@@ -1,0 +1,38 @@
+[
+  {
+    "user_input": "請幫我深度分析這個單字：accelerate",
+    "deck_name": "FluencyTides::TOEIC",
+    "model_name": "TOEIC_Coach_Dark",
+    "model_file_name": "TOEIC_Coach_Dark.json",
+    "primary_field_name": "Expression",
+    "tags": ["Auto_Import", "LLM_Generated"],
+    "extra_fields": {
+      "Expression": "accelerate",
+      "Target_Example_Sentence": "The new policies will accelerate economic growth.",
+      "Graph_Relations": [
+        {
+          "target_label": "expedite",
+          "relation_type": "synonym",
+          "direction": "bidirectional"
+        },
+        {
+          "target_label": "hasten",
+          "relation_type": "synonym",
+          "direction": "bidirectional"
+        }
+      ]
+    }
+  },
+  {
+    "user_input": "請幫我設計一個有關「機場登機 (Airport Check-in)」的對話情境卡片，目標句是 'Here is my boarding pass.'",
+    "deck_name": "FluencyTides::Speaking_Coach",
+    "model_name": "Speaking_Coach_Dark",
+    "model_file_name": "Speaking_Coach_Dark.json",
+    "primary_field_name": "Prompt",
+    "tags": ["Auto_Import", "LLM_Generated", "Scenario"],
+    "extra_fields": {
+      "Prompt": "Here is my boarding pass.",
+      "Context": "At the airport boarding gate."
+    }
+  }
+]

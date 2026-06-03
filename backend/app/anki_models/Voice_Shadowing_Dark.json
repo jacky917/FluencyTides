@@ -1,0 +1,55 @@
+{
+  "modelName": "Voice_Shadowing_Dark",
+  "inOrderFields": [
+    "Topic",
+    "Analysis_JSON",
+    "Original_Text",
+    "Audio"
+  ],
+  "llm_schema": {
+    "type": "object",
+    "properties": {
+      "Topic": {
+        "type": "string",
+        "description": "卡片主題，例如：面試問題或對話情境等。請務必完全照抄使用者提供的內容，不要有任何修改。"
+      },
+      "Original_Text": {
+        "type": "string",
+        "description": "日文原文內容。請務必完全照抄使用者提供的原文內容，不要有任何修改。"
+      },
+      "Audio": {
+        "type": "string",
+        "description": "原文對應的語音音頻佔位符。請務必完全照抄使用者提供的值 (如 [sound:...])，不要有任何修改。"
+      },
+      "Analysis_JSON": {
+        "type": "array",
+        "description": "提供簡短、方便記憶的表達框架與背誦口訣。請完全使用「繁體中文」撰寫，不需要包含日文或英文等外文。必須為嚴格的 JSON Array 格式。",
+        "items": {
+          "type": "object",
+          "properties": {
+            "point": {
+              "type": "string",
+              "description": "框架步驟名稱或標題。例如：'1. 破題：失敗經驗' 或 '💡 背誦小訣竅'"
+            },
+            "explanation": {
+              "type": "string",
+              "description": "具體內容說明 (可使用 <br> 換行)。建議包含「記憶標籤」與「表達重點」。例如：'記憶標籤：獨自攬責 ➔ 差點延期<br><br>表達重點：直接點出過去最大的失敗...'。表達要自然簡潔。"
+            }
+          },
+          "required": [
+            "point",
+            "explanation"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "Topic",
+      "Analysis_JSON",
+      "Original_Text",
+      "Audio"
+    ],
+    "additionalProperties": false
+  }
+}

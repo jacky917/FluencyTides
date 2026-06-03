@@ -1,0 +1,40 @@
+{
+  "modelName": "Shadowing_Breakdown_Dark",
+  "inOrderFields": [
+    "Card_ID",
+    "Topic",
+    "Front_Chinese",
+    "Back_Japanese"
+  ],
+  "llm_schema": {
+    "type": "object",
+    "properties": {
+      "sentences": {
+        "type": "array",
+        "description": "將日文原文拆解成獨立且容易記憶的完整句子，並提供對應的中文翻譯。",
+        "items": {
+          "type": "object",
+          "properties": {
+            "japanese": {
+              "type": "string",
+              "description": "拆解出來的日文原句，必須一字不差地來自於原文。"
+            },
+            "chinese": {
+              "type": "string",
+              "description": "對應的繁體中文翻譯，要求通順且自然。"
+            }
+          },
+          "required": [
+            "japanese",
+            "chinese"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "sentences"
+    ],
+    "additionalProperties": false
+  }
+}

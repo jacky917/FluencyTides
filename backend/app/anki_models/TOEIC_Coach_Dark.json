@@ -1,0 +1,136 @@
+{
+  "modelName": "TOEIC_Coach_Dark",
+  "inOrderFields": [
+    "Expression",
+    "Chunking",
+    "Word_Family_JSON",
+    "Synonyms_JSON",
+    "Collocations",
+    "Audio"
+  ],
+  "llm_schema": {
+    "type": "object",
+    "properties": {
+      "Expression": {
+        "type": "string",
+        "description": "必須完全使用使用者提供的原始目標單字或片語，一字不漏地原樣輸出，絕對不可以自己造句或加上解說（例如：使用者查 accelerate，這裡就只能填 accelerate）。"
+      },
+      "Chunking": {
+        "type": "string",
+        "description": "先給出單字或句子的繁體中文翻譯。如果語塊中包含多益值得學習的單字，需簡潔補充「字根拆解」或「記憶法」。"
+      },
+      "Word_Family_JSON": {
+        "type": "array",
+        "description": "存放同字根的詞性家族（如：Electronic, Electronics...）。必須為 JSON Array 格式。",
+        "items": {
+          "type": "object",
+          "properties": {
+            "word": {
+              "type": "string",
+              "description": "單字"
+            },
+            "phonetic": {
+              "type": "string",
+              "description": "音標"
+            },
+            "pos": {
+              "type": "string",
+              "enum": ["n.", "vi.", "vt.", "phrasal v.", "adj.", "adv.", "prep.", "conj.", "pron.", "det.", "interj."],
+              "description": "詞性縮寫。必須嚴格遵循小寫並以點號結尾。僅限從列舉值中選擇，嚴禁輸出單字全寫（例如：必須使用 n. 而非 Noun）。"
+            },
+            "translation": {
+              "type": "string",
+              "description": "中文翻譯"
+            },
+            "nuance": {
+              "type": "string",
+              "description": "母語者語感/用法微差異"
+            },
+            "example": {
+              "type": "string",
+              "description": "多益情境例句"
+            },
+            "example_translation": {
+              "type": "string",
+              "description": "例句繁體中文翻譯"
+            }
+          },
+          "required": [
+            "word",
+            "phonetic",
+            "pos",
+            "translation",
+            "nuance",
+            "example",
+            "example_translation"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "Synonyms_JSON": {
+        "type": "array",
+        "description": "存放近義詞或易混淆詞的對比（如：Indicate, Suggest...）。必須為 JSON Array 格式。",
+        "items": {
+          "type": "object",
+          "properties": {
+            "word": {
+              "type": "string",
+              "description": "單字"
+            },
+            "phonetic": {
+              "type": "string",
+              "description": "音標"
+            },
+            "pos": {
+              "type": "string",
+              "description": "詞性"
+            },
+            "translation": {
+              "type": "string",
+              "description": "中文意"
+            },
+            "nuance": {
+              "type": "string",
+              "description": "母語者語感/用法微差異"
+            },
+            "example": {
+              "type": "string",
+              "description": "多益情境例句"
+            },
+            "example_translation": {
+              "type": "string",
+              "description": "例句繁體中文翻譯"
+            }
+          },
+          "required": [
+            "word",
+            "phonetic",
+            "pos",
+            "translation",
+            "nuance",
+            "example",
+            "example_translation"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "Collocations": {
+        "type": "string",
+        "description": "必考搭配詞 (Collocations)：提出 1 到 2 個固定用法或組合。要有中文翻譯，例如：personnel department（人事部門）"
+      },
+      "Audio": {
+        "type": "string",
+        "description": "若有發音需求留空，或標註需要音訊檔的佔位符 (通常 LLM 填空為空字串即可，此交由 TTS 處理)。"
+      }
+    },
+    "required": [
+      "Expression",
+      "Chunking",
+      "Word_Family_JSON",
+      "Synonyms_JSON",
+      "Collocations",
+      "Audio"
+    ],
+    "additionalProperties": false
+  }
+}

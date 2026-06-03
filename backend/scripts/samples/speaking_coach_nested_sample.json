@@ -1,0 +1,58 @@
+[
+  {
+    "deckName": "FluencyTides::Speaking_Coach",
+    "modelName": "Speaking_Coach_Dark",
+    "tags": ["TelegramBot", "Speaking_Coach", "Clean_Nested"],
+    "fields": {
+      "Card_ID": "SC_NESTED_001",
+      "Prompt": "Where do you see yourself in five years?",
+      "Prompt_Audios": [],
+      "Context": "Job interview question about future career goals.",
+      "Recordings": [],
+      "References": [
+        {
+          "date": "2026-06-03",
+          "content": "I see myself taking on more leadership responsibilities and contributing to larger-scale projects.",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-06-03",
+          "content": "My goal is to deepen my technical expertise while mentoring junior team members.",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "TG_Bot": "my_test_bot_name"
+    }
+  },
+  {
+    "deckName": "FluencyTides::Speaking_Coach",
+    "modelName": "Speaking_Coach_Dark",
+    "tags": ["TelegramBot", "Speaking_Coach", "Clean_Nested"],
+    "fields": {
+      "Card_ID": "SC_NESTED_002",
+      "Prompt": "Could you please explain that in more detail?",
+      "Prompt_Audios": [],
+      "Context": "Asking for clarification during a meeting or presentation.",
+      "Recordings": [
+        {
+          "date": "2026-06-03",
+          "score": 85,
+          "transcript": "Could you please explain that in more detail?",
+          "comment": "Good pronunciation, but the intonation could be slightly more polite at the end.",
+          "audio": "test_recording_001.ogg"
+        }
+      ],
+      "References": [
+        {
+          "date": "2026-06-03",
+          "content": "Could you please elaborate on that point?",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "TG_Bot": "my_test_bot_name"
+    }
+  }
+]

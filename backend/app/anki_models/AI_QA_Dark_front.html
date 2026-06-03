@@ -1,0 +1,84 @@
+<div class="card front-card">
+    <div class="expression-box">
+        <div class="topic-tag">題目 (Question)</div>
+        <div class="qa-content" id="question-text">{{Question}}</div>
+    </div>
+    
+    <button id="copy-btn" class="copy-button" onclick="copyCardContent(event)">📋 複製完整 QA 以供 AI 批改</button>
+</div>
+
+<!-- Hidden answer for copying on the front -->
+<div id="answer-text" style="display: none;">{{Answer}}</div>
+
+<script>
+var copyTimeout;
+
+function copyCardContent(event) {
+    // 阻止事件冒泡，避免觸發 Anki 卡片翻面
+    if (event) {
+        event.stopPropagation();
+        event.preventDefault();
+    }
+    
+    const question = document.getElementById('question-text').innerText.trim();
+    const answer = document.getElementById('answer-text').innerText.trim();
+    
+    const textToCopy = `[題目]：${question}\n[目標]：${answer}`;
+    
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(textToCopy).then(() => {
+            showCopiedState();
+        }).catch(err => {
+            console.error('Failed to copy: ', err);
+            fallbackCopyTextToClipboard(textToCopy);
+        });
+    } else {
+        fallbackCopyTextToClipboard(textToCopy);
+    }
+}
+
+function fallbackCopyTextToClipboard(text) {
+    var textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.top = "0";
+    textArea.style.left = "0";
+    textArea.style.position = "fixed";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+
+    try {
+        var successful = document.execCommand('copy');
+        if (successful) {
+            showCopiedState();
+        }
+    } catch (err) {
+        console.error('Fallback: Oops, unable to copy', err);
+    }
+    document.body.removeChild(textArea);
+}
+
+function showCopiedState() {
+    const btns = document.querySelectorAll('.copy-button');
+    btns.forEach(btn => {
+        if (!btn.dataset.originalText) {
+            btn.dataset.originalText = btn.innerHTML;
+        }
+        btn.innerHTML = "✅ 已複製！";
+        btn.classList.add("copied");
+    });
+    
+    if (copyTimeout) {
+        clearTimeout(copyTimeout);
+    }
+    
+    copyTimeout = setTimeout(() => {
+        btns.forEach(btn => {
+            if (btn.dataset.originalText) {
+                btn.innerHTML = btn.dataset.originalText;
+            }
+            btn.classList.remove("copied");
+        });
+    }, 2000);
+}
+</script>

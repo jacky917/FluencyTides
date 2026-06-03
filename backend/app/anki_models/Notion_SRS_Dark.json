@@ -1,0 +1,55 @@
+{
+  "modelName": "Notion_SRS_Dark",
+  "inOrderFields": [
+    "Prompt",
+    "Answer",
+    "Additional",
+    "Category",
+    "Source",
+    "Tags",
+    "NotionURL"
+  ],
+  "llm_schema": {
+    "type": "object",
+    "properties": {
+      "Prompt": {
+        "type": "string",
+        "description": "The main question or prompt from Notion."
+      },
+      "Answer": {
+        "type": "string",
+        "description": "The answer or definition."
+      },
+      "Additional": {
+        "type": "string",
+        "description": "Extra information or context to display."
+      },
+      "Category": {
+        "type": "string",
+        "description": "The category of the flashcard."
+      },
+      "Source": {
+        "type": "string",
+        "description": "Source reference or book."
+      },
+      "Tags": {
+        "type": "string",
+        "description": "Comma separated tags."
+      },
+      "NotionURL": {
+        "type": "string",
+        "description": "URL to jump directly to the Notion page."
+      }
+    },
+    "required": [
+      "Prompt",
+      "Answer",
+      "Additional",
+      "Category",
+      "Source",
+      "Tags",
+      "NotionURL"
+    ],
+    "additionalProperties": false
+  }
+}

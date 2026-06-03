@@ -1,0 +1,104 @@
+<div class="card back-card">
+    <div class="expression-box">
+        <div class="expression">{{Expression}}</div>
+    </div>
+
+    <hr class="divider">
+
+    <div id="reply-groups-wrapper" style="display: none;">
+        <div id="reply-groups-container"></div>
+    </div>
+    
+    <!-- 存放原始 JSON 資料供腳本讀取 -->
+    <div id="reply-data" style="display: none;">{{Reply_Groups_JSON}}</div>
+</div>
+
+<script>
+(function() {
+    function renderReplyGroups() {
+        const dataEl = document.getElementById("reply-data");
+        const containerEl = document.getElementById("reply-groups-container");
+        const wrapperEl = document.getElementById("reply-groups-wrapper");
+
+        if (!dataEl || !containerEl || !wrapperEl) return;
+
+        let jsonString = dataEl.textContent || dataEl.innerText;
+        jsonString = jsonString.trim();
+
+        if (!jsonString) return;
+
+        try {
+            const dataArray = JSON.parse(jsonString);
+            if (!Array.isArray(dataArray) || dataArray.length === 0) return;
+
+            containerEl.innerHTML = "";
+
+            dataArray.forEach((group, index) => {
+                const section = document.createElement("div");
+                section.className = "section reply-section";
+                
+                // 群組標題與說明
+                const header = document.createElement("div");
+                header.className = "group-header";
+                
+                const title = document.createElement("div");
+                title.className = "section-title";
+                title.textContent = group.group_name || `Group ${index + 1}`;
+                header.appendChild(title);
+                
+                if (group.group_explanation) {
+                    const desc = document.createElement("div");
+                    desc.className = "group-desc section-content";
+                    desc.textContent = group.group_explanation;
+                    header.appendChild(desc);
+                }
+                
+                section.appendChild(header);
+
+                // 例句列表
+                if (Array.isArray(group.sentences) && group.sentences.length > 0) {
+                    const sentencesContainer = document.createElement("div");
+                    sentencesContainer.className = "sentences-container";
+                    
+                    group.sentences.forEach(sent => {
+                        const item = document.createElement("div");
+                        item.className = "dynamic-item accent-reply";
+
+                        // 外語與翻譯
+                        const sentHeader = document.createElement("div");
+                        sentHeader.className = "item-header";
+                        sentHeader.innerHTML = `<span class="item-word">${sent.foreign || ''}</span>`;
+                        item.appendChild(sentHeader);
+
+                        const body = document.createElement("div");
+                        body.className = "item-body";
+                        body.innerHTML = `<div class="item-trans">${sent.translation || ''}</div>`;
+                        item.appendChild(body);
+
+                        // 解析 (若有)
+                        if (sent.explanation && sent.explanation.trim() !== "") {
+                            const expl = document.createElement("div");
+                            expl.className = "item-example";
+                            expl.innerHTML = `<div class="eg-tw">💡 解析: ${sent.explanation}</div>`;
+                            item.appendChild(expl);
+                        }
+                        
+                        sentencesContainer.appendChild(item);
+                    });
+                    
+                    section.appendChild(sentencesContainer);
+                }
+                
+                containerEl.appendChild(section);
+            });
+
+            wrapperEl.style.display = "block";
+
+        } catch (e) {
+            console.error("解析 JSON 失敗:", e);
+        }
+    }
+
+    renderReplyGroups();
+})();
+</script>

@@ -1,0 +1,7 @@
+{
+  "modelName": "AI_QA_Dark",
+  "inOrderFields": [
+    "Question",
+    "Answer"
+  ]
+}

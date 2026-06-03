@@ -1,0 +1,81 @@
+<div class="card back-card">
+    <div class="expression-box" style="margin-bottom: 20px;">
+        <div class="expression">{{Topic}}</div>
+    </div>
+
+    <!-- 原文呈現 -->
+    {{#Original_Text}}
+    <div class="section original-text-section">
+        <div class="section-title">原文 (Original Text)</div>
+        <div class="section-content" style="font-size: 19px; line-height: 1.8;">{{Original_Text}}</div>
+    </div>
+    {{/Original_Text}}
+
+    {{#Audio}}
+    <div class="audio-box" style="margin-top: 15px; margin-bottom: 15px;">
+        {{Audio}}
+    </div>
+    {{/Audio}}
+
+    <hr class="divider">
+
+    <!-- 原文分析呈現 -->
+    {{#Analysis_JSON}}
+    <div class="section analysis-section" id="analysis-wrapper" style="display: none;">
+        <div class="section-title">原文分析 (Analysis)</div>
+        <div id="analysis-container"></div>
+    </div>
+    <!-- 存放原始 JSON 資料供腳本讀取 -->
+    <div id="analysis-data" style="display: none;">{{Analysis_JSON}}</div>
+    {{/Analysis_JSON}}
+</div>
+
+<script>
+    /**
+     * 解析並渲染 Analysis_JSON 為動態項目
+     */
+    (function () {
+        function renderAnalysisBlocks(dataElementId, containerId, wrapperId) {
+            const dataEl = document.getElementById(dataElementId);
+            const containerEl = document.getElementById(containerId);
+            const wrapperEl = document.getElementById(wrapperId);
+
+            if (!dataEl || !containerEl || !wrapperEl) return;
+
+            let jsonString = dataEl.textContent || dataEl.innerText;
+            jsonString = jsonString.trim();
+
+            if (!jsonString) return;
+
+            try {
+                const dataArray = JSON.parse(jsonString);
+                if (!Array.isArray(dataArray) || dataArray.length === 0) return;
+
+                containerEl.innerHTML = "";
+
+                dataArray.forEach(item => {
+                    const block = document.createElement("div");
+                    block.className = "dynamic-item accent-analysis";
+
+                    const header = document.createElement("div");
+                    header.className = "item-header";
+                    header.innerHTML = `<span class="item-word" style="font-size: 19px; color: #f39c12;">${item.point || ''}</span>`;
+                    block.appendChild(header);
+
+                    const body = document.createElement("div");
+                    body.className = "item-body";
+                    body.innerHTML = `<div class="item-example" style="border-left-color: #e67e22;"><div class="eg-en" style="color: #ecf0f1;">${item.explanation || ''}</div></div>`;
+                    block.appendChild(body);
+
+                    containerEl.appendChild(block);
+                });
+
+                wrapperEl.style.display = "block";
+            } catch (e) {
+                console.error(`解析失敗 (${dataElementId}):`, e);
+            }
+        }
+
+        renderAnalysisBlocks("analysis-data", "analysis-container", "analysis-wrapper");
+    })();
+</script>

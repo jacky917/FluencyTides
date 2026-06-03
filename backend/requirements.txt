@@ -1,0 +1,24 @@
+# ─── Core Web Framework ──────────────────────────────────────────────
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+python-multipart>=0.0.6
+
+# ─── Data Validation & Configuration ─────────────────────────────────
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+
+# ─── Database & ORM ──────────────────────────────────────────────────
+sqlmodel>=0.0.22
+aiosqlite>=0.20.0
+alembic>=1.13.0
+
+# ─── Async Clients & AI Integration ──────────────────────────────────
+httpx>=0.24.0
+openai>=1.30.0
+google-genai>=0.2.0
+jinja2>=3.1.0
+
+# ─── Storage & External Services ─────────────────────────────────────
+minio>=7.2.0
+aiogram>=3.4.0

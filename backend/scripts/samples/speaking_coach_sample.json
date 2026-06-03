@@ -1,0 +1,56 @@
+[
+  {
+    "deckName": "FluencyTides::Speaking_Coach",
+    "modelName": "Speaking_Coach_Dark",
+    "tags": ["TelegramBot", "Speaking_Coach", "Sample_Stringified"],
+    "fields": {
+      "Card_ID": "SC_SAMPLE_001",
+      "Prompt": "這是一個測試發音的句子。(使用字串化 JSON)",
+      "Prompt_Audios": "[]",
+      "Context": "當你想要測試系統是否能正確讀取字串化 JSON 時使用。",
+      "Recordings": "[]",
+      "References": "[{\"date\": \"2026-06-03\", \"content\": \"This is a test sentence for pronunciation.\", \"status\": 1, \"audios\": []}]",
+      "TG_Bot": "my_test_bot_name"
+    },
+    "relations": [
+      {
+        "target_label": "This is a test sentence.",
+        "relation_type": "translation",
+        "direction": "bidirectional"
+      }
+    ]
+  },
+  {
+    "deckName": "FluencyTides::Speaking_Coach",
+    "modelName": "Speaking_Coach_Dark",
+    "tags": ["TelegramBot", "Speaking_Coach", "Sample_Nested"],
+    "fields": {
+      "Card_ID": "SC_SAMPLE_002",
+      "Prompt": "這是一個測試發音的句子。(使用原生 JSON 陣列)",
+      "Prompt_Audios": [],
+      "Context": "當你想要測試系統是否能自動序列化巢狀 JSON 時使用。",
+      "Recordings": [],
+      "References": [
+        {
+          "date": "2026-06-03",
+          "content": "This is another test sentence for pronunciation.",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "TG_Bot": "my_test_bot_name"
+    },
+    "relations": [
+      {
+        "target_label": "Another test sentence.",
+        "relation_type": "translation",
+        "direction": "bidirectional"
+      },
+      {
+        "target_label": "pronunciation",
+        "relation_type": "keyword",
+        "direction": "forward"
+      }
+    ]
+  }
+]

@@ -1,0 +1,210 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+html, body {
+  background-color: #0d0f18;
+  color: #e2e8f0;
+  margin: 0;
+  padding: 0;
+}
+
+/* --- 全局預設背景重置 --- */
+.card {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: #0d0f18; /* 深邃星空藍黑底 */
+  color: #e2e8f0;
+  text-align: center;
+  margin: 0;
+  padding: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --- 卡片主體 (玻璃擬態) --- */
+.card-container {
+  background: rgba(30, 32, 44, 0.55);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 24px;
+  padding: 36px 28px;
+  max-width: 650px;
+  /* 使用多重 box-shadow 取代原本不穩定的巨型偽元素霓虹光 */
+  box-shadow: 
+    0 24px 48px rgba(0, 0, 0, 0.5), 
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 -10px 40px rgba(99, 102, 241, 0.08),
+    0 10px 40px rgba(236, 72, 153, 0.05);
+  margin: 0 auto;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.3s ease;
+}
+
+/* --- 頂部標籤 --- */
+.header {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+}
+
+.category-pill, .tags-pill {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding: 6px 14px;
+  border-radius: 24px;
+}
+
+.category-pill {
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.tags-pill {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+/* --- 正反面文字 --- */
+.prompt-section h1 {
+  font-size: 32px;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 0;
+  line-height: 1.4;
+  letter-spacing: -0.5px;
+}
+
+.prompt-section h2 {
+  font-size: 20px;
+  font-weight: 500;
+  color: #94a3b8;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.divider {
+  border: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
+  margin: 28px 0;
+}
+
+.answer-section {
+  text-align: left;
+}
+
+.answer-text {
+  font-size: 24px;
+  font-weight: 600;
+  color: #f8fafc;
+  line-height: 1.6;
+  margin-bottom: 24px;
+}
+
+/* --- 補充說明區塊 --- */
+.additional-box {
+  background: rgba(0, 0, 0, 0.3);
+  border-left: 3px solid #6366f1;
+  border-radius: 0 12px 12px 0;
+  padding: 18px 20px;
+  margin-bottom: 20px;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.additional-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #6366f1;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+
+.additional-text {
+  font-size: 16px;
+  color: #cbd5e1;
+  line-height: 1.6;
+}
+
+/* --- 資料來源 --- */
+.source-info {
+  font-size: 13px;
+  color: #64748b;
+  margin-top: 24px;
+  text-align: right;
+  font-style: italic;
+  opacity: 0.8;
+}
+
+/* --- Notion 按鈕 --- */
+.footer {
+  margin-top: 36px;
+  display: flex;
+  justify-content: center;
+}
+
+.notion-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #f1f5f9;
+  font-size: 15px;
+  font-weight: 500;
+  text-decoration: none;
+  padding: 12px 24px;
+  border-radius: 12px;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  backdrop-filter: blur(12px);
+}
+
+.notion-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2), 0 0 15px rgba(255, 255, 255, 0.05);
+  color: #ffffff;
+}
+
+.notion-btn:active {
+  transform: translateY(0);
+}
+
+.notion-icon {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+/* --- 手機自適應 --- */
+@media screen and (max-width: 480px) {
+  .card {
+    padding: 12px 8px;
+  }
+  .card-container {
+    padding: 28px 20px;
+    border-radius: 20px;
+  }
+  
+  .prompt-section h1 {
+    font-size: 26px;
+  }
+  
+  .prompt-section h2 {
+    font-size: 18px;
+  }
+  
+  .answer-text {
+    font-size: 20px;
+  }
+  
+  .additional-text {
+    font-size: 15px;
+  }
+}

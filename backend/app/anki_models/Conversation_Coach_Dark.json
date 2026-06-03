@@ -1,0 +1,71 @@
+{
+  "modelName": "Conversation_Coach_Dark",
+  "inOrderFields": [
+    "Expression",
+    "Reply_Groups_JSON"
+  ],
+  "llm_schema": {
+    "type": "object",
+    "properties": {
+      "Expression": {
+        "type": "string",
+        "description": "卡片正面標題，請約束為「主題 + (外語)」，例如：'尋ねられたときのうまい返し方 (英語)'"
+      },
+      "Reply_Groups_JSON": {
+        "type": "array",
+        "description": "存放回覆建議群組的陣列。必須為乾淨的 JSON Array 格式。",
+        "items": {
+          "type": "object",
+          "properties": {
+            "group_name": {
+              "type": "string",
+              "description": "群組名稱，例如：'1. 考える時間を稼ぐ「魔法のクッション」'"
+            },
+            "group_explanation": {
+              "type": "string",
+              "description": "群組的整體說明，例如：'質問されて即座に答えられないのは普通のことです。無言でフリーズする代わりに、これらを口に出すだけで「余裕のある人」に見えます。'"
+            },
+            "sentences": {
+              "type": "array",
+              "description": "此群組下的例句集合",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "foreign": {
+                    "type": "string",
+                    "description": "外語例句，例如：'That's a good question.'"
+                  },
+                  "translation": {
+                    "type": "string",
+                    "description": "母語翻譯，例如：'「いい質問ですね（その間に考えさせて）」の定番。'"
+                  },
+                  "explanation": {
+                    "type": "string",
+                    "description": "解析或補充說明（必須使用母語），若無可填空字串。例如：'自然に考え込むときに。'"
+                  }
+                },
+                "required": [
+                  "foreign",
+                  "translation",
+                  "explanation"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "group_name",
+            "group_explanation",
+            "sentences"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "Expression",
+      "Reply_Groups_JSON"
+    ],
+    "additionalProperties": false
+  }
+}

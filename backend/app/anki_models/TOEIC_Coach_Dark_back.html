@@ -1,0 +1,129 @@
+<div class="card back-card">
+    <!-- 原文呈現 -->
+    <div class="expression-box">
+        <div class="expression">{{Expression}}</div>
+    </div>
+
+    <hr class="divider">
+
+    <!-- 語塊分析 -->
+    {{#Chunking}}
+    <div class="section chunking-section">
+        <div class="section-title">語塊分析 (Chunking)</div>
+        <div class="section-content">{{Chunking}}</div>
+    </div>
+    {{/Chunking}}
+
+    <!-- 動態渲染：同字根詞性家族 -->
+    {{#Word_Family_JSON}}
+    <div class="section family-section" id="family-wrapper" style="display: none;">
+        <div class="section-title">詞性家族 (Word Family)</div>
+        <div id="family-container"></div>
+    </div>
+    <!-- 存放原始 JSON 資料供腳本讀取 -->
+    <div id="family-data" style="display: none;">{{Word_Family_JSON}}</div>
+    {{/Word_Family_JSON}}
+
+    <!-- 動態渲染：近義詞對比 -->
+    {{#Synonyms_JSON}}
+    <div class="section synonym-section" id="synonym-wrapper" style="display: none;">
+        <div class="section-title">近義詞對比 (Synonyms)</div>
+        <div id="synonym-container"></div>
+    </div>
+    <!-- 存放原始 JSON 資料供腳本讀取 -->
+    <div id="synonym-data" style="display: none;">{{Synonyms_JSON}}</div>
+    {{/Synonyms_JSON}}
+
+    <!-- 必考搭配詞 -->
+    {{#Collocations}}
+    <div class="section collocation-section">
+        <div class="section-title">必考搭配詞 (Collocations)</div>
+        <div class="section-content">{{Collocations}}</div>
+    </div>
+    {{/Collocations}}
+
+    <!-- 音頻播放 -->
+    {{#Audio}}
+    <div class="audio-box">
+        {{Audio}}
+    </div>
+    {{/Audio}}
+</div>
+
+<script>
+/**
+ * 強健的 JSON 陣列渲染腳本 (Robust JSON Array Renderer)
+ * 負責將隱藏在 HTML DOM 中的 JSON 字串安全地解析並渲染為美麗的區塊。
+ */
+(function() {
+    function renderJsonBlocks(dataElementId, containerId, wrapperId, accentClass) {
+        const dataEl = document.getElementById(dataElementId);
+        const containerEl = document.getElementById(containerId);
+        const wrapperEl = document.getElementById(wrapperId);
+
+        if (!dataEl || !containerEl || !wrapperEl) return;
+
+        let jsonString = dataEl.textContent || dataEl.innerText;
+        jsonString = jsonString.trim();
+
+        if (!jsonString) return;
+
+        try {
+            const dataArray = JSON.parse(jsonString);
+            if (!Array.isArray(dataArray) || dataArray.length === 0) return;
+
+            // 清空容器重新渲染
+            containerEl.innerHTML = "";
+
+            dataArray.forEach(item => {
+                const block = document.createElement("div");
+                block.className = `dynamic-item ${accentClass}`;
+
+                // 標頭區 (單字 + 音標 + 詞性)
+                const header = document.createElement("div");
+                header.className = "item-header";
+                
+                let headerHtml = `<span class="item-word">${item.word || 'N/A'}</span>`;
+                if (item.phonetic) headerHtml += `<span class="item-phonetic">${item.phonetic}</span>`;
+                if (item.pos) headerHtml += `<span class="item-pos">${item.pos}</span>`;
+                header.innerHTML = headerHtml;
+                block.appendChild(header);
+
+                // 解釋與語感
+                const body = document.createElement("div");
+                body.className = "item-body";
+                let bodyHtml = `<div class="item-trans">${item.translation || ''}</div>`;
+                if (item.nuance) {
+                    bodyHtml += `<div class="item-nuance"><span class="nuance-badge">💡 語感</span> ${item.nuance}</div>`;
+                }
+                body.innerHTML = bodyHtml;
+                block.appendChild(body);
+
+                // 例句區 (若有)
+                if (item.example) {
+                    const eg = document.createElement("div");
+                    eg.className = "item-example";
+                    eg.innerHTML = `
+                        <div class="eg-en">${item.example}</div>
+                        <div class="eg-tw">${item.example_translation || ''}</div>
+                    `;
+                    block.appendChild(eg);
+                }
+
+                containerEl.appendChild(block);
+            });
+
+            // 成功解析並渲染後，顯示外層包裝器
+            wrapperEl.style.display = "block";
+
+        } catch (e) {
+            console.error(`解析失敗 (${dataElementId}):`, e);
+            // 靜默降級，不顯示錯誤，直接不顯示該區塊
+        }
+    }
+
+    // 執行渲染
+    renderJsonBlocks("family-data", "family-container", "family-wrapper", "accent-family");
+    renderJsonBlocks("synonym-data", "synonym-container", "synonym-wrapper", "accent-synonym");
+})();
+</script>

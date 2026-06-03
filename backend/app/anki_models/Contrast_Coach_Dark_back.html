@@ -1,0 +1,101 @@
+<div class="card back-card">
+    <!-- 標題/情境 -->
+    <div class="eyebrow" style="text-align: center;">Topic / Scenario</div>
+    <div class="expression-box" style="margin-bottom: 20px;">
+        <div class="expression">{{Topic}}</div>
+    </div>
+
+    <!-- 正確版本 (Correct Reply) -->
+    {{#Correct_Reply}}
+    <div class="section correct-section">
+        <div class="section-title"><span style="color:#2ecc71;">✓</span> Native / Correct Reply</div>
+        <div class="section-content correct-text">{{Correct_Reply}}</div>
+    </div>
+    {{/Correct_Reply}}
+
+    <!-- 盲點分析 (Analysis) -->
+    {{#Analysis}}
+    <div class="section analysis-section">
+        <div class="section-title">💡 分析與盲點 (Analysis)</div>
+        <div class="section-content">{{Analysis}}</div>
+    </div>
+    {{/Analysis}}
+
+    <hr class="divider">
+
+    <!-- 重點表達與點評 (Expressions) 動態渲染 -->
+    {{#Expressions_JSON}}
+    <div class="section expression-takeaway-section" id="expressions-wrapper" style="display: none;">
+        <div class="section-title">🎯 核心重點與語感點評 (Key Expressions)</div>
+        <div id="expressions-container"></div>
+    </div>
+    <!-- 隱藏的原始 JSON -->
+    <div id="expressions-data" style="display: none;">{{Expressions_JSON}}</div>
+    {{/Expressions_JSON}}
+
+    <!-- 原始/錯誤版本 (My Reply) - 較不顯眼的灰色系樣式 -->
+    {{#My_Reply}}
+    <div class="my-reply-box" style="margin-top: 30px;">
+        <div class="my-reply-title">Your Original Reply</div>
+        <div class="my-reply-content">{{My_Reply}}</div>
+    </div>
+    {{/My_Reply}}
+
+</div>
+
+<script>
+/**
+ * 強健的 JSON 陣列渲染腳本 (Robust JSON Array Renderer)
+ * 負責將隱藏在 HTML DOM 中的 JSON 字串安全地解析並渲染為區塊。
+ */
+(function() {
+    function renderExpressions(dataElementId, containerId, wrapperId) {
+        const dataEl = document.getElementById(dataElementId);
+        const containerEl = document.getElementById(containerId);
+        const wrapperEl = document.getElementById(wrapperId);
+
+        if (!dataEl || !containerEl || !wrapperEl) return;
+
+        let jsonString = dataEl.textContent || dataEl.innerText;
+        jsonString = jsonString.trim();
+
+        if (!jsonString) return;
+
+        try {
+            const dataArray = JSON.parse(jsonString);
+            if (!Array.isArray(dataArray) || dataArray.length === 0) return;
+
+            // 清空容器重新渲染
+            containerEl.innerHTML = "";
+
+            dataArray.forEach(item => {
+                const block = document.createElement("div");
+                block.className = `dynamic-item accent-expression`;
+
+                // 表達字句
+                const header = document.createElement("div");
+                header.className = "item-header";
+                header.innerHTML = `<span class="item-word">${item.expression || 'N/A'}</span>`;
+                block.appendChild(header);
+
+                // 解釋/點評
+                const body = document.createElement("div");
+                body.className = "item-body";
+                body.innerHTML = `<div class="item-nuance" style="margin-top:6px; border-left-color: #f39c12;"><span class="nuance-badge">📝 解釋與點評</span> <span style="color:#ecf0f1;">${item.explanation || ''}</span></div>`;
+                block.appendChild(body);
+
+                containerEl.appendChild(block);
+            });
+
+            // 成功解析並渲染後，顯示外層包裝器
+            wrapperEl.style.display = "block";
+
+        } catch (e) {
+            console.error(`解析失敗 (${dataElementId}):`, e);
+            // 靜默降級
+        }
+    }
+
+    renderExpressions("expressions-data", "expressions-container", "expressions-wrapper");
+})();
+</script>

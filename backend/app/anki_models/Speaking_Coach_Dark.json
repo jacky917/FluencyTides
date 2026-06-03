@@ -1,0 +1,12 @@
+{
+  "modelName": "Speaking_Coach_Dark",
+  "inOrderFields": [
+    "Card_ID",
+    "Prompt",
+    "Prompt_Audios",
+    "Context",
+    "Recordings",
+    "References",
+    "TG_Bot"
+  ]
+}

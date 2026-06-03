@@ -1,0 +1,224 @@
+{{FrontSide}}
+
+<hr class="divider">
+
+<!-- ============================================ -->
+<!-- 我的歷史錄音 (Recordings) - 可展開收合         -->
+<!-- ============================================ -->
+<div class="section recordings-section">
+    <div class="section-title">🎙️ 我的歷史錄音 (My Recordings)</div>
+    <div id="recordings-container"></div>
+    <div id="recordings-empty" class="empty-hint" style="display:none;">尚無錄音紀錄</div>
+</div>
+
+<!-- ============================================ -->
+<!-- 參考的範本回覆 (References)                    -->
+<!-- ============================================ -->
+<div class="section references-section">
+    <div class="section-title">📝 參考範本回覆 (References)</div>
+    <div id="references-container"></div>
+    <div id="references-empty" class="empty-hint" style="display:none;">尚無範本</div>
+</div>
+
+<!-- 隱藏欄位供 JS 解析 (不含 [sound:] 語法，不會被 Anki 渲染器破壞) -->
+<div id="recordings-data" style="display:none;">{{Recordings}}</div>
+<div id="references-data" style="display:none;">{{References}}</div>
+
+<script>
+(function() {
+    // ============================
+    // 翻面後隱藏正面的「文脈」區塊
+    // ============================
+    var ctxSections = document.querySelectorAll('.context-section');
+    for (var i = 0; i < ctxSections.length; i++) {
+        ctxSections[i].style.display = 'none';
+    }
+
+    // ============================
+    // 工具函式
+    // ============================
+    function toggleAccordion(targetId, summaryEl) {
+        var el = document.getElementById(targetId);
+        if (!el) return;
+        var isHidden = el.style.display === 'none';
+        el.style.display = isHidden ? 'block' : 'none';
+        var arrow = summaryEl.querySelector('.accordion-arrow');
+        if (arrow) {
+            arrow.textContent = isHidden ? '▾' : '▸';
+        }
+    }
+
+    function escapeHtml(str) {
+        var div = document.createElement('div');
+        div.appendChild(document.createTextNode(str));
+        return div.innerHTML;
+    }
+
+    function safeParseJsonArray(elementId) {
+        var el = document.getElementById(elementId);
+        if (!el) return [];
+        var raw = (el.textContent || '').trim();
+        if (!raw) return [];
+        try {
+            var parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch(e) {
+            return [];
+        }
+    }
+
+    // ============================
+    // 解析與渲染歷史錄音
+    // ============================
+    var recordings = safeParseJsonArray('recordings-data');
+
+    var recContainer = document.getElementById('recordings-container');
+    var recEmpty = document.getElementById('recordings-empty');
+
+    if (!recordings || recordings.length === 0) {
+        recEmpty.style.display = 'block';
+    } else {
+        for (var i = 0; i < recordings.length; i++) {
+            var r = recordings[i];
+            var score = parseInt(r.score, 10) || 0;
+            var dotClass = score >= 90 ? 'dot-green' : (score >= 60 ? 'dot-orange' : 'dot-red');
+            var itemId = 'rec-detail-' + i;
+
+            var item = document.createElement('div');
+            item.className = 'accordion-item';
+
+            // 摘要列 (點擊展開)
+            var summary = document.createElement('div');
+            summary.className = 'accordion-summary';
+            summary.setAttribute('data-target', itemId);
+            summary.innerHTML =
+                '<span class="status-dot ' + dotClass + '"></span>' +
+                '<span class="accordion-date">' + escapeHtml(r.date || '') + '</span>' +
+                '<span class="accordion-score">' + score + '</span>' +
+                '<span class="accordion-arrow">▸</span>';
+            summary.onclick = (function(id) {
+                return function(e) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    toggleAccordion(id, this);
+                };
+            })(itemId);
+
+            // 詳情區塊 (預設收合)
+            var detail = document.createElement('div');
+            detail.className = 'accordion-detail';
+            detail.id = itemId;
+            detail.style.display = 'none';
+
+            // 音檔播放 (使用 HTML5 audio 元素，不依賴 Anki [sound:] 語法)
+            if (r.audio) {
+                var audioRow = document.createElement('div');
+                audioRow.className = 'rec-audio';
+                var audioEl = document.createElement('audio');
+                audioEl.controls = true;
+                audioEl.preload = 'none';
+                audioEl.src = r.audio;
+                audioRow.appendChild(audioEl);
+                detail.appendChild(audioRow);
+            }
+            // 逐字稿
+            if (r.transcript) {
+                var labelT = document.createElement('div');
+                labelT.className = 'rec-label';
+                labelT.textContent = '逐字稿';
+                detail.appendChild(labelT);
+                var transDiv = document.createElement('div');
+                transDiv.className = 'rec-transcript';
+                transDiv.textContent = r.transcript;
+                detail.appendChild(transDiv);
+            }
+            // AI 評語
+            if (r.comment) {
+                var labelC = document.createElement('div');
+                labelC.className = 'rec-label';
+                labelC.textContent = 'AI 評語';
+                detail.appendChild(labelC);
+                var commentDiv = document.createElement('div');
+                commentDiv.className = 'rec-comment';
+                commentDiv.textContent = r.comment;
+                detail.appendChild(commentDiv);
+            }
+            // AI 評分
+            var labelS = document.createElement('div');
+            labelS.className = 'rec-label';
+            labelS.textContent = 'AI 評分';
+            detail.appendChild(labelS);
+            var scoreDiv = document.createElement('div');
+            scoreDiv.className = 'rec-score-detail';
+            scoreDiv.innerHTML = '<span class="status-dot ' + dotClass + '"></span> ' + score + ' / 100';
+            detail.appendChild(scoreDiv);
+
+            item.appendChild(summary);
+            item.appendChild(detail);
+            recContainer.appendChild(item);
+        }
+    }
+
+    // 新增錄音的 TG 按鈕 (與折疊錄音項目同層級)
+    var recTgBtn = scCreateTgBtn('recording', null);
+    if (recTgBtn) {
+        recTgBtn.className = 'rec-submit-btn';
+        recTgBtn.innerHTML = '<span class="rec-submit-icon">🎤</span><span class="rec-submit-text">提交新錄音</span>';
+        recContainer.appendChild(recTgBtn);
+    }
+
+    // ============================
+    // 解析與渲染參考範本 (含語音頭像)
+    // ============================
+    var references = safeParseJsonArray('references-data');
+
+    var refContainer = document.getElementById('references-container');
+    var refEmpty = document.getElementById('references-empty');
+
+    if (!references || references.length === 0) {
+        refEmpty.style.display = 'block';
+    } else {
+        for (var i = 0; i < references.length; i++) {
+            var ref = references[i];
+            var statusVal = parseInt(ref.status, 10);
+            var statusDot = statusVal === 1 ? 'dot-green' : 'dot-red';
+
+            var refItem = document.createElement('div');
+            refItem.className = 'ref-item';
+            if (statusVal === 0) { refItem.classList.add('ref-disabled'); }
+
+            // Header: 狀態圓點 + 日期
+            var header = document.createElement('div');
+            header.className = 'ref-header';
+            header.innerHTML =
+                '<span class="status-dot ' + statusDot + '"></span>' +
+                '<span class="ref-date">' + escapeHtml(ref.date || '') + '</span>';
+            refItem.appendChild(header);
+
+            // 內容
+            var content = document.createElement('div');
+            content.className = 'ref-content';
+            content.textContent = ref.content || '';
+            refItem.appendChild(content);
+
+            // 語音頭像列
+            var refAudios = ref.audios || [];
+            if (refAudios.length > 0 || document.getElementById('tg-bot-data').textContent.trim()) {
+                var avatarRow = document.createElement('div');
+                avatarRow.className = 'avatar-row';
+
+                for (var j = 0; j < refAudios.length; j++) {
+                    avatarRow.appendChild(scCreateAvatarBtn(refAudios[j], j));
+                }
+
+                var tgBtn = scCreateTgBtn('ref', i);
+                if (tgBtn) avatarRow.appendChild(tgBtn);
+
+                refItem.appendChild(avatarRow);
+            }
+
+            refContainer.appendChild(refItem);
+        }
+    }
+})();
+</script>
