@@ -1,0 +1,51 @@
+name: fluencytides-frontend
+services:
+  frontend:
+    image: jacky917/fluencytides-frontend:latest
+    container_name: fluencytides-frontend
+    restart: unless-stopped
+    ports:
+      # CasaOS 預設會佔用 80 端口，所以建議前端對外開在 8080 或 8001
+      # 這裡預設將本機的 8080 映射到容器內的 80 (Nginx)
+      - "8080:80"
+      
+    environment:
+      - TZ=Asia/Tokyo
+      
+    # 將前端容器明確加入我們自訂的 Docker 網路
+    networks:
+      - fluencytides_net
+      
+    # 前端純靜態網頁，不需要掛載資料卷 (Volumes)，也不需要 env_file
+    # (因為環境變數在 build 階段就已經打包進 JS 裡面了)
+      
+    x-casaos:
+      ports:
+        - container: "80"
+          description:
+            en_US: Web UI Port
+            zh_CN: 網頁前端端口
+
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+    - arm
+  main: frontend
+  description:
+    en_US: FluencyTides Web Frontend UI (React + Vite).
+    zh_CN: FluencyTides 網頁前端 (React + Vite)，提供直觀的知識圖譜與卡片生成介面。
+  store_app_id: fluencytides-frontend
+  title:
+    en_US: FluencyTides Web UI
+    zh_CN: FluencyTides 前端
+  # 使用 React 的圖示來代表前端
+  icon: "https://images.icon-icons.com/2699/PNG/512/nginx_logo_icon_169915.png"
+  index: /
+  port_map: "8080"
+  scheme: "http"
+
+# 定義外部網路，指向後端建立的自訂網路 (fluencytides_net)
+networks:
+  fluencytides_net:
+    external: true

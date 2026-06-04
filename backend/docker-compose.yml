@@ -1,0 +1,59 @@
+name: fluencytides
+services:
+  backend:
+    image: jacky917/fluencytides-backend:latest
+    container_name: fluencytides-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+      
+    # 密鑰掛載：啟動時從 CasaOS 主機讀取機密變數
+    env_file:
+      - /DATA/AppData/FluencyTides/backend/.env
+      
+    # 保持原本的環境變數設定 (例如時區)
+    environment:
+      - TZ=Asia/Tokyo
+      
+    volumes:
+      # 將 SQLite 資料庫獨立放在一個資料夾中進行映射，避免覆蓋到容器內的程式碼
+      - /DATA/AppData/FluencyTides/backend/data:/app/data
+      
+    # 明確指定加入自訂網路
+    networks:
+      - fluencytides_net
+      
+    x-casaos:
+      ports:
+        - container: "8000"
+          description:
+            en_US: API Port
+            zh_CN: API 端口
+      volumes:
+        - container: /app/data
+          description:
+            en_US: Database Storage
+            zh_CN: 資料庫儲存區
+
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+    - arm
+  main: backend
+  description:
+    en_US: FluencyTides Backend Service running on FastAPI.
+    zh_CN: FluencyTides 後端 API 服務 (FastAPI)，提供語言學習與 Telegram Bot 核心邏輯。
+  store_app_id: fluencytides-backend
+  title:
+    en_US: FluencyTides API
+    zh_CN: FluencyTides 後端
+  icon: https://cdn.jsdelivr.net/gh/WalkxCode/dashboard-icons/png/fastapi.png
+  index: /docs
+  port_map: "8000"
+  scheme: "http"
+
+# 定義外部網路，指向後端建立的自訂網路 (fluencytides_net)
+networks:
+  fluencytides_net:
+    external: true

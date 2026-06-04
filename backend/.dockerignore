@@ -1,0 +1,49 @@
+# =========================
+# Backend .dockerignore
+# =========================
+
+# 1. 環境變數與機密金鑰 (絕對不能包進 Image)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# 2. 本地資料庫 (避免蓋掉線上資料庫或把測試資料包進去)
+*.db
+*.sqlite3
+
+# 3. Python 虛擬環境 (容器內有自己的全域 Python 環境)
+venv/
+.venv/
+env/
+.env_venv/
+ENV/
+
+# 4. Python 快取與編譯檔 (減少映像檔體積)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+
+# 5. 測試與覆蓋率報告
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# 6. 日誌檔案
+*.log
+
+# 7. 作業系統與編輯器設定
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

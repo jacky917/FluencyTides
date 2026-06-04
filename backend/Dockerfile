@@ -14,6 +14,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     --no-install-recommends \
     curl \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # 5. 依賴安裝分離 (利用 Docker 快取機制加速部署)
@@ -23,7 +24,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # 6. 複製專案原始碼
-COPY .. .
+COPY . .
 
 # 7. 安全性升級：建立並切換為非 root 使用者
 # 在處理包含 API Keys 或自動化生成內容的服務時，降權執行是防止容器逃逸的標準防護
@@ -33,5 +34,5 @@ USER apiuser
 # 8. 宣告對外 Port
 EXPOSE 8000
 
-# 9. 啟動指令 (假設你的 FastAPI 實例叫做 app，放在 main.py 中)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 9. 啟動指令 (FastAPI 實例位於 app/main.py)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
