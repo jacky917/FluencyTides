@@ -125,10 +125,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             webhook_info = await bot.get_webhook_info()
             if webhook_info.url != settings.tg_webhook_url:
                 logger.info("🔧 準備設定 Telegram Webhook: %s", settings.tg_webhook_url)
+                
+                secret_token = settings.TG_WEBHOOK_SECRET
+                if secret_token:
+                    masked = f"{secret_token[:3]}***{secret_token[-3:]}" if len(secret_token) > 6 else "***"
+                    logger.info("🔒 帶上 Webhook Secret Token 進行綁定: %s", masked)
+                
                 await bot.set_webhook(
                     url=settings.tg_webhook_url,
                     allowed_updates=dp.resolve_used_update_types(),
                     drop_pending_updates=True,
+                    secret_token=secret_token,
                 )
             
             # 驗證綁定結果

@@ -26,6 +26,18 @@ async def telegram_webhook(request: Request) -> dict[str, object]:
         logger.warning("收到 Webhook 請求，但 Bot 或 Dispatcher 尚未初始化。")
         return {"status": "bot_disabled"}
 
+    # 驗證 Secret Token (防禦惡意請求)
+    if settings.TG_WEBHOOK_SECRET:
+        secret_header = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        if secret_header != settings.TG_WEBHOOK_SECRET:
+            masked_expected = f"{settings.TG_WEBHOOK_SECRET[:3]}***{settings.TG_WEBHOOK_SECRET[-3:]}" if len(settings.TG_WEBHOOK_SECRET) > 6 else "***"
+            if secret_header:
+                masked_actual = f"{secret_header[:3]}***{secret_header[-3:]}" if len(secret_header) > 6 else "***"
+            else:
+                masked_actual = "None"
+            logger.warning("🚫 Webhook 密鑰驗證失敗！期望: %s, 實際收到: %s", masked_expected, masked_actual)
+            return {"status": "unauthorized"}
+
     try:
         update_data = await request.json()
         update = Update(**update_data)

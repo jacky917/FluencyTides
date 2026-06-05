@@ -47,3 +47,12 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+
+# 8. Git 與 GitHub (機密防漏)
+.git/
+.gitignore
+.github/
+
+# 9. 本地專案與資料
+data/
+frontend/

@@ -193,8 +193,8 @@ class AnkiModelManager:
             duplicateScope="deck",
             duplicateScopeOptions={
                 "deckName": deck_name,
-                "checkChildren": "false",
-                "checkAllModels": "false",
+                "checkChildren": False,
+                "checkAllModels": False,
             },
         )
 
@@ -377,11 +377,33 @@ class AnkiModelManager:
             model_name,
             deck_name,
         )
+        
+        # 取得模型所有定義的欄位，並補齊空字串
+        # AnkiConnect 的 canAddNotes 若發現欄位缺失，會直接回傳 False (被誤認為重複)
+        full_fields = {}
+        all_models = self.list_available_models()
+        target_model = next((m for m in all_models if m.model_name == model_name), None)
+        if target_model and target_model.fields:
+            for f in target_model.fields:
+                full_fields[f] = ""
+        
+        # 覆蓋傳入的測試欄位 (通常是 Primary Field)
+        full_fields.update(fields)
+
         notes_to_check: list[dict[str, object]] = [
             {
                 "deckName": deck_name,
                 "modelName": model_name,
-                "fields": fields,
+                "fields": full_fields,
+                "options": {
+                    "allowDuplicate": False,
+                    "duplicateScope": "deck",
+                    "duplicateScopeOptions": {
+                        "deckName": deck_name,
+                        "checkChildren": False,
+                        "checkAllModels": False,
+                    },
+                },
             }
         ]
 

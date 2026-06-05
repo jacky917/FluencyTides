@@ -182,6 +182,10 @@ class Settings(BaseSettings):
         default="/api/webhook",
         description="Webhook 接收路徑",
     )
+    TG_WEBHOOK_SECRET: str | None = Field(
+        default=None,
+        description="Webhook 密鑰，用於驗證來自 Telegram 的請求。若設定，將會在 setWebhook 時自動帶上。",
+    )
     TG_DEFAULT_DECK: str = Field(
         default="Default",
         description="Telegram 預設生成使用的牌組",

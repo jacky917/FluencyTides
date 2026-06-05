@@ -1,7 +1,7 @@
 name: fluencytides
 services:
   backend:
-    image: jacky917/fluencytides-backend:latest
+    image: ghcr.io/jacky917/fluencytides-backend:latest
     container_name: fluencytides-backend
     restart: unless-stopped
     ports:

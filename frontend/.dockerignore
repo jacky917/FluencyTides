@@ -16,8 +16,21 @@ dist-ssr/
 .DS_Store
 Thumbs.db
 
+# 4. 環境變數與機密金鑰
+.env
+.env.*
+!.env.example
+
 # 5. 日誌
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# 6. Git 與 GitHub (機密防漏)
+.git/
+.gitignore
+.github/
+
+# 7. 後端相關
+backend/

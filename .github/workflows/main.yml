@@ -1,3 +1,19 @@
+# =============================================================================
+# FluencyTides CI/CD Pipeline
+# =============================================================================
+# 觸發條件：推送至 main 分支時執行完整的 CI/CD 流程
+# 流程概覽：
+#   1. 偵測哪些路徑發生變更 (detect-changes)
+#   2. 後端：Lint → Build & Push Docker Image → 觸發 Portainer Webhook 重新佈署
+#   3. 前端：Type Check → Build & Push Docker Image → 觸發 Portainer Webhook 重新佈署
+#
+# 所需 GitHub Secrets (在 Settings → Secrets and variables → Actions 中設定)：
+#   - DOCKERHUB_USERNAME    : Docker Hub 使用者名稱
+#   - DOCKERHUB_TOKEN       : Docker Hub Access Token (非密碼)
+#   - PORTAINER_WEBHOOK_BACKEND  : 後端 Portainer Webhook URL
+#   - PORTAINER_WEBHOOK_FRONTEND : 前端 Portainer Webhook URL
+# =============================================================================
+
 name: CI/CD Pipeline
 
 on:
@@ -6,36 +22,191 @@ on:
   pull_request:
     branches: [ "main" ]
 
+# 同一分支的新推送會自動取消舊的 workflow，節省 runner 資源
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# 設定 GitHub Token 權限，允許推送到 GHCR
+permissions:
+  contents: read
+  packages: write
+
+# =============================================================================
+# Job 1: 偵測變更路徑，決定後續哪些 Job 需要執行
+# =============================================================================
 jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    # 僅在 push 事件才偵測 (PR 事件全部執行 lint/build)
+    if: github.event_name == 'push'
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
+
+  # =============================================================================
+  # Job 2: 後端 Lint & 測試
+  # =============================================================================
   backend-lint-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install ruff
-        if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
-    - name: Lint with Ruff
-      run: |
-        ruff check backend/app
-    
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+          if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
+      - name: Lint with Ruff
+        run: |
+          ruff check backend/app
+
+  # =============================================================================
+  # Job 3: 前端 Type Check & Build 驗證
+  # =============================================================================
   frontend-build:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./frontend
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: "20"
-    - name: Install dependencies
-      run: npm install
-    - name: Type check
-      run: npm run build
+      - uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm ci
+      - name: Type check & Build
+        run: npm run build
+
+  # =============================================================================
+  # Job 4: 後端 Docker Image 建構 & 推送至 Docker Hub
+  # =============================================================================
+  backend-docker:
+    runs-on: ubuntu-latest
+    # 僅在 push to main 且後端有變更時執行；lint 必須先通過
+    needs: [ detect-changes, backend-lint-test ]
+    if: |
+      github.event_name == 'push' &&
+      needs.detect-changes.outputs.backend == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Backend Image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/jacky917/fluencytides-backend:latest
+            ghcr.io/jacky917/fluencytides-backend:${{ github.sha }}
+          # 利用 GitHub Actions Cache 加速後續建置
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # 支援多架構 (與 docker-compose.yml 中 x-casaos.architectures 對齊)
+          platforms: linux/amd64,linux/arm64
+
+  # =============================================================================
+  # Job 5: 前端 Docker Image 建構 & 推送至 Docker Hub
+  # =============================================================================
+  frontend-docker:
+    runs-on: ubuntu-latest
+    # 僅在 push to main 且前端有變更時執行；build 驗證必須先通過
+    needs: [ detect-changes, frontend-build ]
+    if: |
+      github.event_name == 'push' &&
+      needs.detect-changes.outputs.frontend == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Frontend Image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/jacky917/fluencytides-frontend:latest
+            ghcr.io/jacky917/fluencytides-frontend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+
+  # =============================================================================
+  # Job 6: 觸發 Portainer Webhook → 自動重新佈署容器
+  # =============================================================================
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [ detect-changes, backend-docker, frontend-docker ]
+    # 使用 always() 確保即使某個 docker job 被 skip 也能執行
+    # 條件：至少有一個 docker job 成功完成 (非 skip/failure)
+    if: |
+      always() &&
+      github.event_name == 'push' &&
+      (needs.backend-docker.result == 'success' || needs.frontend-docker.result == 'success')
+    steps:
+      - name: Trigger Backend Redeploy
+        # 僅當後端 image 成功推送時才觸發
+        if: needs.backend-docker.result == 'success'
+        run: |
+          echo "🚀 Triggering backend container redeploy via Portainer webhook..."
+          curl -s -o /dev/null -w "HTTP Status: %{http_code}\n" \
+            -H "CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}" \
+            -H "CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}" \
+            -X POST "${{ secrets.PORTAINER_WEBHOOK_BACKEND }}"
+
+      - name: Trigger Frontend Redeploy
+        # 僅當前端 image 成功推送時才觸發
+        if: needs.frontend-docker.result == 'success'
+        run: |
+          echo "🚀 Triggering frontend container redeploy via Portainer webhook..."
+          curl -s -o /dev/null -w "HTTP Status: %{http_code}\n" \
+            -H "CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}" \
+            -H "CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}" \
+            -X POST "${{ secrets.PORTAINER_WEBHOOK_FRONTEND }}"
+
+      - name: Deployment Summary
+        run: |
+          echo "============================================="
+          echo "  FluencyTides Deployment Summary"
+          echo "============================================="
+          echo "  Commit:   ${{ github.sha }}"
+          echo "  Branch:   ${{ github.ref_name }}"
+          echo "  Backend:  ${{ needs.backend-docker.result }}"
+          echo "  Frontend: ${{ needs.frontend-docker.result }}"
+          echo "============================================="
