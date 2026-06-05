@@ -15,7 +15,6 @@
       對齊 VOICEPEAK CLI 的合法參數範圍。
 """
 
-from pathlib import Path
 
 from pydantic import BaseModel, Field
 

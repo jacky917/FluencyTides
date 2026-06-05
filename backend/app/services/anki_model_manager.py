@@ -24,9 +24,7 @@ from pathlib import Path
 
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from app.schemas.anki import (
-    AnkiCardTemplate,
     AnkiModelInfo,
-    AnkiModelPayload,
     AnkiNote,
     AnkiNoteOptions,
 )

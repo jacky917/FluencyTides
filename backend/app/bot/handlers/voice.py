@@ -60,8 +60,8 @@ async def process_voice_handler(
 
     card_id = state.card_id
     status_msg = await message.reply(
-        f"🔄 <b>處理中...</b>\n\n"
-        f"步驟 1/4: 正在下載語音..."
+        "🔄 <b>處理中...</b>\n\n"
+        "步驟 1/4: 正在下載語音..."
     )
 
     # ── Step 1: 下載語音檔 ──

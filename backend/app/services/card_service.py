@@ -28,17 +28,20 @@ import base64
 import json
 from datetime import datetime, timezone
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.infrastructure.audio_evaluator.base import BaseAudioEvaluator
 
 from app.core.exceptions import (
     AnkiServiceError,
     DeckNotFoundError,
     DuplicateCardError,
-    LLMServiceError,
     ModelFileNotFoundError,
 )
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from app.infrastructure.llm.client import LLMClient
-from app.schemas.anki import AnkiDeckInfo, AnkiModelInfo
+from app.schemas.anki import AnkiDeckInfo
 from app.schemas.card import CardGenerateRequest, CardGenerateResponse
 from app.services.anki_model_manager import AnkiModelManager
 from app.services.prompt_manager import PromptManager

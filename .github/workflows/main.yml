@@ -8,10 +8,10 @@
 #   3. 前端：Type Check → Build & Push Docker Image → 觸發 Portainer Webhook 重新佈署
 #
 # 所需 GitHub Secrets (在 Settings → Secrets and variables → Actions 中設定)：
-#   - DOCKERHUB_USERNAME    : Docker Hub 使用者名稱
-#   - DOCKERHUB_TOKEN       : Docker Hub Access Token (非密碼)
 #   - PORTAINER_WEBHOOK_BACKEND  : 後端 Portainer Webhook URL
 #   - PORTAINER_WEBHOOK_FRONTEND : 前端 Portainer Webhook URL
+#   - CF_ACCESS_CLIENT_ID        : Cloudflare Zero Trust Client ID
+#   - CF_ACCESS_CLIENT_SECRET    : Cloudflare Zero Trust Client Secret
 # =============================================================================
 
 name: CI/CD Pipeline

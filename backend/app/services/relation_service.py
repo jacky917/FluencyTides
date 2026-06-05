@@ -9,8 +9,13 @@
 
 import logging
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
-from sqlalchemy import and_, delete, func, or_, select, update
+if TYPE_CHECKING:
+    from app.schemas.relation import CardRelationDelete
+    from app.schemas.anki import AnkiNoteInfo
+
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.database.models import CardRelation, RelationType
