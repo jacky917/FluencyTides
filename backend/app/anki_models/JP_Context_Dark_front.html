@@ -1,0 +1,20 @@
+<div class="card front-card">
+    <div class="section">
+        <div class="section-title" style="color: #9b59b6;">📝 情境概要 (Summary)</div>
+        <div class="summary-text">{{Summary}}</div>
+    </div>
+    <div class="action-btn-row">
+        <button class="action-btn" onclick="openMasterCard()">🔍 查看母卡片</button>
+    </div>
+</div>
+<div id="master-note-id-data" style="display:none;">{{Master_Note_ID}}</div>
+<script>
+    function openMasterCard() {
+        var masterId = (document.getElementById('master-note-id-data').textContent || '').trim();
+        if (!masterId) return;
+        fetch('http://127.0.0.1:8765', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'guiBrowse', version: 6, params: { query: 'nid:' + masterId } })
+        }).catch(function() {});
+    }
+</script>

@@ -6,6 +6,10 @@ import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Loader2, Trash2, X } from 'lucide-react'
 
+/**
+ * CardDetailModal 元件的 Props。
+ * Props for the CardDetailModal component.
+ */
 interface CardDetailModalProps {
   isOpen: boolean
   onClose: () => void
@@ -13,6 +17,15 @@ interface CardDetailModalProps {
   isLoading: boolean
 }
 
+/**
+ * 卡片詳情彈窗：檢視、編輯與刪除單一 Anki 卡片欄位。
+ * Card detail modal: view, edit, and delete a single Anki card's fields.
+ * @param isOpen - 是否開啟彈窗。Whether the modal is open.
+ * @param onClose - 關閉彈窗的回呼。Callback to close the modal.
+ * @param cardDetail - 卡片詳情資料。Card detail data.
+ * @param isLoading - 是否正在載入卡片。Whether the card is loading.
+ * @returns 彈窗 JSX 或 null。Modal JSX or null.
+ */
 export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading }: CardDetailModalProps) {
   const queryClient = useQueryClient()
   const [fields, setFields] = useState<Record<string, string>>({})
@@ -27,7 +40,10 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading }: Card
 
   const updateMutation = useMutation({
     mutationFn: (updatedFields: Record<string, string>) => 
-      FluencyTidesAPI.updateCard(cardDetail!.note_id, updatedFields),
+      FluencyTidesAPI.updateCard('vocabulary_mining', cardDetail!.note_id, { 
+        action: 'update_fields', 
+        fields: updatedFields 
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['graph'] })
       onClose()
@@ -38,7 +54,7 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading }: Card
   })
 
   const deleteMutation = useMutation({
-    mutationFn: () => FluencyTidesAPI.deleteCard(cardDetail!.note_id),
+    mutationFn: () => FluencyTidesAPI.deleteCard('vocabulary_mining', cardDetail!.note_id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['graph'] })
       onClose()

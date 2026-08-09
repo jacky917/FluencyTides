@@ -1,0 +1,53 @@
+<div class="card front-card">
+    <div class="expression-box">
+        <div class="topic-tag">🗣️ 我的外語 (My Original)</div>
+        <div class="prompt-content" style="color: #95a5a6; font-style: italic;">{{My_Original}}</div>
+    </div>
+
+    {{#Context}}
+    <div class="section context-section">
+        <div class="section-title">📖 文脈 (Context)</div>
+        <div id="context-container" class="chat-container"></div>
+    </div>
+    {{/Context}}
+</div>
+
+<div id="context-data" style="display:none;">{{Context}}</div>
+<div id="card-id-data" style="display:none;">{{Card_ID}}</div>
+<div id="tg-bot-data" style="display:none;">{{TG_Bot}}</div>
+
+<script>
+    (function () {
+        var raw = (document.getElementById('context-data') || {}).textContent || '';
+        raw = raw.trim();
+        var container = document.getElementById('context-container');
+        if (!container || !raw) return;
+
+        var contextList = [];
+        try {
+            contextList = JSON.parse(raw);
+        } catch (e) {
+            container.innerHTML = '<div class="section-content">' + raw + '</div>';
+            return;
+        }
+
+        if (Array.isArray(contextList) && contextList.length > 0) {
+            var n = contextList.length;
+            for (var i = 0; i < n; i++) {
+                var msg = contextList[i].text || '';
+                var diff = n - 1 - i;
+                var isLeft = (diff % 2 === 0);
+
+                var bubbleWrap = document.createElement('div');
+                bubbleWrap.className = 'chat-bubble-wrap ' + (isLeft ? 'chat-left' : 'chat-right');
+
+                var bubble = document.createElement('div');
+                bubble.className = 'chat-bubble';
+                bubble.textContent = msg;
+
+                bubbleWrap.appendChild(bubble);
+                container.appendChild(bubbleWrap);
+            }
+        }
+    })();
+</script>

@@ -1,0 +1,144 @@
+<div class="card back-card type-{{Card_Type}}">
+    <div class="expression-box dynamic-border">
+        <div class="topic-tag dynamic-text">🎯 正確表達 (Target Phrase)</div>
+        <div class="prompt-content">{{Target_Phrase}}</div>
+        <div id="phrase-avatars" class="avatar-row"></div>
+    </div>
+
+    <div class="section context-section">
+        <div class="section-title">📖 完整句子</div>
+        <div class="section-content">{{Context_Sentence}}</div>
+    </div>
+
+    {{#Error_Hint}}
+    <div class="section recordings-section">
+        <div class="section-title">⚠️ 錯誤提示 (Hint)</div>
+        <div class="section-content" style="font-size: 16px;">{{Error_Hint}}</div>
+    </div>
+    {{/Error_Hint}}
+
+    <div id="back-to-master-btn" class="rec-submit-btn" style="margin-top: 24px; cursor: pointer;" onclick="openMasterCard()">
+        <span class="rec-submit-icon">🔍</span>
+        <span class="rec-submit-text">查看母卡片</span>
+    </div>
+</div>
+
+<!-- 隱藏欄位供 JS 解析 -->
+<div id="phrase-audios-data" style="display:none;">{{Phrase_Audios}}</div>
+<div id="card-id-data" style="display:none;">{{Card_ID}}</div>
+<div id="tg-bot-data" style="display:none;">{{TG_Bot}}</div>
+<div id="master-note-id-data" style="display:none;">{{Master_Note_ID}}</div>
+
+<script>
+
+    // JS 音訊播放控制 (與 Speaking_Coach_Dark 一致)
+    var _scCurrentAudio = null;
+    var _scActiveBtn = null;
+
+    function scPlayAudio(filename, btn) {
+        if (event) { event.stopPropagation(); event.preventDefault(); }
+        if (_scCurrentAudio && _scActiveBtn === btn) {
+            _scCurrentAudio.pause();
+            _scCurrentAudio.currentTime = 0;
+            _scCurrentAudio = null;
+            btn.classList.remove('playing');
+            _scActiveBtn = null;
+            return;
+        }
+        if (_scCurrentAudio) {
+            _scCurrentAudio.pause();
+            _scCurrentAudio.currentTime = 0;
+            if (_scActiveBtn) _scActiveBtn.classList.remove('playing');
+        }
+        var audio = new Audio(filename);
+        _scCurrentAudio = audio;
+        _scActiveBtn = btn;
+        btn.classList.add('playing');
+        audio.onended = function () { btn.classList.remove('playing'); _scCurrentAudio = null; _scActiveBtn = null; };
+        audio.onerror = function () { btn.classList.remove('playing'); _scCurrentAudio = null; _scActiveBtn = null; };
+        audio.play();
+    }
+
+    function scCreateAvatarBtn(item) {
+        var btn = document.createElement('div');
+        btn.className = 'avatar-btn';
+        btn.title = item.speaker || '';
+        btn.onclick = function (e) { scPlayAudio(item.audio, btn); };
+        if (item.avatar && item.avatar !== "none") {
+            var img = document.createElement('img');
+            img.src = item.avatar;
+            img.alt = item.speaker || 'voice';
+            btn.appendChild(img);
+        } else {
+            btn.innerHTML = '<span class="avatar-icon">▶</span>';
+        }
+        return btn;
+    }
+
+    function scCreateTgBtn(action, fieldName, iconText, titleText) {
+        var cardId = (document.getElementById('card-id-data').textContent || '').trim();
+        var tgBot = (document.getElementById('tg-bot-data').textContent || '').trim();
+        if (!tgBot) return null;
+
+        var param = action + '-' + fieldName + '-none-' + encodeURIComponent(cardId);
+        var isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        var tgBase = isMobile ? 'tg://resolve?domain=' : 'https://t.me/';
+        var tgParam = isMobile ? '&start=' : '?start=';
+        var deepLink = tgBase + tgBot + tgParam + param;
+
+        var btn = document.createElement('a');
+        btn.className = 'avatar-btn tg-add-btn';
+        btn.href = deepLink;
+        btn.title = titleText || '透過 Telegram 執行';
+        btn.onclick = function (e) { e.stopPropagation(); };
+        btn.innerHTML = '<span class="avatar-icon">' + (iconText || '＋') + '</span>';
+        return btn;
+    }
+
+    (function () {
+        var raw = (document.getElementById('phrase-audios-data').textContent || '').trim();
+        var audios = [];
+        try { audios = JSON.parse(raw); } catch (e) { audios = []; }
+
+        var container = document.getElementById('phrase-avatars');
+        if (!container) return;
+
+        var hasValidAudio = false;
+        if (audios && audios.length > 0) {
+            for (var i = 0; i < audios.length; i++) {
+                if (audios[i].audio) {
+                    container.appendChild(scCreateAvatarBtn(audios[i]));
+                    hasValidAudio = true;
+                }
+            }
+        }
+
+        if (!hasValidAudio) {
+            var ttsBtn = scCreateTgBtn('ttsaudio', 'Phrase_Audios', 'AI', '透過 AI TTS 生成語音');
+            if (ttsBtn) container.appendChild(ttsBtn);
+        }
+    })();
+
+    /**
+     * 透過 AnkiConnect 的 guiBrowse API 打開母卡片。
+     * 不依賴任何第三方插件，直接利用已安裝的 AnkiConnect
+     * 在 Anki 瀏覽器中搜尋並顯示指定 Note ID 的卡片。
+     */
+    function openMasterCard() {
+        var masterNoteId = (document.getElementById('master-note-id-data').textContent || '').trim();
+        if (!masterNoteId) return;
+
+        fetch('http://127.0.0.1:8765', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'guiBrowse',
+                version: 6,
+                params: { query: 'nid:' + masterNoteId }
+            })
+        }).catch(function () {
+            // 若 AnkiConnect 無法連線（例如行動裝置），靜默失敗
+        });
+    }
+
+</script>

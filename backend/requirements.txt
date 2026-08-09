@@ -7,11 +7,14 @@ python-multipart>=0.0.6
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
+loguru>=0.7.2
 
 # ─── Database & ORM ──────────────────────────────────────────────────
 sqlmodel>=0.0.22
 aiosqlite>=0.20.0
 alembic>=1.13.0
+aiomysql>=0.2.0
+cryptography>=41.0.0
 
 # ─── Async Clients & AI Integration ──────────────────────────────────
 httpx>=0.24.0
@@ -22,3 +25,4 @@ jinja2>=3.1.0
 # ─── Storage & External Services ─────────────────────────────────────
 minio>=7.2.0
 aiogram>=3.4.0
+elasticsearch[async]>=8.13.0,<9.0.0

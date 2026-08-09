@@ -5,6 +5,13 @@
 連動刪除（清理孤兒節點）以及高效的知識圖譜資料查詢。
 
 此模組實作了 Phase 5 計畫中的 RelationService。
+
+Card relation business-logic service module.
+
+Interacts with the CardRelation table in the database, providing
+creation, batch creation, cascade deletion (orphan cleanup), and
+efficient knowledge-graph data queries. Implements the RelationService
+described in the Phase 5 plan.
 """
 
 import logging
@@ -27,18 +34,25 @@ logger = logging.getLogger(__name__)
 class RelationService:
     """卡片關聯管理服務。
 
+    Card relation management service.
+
     提供操作關聯資料庫（CardRelation 表）的方法，
     並抽象出前端 react-force-graph 所需的 graph_data 結構轉換。
 
+    Provides methods operating on the CardRelation table and abstracts
+    the graph_data structure needed by the react-force-graph frontend.
+
     Attributes:
-        _db_session: 注入的非同步資料庫 Session。
+        _db_session: 注入的非同步資料庫 Session。Injected async DB session.
     """
 
     def __init__(self, db_session: AsyncSession) -> None:
         """初始化 RelationService。
 
+        Initialize the RelationService.
+
         Args:
-            db_session: 注入的 AsyncSession 實例。
+            db_session: 注入的 AsyncSession 實例。Injected AsyncSession.
         """
         self._db_session = db_session
 
@@ -47,11 +61,13 @@ class RelationService:
     ) -> CardRelationRead:
         """建立單筆卡片關聯。
 
+        Create a single card relation.
+
         Args:
-            request: CardRelationCreate DTO。
+            request: CardRelationCreate DTO。CardRelationCreate DTO.
 
         Returns:
-            已建立的 CardRelationRead 實例。
+            已建立的 CardRelationRead 實例。The created CardRelationRead.
         """
         await self.get_or_create_relation_type(request.relation_type)
         
@@ -72,13 +88,17 @@ class RelationService:
     ) -> list[CardRelationRead]:
         """批次建立多筆卡片關聯。
 
+        Batch-create multiple card relations.
+
         使用 add_all 優化寫入效能。若列表為空則直接返回。
+        Uses add_all for write performance; returns early on empty input.
 
         Args:
-            requests: CardRelationCreate DTO 列表。
+            requests: CardRelationCreate DTO 列表。List of DTOs.
 
         Returns:
-            已建立的 CardRelationRead 實例列表。
+            已建立的 CardRelationRead 實例列表。Created CardRelationRead
+            instances.
         """
         if not requests:
             return []
@@ -103,14 +123,18 @@ class RelationService:
     async def delete_relations_by_note_id(self, note_id: int) -> int:
         """根據 Note ID 清理所有相關的關聯。
 
+        Clean up all relations referring to the given note ID.
+
         執行雙向刪除：只要 source_note_id 或 target_note_id 等於該 note_id，
         就會被刪除。用於卡片被刪除時避免產生死連結（孤兒節點）。
+        Bidirectional delete: rows whose source_note_id or target_note_id
+        equals note_id are removed, preventing dangling links.
 
         Args:
-            note_id: 目標 Anki Note ID。
+            note_id: 目標 Anki Note ID。Target Anki note ID.
 
         Returns:
-            被刪除的關聯記錄數量。
+            被刪除的關聯記錄數量。Number of deleted relation rows.
         """
         stmt = delete(CardRelation).where(
             or_(
@@ -130,15 +154,21 @@ class RelationService:
     async def sync_with_anki(self, valid_note_ids: list[int]) -> int:
         """根據 Anki 現存的 Note ID，清理資料庫中的孤兒關聯。
 
+        Remove orphan relations not backed by existing Anki note IDs.
+
         若 CardRelation 的 source_note_id 或 target_note_id
         (非 None 時) 不存在於 valid_note_ids，則將該筆關聯刪除。
         這確保了資料庫關聯 (為輔) 嚴格追隨 Anki 卡片 (為主)。
+        A relation is deleted if its non-null source_note_id or
+        target_note_id is absent from valid_note_ids, keeping the DB
+        (secondary) strictly following Anki (primary).
 
         Args:
-            valid_note_ids: 當前 Anki 中所有存在的 Note ID 列表。
+            valid_note_ids: 當前 Anki 中所有存在的 Note ID 列表。All note
+                IDs currently existing in Anki.
 
         Returns:
-            被刪除的孤兒關聯記錄數量。
+            被刪除的孤兒關聯記錄數量。Number of deleted orphan rows.
         """
         stmt = delete(CardRelation).where(
             or_(
@@ -162,11 +192,13 @@ class RelationService:
     async def delete_relations_for_note(self, note_id: int) -> int:
         """刪除指定筆記的所有關聯（無論是來源或目標）。
 
+        Delete all relations of the note (as source or target).
+
         Args:
-            note_id: 筆記 ID。
+            note_id: 筆記 ID。Note ID.
 
         Returns:
-            刪除的紀錄數量。
+            刪除的紀錄數量。Number of deleted rows.
         """
         stmt = delete(CardRelation).where(
             or_(
@@ -183,14 +215,18 @@ class RelationService:
     async def update_source_label(self, note_id: int, new_label: str) -> int:
         """更新關聯紀錄中的 source_label。
 
+        Update the redundant source_label on relation rows.
+
         當 Anki 卡片的主要欄位 (如 Expression) 改變時，同步更新冗餘資料。
+        Keeps the denormalized label in sync when the card's primary
+        field (e.g. Expression) changes.
 
         Args:
-            note_id: 來源筆記 ID。
-            new_label: 新的標籤文字。
+            note_id: 來源筆記 ID。Source note ID.
+            new_label: 新的標籤文字。New label text.
 
         Returns:
-            更新的紀錄數量。
+            更新的紀錄數量。Number of updated rows.
         """
         stmt = (
             update(CardRelation)
@@ -204,13 +240,27 @@ class RelationService:
         return updated_count
 
     async def get_all_relation_types(self) -> list[str]:
-        """取得所有已註冊的關聯類型名稱。"""
+        """取得所有已註冊的關聯類型名稱。
+
+        Get all registered relation type names.
+
+        Returns:
+            按名稱排序的關聯類型字串列表。Relation type names sorted by
+            name.
+        """
         stmt = select(RelationType.name).order_by(RelationType.name)
         result = await self._db_session.execute(stmt)
         return list(result.scalars().all())
 
     async def get_or_create_relation_type(self, name: str) -> None:
-        """確保關聯類型存在於資料庫中，若不存在則自動新增。"""
+        """確保關聯類型存在於資料庫中，若不存在則自動新增。
+
+        Ensure the relation type exists in the DB, auto-registering it.
+
+        Args:
+            name: 關聯類型名稱（將被正規化為小寫）。Relation type name
+                (normalized to lowercase).
+        """
         name = name.strip().lower()
         if not name:
             return
@@ -227,14 +277,20 @@ class RelationService:
         self, request: "CardRelationDelete"
     ) -> dict[str, int]:
         """精準刪除特定關聯（包含雙向）。
-        
+
+        Precisely delete a specific relation (both directions).
+
         刪除兩個節點之間特定 relation_type 的所有連線 (A->B 與 B->A)。
-        
+        Removes all links of the given relation_type between the two
+        nodes (A->B and B->A).
+
         Args:
-            request: 包含 source_label, target_label, relation_type 的 DTO。
-            
+            request: 包含 source_label, target_label, relation_type 的
+                DTO。DTO with source_label, target_label, relation_type.
+
         Returns:
-            刪除的紀錄數量 {"deleted_count": N}。
+            刪除的紀錄數量 {"deleted_count": N}。Dict with the deleted row
+            count.
         """
         condition = and_(
             CardRelation.relation_type == request.relation_type,
@@ -261,6 +317,36 @@ class RelationService:
         )
         return {"deleted_count": deleted_count}
 
+    async def get_relations_by_note_ids(
+        self, note_ids: set[int] | None = None
+    ) -> list["CardRelation"]:
+        """根據一組 Note IDs 查詢相關的所有關聯紀錄。
+
+        Query relation rows related to a set of note IDs.
+
+        若傳入 note_ids，只查詢 source 或 target 包含在內的關聯。
+        若傳入 None 或空集合，查詢全部。
+        With note_ids, only relations whose source or target is included
+        are returned; None or an empty set returns all rows.
+
+        Args:
+            note_ids: 要篩選的 Note ID 集合 (可選)。Optional set of note
+                IDs to filter by.
+
+        Returns:
+            CardRelation ORM 實例列表。List of CardRelation ORM instances.
+        """
+        stmt = select(CardRelation)
+        if note_ids:
+            stmt = stmt.where(
+                or_(
+                    CardRelation.source_note_id.in_(note_ids),
+                    CardRelation.target_note_id.in_(note_ids),
+                )
+            )
+        result = await self._db_session.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_graph_data(
         self, 
         notes_info: list["AnkiNoteInfo"] | None = None,
@@ -268,12 +354,20 @@ class RelationService:
     ) -> dict[str, list[dict]]:
         """合併 Anki 實際卡片與 SQLite 關聯紀錄，建立完整的知識圖譜。
 
+        Merge actual Anki cards with SQLite relation rows into a full
+        knowledge graph.
+
         Args:
-            notes_info: 從 Anki 取得的卡片詳細資訊列表。用來建立圖譜中的「孤立節點」。
-            cards_info: 從 Anki 取得的卡片狀態資訊列表。用來決定節點的熟練度顏色。
+            notes_info: 從 Anki 取得的卡片詳細資訊列表。用來建立圖譜中的
+                「孤立節點」。Note details from Anki, used to create
+                isolated nodes in the graph.
+            cards_info: 從 Anki 取得的卡片狀態資訊列表。用來決定節點的熟練度
+                顏色。Card status info from Anki, used to decide node
+                proficiency colors.
 
         Returns:
-            圖譜結構字典: {"nodes": [...], "links": [...]}
+            圖譜結構字典: {"nodes": [...], "links": [...]}。Graph structure
+            dict with "nodes" and "links".
         """
         import re
 

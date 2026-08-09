@@ -7,7 +7,7 @@
 
 - [x] 建立並定義核心架構文件與 ADR (Architecture Decision Records)。
 - [x] 初始化 FastAPI 後端專案 (導入 Pydantic V2, 配置 `main.py` 與基礎資料夾)。
-- [x] **[核心遷移]** 完整讀取並分析舊專案的 Anki 核心工具類與卡片生成邏輯還有語音生成。目錄: `old`
+- [x] **[核心遷移]** 完整讀取並分析舊專案的 Anki 核心工具類與卡片生成邏輯還有語音生成。（註：遷移來源的 `old/` 目錄已於遷移完成後移除，目前不在 repo 中。）
 - [x] **[代碼重構]** 將舊工具類重構至新專案中。
   - **注意：請勿拘泥於舊代碼的文件切分方式。**
   - 請根據 FluencyTides 的新架構需求，重新進行函數職責拆分與合併。
@@ -16,14 +16,15 @@
   - [x] **[基礎設施層補漏]** Phase 1 遺留的 Infrastructure 層完整遷移：
     - MinIO Client 重構：補齊 download/delete/list/set_policy + Pydantic 回傳值 + 自訂異常 `MinioStorageError`
     - VoicePeak Runner 重構：完整參數支援 (emotions/speed/pitch/volume) + 環境變數隔離 + Pydantic 入參
-    - FFmpeg Merger 遷移：從 `old/` 遷移至 `infrastructure/ffmpeg/`（獨立子套件）+ 非同步化
+    - FFmpeg Merger 遷移：自舊專案遷移至 `infrastructure/ffmpeg/`（獨立子套件）+ 非同步化
     - 新增 `schemas/storage.py`（MinioUploadResult, MinioObjectInfo, MinioBucketPolicy）
     - 新增 `schemas/voice.py`（VoicepeakSynthesisRequest/Result, FfmpegMergeRequest/Result）
     - `core/config.py` 擴充：VOICEPEAK_EXECUTABLE_PATH / DEFAULT_NARRATOR / CHARACTERS_CONFIG_PATH / MINIO_DEFAULT_BUCKET
     - 新增 `backend/.env.example` 環境變數配置範例
 - [x] 初始化 React + Vite 前端專案 (安裝 Tailwind CSS 與 shadcn/ui 基礎配置)。
 - [x] 實作前後端 Health Check 介面，確保本地開發環境與跨域 (CORS) 設定無誤。
-- [x] 建立基礎的 CI/CD Pipeline 腳本 (Linting & 基礎單元測試)。
+- [x] 建立基礎的 CI/CD Pipeline 腳本（後端 Ruff Lint + 前端 tsc/Vite Build → GHCR 多架構映像 → Portainer webhook 部署）。
+- [x] **[測試基線已建立]** `backend/tests/` pytest 套件已於第三輪落地（48 個測試：全端點 smoke、fail-closed validator、Anki 查詢跳脫、sync 空列表防護、LLM 圍欄/重試分類、schema composer、Alembic baseline 遷移），全數綠燈（見 docs/06 F063、docs/12_Implementation_Log.md）；前端亦建立 vitest 基線（11 個測試）。**待辦**：將 pytest/vitest 納入 CI job 作為部署前置關卡。
 
 ## Phase 2: 核心 LLM 與 Anki 服務 (Backend Core)
 **目標：** 完善後端的核心業務邏輯，確保 LLM 能產出穩定 JSON，並與重構後的 Anki 工具類無縫對接。
@@ -94,3 +95,15 @@
 - [x] **[Workflow A]** 實作 `/newcard` 指令，接收 JSON Payload 並無狀態建立新卡片。
 - [x] **[Workflow B]** 整合 Anki 卡片上的 Deep Link，攔截 `/start rec_`，接收語音訊息，並交由 Audio Evaluator 進行 AI 評估，最後將 Base64 音檔與評分寫回 Anki。
 - [x] **[Workflow C]** 攔截 `/start del_`，解析索引並自動刪除 Anki 卡片中對應的 References 或 Recordings 條目。
+- [x] **[Multi-Language Support]** 新增 `Target_Language` 欄位與列舉 (Enum)，支援於 Telegram FSM (InlineKeyboard) 動態選擇目標語言，並在 Audio Evaluator 中注入該語言作為評分標準。
+
+## Phase 11: Telegram Bot 嚴格狀態驅動重構
+**狀態：** 完成 ✅
+**目標：** 徹底消除「無狀態兜底」造成的誤判，全面轉向 aiogram 的 FSM 狀態機架構來處理所有的卡片新增。
+
+- [x] 建立 `bot/handlers/fsm/` 套件，統管所有的對話狀態流。
+- [x] 實作 `vocabulary_fsm.py` (單字卡)，涵蓋查字典、選牌組的互動問答。
+- [x] 實作 `speaking_fsm.py` (對話卡)，支援跨平台多行文字輸入並逐步引導使用者輸入情境與範例。
+- [x] 實作 `expression_fsm.py` (外語糾錯)，將舊有的實作遷移至專屬狀態機內。
+- [x] 統一以 `/newcard` 為卡片新增的唯一入口，並由 `newcard_menu.py` 進行路由分派。
+- [x] 重構 `messages.py`，作為嚴格的防呆兜底，攔截任何無狀態的純文字輸入，並主動提示使用者使用 `/newcard`。

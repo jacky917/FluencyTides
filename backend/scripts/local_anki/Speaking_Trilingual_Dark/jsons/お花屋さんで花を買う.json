@@ -1,0 +1,572 @@
+[
+  {
+    "deckName": "日常會話",
+    "modelName": "Speaking_Trilingual_Dark",
+    "tags": [
+      "TelegramBot",
+      "Sample",
+      "FlowerShop"
+    ],
+    "fields": {
+      "Prompt": "你剛走進花店，店員向你打招呼並詢問是否需要幫忙。請回答你只是先隨便看看。",
+      "Prompt_Audios": [],
+      "Context": "情境：入店打招呼。\n重點：\n1. 禮貌地回應或表達感謝\n2. 說明自己只是先逛逛、看看",
+      "Recordings_ZH": [],
+      "Recordings_JA": [],
+      "Recordings_EN": [],
+      "References_ZH": [
+        {
+          "date": "2026-07-18",
+          "content": "謝謝，我先自己隨便看看。",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "沒關係，我先逛逛，有需要再麻煩你。",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "我只是隨便看看，謝謝喔！",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "不用麻煩了，我先自己挑一下就好。",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_JA": [
+        {
+          "date": "2026-07-18",
+          "content": "あ、見ているだけなので大丈夫です。",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "ありがとうございます。ちょっと見せてください。",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "今はちょっと見てるだけです。何かあれば声かけますね。",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "あ、大丈夫です。自分で少し見て回りますね。",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_EN": [
+        {
+          "date": "2026-07-18",
+          "content": "Thanks, I'm just looking around for now.",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "I'm just browsing, but thank you.",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "I'm good for now, just taking a look. I'll let you know if I need any help.",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "No thanks, I'm just looking.",
+          "status": 1,
+          "audios": []
+        }
+      ]
+    }
+  },
+  {
+    "deckName": "日常會話",
+    "modelName": "Speaking_Trilingual_Dark",
+    "tags": [
+      "TelegramBot",
+      "Sample",
+      "FlowerShop"
+    ],
+    "fields": {
+      "Prompt": "你想在房間裡裝飾花朵，希望能活得比較久。請向店員詢問有沒有推薦的品種。",
+      "Prompt_Audios": [],
+      "Context": "情境：在花店詢問店員推薦。\n重點：\n1. 說明要放在自己家裡（房間裝飾）\n2. 提出希望「活得久（日持ちする）」的要求",
+      "Recordings_ZH": [],
+      "Recordings_JA": [],
+      "Recordings_EN": [],
+      "References_ZH": [
+        {
+          "date": "2026-07-18",
+          "content": "我想在房間裡裝飾一些鮮花，請問有沒有推薦比較好照顧、能活得比較久的花呢？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "我想找一些可以放房間裡的花，有沒有那種比較耐放、不容易謝的推薦？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "請問有沒有適合放在室內的盆栽或切花？我希望可以撐久一點的。",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "我想買些花放家裡，但不想太快凋謝，有什麼好推薦嗎？",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_JA": [
+        {
+          "date": "2026-07-18",
+          "content": "部屋に飾りたいんですが、なるべく日持ちするお花で、何かおすすめはありますか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "部屋に飾るお花を探してるんですが、できるだけ長く楽しめるものってありますか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "家の中で長く飾れるお花が欲しいんですけど、どれがいいでしょうか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "あまり手入れがいらなくて、長く咲いてくれるお花を探しています。",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_EN": [
+        {
+          "date": "2026-07-18",
+          "content": "I'd like to decorate my room with some flowers. Do you have any recommendations for ones that will last a long time?",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "I'm looking for some flowers for my room. What do you recommend that will last a while?",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "Do you have any low-maintenance flowers that will last a long time in a vase?",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "I'm looking for something to keep in my house that won't wilt too quickly. Any suggestions?",
+          "status": 1,
+          "audios": []
+        }
+      ]
+    }
+  },
+  {
+    "deckName": "日常會話",
+    "modelName": "Speaking_Trilingual_Dark",
+    "tags": [
+      "TelegramBot",
+      "Sample",
+      "FlowerShop"
+    ],
+    "fields": {
+      "Prompt": "你決定買店員推薦的百合花，請詢問店員這種花應該怎麼照顧（例如澆水頻率）。",
+      "Prompt_Audios": [],
+      "Context": "情境：決定購買後詢問照顧方法。\n重點：\n1. 詢問照顧方法（手入れの方法）\n2. 詢問換水或澆水的頻率",
+      "Recordings_ZH": [],
+      "Recordings_JA": [],
+      "Recordings_EN": [],
+      "References_ZH": [
+        {
+          "date": "2026-07-18",
+          "content": "我決定買這束百合。請問該怎麼照顧呢？需要每天換水嗎？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "我要買這把百合。順便問一下，帶回去之後要怎麼照顧比較好？水需要每天換嗎？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "這百合好漂亮，請問買回去要怎麼保養？要天天換水嗎？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "我拿這束百合。請問養這花有什麼要注意的嗎？換水的頻率大概是多久一次？",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_JA": [
+        {
+          "date": "2026-07-18",
+          "content": "この百合にします。お手入れはどうすればいいですか？お水は毎日替えた方がいいんでしょうか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "この百合を買います。家に持ち帰った後のお世話はどうすればいいですか？お水は毎日替える必要がありますか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "この百合をください。長持ちさせるコツってありますか？お水はこまめに替えた方がいいですか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "これをお願いします。お水って毎日替えた方がいいんですか？お手入れの仕方を教えてください。",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_EN": [
+        {
+          "date": "2026-07-18",
+          "content": "I think I'll go with these lilies. How should I care for them? Do I need to change the water every day?",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "I'll take these lilies. By the way, what's the best way to take care of them? Should I change the water daily?",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "I'm getting these lilies. Do you have any tips on making them last? How often should I change the water?",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "I'll buy this bunch of lilies. Are they hard to take care of? Do I need to give them fresh water every day?",
+          "status": 1,
+          "audios": []
+        }
+      ]
+    }
+  },
+  {
+    "deckName": "日常會話",
+    "modelName": "Speaking_Trilingual_Dark",
+    "tags": [
+      "TelegramBot",
+      "Sample",
+      "FlowerShop"
+    ],
+    "fields": {
+      "Prompt": "你想買三支玫瑰和一小束滿天星搭配，請告訴店員你的購買數量，並請他包在一起。",
+      "Prompt_Audios": [],
+      "Context": "情境：挑選特定花卉並告知數量。\n重點：\n1. 使用花朵的量詞（本：支/朵，束：把/束）\n2. 說出想要的具體數量並要求包裝",
+      "Recordings_ZH": [],
+      "Recordings_JA": [],
+      "Recordings_EN": [],
+      "References_ZH": [
+        {
+          "date": "2026-07-18",
+          "content": "請給我三朵這款玫瑰，還有一束滿天星。可以幫我包裝在一起嗎？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "老闆，我要三支玫瑰加一把滿天星，麻煩幫我包裝成一束，謝謝！",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "我要那邊的玫瑰三朵，跟這束滿天星，請幫我包在一起做成花束。",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "麻煩給我三朵紅玫瑰配一點滿天星，幫我包漂亮一點喔！",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_JA": [
+        {
+          "date": "2026-07-18",
+          "content": "このバラを3本と、かすみ草を1束ください。一緒に包んでもらえますか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "すみません、このバラ3本と、かすみ草を1束お願いします。これを一つの花束にしてもらえますか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "バラ3本とかすみ草1つを合わせて、花束にしていただくことは可能ですか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "このバラ3本と、そちらのかすみ草を1束、まとめてラッピングをお願いします。",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_EN": [
+        {
+          "date": "2026-07-18",
+          "content": "I'd like three of these roses and a bunch of baby's breath, please. Could you wrap them together?",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "Excuse me, I'd like 3 of those roses and a bundle of baby's breath. Could you make them into a single bouquet for me?",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "I'll take three roses and some baby's breath. Can you arrange them into a bouquet?",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "Could I get three of the red roses and a sprig of baby's breath, wrapped up nicely together?",
+          "status": 1,
+          "audios": []
+        }
+      ]
+    }
+  },
+  {
+    "deckName": "日常會話",
+    "modelName": "Speaking_Trilingual_Dark",
+    "tags": [
+      "TelegramBot",
+      "Sample",
+      "FlowerShop"
+    ],
+    "fields": {
+      "Prompt": "你想買一束花送給朋友當生日禮物，預算大約是三千日圓。請店員幫你搭配一束感覺比較明亮、有活力的花束。",
+      "Prompt_Audios": [],
+      "Context": "情境：請店員依照預算和感覺搭配花束。\n重點：\n1. 說明用途（朋友生日）\n2. 告知預算（三千日圓左右）\n3. 描述想要的感覺（明亮、有活力）",
+      "Recordings_ZH": [],
+      "Recordings_JA": [],
+      "Recordings_EN": [],
+      "References_ZH": [
+        {
+          "date": "2026-07-18",
+          "content": "我想買一束花當朋友的生日禮物，預算大概三千塊。可以幫我搭一束感覺比較明亮、活潑一點的花嗎？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "這是要送朋友生日的，預算大約三千日幣左右，麻煩幫我配得有活力一點！",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "我要送人當生日禮物，想請你們幫忙配三千圓左右的花束，希望色調看起來是很開朗、陽光的。",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "預算三千塊左右，要送朋友生日的。能不能幫我做一個看起來色彩鮮豔、讓人心情很好的花束？",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_JA": [
+        {
+          "date": "2026-07-18",
+          "content": "友達の誕生日に花束を贈りたいんですが、予算は3000円くらいでお願いします。明るくて元気なイメージで作ってもらえますか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "プレゼント用なんですけど、3000円前後で、パッと明るい感じにアレンジしていただくことはできますか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "友人の誕生日プレゼントとして、3000円くらいで花束を作ってほしいです。色は明るめでお願いできますか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "予算3000円で誕生日用の花束をお願いします。元気が出るような明るい色合いでまとめてもらえますか？",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_EN": [
+        {
+          "date": "2026-07-18",
+          "content": "I'd like a bouquet for a friend's birthday. My budget is around 3000 yen. Could you put together something bright and cheerful?",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "It's a birthday gift for a friend. I'm looking to spend about 3000 yen. Can you make it look vibrant and lively?",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "I need a birthday bouquet for about 3000 yen. Could you use bright colors that give off a happy vibe?",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "Could you arrange a bright and colorful bouquet for a friend's birthday? My budget is roughly 3000 yen.",
+          "status": 1,
+          "audios": []
+        }
+      ]
+    }
+  },
+  {
+    "deckName": "日常會話",
+    "modelName": "Speaking_Trilingual_Dark",
+    "tags": [
+      "TelegramBot",
+      "Sample",
+      "FlowerShop"
+    ],
+    "fields": {
+      "Prompt": "你看到了一種很漂亮的花，想買來送給媽媽。請向店員確認這種花的花語是什麼，適不適合送給長輩。",
+      "Prompt_Audios": [],
+      "Context": "情境：詢問花語。\n重點：\n1. 詢問花語（花言葉）\n2. 確認是否適合送給特定對象（媽媽/長輩）",
+      "Recordings_ZH": [],
+      "Recordings_JA": [],
+      "Recordings_EN": [],
+      "References_ZH": [
+        {
+          "date": "2026-07-18",
+          "content": "請問這種花的花語是什麼？如果要送給媽媽的話適合嗎？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "這花看起來很漂亮，它的花語是什麼呀？送長輩會不會有什麼禁忌？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "我想送這個給媽媽，請問這花有什麼特殊的花語或含意嗎？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "這花滿適合送媽媽的，不過保險起見，想問一下它的花語是什麼？會不吉利嗎？",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_JA": [
+        {
+          "date": "2026-07-18",
+          "content": "このお花、すごく綺麗ですね。花言葉は何ですか？母へのプレゼントにしても大丈夫なお花でしょうか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "これの花言葉って何ですか？目上の人や母に贈るのに向いていますか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "母に贈りたいんですが、このお花にはどんな花言葉がありますか？",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "この花を母の日に贈ろうと思うんですが、花言葉的に変な意味はないですか？",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_EN": [
+        {
+          "date": "2026-07-18",
+          "content": "These flowers are beautiful. Do you know what they symbolize? Would they be appropriate for my mother?",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "What's the meaning behind this flower? I'm thinking of getting it for my mom, but I want to make sure it's suitable.",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "I'm planning to give these to my mother. Do they have any special symbolism? I just want to be sure.",
+          "status": 1,
+          "audios": []
+        },
+        {
+          "date": "2026-07-18",
+          "content": "Could you tell me what this flower stands for? I want to make sure it sends the right message for my mom.",
+          "status": 1,
+          "audios": []
+        }
+      ]
+    }
+  }
+]

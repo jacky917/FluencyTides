@@ -2,9 +2,17 @@ import * as React from "react"
 
 import { cn } from "../../lib/utils"
 
+/**
+ * Input 元件的 Props，繼承原生 input 屬性。
+ * Props for the Input component, extending native input attributes.
+ */
 export interface InputProps
   extends React.InputHTMLAttributes<HTMLInputElement> {}
 
+/**
+ * 樣式化的文字輸入框元件 (shadcn/ui 風格)。
+ * Styled text input component (shadcn/ui style).
+ */
 const Input = React.forwardRef<HTMLInputElement, InputProps>(
   ({ className, type, ...props }, ref) => {
     return (

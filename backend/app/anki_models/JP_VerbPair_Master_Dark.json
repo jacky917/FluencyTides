@@ -1,0 +1,10 @@
+{
+  "modelName": "JP_VerbPair_Master_Dark",
+  "inOrderFields": [
+    "Intransitive_Word",
+    "Transitive_Word",
+    "Intransitive_Data_JSON",
+    "Transitive_Data_JSON",
+    "Card_ID"
+  ]
+}

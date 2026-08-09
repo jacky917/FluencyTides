@@ -8,6 +8,11 @@ import Dashboard from './pages/Dashboard'
 import CardGenerator from './pages/CardGenerator'
 import KnowledgeGraph from './pages/KnowledgeGraph'
 
+/**
+ * 應用程式根元件：提供側邊欄導覽、路由切換與全域 Toast。
+ * Application root component: provides sidebar navigation, routing, and global toasts.
+ * @returns 應用程式版面 JSX。Application layout JSX.
+ */
 function App() {
   const location = useLocation()
 

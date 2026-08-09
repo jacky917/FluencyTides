@@ -1,0 +1,11 @@
+{
+  "見[み]る": {
+    "include_keywords": [],
+    "exclude_keywords": [],
+    "exclude_speakers": ["柊史"],
+    "exclude_narration": true,
+    "exclude_script_ids": [],
+    "allow_auxiliary": false,
+    "priority_collocations": ["大目に"]
+  }
+}

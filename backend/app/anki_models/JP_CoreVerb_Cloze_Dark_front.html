@@ -1,0 +1,134 @@
+<!-- 核心動詞克漏字正面：與 JP_VerbPair_Cloze_Dark 正面完全一致（氣泡 + 音檔 + 母卡/情境卡按鈕） -->
+<div class="card front-card">
+    <div class="section" style="border-left-color: #f39c12;">
+        <div class="section-title" style="color: #f39c12;">🎯 搭配詞克漏字 (Cloze)</div>
+        <div id="cloze-chat-container" class="chat-container"></div>
+    </div>
+
+
+</div>
+
+<div id="speaker-data" style="display:none;">{{Speaker}}</div>
+<div id="avatar-data" style="display:none;">{{Avatar}}</div>
+<div id="audio-data" style="display:none;">{{Audio}}</div>
+<div id="cloze-sentence-data" style="display:none;">{{Cloze_Sentence}}</div>
+<div id="translation-data" style="display:none;">{{Translation}}</div>
+<div id="master-note-id-data" style="display:none;">{{Master_Note_ID}}</div>
+<div id="context-note-id-data" style="display:none;">{{Context_Note_ID}}</div>
+
+<script>
+    (function() {
+        var speaker = (document.getElementById('speaker-data').textContent || '').trim();
+        var avatar = (document.getElementById('avatar-data').textContent || '').trim();
+        var audioUrl = (document.getElementById('audio-data').textContent || '').trim();
+        var clozeSentence = (document.getElementById('cloze-sentence-data').textContent || '').trim();
+        var translation = (document.getElementById('translation-data').textContent || '').trim();
+        var container = document.getElementById('cloze-chat-container');
+        if (!container) return;
+
+        var bubbleWrap = document.createElement('div');
+        bubbleWrap.className = 'chat-bubble-wrap chat-left';
+
+        var avatarWrap = document.createElement('div');
+        avatarWrap.className = 'avatar-btn';
+        avatarWrap.style.margin = '0 12px 0 0';
+
+        if (audioUrl) {
+            var audio = document.createElement('audio');
+            audio.src = audioUrl;
+            avatarWrap.appendChild(audio);
+            avatarWrap.onclick = function(e) {
+                if (e.target.tagName !== 'AUDIO') audio.play();
+            };
+            audio.onplay = function() { avatarWrap.classList.add('playing'); };
+            audio.onended = function() { avatarWrap.classList.remove('playing'); };
+        } else {
+            avatarWrap.classList.add('no-audio');
+        }
+
+        var isNarration = !speaker || speaker === "-" || speaker === "";
+
+        if (!isNarration) {
+            if (avatar && avatar !== 'none') {
+                var img = document.createElement('img');
+                img.src = avatar;
+                avatarWrap.appendChild(img);
+            } else {
+                var icon = document.createElement('div');
+                icon.className = 'avatar-icon';
+                icon.textContent = speaker ? speaker.charAt(0).toUpperCase() : '👤';
+                avatarWrap.appendChild(icon);
+            }
+        }
+
+        var contentCol = document.createElement('div');
+        contentCol.style.display = 'flex';
+        contentCol.style.flexDirection = 'column';
+        contentCol.style.gap = '6px';
+        contentCol.style.maxWidth = '85%';
+
+        var bubble = document.createElement('div');
+        bubble.className = 'chat-bubble';
+        bubble.style.maxWidth = '100%';
+
+        // 只有旁白 (無說話人) 時，對話框才使用最普通的底色（灰色），不套用左右分色
+        if (isNarration) {
+            bubble.classList.add('chat-no-avatar');
+        }
+
+        bubble.innerHTML = clozeSentence;
+        if (translation) {
+            var trans = document.createElement('div');
+            trans.style.marginTop = '10px';
+            trans.style.fontSize = '14px';
+            trans.style.color = '#95a5a6';
+            trans.textContent = translation;
+            bubble.appendChild(trans);
+        }
+        contentCol.appendChild(bubble);
+
+        var actions = document.createElement('div');
+        actions.className = 'chat-actions-row';
+        actions.style.marginLeft = '0';
+        actions.style.marginTop = '0';
+
+        var masterBtn = document.createElement('div');
+        masterBtn.className = 'mini-action-btn btn-blue';
+        masterBtn.textContent = '🔍 查看母卡片';
+        masterBtn.onclick = openMasterCard;
+        actions.appendChild(masterBtn);
+
+        var contextBtn = document.createElement('div');
+        contextBtn.className = 'mini-action-btn btn-green';
+        contextBtn.textContent = '📖 查看情境卡';
+        contextBtn.onclick = openContextCard;
+        actions.appendChild(contextBtn);
+
+        contentCol.appendChild(actions);
+
+        if (isNarration) {
+            avatarWrap.style.visibility = 'hidden';
+        }
+        bubbleWrap.appendChild(avatarWrap);
+        bubbleWrap.appendChild(contentCol);
+        container.appendChild(bubbleWrap);
+    })();
+
+    function openMasterCard() {
+        var masterId = (document.getElementById('master-note-id-data').textContent || '').trim();
+        if (!masterId) return;
+        fetch('http://127.0.0.1:8765', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'guiBrowse', version: 6, params: { query: 'nid:' + masterId } })
+        }).catch(function() {});
+    }
+
+    function openContextCard() {
+        var contextId = (document.getElementById('context-note-id-data').textContent || '').trim();
+        if (!contextId) return;
+        fetch('http://127.0.0.1:8765', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'guiBrowse', version: 6, params: { query: 'nid:' + contextId } })
+        }).catch(function() {});
+    }
+</script>

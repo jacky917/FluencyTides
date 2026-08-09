@@ -1,0 +1,32 @@
+[
+  {
+    "deckName": "FluencyTides::Speaking_Trilingual",
+    "modelName": "Speaking_Trilingual_Dark",
+    "tags": [
+      "TelegramBot",
+      "Speaking_Trilingual",
+      "Sample"
+    ],
+    "fields": {
+      "Card_ID": "ST_SAMPLE_001",
+      "Prompt": "朋友約你週末去爬山，但你已經有其他計劃了。請委婉地拒絕並提出替代方案。",
+      "Prompt_Audios": [
+        {"lang": "JA", "audio": "example1.wav", "speaker": "Coach", "avatar": ""}
+      ],
+      "Context": "情境：對方是熟識的朋友，語氣可以輕鬆，但要顧及對方感受。重點：1) 表達感謝 2) 說明原因 3) 提出替代時間。",
+      "Recordings_ZH": [],
+      "Recordings_JA": [],
+      "Recordings_EN": [],
+      "References_ZH": [
+        {"date": "2026-07-18", "content": "謝謝你約我！不過這週末我已經跟家人有約了，下週六一起去怎麼樣？", "status": 1, "audios": []}
+      ],
+      "References_JA": [
+        {"date": "2026-07-18", "content": "誘ってくれてありがとう！でも今週末はもう予定が入ってて……来週の土曜はどうかな？", "status": 1, "audios": []}
+      ],
+      "References_EN": [
+        {"date": "2026-07-18", "content": "Thanks for inviting me! But I've already got plans this weekend. How about next Saturday instead?", "status": 1, "audios": []}
+      ],
+      "TG_Bot": "my_test_bot_name"
+    }
+  }
+]

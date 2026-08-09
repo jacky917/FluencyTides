@@ -4,6 +4,10 @@ import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "../../lib/utils"
 
+/**
+ * 按鈕樣式變體定義 (variant 與 size)。
+ * Button style variant definitions (variant and size).
+ */
 const buttonVariants = cva(
   "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
   {
@@ -33,12 +37,20 @@ const buttonVariants = cva(
   }
 )
 
+/**
+ * Button 元件的 Props，繼承原生 button 屬性並支援樣式變體。
+ * Props for the Button component, extending native button attributes with style variants.
+ */
 export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
   asChild?: boolean
 }
 
+/**
+ * 樣式化按鈕元件 (shadcn/ui 風格)，支援 asChild 插槽模式。
+ * Styled button component (shadcn/ui style) supporting the asChild slot pattern.
+ */
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, asChild = false, ...props }, ref) => {
     const Comp = asChild ? Slot : "button"

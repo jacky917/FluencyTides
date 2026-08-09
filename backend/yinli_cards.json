@@ -1,0 +1,444 @@
+[
+  {
+    "id": 1782393604231,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "柊史向朋友們坦白自己有著無法拒絕他人請求的習慣。和奏對此感到不尋常，猜測他可能隱藏著什麼秘密，甚至半開玩笑地詢問他是否擁有被人使喚就會感到興奮的特殊性癖好。這段對話展現了朋友們對柊史行為的誇張解讀與日常吐槽。",
+      "Dialog_JSON": "[{\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「秘密……それってどういうことだよ、和奏ちゃん？」\", \"translation\": \"秘密……那是怎麼回事啊，和奏？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_016.mp3\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「もしかしたらアレなんじゃない？　保科って ドＭなんじゃない？」\", \"translation\": \"該不會是那個吧？保科該不會是個抖M吧？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_003.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「発想が極端すぎる」\", \"translation\": \"想法太極端了。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「ドＭだと！？　なるほど。学内で興奮するために、 他人の仕事を引き受けていたのか……まさか柊史が Ｍだったなんて……」\", \"translation\": \"抖M！？原來如此。為了在學校裡興奮，所以才把別人的工作都攬下來嗎……沒想到柊史居然是M……\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_017.mp3\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「なんだ同志じゃないですかー」\", \"translation\": \"什麼嘛，原來是同志啊ー\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_018.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「さらりと自分の性癖を暴露するのはやめろ！　 ビックリしちゃうだろ！」\", \"translation\": \"不要若無其事地暴露自己的性癖啦！會嚇死人好嗎！\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「あれ？　人にこき使われて、興奮をしてしまう 特殊な性的嗜好を持ってるんじゃないの？」\", \"translation\": \"咦？你該不會是有那種被人使喚就會興奮的特殊性癖好吧？\", \"align\": \"right\", \"is_target\": true, \"audio\": \"SabbatOfTheWitch_wak001_004.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「そんなキョトンとした顔で言われると傷つくわ」\", \"translation\": \"你用那種一臉茫然的表情說這種話，我很受傷耶。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「というかそもそも、昼間っから女の子が変な話題を振るの ってどうなの？」\", \"translation\": \"話說回來，女孩子大白天的拋出這種奇怪的話題，這樣好嗎？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「おっ、男女差別？　女の子だって性的な話ぐらいするさ」\", \"translation\": \"哦，性別歧視？女孩子也是會聊些性方面的話題的啦。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_005.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「にしても、その相手は同性だろ、普通」\", \"translation\": \"話雖如此，但通常對象也是同性吧。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「もしかしてオレに気があるの？」\", \"translation\": \"難道說妳對我有意思？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「ははは、またまた～。そんな期待、露程も持ってないくせに」\", \"translation\": \"哈哈哈，又來了～。明明連一點那種期待都沒有。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_006.mp3\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「でも確かに女子って、男を勘違いさせるようなことを サラリと口にするよな」\", \"translation\": \"不過女孩子確實會若無其事地說出讓男人誤會的話呢。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_019.mp3\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「意識してないからこそサラリとしてるってこと。ただの 話題提供でしかないよ。深読みしすぎじゃない？」\", \"translation\": \"就是因為沒有特別意識到，所以才能若無其事地說出口啊。這不過就只是提供個話題罷了。你是不是想太多了？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_007.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「とにかく、人にこき使われても嬉しくもなんともないよ、 オレは」\", \"translation\": \"總之，就算被人使喚，我一點都不會覺得高興。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}]",
+      "Master_Note_ID": "1782042908559",
+      "Card_ID": "ec-1782393603643-ab7ea8cd"
+    }
+  },
+  {
+    "id": 1782393604363,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "「あれ？　人にこき使われて、興奮をしてしまう\n特殊な性的嗜好____んじゃないの？」",
+      "Full_Sentence_HTML": "「あれ？　人にこき使われて、興奮をしてしまう\n特殊な性的嗜好<u class=\"error-line\">を持ってる</u>んじゃないの？」",
+      "Translation": "咦？你該不會是有那種被人使喚就會興奮的特殊性癖好吧？",
+      "Verb_Pair_JSON": "{\"intransitive\": \"ほぐれる\", \"transitive\": \"ほぐす\", \"used\": \"transitive\"}",
+      "Audio": "SabbatOfTheWitch_wak001_004.mp3",
+      "Speaker": "和奏",
+      "Avatar": "SabbatOfTheWitch_和奏.jpg",
+      "Master_Note_ID": "1782042908559",
+      "Context_Note_ID": "1782393604231",
+      "Card_ID": "ec-1782393604237-728b3113"
+    }
+  },
+  {
+    "id": 1782393881301,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "柊史因為不擅長拒絕別人的請求，經常幫忙處理各種雜事。他的朋友秀明和和奏對此感到好奇，和奏甚至開玩笑地猜測柊史是不是有被使喚就會興奮的特殊癖好（抖M）。「こき使う」在這裡是指像對待牛馬一樣嚴厲地使喚、驅使他人，對話中以被動態「こき使われる」表示被當作工具般隨意使喚。",
+      "Dialog_JSON": "[{\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"オレと海道の間に割って入ってきた少女――数少ない、 異性の友人である“仮屋和奏”の言葉に、オレの心臓が 大きく跳ねた。\", \"translation\": \"插入我和海道之間的少女——少數的異性朋友「假屋和奏」的話語，讓我的心臟猛烈地跳動了一下。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"確かにオレには秘密がある。友人である海道や仮屋にも 言ってない……友人だからこそ言いたくない秘密が。\", \"translation\": \"我確實有秘密。連朋友海道和假屋都沒說過……正因為是朋友才不想說的秘密。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「秘密……それってどういうことだよ、和奏ちゃん？」\", \"translation\": \"秘密……那是怎麼回事啊，和奏？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_016.mp3\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「もしかしたらアレなんじゃない？　保科って ドＭなんじゃない？」\", \"translation\": \"說不定是那個吧？保科該不會是個抖M吧？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_003.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「発想が極端すぎる」\", \"translation\": \"想法太極端了。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「ドＭだと！？　なるほど。学内で興奮するために、 他人の仕事を引き受けていたのか……まさか柊史が Ｍだったなんて……」\", \"translation\": \"抖M！？原來如此。為了在學校裡興奮，才接下別人的工作嗎……沒想到柊史居然是個M……\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_017.mp3\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「なんだ同志じゃないですかー」\", \"translation\": \"什麼嘛，原來是同志啊ー\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_018.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「さらりと自分の性癖を暴露するのはやめろ！　 ビックリしちゃうだろ！」\", \"translation\": \"不要若無其事地暴露自己的性癖啦！會嚇到人的好嗎！\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「あれ？　人にこき使われて、興奮をしてしまう 特殊な性的嗜好を持ってるんじゃないの？」\", \"translation\": \"咦？你不是有那種被人隨意使喚就會興奮的特殊性癖嗎？\", \"align\": \"left\", \"is_target\": true, \"audio\": \"SabbatOfTheWitch_wak001_004.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「そんなキョトンとした顔で言われると傷つくわ」\", \"translation\": \"被你用那種一臉茫然的表情說出來，還挺傷人的。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「というかそもそも、昼間っから女の子が変な話題を振るの ってどうなの？」\", \"translation\": \"話說回來，大白天的女孩子主動聊這種奇怪的話題，這樣好嗎？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「おっ、男女差別？　女の子だって性的な話ぐらいするさ」\", \"translation\": \"喔，性別歧視？女孩子也是會聊聊性方面的話題的。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_005.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「にしても、その相手は同性だろ、普通」\", \"translation\": \"話雖如此，通常聊天的對象也是同性吧。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「もしかしてオレに気があるの？」\", \"translation\": \"難道妳對我有意思？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「ははは、またまた～。そんな期待、露程も持ってないくせに」\", \"translation\": \"哈哈哈，又來了～。明明連一絲期待都沒有。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_006.mp3\"}]",
+      "Master_Note_ID": "1782042908559",
+      "Card_ID": "ec-1782393880729-3aa5fedc"
+    }
+  },
+  {
+    "id": 1782393881418,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "「あれ？　人____、興奮をしてしまう\n特殊な性的嗜好を持ってるんじゃないの？」",
+      "Full_Sentence_HTML": "「あれ？　人<u class=\"error-line\">にこき使われて</u>、興奮をしてしまう\n特殊な性的嗜好を持ってるんじゃないの？」",
+      "Translation": "咦？你不是有那種被人隨意使喚就會興奮的特殊性癖嗎？",
+      "Verb_Pair_JSON": "{\"intransitive\": \"ほぐれる\", \"transitive\": \"ほぐす\", \"used\": \"transitive\"}",
+      "Audio": "SabbatOfTheWitch_wak001_004.mp3",
+      "Speaker": "和奏",
+      "Avatar": "SabbatOfTheWitch_和奏.jpg",
+      "Master_Note_ID": "1782042908559",
+      "Context_Note_ID": "1782393881301",
+      "Card_ID": "ec-1782393881308-e1ea4778"
+    }
+  },
+  {
+    "id": 1782394390632,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "柊史有著無法拒絕他人請求的習慣，友人海道警告他這樣的性格遲早會惹上麻煩。此時，同班的女同學假屋和奏介入對話，開玩笑地猜測柊史之所以不拒絕別人的差遣，是因為他有著「被人使喚就會感到興奮」的極端性癖，引發了荒謬的誤會。此處的「こき使われる」是「こき使う（隨意使喚、過度勞役）」的受身形（被動態），搭配助詞「に」表示被他人任意使喚。",
+      "Dialog_JSON": "[{\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"オレと海道の間に割って入ってきた少女――数少ない、 異性の友人である“仮屋和奏”の言葉に、オレの心臓が 大きく跳ねた。\", \"translation\": \"插入我和海道之間的少女——也就是我為數不多的異性友人「假屋和奏」的話語，讓我的心臟用力跳了一下。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"確かにオレには秘密がある。友人である海道や仮屋にも 言ってない……友人だからこそ言いたくない秘密が。\", \"translation\": \"我確實藏著秘密。就連身為朋友的海道與假屋都沒說過……正因為是朋友才不想說的秘密。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「秘密……それってどういうことだよ、和奏ちゃん？」\", \"translation\": \"秘密……那是什麼意思啊，和奏同學？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_016.mp3\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「もしかしたらアレなんじゃない？　保科って ドＭなんじゃない？」\", \"translation\": \"該不會是那個吧？保科其實是個超級抖M？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_003.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「発想が極端すぎる」\", \"translation\": \"想法太極端了吧。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「ドＭだと！？　なるほど。学内で興奮するために、 他人の仕事を引き受けていたのか……まさか柊史が Ｍだったなんて……」\", \"translation\": \"抖M！？原來如此。為了在學校裡獲得興奮感，才去接下別人的工作嗎……沒想到柊史居然是M……\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_017.mp3\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「なんだ同志じゃないですかー」\", \"translation\": \"什麼嘛，原來是同志啊ー\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_018.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「さらりと自分の性癖を暴露するのはやめろ！　 ビックリしちゃうだろ！」\", \"translation\": \"別一派輕鬆地暴露自己的性癖啦！會把人嚇一跳的！\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「あれ？　人にこき使われて、興奮をしてしまう 特殊な性的嗜好を持ってるんじゃないの？」\", \"translation\": \"咦？你不是有著被人當牛馬使喚就會感到興奮的特殊性癖嗎？\", \"align\": \"left\", \"is_target\": true, \"audio\": \"SabbatOfTheWitch_wak001_004.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「そんなキョトンとした顔で言われると傷つくわ」\", \"translation\": \"被你用那種呆愣的表情說出來，還挺傷人的。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「というかそもそも、昼間っから女の子が変な話題を振るの ってどうなの？」\", \"translation\": \"話說回來，女孩子大白天就拋出這種奇怪的話題，這樣好嗎？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}]",
+      "Master_Note_ID": "1782042908559",
+      "Card_ID": "ec-1782394390078-0797dbd3"
+    }
+  },
+  {
+    "id": 1782394390746,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "「あれ？　人____、興奮をしてしまう\n特殊な性的嗜好を持ってるんじゃないの？」",
+      "Full_Sentence_HTML": "「あれ？　人<u class=\"error-line\">にこき使われて</u>、興奮をしてしまう\n特殊な性的嗜好を持ってるんじゃないの？」",
+      "Translation": "咦？你不是有著被人當牛馬使喚就會感到興奮的特殊性癖嗎？",
+      "Verb_Pair_JSON": "{\"intransitive\": \"ほぐれる\", \"transitive\": \"ほぐす\", \"used\": \"transitive\"}",
+      "Audio": "SabbatOfTheWitch_wak001_004.mp3",
+      "Speaker": "和奏",
+      "Avatar": "SabbatOfTheWitch_和奏.jpg",
+      "Master_Note_ID": "1782042908559",
+      "Context_Note_ID": "1782394390632",
+      "Card_ID": "ec-1782394390637-5d775662"
+    }
+  },
+  {
+    "id": 1782394990882,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "柊史因為害怕破壞氣氛而總是不敢拒絕別人的請求。他的朋友秀明警告他這樣遲早會吃大虧，而和奏則半開玩笑地猜測，柊史是不是有著「被人使喚就會感到興奮」的特殊性癖（抖M）。這裡的對話生動地展現了角色間輕鬆的日常打鬧與互相吐槽。「こき使う」在這個情境中以被動態「こき使われる」出現，意思是像對待奴隸般嚴厲地驅使、使喚他人。",
+      "Dialog_JSON": "[{\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「秘密……それってどういうことだよ、和奏ちゃん？」\", \"translation\": \"秘密……那是什麼意思啊，和奏？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_016.mp3\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「もしかしたらアレなんじゃない？　保科って ドＭなんじゃない？」\", \"translation\": \"難不成是那個？保科是個抖M嗎？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_003.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「発想が極端すぎる」\", \"translation\": \"想法太極端了吧。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「ドＭだと！？　なるほど。学内で興奮するために、 他人の仕事を引き受けていたのか……まさか柊史が Ｍだったなんて……」\", \"translation\": \"抖M！？原來如此。為了在學校裡獲得興奮感，才包攬別人的工作嗎……沒想到柊史竟然是M……\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_017.mp3\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「なんだ同志じゃないですかー」\", \"translation\": \"什麼嘛，原來是同志啊ー\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_018.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「さらりと自分の性癖を暴露するのはやめろ！　 ビックリしちゃうだろ！」\", \"translation\": \"別輕描淡寫地暴露自己的性癖啦！會把人嚇一跳的好嗎！\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「あれ？　人にこき使われて、興奮をしてしまう 特殊な性的嗜好を持ってるんじゃないの？」\", \"translation\": \"咦？你不是有那種被人隨意使喚就會感到興奮的特殊性癖嗎？\", \"align\": \"right\", \"is_target\": true, \"audio\": \"SabbatOfTheWitch_wak001_004.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「そんなキョトンとした顔で言われると傷つくわ」\", \"translation\": \"被你用這麼一臉茫然的表情說出來，還挺傷人的。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「というかそもそも、昼間っから女の子が変な話題を振るの ってどうなの？」\", \"translation\": \"話說回來，大白天女孩子主動挑起這種奇怪的話題，這合適嗎？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「おっ、男女差別？　女の子だって性的な話ぐらいするさ」\", \"translation\": \"喔，性別歧視嗎？女孩子也是會聊些性方面的話題的嘛。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_005.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「にしても、その相手は同性だろ、普通」\", \"translation\": \"就算這樣，對象通常也是同性吧。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「もしかしてオレに気があるの？」\", \"translation\": \"難不成你對我有意思？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「ははは、またまた～。そんな期待、露程も持ってないくせに」\", \"translation\": \"哈哈哈，又來了～。明明連一絲這種期待都沒有的說。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_006.mp3\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「でも確かに女子って、男を勘違いさせるようなことを サラリと口にするよな」\", \"translation\": \"不過確實，女孩子總是能若無其事地說出讓男生誤會的話呢。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_019.mp3\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「意識してないからこそサラリとしてるってこと。ただの 話題提供でしかないよ。深読みしすぎじゃない？」\", \"translation\": \"正因為沒有特別意識，所以才能若無其事地說出口啊。這只不過是提供個話題罷了。你是不是想太多了？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_007.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「とにかく、人にこき使われても嬉しくもなんともないよ、 オレは」\", \"translation\": \"總之，被人隨意使喚我也一點都不覺得高興啦。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「嘘吐け。こき使われまくりじゃないか」\", \"translation\": \"騙人。你明明就被使喚得團團轉嘛。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_020.mp3\"}]",
+      "Master_Note_ID": "1782042908559",
+      "Card_ID": "ec-1782394990302-aa61eef9"
+    }
+  },
+  {
+    "id": 1782394990999,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "「あれ？　人____、興奮をしてしまう\n特殊な性的嗜好を持ってるんじゃないの？」",
+      "Full_Sentence_HTML": "「あれ？　人<u class=\"error-line\">にこき使われて</u>、興奮をしてしまう\n特殊な性的嗜好を持ってるんじゃないの？」",
+      "Translation": "咦？你不是有那種被人隨意使喚就會感到興奮的特殊性癖嗎？",
+      "Verb_Pair_JSON": "{\"intransitive\": \"ほぐれる\", \"transitive\": \"ほぐす\", \"used\": \"transitive\"}",
+      "Audio": "SabbatOfTheWitch_wak001_004.mp3",
+      "Speaker": "和奏",
+      "Avatar": "SabbatOfTheWitch_和奏.jpg",
+      "Master_Note_ID": "1782042908559",
+      "Context_Note_ID": "1782394990882",
+      "Card_ID": "ec-1782394990886-c397c20b"
+    }
+  },
+  {
+    "id": 1782395969877,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "柊史因為不擅長拒絕別人的請求，常被周遭的人當成工具人。朋友秀明和和奏對此感到不可思議，甚至開始懷疑他是不是有什麼不可告人的秘密。和奏半開玩笑地猜測他是不是有受虐傾向（抖M），喜歡被別人使喚而感到興奮。這裡的「こき使う」意為「任意驅使、使喚」，在句中以被動態「こき使われる」（被使喚）呈現。",
+      "Dialog_JSON": "[{\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"オレと海道の間に割って入ってきた少女――数少ない、 異性の友人である“仮屋和奏”の言葉に、オレの心臓が 大きく跳ねた。\", \"translation\": \"突然介入我和海道之間的少女——也就是我為數不多的異性朋友「假屋和奏」所說的話，讓我的心臟用力地跳了一下。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"確かにオレには秘密がある。友人である海道や仮屋にも 言ってない……友人だからこそ言いたくない秘密が。\", \"translation\": \"我的確有秘密。那是連身為朋友的海道與假屋都沒說過……正因為是朋友才不想說出口的秘密。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「秘密……それってどういうことだよ、和奏ちゃん？」\", \"translation\": \"秘密……那是什麼意思啊，和奏？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_016.mp3\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「もしかしたらアレなんじゃない？　保科って ドＭなんじゃない？」\", \"translation\": \"該不會是那個吧？保科其實是個抖M吧？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_003.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「発想が極端すぎる」\", \"translation\": \"這想法也太極端了吧。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「ドＭだと！？　なるほど。学内で興奮するために、 他人の仕事を引き受けていたのか……まさか柊史が Ｍだったなんて……」\", \"translation\": \"抖M！？原來如此。為了在學校裡感到興奮，才一直接下別人的工作嗎……沒想到柊史竟然是M……\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_017.mp3\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「なんだ同志じゃないですかー」\", \"translation\": \"什麼嘛，原來是同志啊ー\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_018.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「さらりと自分の性癖を暴露するのはやめろ！　 ビックリしちゃうだろ！」\", \"translation\": \"不要若無其事地暴露自己的性癖啦！會嚇死人好嗎！\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「あれ？　人にこき使われて、興奮をしてしまう 特殊な性的嗜好を持ってるんじゃないの？」\", \"translation\": \"咦？你不是有著被別人使喚就會感到興奮的特殊性癖好嗎？\", \"align\": \"left\", \"is_target\": true, \"audio\": \"SabbatOfTheWitch_wak001_004.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「そんなキョトンとした顔で言われると傷つくわ」\", \"translation\": \"被妳用那麼無辜的表情講出這種話，還挺傷人的。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}]",
+      "Master_Note_ID": "1782042908559",
+      "Card_ID": "ec-1782395969315-777cff9e"
+    }
+  },
+  {
+    "id": 1782395969983,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "「あれ？　人____、興奮をしてしまう\n特殊な性的嗜好を持ってるんじゃないの？」",
+      "Full_Sentence_HTML": "「あれ？　人<u class=\"error-line\">にこき使われて</u>、興奮をしてしまう\n特殊な性的嗜好を持ってるんじゃないの？」",
+      "Translation": "咦？你不是有著被別人使喚就會感到興奮的特殊性癖好嗎？",
+      "Verb_Pair_JSON": "{\"intransitive\": \"ほぐれる\", \"transitive\": \"ほぐす\", \"used\": \"transitive\"}",
+      "Audio": "SabbatOfTheWitch_wak001_004.mp3",
+      "Speaker": "和奏",
+      "Avatar": "SabbatOfTheWitch_和奏.jpg",
+      "Master_Note_ID": "1782042908559",
+      "Context_Note_ID": "1782395969877",
+      "Card_ID": "ec-1782395969880-a6cfd26c"
+    }
+  },
+  {
+    "id": 1782396056039,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "午休時間，男主在走廊上被班上受歡迎的女同學叫住。女同學為了推託圖書委員的工作，故意用各種裝可愛的小動作來拜託男主代班。此處的「来る」以補助動詞「〜てくる」的形式接在「出す（伸出）」之後，表示對方朝向說話者（男主）做出吐舌頭的動作，帶有動作朝向自己發生的語感。",
+      "Dialog_JSON": "[{\"speaker\": \"女子クラスメイト\", \"avatar\": \"none\", \"text\": \"「そうなの、大変なんだよー」\", \"translation\": \"是啊，很麻煩的ー\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_joshicla001_005.mp3\"}, {\"speaker\": \"女子クラスメイト\", \"avatar\": \"none\", \"text\": \"「だから、本当にゴメンなんだけど……代わってくれないかな？　お願い、ね？」\", \"translation\": \"所以說，真的很抱歉……能不能幫我代班？拜託你啦，好嗎？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_joshicla001_006.mp3\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"最後の『ね』で小首を傾げて若干上目遣い、しかも舌を ペロッと出してきた。\", \"translation\": \"在最後的「好嗎」時她微微歪著頭稍微向上看，而且還朝我輕輕吐了吐舌頭。\", \"align\": \"right\", \"is_target\": true, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"これがいわゆる計算で“可愛さは作れる”ということなのは ちゃんとわかってる。\", \"translation\": \"我很清楚這就是所謂算計好的「可愛是可以裝出來的」。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"わかってはいるんだけど……それでも可愛いと思えてしまう から困る。\", \"translation\": \"雖然心裡明白……但還是覺得很可愛，這點真讓人傷腦筋。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「けどオレ、図書委員の仕事なんて知らないよ？」\", \"translation\": \"可是，我不知道圖書委員的工作要做什麼喔？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"女子クラスメイト\", \"avatar\": \"none\", \"text\": \"「あ、それはヘーキ。図書室に新しい本が入ったんだけど、 その本を検索できるようにパソコンに打ち込むだけだから」\", \"translation\": \"啊，那個沒問題。圖書室進了新書，只要把它輸入電腦能檢索就可以了\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_joshicla001_007.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「蔵書の検索システムに登録か……打ち込むだけなら、 確かに難しくはなさそうだ」\", \"translation\": \"登錄進藏書檢索系統嗎……只是輸入的話，確實好像不難\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"女子クラスメイト\", \"avatar\": \"none\", \"text\": \"「うん！　ということで、あの……代わってもらえない？　 お願い！　このとーり！」\", \"translation\": \"嗯！所以說，那個……能幫我代班嗎？拜託你！就像這樣！\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_joshicla001_008.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「……わかった。いいよ、それぐらいなら」\", \"translation\": \"……我知道了。可以啊，只是那種程度的話\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"女子クラスメイト\", \"avatar\": \"none\", \"text\": \"「ホント！？　わー、ありがとー！　やっぱり保科君って 頼りになるねー！」\", \"translation\": \"真的！？哇ー，謝謝ー！保科同學果然很靠得住呢ー！\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_joshicla001_009.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「大したことじゃないから」\", \"translation\": \"這沒什麼大不了的\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"女子クラスメイト\", \"avatar\": \"none\", \"text\": \"「じゃあ、放課後よろしくね！　図書室に行けば、 教えてくれる人がいるから」\", \"translation\": \"那就放學後拜託囉！去圖書室的話，會有人教你的\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_joshicla001_010.mp3\"}]",
+      "Master_Note_ID": "1782042908587",
+      "Card_ID": "ec-1782396055484-e1860e8a"
+    }
+  },
+  {
+    "id": 1782396056126,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "最後の『ね』で小首を傾げて若干上目遣い、しかも舌____\nペロッと出して____。",
+      "Full_Sentence_HTML": "最後の『ね』で小首を傾げて若干上目遣い、しかも舌<u class=\"error-line\">を</u>\nペロッと出して<u class=\"error-line\">きた</u>。",
+      "Translation": "在最後的「好嗎」時她微微歪著頭稍微向上看，而且還朝我輕輕吐了吐舌頭。",
+      "Verb_Pair_JSON": "{\"intransitive\": \"きたる\", \"transitive\": \"きたす\", \"used\": \"intransitive\"}",
+      "Audio": "",
+      "Speaker": "-",
+      "Avatar": "none",
+      "Master_Note_ID": "1782042908587",
+      "Context_Note_ID": "1782396056039",
+      "Card_ID": "ec-1782396056045-78baa19f"
+    }
+  },
+  {
+    "id": 1782399546746,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "柊史不小心吸收了「心的碎片」，七緒正在向他與寧寧解釋原因。七緒指出，柊史的心裡因為放棄解決某個巨大的煩惱而「破了個大洞」。在對話中，七緒提到人的內心很脆弱，有時候會失去平衡，甚至會有所「欠缺（欠ける）」。此處的「欠ける」為自動詞，用來形容事物變得不完整、缺少了一部分，在此比喻精神或內心狀態的缺憾。",
+      "Dialog_JSON": "[{\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"「そもそも保科君はどうして“心の欠片”を 取り込んでしまったのか？　そこには大きな理由がある」\", \"translation\": \"說到底，保科同學為什麼會將“心的碎片”吸收進去呢？那是有著重大原因的。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nan003_018.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「オレに、理由……一体、どんな？」\", \"translation\": \"我有、原因……到底是，什麼原因？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"「保科君、おそらくキミの胸には穴が空いてる」\", \"translation\": \"保科同學，恐怕你的心裡破了個洞吧。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nan003_019.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「穴……ですか？」\", \"translation\": \"洞……嗎？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"「もちろん肉体的な話じゃない、精神的な話だ。 キミの心にはポッカリと大きな穴が空いてるはずなんだ」\", \"translation\": \"當然不是肉體上的，是精神上的。你的心裡應該破了一個大洞才對。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nan003_020.mp3\"}, {\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"「人の心は脆いものでね、ちょっとした感情でバランスを 崩すこともあるし、時には欠けることも、穴が空くこと だってある」\", \"translation\": \"人的心是很脆弱的呢，有時會因為一點小情緒就失去平衡，有時候也會有所欠缺，甚至會破了個洞。\", \"align\": \"left\", \"is_target\": true, \"audio\": \"SabbatOfTheWitch_nan003_021.mp3\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「穴って……私も初耳です、七緒」\", \"translation\": \"破洞什麼的……我也是第一次聽說，七緒。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen003_018.mp3\"}, {\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"「この年頃で、穴が空くのはかなり珍しいからな。 言わなくてもいいかと思っていたんだよ」\", \"translation\": \"畢竟在這個年紀，心裡破洞是非常罕見的啊。我原本還想著要不要說出來呢。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nan003_022.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「そんなに珍しいことなんですか？」\", \"translation\": \"有那麼罕見嗎？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"「まあね。“心に穴が空いている”というのは、そうだな…… “諦めを受け入れている”といえば少しは伝わるかな？」\", \"translation\": \"是啊。所謂的“心裡破了個洞”，這個嘛……如果說成是“接受了放棄的狀態”，或許多少能傳達一點吧？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nan003_023.mp3\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「諦め？　受け入れる？」\", \"translation\": \"放棄？接受？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen003_019.mp3\"}, {\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"「保科君には大きな悩みがあるだろう？　しかし、その悩みを解決させることを完全に放棄している。違うかな？」\", \"translation\": \"保科同學應該有著巨大的煩惱吧？但是，你卻完全放棄了解決那個煩惱。我說的對嗎？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nan003_024.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「………………」\", \"translation\": \"………………\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"「“心に穴が空く”というのはね、悩みを解決させることを 諦めている状態によくあることだ」\", \"translation\": \"所謂的“心裡破了個洞”呢，就是放棄解決煩惱的狀態下常見的情況。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nan003_025.mp3\"}, {\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"「どうしようもないことと受け入れ、見限り、諦める。 何か心当たりはないかな、保科君？」\", \"translation\": \"覺得無可奈何而接受、死心、放棄。你有什麼頭緒嗎，保科同學？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nan003_026.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「それは………………」\", \"translation\": \"那是………………\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}]",
+      "Master_Note_ID": "1782042908590",
+      "Card_ID": "ec-1782399546184-66523c66"
+    }
+  },
+  {
+    "id": 1782399546866,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "「人の心は脆いものでね、ちょっとした感情でバランスを\n崩すこともあるし、時には____ことも、穴が空くこと\nだってある」",
+      "Full_Sentence_HTML": "「人の心は脆いものでね、ちょっとした感情でバランスを\n崩すこともあるし、時には<u class=\"error-line\">欠ける</u>ことも、穴が空くこと\nだってある」",
+      "Translation": "人的心是很脆弱的呢，有時會因為一點小情緒就失去平衡，有時候也會有所欠缺，甚至會破了個洞。",
+      "Verb_Pair_JSON": "{\"intransitive\": \"欠[か]ける\", \"transitive\": \"欠[か]く\", \"used\": \"intransitive\"}",
+      "Audio": "SabbatOfTheWitch_nan003_021.mp3",
+      "Speaker": "七緒",
+      "Avatar": "SabbatOfTheWitch_七緒.jpg",
+      "Master_Note_ID": "1782042908590",
+      "Context_Note_ID": "1782399546746",
+      "Card_ID": "ec-1782399546751-e568b9cb"
+    }
+  },
+  {
+    "id": 1782399872502,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "柊史在社辦與寧寧獨處時，因為過度擔心寧寧的秘密而顯得小心翼翼。寧寧對此感到不悅，並開玩笑地表示自己「很生氣（激おこ）」。當柊史試圖轉移話題，詢問寧寧在社團時間都在做什麼時，寧寧回答說在看書，並提到圖書館很近很方便。柊史這才恍然大悟，原來寧寧經常去圖書館，難怪會對桌子的形狀那麼了解。寧寧立刻察覺到柊史在回想她在圖書館的「秘密」，並指責他眼神裡藏著謊言。為了掩飾，柊史試圖「不服輸地（負けじと）」對她露出微笑。這裡的「負けじと」是由動詞「負ける」的未然形「負け」加上否定推量助動詞「じ」與助詞「と」構成，表示「不甘示弱地」、「不服輸地」試圖反擊或回應。",
+      "Dialog_JSON": "[{\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「で、話は変わるんだけど……この部活って待ち体制が 基本なんだよね？　待ってる間、綾地さんは何を してるの？」\", \"translation\": \"話說回來……這個社團基本上都是在等待對吧？等待的時候，妳都在做什麼？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「私は、本を読んでます。そういう意味では、 図書室がすぐそこにあるのは便利ですね」\", \"translation\": \"我都在看書。從這個角度來說，圖書館就在附近真的很方便呢。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen005_024.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「図書室によく行くんだ？　そっか……」\", \"translation\": \"妳常去圖書館啊？原來如此……\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"だから、机の丸みとかを把握してたってことだろうか？　 なるほどな。\", \"translation\": \"所以她才會連桌子邊緣的弧度都一清二楚嗎？原來如此。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「保科君？　そういうことも考えなくていいですからね？」\", \"translation\": \"保科同學？你不需要想那種事情喔？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen005_025.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「何の事？　気のせいじゃないかなぁ？」\", \"translation\": \"什麼事？妳多心了吧？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"負けじとニッコリ笑って返事をしてみる。\", \"translation\": \"我不甘示弱地對她微微一笑，試著這樣回應。\", \"align\": \"left\", \"is_target\": true, \"audio\": \"\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「……嘘です、あの目は嘘の目です…… 図書室のオ、オナニー……のことを思い出して、 私のことをヘンタイだと思っている目です……」\", \"translation\": \"……騙人，那個眼神是在騙人……你是不是想起了圖書館的自、自慰……心裡覺得我是個變態對吧……\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen005_026.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「………」\", \"translation\": \"……\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"綾地さんって一旦マイナス方向に入ると、 ダウナー状態からなかなか回復しないんだなぁ。\", \"translation\": \"綾地同學一旦陷入負面情緒，就很難從低潮中恢復過來呢。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"どうしよう、オレがフォローをしても、落ち込む一方のような気もするし。\", \"translation\": \"怎麼辦，總覺得就算我幫忙打圓場，她也只會越來越沮喪。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"困ったなぁ……。\", \"translation\": \"傷腦筋啊……\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「……えーっと……」\", \"translation\": \"……呃……\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"おぉ！　救いのノック！\", \"translation\": \"喔喔！救命的敲門聲！\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「ほら綾地さん、ノックだよ。誰か相談しに来たのかも、 しっかりして！」\", \"translation\": \"看吧，綾地同學，有人敲門喔。可能有人來找我們商量事情了，振作點！\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「え？　あ、はい。どうぞ、開いていますから」\", \"translation\": \"咦？啊，好的。請進，門沒鎖。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen005_027.mp3\"}, {\"speaker\": \"めぐる\", \"avatar\": \"SabbatOfTheWitch_めぐる.jpg\", \"text\": \"「し、失礼しまーす」\", \"translation\": \"打、打擾了——\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_meg005_001.mp3\"}]",
+      "Master_Note_ID": "1782042908596",
+      "Card_ID": "ec-1782399871964-b4c4018b"
+    }
+  },
+  {
+    "id": 1782399872595,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "____ニッコリ笑って返事をしてみる。",
+      "Full_Sentence_HTML": "<u class=\"error-line\">負けじと</u>ニッコリ笑って返事をしてみる。",
+      "Translation": "我不甘示弱地對她微微一笑，試著這樣回應。",
+      "Verb_Pair_JSON": "{\"intransitive\": \"負[ま]ける\", \"transitive\": \"負[ま]かす\", \"used\": \"intransitive\"}",
+      "Audio": "",
+      "Speaker": "-",
+      "Avatar": "none",
+      "Master_Note_ID": "1782042908596",
+      "Context_Note_ID": "1782399872502",
+      "Card_ID": "ec-1782399872508-9d2b5ec9"
+    }
+  },
+  {
+    "id": 1782399907151,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "午休時間，男主角從廁所返回教室的途中，被班上一位可愛的女同學叫住。男主角原以為可能有什麼浪漫的發展，結果對方是因為有攸關未來的急事，想拜託他代班圖書委員的工作。情境中「乗る」以「風に乗って」的形式出現，作為自動詞，用來生動地比喻聲音「乘著」秋風從背後傳來，表達聲音隨風傳遞的意境。",
+      "Dialog_JSON": "[{\"speaker\": \"女子クラスメイト\", \"avatar\": \"none\", \"text\": \"「あの……保科君、ちょっといいかな？」\", \"translation\": \"「那個……保科同學，現在方便嗎？」\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_joshicla001_001.mp3\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"それは昼休み、トイレから教室に戻る途中だった。\", \"translation\": \"那是午休時間，從廁所回教室的途中。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"秋の訪れを告げる冷えた風に乗って、背後から可愛らしい声がオレを呼び止める。\", \"translation\": \"乘著宣告秋天到來的冷風，背後傳來可愛的聲音叫住了我。\", \"align\": \"right\", \"is_target\": true, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「うん？　どうかした？」\", \"translation\": \"「嗯？怎麼了嗎？」\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"申し訳なさそうな顔でオレを見つめてくる女の子は、 クラスメイトの１人。\", \"translation\": \"用充滿歉意的表情看著我的女孩，是同班同學之一。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"男子からもそれなりに人気のある、可愛らしい女の子だ。\", \"translation\": \"是個在男生中也頗受歡迎、非常可愛的女孩。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"新しい学年になって約半年。夏休みも明けた９月ともなれば、クラスメイトとも打ち解けている。\", \"translation\": \"升上新學級已經大約半年了。一到暑假結束後的九月，和班上同學也都混熟了。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"だから、こうして可愛い女の子がオレを呼び止めた 理由は………………\", \"translation\": \"所以，像這樣被可愛的女孩子叫住的理由是………………\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"女子クラスメイト\", \"avatar\": \"none\", \"text\": \"「あたしね、図書委員で、今日中に終わらせなきゃいけない 仕事があるんだけど、どうしても外せない大切な用事が あるの」\", \"translation\": \"「我啊，是圖書委員，有今天之內必須做完的工作，但是偏偏有絕對推不掉的重要事情。」\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_joshicla001_002.mp3\"}, {\"speaker\": \"女子クラスメイト\", \"avatar\": \"none\", \"text\": \"「だから、ホントーにゴメンなんだけどー、あたしの仕事、 代わってくれないかな？」\", \"translation\": \"「所以，真的很對不起啦，能不能幫我代班呢？」\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_joshicla001_003.mp3\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"そうだよな、告白なんてあるわけないよな。可愛い子は色々 忙しいのだ。\", \"translation\": \"也是啦，怎麼可能是被告白呢。可愛的女孩子總是很忙的。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「それって、家の用事とか？」\", \"translation\": \"「那是家裡的事情之類的嗎？」\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"女子クラスメイト\", \"avatar\": \"none\", \"text\": \"「家というか……あたしの将来に関わる問題、かな？」\", \"translation\": \"「與其說是家事……不如說是攸關我未來的問題吧？」\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_joshicla001_004.mp3\"}]",
+      "Master_Note_ID": "1782042908601",
+      "Card_ID": "ec-1782399906608-fc6ad38a"
+    }
+  },
+  {
+    "id": 1782399907235,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "秋の訪れを告げる冷えた風____、背後から可愛らしい声がオレを呼び止める。",
+      "Full_Sentence_HTML": "秋の訪れを告げる冷えた風<u class=\"error-line\">に乗って</u>、背後から可愛らしい声がオレを呼び止める。",
+      "Translation": "乘著宣告秋天到來的冷風，背後傳來可愛的聲音叫住了我。",
+      "Verb_Pair_JSON": "{\"intransitive\": \"乗[の]る\", \"transitive\": \"乗[の]す\", \"used\": \"intransitive\"}",
+      "Audio": "",
+      "Speaker": "-",
+      "Avatar": "none",
+      "Master_Note_ID": "1782042908601",
+      "Context_Note_ID": "1782399907151",
+      "Card_ID": "ec-1782399907156-ab77422a"
+    }
+  },
+  {
+    "id": 1782399938464,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "寧々向大家說明神祕學研究社目前只有她一個社員，活動內容主要是她當作興趣在做的塔羅牌算命。和奏聽完後，理解社團的活動也包含傾聽學生的煩惱，於是做出總結。此處的「乗る」搭配「相談に」，意思是「接受諮詢、傾聽並給予建議」。",
+      "Dialog_JSON": "[{\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「いえ、私は占いを。オカルトと言っても幅は広いので。 それに部には私しかいませんから、結構好きに できるんです」\", \"translation\": \"不，我是做算命。神祕學的範圍很廣。而且社團裡只有我一個人，所以可以隨心所欲。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen001_023.mp3\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「占いって言うと、指で印を切ったりして 『こんなん出ましたけど！』とか言うアレ？」\", \"translation\": \"說到算命，是那種用手指結印說『幫你算出這種結果囉！』的那種嗎？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_038.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「よくそんな古いネタが出てくるな、絶対に通じないと思うぞ、ソレ」\", \"translation\": \"虧你想得出那麼老的梗，那個絕對沒人聽得懂啦。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「即座にツッコミ入れてる保科もなかなかだと思うけど…… アタシそのネタわからないし。マニアック過ぎだよね、 綾地さん」\", \"translation\": \"能立刻吐槽的保科也滿厲害的啦……我就聽不懂那個梗。太狂熱了啦，綾地同學。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_028.mp3\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「さすがに白蛇占いはできませんよ」\", \"translation\": \"我當然不會做白蛇算命喔。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen001_024.mp3\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「わかるんだっ！？」\", \"translation\": \"妳聽得懂啊！？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_029.mp3\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「一応。知ってはいますけど、私にできるのは タロットぐらいです。あくまで趣味程度ですから」\", \"translation\": \"算是知道吧。不過我會的只有塔羅牌而已。說到底只是興趣程度。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen001_025.mp3\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「で、オカ研では人生相談にも乗ってくれるわけ」\", \"translation\": \"所以，神祕學研究社也會幫忙做人生諮詢囉。\", \"align\": \"right\", \"is_target\": true, \"audio\": \"SabbatOfTheWitch_wak001_030.mp3\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「あくまで占いの延長線上のものですから。人生相談なんて いうほど大層な物じゃありません」\", \"translation\": \"那說到底只是算命的延伸而已。沒有人生諮詢這麼誇張啦。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen001_026.mp3\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「でも……もし保科君も嫌いでなければ、いつでも部室に 来て下さい」\", \"translation\": \"不過……如果保科同學不嫌棄的話，隨時歡迎來社團辦公室。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen001_027.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「あ、うん。ありがとう」\", \"translation\": \"啊，嗯。謝謝。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}]",
+      "Master_Note_ID": "1782042908601",
+      "Card_ID": "ec-1782399936579-07b5c79a"
+    }
+  },
+  {
+    "id": 1782399938552,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "「で、オカ研では人生相談____くれるわけ」",
+      "Full_Sentence_HTML": "「で、オカ研では人生相談<u class=\"error-line\">にも乗って</u>くれるわけ」",
+      "Translation": "所以，神祕學研究社也會幫忙做人生諮詢囉。",
+      "Verb_Pair_JSON": "{\"intransitive\": \"乗[の]る\", \"transitive\": \"乗[の]す\", \"used\": \"intransitive\"}",
+      "Audio": "SabbatOfTheWitch_wak001_030.mp3",
+      "Speaker": "和奏",
+      "Avatar": "SabbatOfTheWitch_和奏.jpg",
+      "Master_Note_ID": "1782042908601",
+      "Context_Note_ID": "1782399938464",
+      "Card_ID": "ec-1782399938468-2e7c3252"
+    }
+  },
+  {
+    "id": 1782399977707,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "寧々向眾人說明自己身為超自然研究社唯一的社員，平時會藉由塔羅牌占卜來替人解決煩惱，隨後便因同學的呼喚而暫時離開。男同學秀明對如此完美的女孩竟會私下幫人諮詢感到驚訝，並疑惑為何沒有在學校裡引起更大的話題。在此情境中，「相談に乗る」為固定慣用語，意思是「傾聽別人的商量/接受諮詢」，動詞「乗る」搭配助詞「に」作為自動詞使用。",
+      "Dialog_JSON": "[{\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「で、オカ研では人生相談にも乗ってくれるわけ」\", \"translation\": \"所以，超自然研究社也會接受人生諮詢囉？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_030.mp3\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「あくまで占いの延長線上のものですから。人生相談なんて いうほど大層な物じゃありません」\", \"translation\": \"說到底只是占卜的延伸而已。並沒有人生諮詢說的那麼誇張。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen001_026.mp3\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「でも……もし保科君も嫌いでなければ、いつでも部室に 来て下さい」\", \"translation\": \"不過……如果保科同學不介意的話，請隨時來社辦。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen001_027.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「あ、うん。ありがとう」\", \"translation\": \"啊，嗯。謝謝。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"女子学生Ａ\", \"avatar\": \"none\", \"text\": \"「綾地さーん！　古文の宿題で教えて欲しいことが あるんだけどーーっ」\", \"translation\": \"綾地同學——！古文作業有問題想請教妳——！\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_joshigakuseia001_001.mp3\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「あ、はい。すぐに行きます」\", \"translation\": \"啊，好的。馬上過去。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen001_028.mp3\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「それじゃあ私はこれで」\", \"translation\": \"那麼我就先離開了。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen001_029.mp3\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"クラスメイトの女子に呼ばれ、綾地さんは教室に戻って行った。\", \"translation\": \"被同班的女同學叫住，綾地同學回到了教室。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「……本当、綾地さんは凄いな。頭もよくて、可愛くて、 偉ぶることもなくて」\", \"translation\": \"……綾地同學真的很厲害呢。頭腦聰明，長得可愛，又不會擺架子。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_031.mp3\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「あんな完璧な子が、現実にいるのも本当に驚きだよな」\", \"translation\": \"現實中竟然存在那麼完美的女孩子，真是令人驚訝。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_039.mp3\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「しかし綾地さんが相談に乗ってくれるのか…… もっと噂になってもおかしくないと思うんだが」\", \"translation\": \"不過綾地同學竟然會接受諮詢啊……我覺得就算傳出更多謠言也不奇怪啊。\", \"align\": \"right\", \"is_target\": true, \"audio\": \"SabbatOfTheWitch_hid001_040.mp3\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「女子の間ではそれなりに有名だよ？　ただ、男子に知られて騒ぎになると、迷惑をかけちゃうからね」\", \"translation\": \"在女生之間還挺有名的喔？只是，如果被男生知道而引起騷動的話，會給她添麻煩的。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_032.mp3\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「そうだったのか……俺も一度行ってみようかな、 そしたら………………デュフ」\", \"translation\": \"原來是這樣……那我也去一次看看好了，這樣的話………………嘿嘿。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_041.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「今お前『もしかしたらお近づきになれるかも』って考えたろ？」\", \"translation\": \"你剛才在想「說不定可以藉機拉近關係」對吧？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「え！？　ちょっ！？　こんなところにオカルトな能力を 持つ人がいるよ！？」\", \"translation\": \"咦！？等一下！？這裡竟然有個擁有超自然能力的人喔！？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_042.mp3\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「いやいや、丸見えだったよ？　ピンク色の魂胆が スケスケだったよ？」\", \"translation\": \"不不不，根本一覽無遺喔？你那粉紅色的企圖完全暴露出來了喔？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_033.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「顔に出るどころか、口の端からヨダレ出てる」\", \"translation\": \"別說寫在臉上了，你嘴角都流口水了。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「うっそ！？　あ、ホントだ！」\", \"translation\": \"騙人！？啊，真的耶！\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_043.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「お前みたいなヤツが多そうだから、男子には広められない噂なんだろうな」\", \"translation\": \"就是因為像你這種傢伙很多，所以這謠言才不能在男生之間傳開吧。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}]",
+      "Master_Note_ID": "1782042908601",
+      "Card_ID": "ec-1782399975887-d59b20ec"
+    }
+  },
+  {
+    "id": 1782399977807,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "「しかし綾地さんが相談____くれるのか……\nもっと噂になってもおかしくないと思うんだが」",
+      "Full_Sentence_HTML": "「しかし綾地さんが相談<u class=\"error-line\">に乗って</u>くれるのか……\nもっと噂になってもおかしくないと思うんだが」",
+      "Translation": "不過綾地同學竟然會接受諮詢啊……我覺得就算傳出更多謠言也不奇怪啊。",
+      "Verb_Pair_JSON": "{\"intransitive\": \"乗[の]る\", \"transitive\": \"乗[の]す\", \"used\": \"intransitive\"}",
+      "Audio": "SabbatOfTheWitch_hid001_040.mp3",
+      "Speaker": "秀明",
+      "Avatar": "SabbatOfTheWitch_秀明.jpg",
+      "Master_Note_ID": "1782042908601",
+      "Context_Note_ID": "1782399977707",
+      "Card_ID": "ec-1782399977712-ecacd9cc"
+    }
+  },
+  {
+    "id": 1782400018776,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "同學和奏與秀明討論著在女同學間頗具人氣的「占卜與人生諮詢」傳聞。為了避免引起男生不必要的騷動，這個傳聞一直沒有在男同學間傳開。柊史想起剛才和奏向負責諮詢的女同學道謝，便詢問和奏是否也去尋求建議了。此處的「乗る」與名詞「相談」搭配，形成慣用語「相談に乗る」，意思是「傾聽別人的煩惱」、「接受諮詢」或「給予建議」。",
+      "Dialog_JSON": "[{\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「お前みたいなヤツが多そうだから、男子には広められない噂なんだろうな」\", \"translation\": \"就是因為有很多像你這種傢伙，所以這傳聞才不能在男生之間傳開吧。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「そういうことだから、２人も広めたりしないようにね」\", \"translation\": \"就是這麼回事，所以你們兩個也別到處亂傳喔。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_034.mp3\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「おう、わかった！」\", \"translation\": \"喔，知道了！\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_044.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「そういえば、仮屋も相談に乗ってもらったのか？　 さっき『ありがとう』って言ってたけど」\", \"translation\": \"說起來，仮屋也找她商量了嗎？剛才聽到你說『謝謝』。\", \"align\": \"left\", \"is_target\": true, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「うん。ちょっと欲しい物があるけど、お金がなくて 悩んでる時にね」\", \"translation\": \"嗯。是有點想要的東西，正為了沒錢而苦惱的時候找她談的。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_035.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「欲しい物って？」\", \"translation\": \"想要的東西是？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「実は……ギターが欲しいんだよね」\", \"translation\": \"其實……我想要一把吉他啦。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_036.mp3\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「ギター？　それはまた意外な答えだな」\", \"translation\": \"吉他？這還真是令人意外的答案。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_045.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「仮屋、弾けるの？　いや、弾けるから買うんだろうけど」\", \"translation\": \"仮屋，你會彈嗎？不，應該是因為會彈才要買吧。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「まあ、多少はね」\", \"translation\": \"嘛，稍微會一點啦。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_037.mp3\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"どこか恥ずかしそうにしながらも、仮屋はしっかりと答えた。\", \"translation\": \"雖然看起來有些害羞，但仮屋還是毫不含糊地回答了。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「元々はお父さんがバンドをやってたらしいんだけど、 使わなくなったギターを見つけてさ。それ以来 教えてもらってるんだ」\", \"translation\": \"聽說原本是我爸爸有在玩樂團，後來找到他沒在用的吉他。從那之後就一直請他教我。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_038.mp3\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「もう数年になるし、前から自分のギターが欲しくってさ」\", \"translation\": \"已經彈了好幾年了，一直想要一把自己的吉他。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_039.mp3\"}]",
+      "Master_Note_ID": "1782042908601",
+      "Card_ID": "ec-1782400016956-b59499ce"
+    }
+  },
+  {
+    "id": 1782400018872,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "「そういえば、仮屋も相談____もらったのか？　\nさっき『ありがとう』って言ってたけど」",
+      "Full_Sentence_HTML": "「そういえば、仮屋も相談<u class=\"error-line\">に乗って</u>もらったのか？　\nさっき『ありがとう』って言ってたけど」",
+      "Translation": "說起來，仮屋也找她商量了嗎？剛才聽到你說『謝謝』。",
+      "Verb_Pair_JSON": "{\"intransitive\": \"乗[の]る\", \"transitive\": \"乗[の]す\", \"used\": \"intransitive\"}",
+      "Audio": "",
+      "Speaker": "柊史",
+      "Avatar": "SabbatOfTheWitch_柊史.jpg",
+      "Master_Note_ID": "1782042908601",
+      "Context_Note_ID": "1782400018776",
+      "Card_ID": "ec-1782400018779-70c4f7f0"
+    }
+  },
+  {
+    "id": 1782400071369,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "柊史與朋友道別後前往位於特別大樓的圖書室。走在安靜的走廊上時，偶然發現了「神秘學研究社」的社團教室。雖然對此感到驚訝，但他表示自己並沒有需要諮詢或占卜的事情，於是便直接走過教室前往圖書室。在此情境中，「相談に乗る」是一個慣用語，表示「傾聽別人的煩惱並給予建議」或「接受諮詢」。這裡的「乗る」作為自動詞使用，搭配助詞「に」表達參與或回應對方的需求。",
+      "Dialog_JSON": "[{\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"オレは海道と別れ、特別棟に向かった。\", \"translation\": \"我和海道道別，前往了特別大樓。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"特別棟には図書室や美術室を始めとし、その他にも文科系の 部室が連なっている。\", \"translation\": \"特別大樓裡有圖書室、美術室，除此之外還有許多文科系的社團教室並列著。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"そのため、授業が終わってしまうと部活に関係のない学生は 訪れない。\", \"translation\": \"因此，一旦放學後，與社團活動無關的學生就不會來這裡。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"しかも図書室ともなると、特別棟の最上階にあるために 行き来が大変だ。\", \"translation\": \"而且說到圖書室，因為位在特別大樓的最高層，所以往返非常辛苦。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"だからだろうか？　想像以上に人気がなかった。\", \"translation\": \"或許是因為這樣吧？這裡比想像中還要冷清。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"そんな静かな廊下を歩いていくと――\", \"translation\": \"走在如此安靜的走廊上時――\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「――あっ」\", \"translation\": \"――啊。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"見つけたのは“オカルト研究部”の室名札がかけられた扉。\", \"translation\": \"我發現的是一扇掛著「神秘學研究社」名牌的門。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「本当にあるんだ」\", \"translation\": \"原來真的有這個社團啊。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"別に疑っていたわけではないけど、こんな部活があるとは 知らなかったから。\", \"translation\": \"倒也不是在懷疑，只是我以前不知道有這種社團存在。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"こうして部室もちゃんとあるんだから、昔は結構 盛況だったのかもしれない。\", \"translation\": \"既然能有一間專屬的社團教室，說不定以前還挺熱鬧的。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「別に相談に乗って欲しいことも、占って欲しいことも ないからな」\", \"translation\": \"畢竟我也沒有什麼想要找人商量，或是想要找人占卜的事。\", \"align\": \"right\", \"is_target\": true, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"オレは部室の前を通り過ぎ、図書室へ急いだ。\", \"translation\": \"我走過社團教室門口，快步前往圖書室。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「失礼しまーす」\", \"translation\": \"打擾了——\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「すみません、新しい図書を検索システムに登録するように 言われて来たんですが」\", \"translation\": \"不好意思，我被吩咐來將新書登錄到檢索系統裡。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}]",
+      "Master_Note_ID": "1782042908601",
+      "Card_ID": "ec-1782400069533-8cf4c716"
+    }
+  },
+  {
+    "id": 1782400071455,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "「別に相談____欲しいことも、占って欲しいことも\nないからな」",
+      "Full_Sentence_HTML": "「別に相談<u class=\"error-line\">に乗って</u>欲しいことも、占って欲しいことも\nないからな」",
+      "Translation": "畢竟我也沒有什麼想要找人商量，或是想要找人占卜的事。",
+      "Verb_Pair_JSON": "{\"intransitive\": \"乗[の]る\", \"transitive\": \"乗[の]す\", \"used\": \"intransitive\"}",
+      "Audio": "",
+      "Speaker": "柊史",
+      "Avatar": "SabbatOfTheWitch_柊史.jpg",
+      "Master_Note_ID": "1782042908601",
+      "Context_Note_ID": "1782400071369",
+      "Card_ID": "ec-1782400071373-194f1dd6"
+    }
+  },
+  {
+    "id": 1782400107578,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "代理圖書委員留下來鎖門的主角，在變成獨自一人後感受到了強烈的開放感。心情愉悅的他開始把玩著電腦鍵盤，最後還伴隨著決定性的姿勢用力敲下 Enter 鍵發出巨大聲響。但回過神來，對於自己這種忘乎所以的舉動感到相當羞恥。「調子に乗る」是日文的慣用語，意思是「得意忘形」、「忘乎所以」或「跟著起鬨」。在此情境中，它與表示「不小心做了～」的口語句型「〜てしまう（〜ちゃう）」結合，變成了過去式「乗っちゃった」，生動地表達出主角一不小心做得太過火並為此感到後悔的情緒。",
+      "Dialog_JSON": "[{\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「………」\", \"translation\": \"「………」\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"そうして１人になると、先ほどまで感じてた苦味が徐々に 和らいでいく。\", \"translation\": \"就這樣變成獨自一人後，剛才感受到的苦澀感也漸漸緩和下來。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「ふぃ～～……少し楽になった。さてと、やりきって しまうかな」\", \"translation\": \"「呼～～……稍微輕鬆一點了。那麼，把剩下的做完吧。」\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"特に焦る必要もないので、ゆっくり自分のペースで 作業を続けていく。\", \"translation\": \"因為沒有特別需要著急，就慢慢按照自己的步調繼續作業。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「にしても、思った以上にいいな、図書室って。静かで、 人もいなくて……色々とできそうだ」\", \"translation\": \"「不過話說回來，圖書室比想像中還要棒啊。很安靜，又沒有人……感覺可以做很多事。」\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"今も１人っきりで、この広い空間を独り占め。 誰にも遠慮することのない、例えばそう！\", \"translation\": \"現在也只有我一個人，獨佔這寬敞的空間。不需要對任何人顧慮，例如說這樣！\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「カチャカチャ、ッターン！」\", \"translation\": \"「喀噠喀噠、啪！」\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"気分よくキーボードを叩いて、決めポーズと共に遠慮なく 大きな音を出すためにエンターキーを叩く！\", \"translation\": \"心情愉悅地敲擊著鍵盤，擺出決定性姿勢的同時，毫不客氣地用力敲下 Enter 鍵發出巨大聲響！\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「つい調子に乗っちゃったけど……やっぱ、こういうのは 恥ずかしい」\", \"translation\": \"「一不小心就得意忘形了……果然，做這種事還是挺丟臉的。」\", \"align\": \"left\", \"is_target\": true, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"１人ではっちゃけるの、やった後の後悔が大きかったり するんだよな。控えようっと。\", \"translation\": \"一個人獨自嗨起來，做完之後的後悔感有時候會很大呢。還是克制一下吧。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「これで仕事は終了、よしっと」\", \"translation\": \"「這樣工作就結束了，好嘞。」\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"満足したオレはＰＣの電源を落とし、帰る準備を整える。\", \"translation\": \"感到滿足的我關掉電腦電源，整理好回家的準備。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}]",
+      "Master_Note_ID": "1782042908601",
+      "Card_ID": "ec-1782400105753-d88abfc7"
+    }
+  },
+  {
+    "id": 1782400107673,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "「つい調子____けど……やっぱ、こういうのは\n恥ずかしい」",
+      "Full_Sentence_HTML": "「つい調子<u class=\"error-line\">に乗っちゃった</u>けど……やっぱ、こういうのは\n恥ずかしい」",
+      "Translation": "「一不小心就得意忘形了……果然，做這種事還是挺丟臉的。」",
+      "Verb_Pair_JSON": "{\"intransitive\": \"乗[の]る\", \"transitive\": \"乗[の]す\", \"used\": \"intransitive\"}",
+      "Audio": "",
+      "Speaker": "柊史",
+      "Avatar": "SabbatOfTheWitch_柊史.jpg",
+      "Master_Note_ID": "1782042908601",
+      "Context_Note_ID": "1782400107578",
+      "Card_ID": "ec-1782400107581-5f41ff0a"
+    }
+  },
+  {
+    "id": 1782400136858,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "柊史聽完關於阿爾普與魔女契約機制的解釋後，釐清了綾地寧々與黑貓相馬七緒的合作關係。他理解到寧々為了收集發動魔法所需的情感能量（心的碎片），而在超自然研究部接受他人的煩惱諮詢。「乗る」在此處與名詞構成慣用句「相談に乗る」，表示傾聽他人煩惱並給予建議或幫助的行為。",
+      "Dialog_JSON": "[{\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"アルプはあくまで橋渡しをしているだけで、 魔法そのものに関与していないらしい。\", \"translation\": \"阿爾普似乎只不過是扮演橋樑的角色，並未直接參與魔法本身。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"関与するのは魔力の管理と魔法が発動するまでの管理とのこと。\", \"translation\": \"參與的只有魔力的管理，以及魔法發動前的管理工作。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"聞いた話をまとめると、それが綾地さんと相馬さんの関係。\", \"translation\": \"總結聽到的內容，那就是綾地同學和相馬小姐的關係。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"といっても、単に利用している感じじゃなく、 どちらかというと仲のいい姉妹みたいな印象を受けた。\", \"translation\": \"話雖如此，與其說是單純的互相利用，給人的印象倒更像是一對關係融洽的姊妹。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"そして綾地さんは、心の欠片を集めるために、オカ研で 人の相談に乗っている。\", \"translation\": \"然後綾地同學為了收集心的碎片，在超自然研究部接受他人的諮詢。\", \"align\": \"left\", \"is_target\": true, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"………。\", \"translation\": \"………。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"２人が嘘を吐いていないことは間違いない。 相馬さんの変身もみた。\", \"translation\": \"這兩人沒有說謊是毫無疑問的。我也看過相馬小姐的變身了。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"だったら母さんも魔女で……。\", \"translation\": \"這麼說來，媽媽也是魔女……。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"もしオレの能力が母さんから貰った物だとしたら…… 母さんは、力をどんな風に使っていたんだろう？\", \"translation\": \"如果我的能力是從媽媽那裡得到的……媽媽當初是怎麼使用這股力量的呢？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"そもそも、どうしてそんな力を求めたりしたんだろうか？\", \"translation\": \"說到底，她當初為什麼會渴求這樣的力量呢？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}]",
+      "Master_Note_ID": "1782042908601",
+      "Card_ID": "ec-1782400134996-30b21841"
+    }
+  },
+  {
+    "id": 1782400136977,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "そして綾地さんは、心の欠片を集めるために、オカ研で\n人の相談____。",
+      "Full_Sentence_HTML": "そして綾地さんは、心の欠片を集めるために、オカ研で\n人の相談<u class=\"error-line\">に乗っている</u>。",
+      "Translation": "然後綾地同學為了收集心的碎片，在超自然研究部接受他人的諮詢。",
+      "Verb_Pair_JSON": "{\"intransitive\": \"乗[の]る\", \"transitive\": \"乗[の]す\", \"used\": \"intransitive\"}",
+      "Audio": "",
+      "Speaker": "-",
+      "Avatar": "none",
+      "Master_Note_ID": "1782042908601",
+      "Context_Note_ID": "1782400136858",
+      "Card_ID": "ec-1782400136863-29d38b9c"
+    }
+  },
+  {
+    "id": 1782400170746,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "學妹因幡巡循著傳聞來到超自然研究部的社辦，希望尋求幫助。面對主角與綾地寧寧的詢問，她緊張地確認是否能找寧寧傾訴煩惱。在這裡「乗る」作為慣用語「相談に乗る」使用，表示「聽取他人的煩惱並給予建議或協助」，是表達願意傾聽與幫忙商量時非常常見且實用的表現。",
+      "Dialog_JSON": "[{\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「それよりも、ここがオカルト研究部の部室と知って 訪ねてきたんですよね？」\", \"translation\": \"再說了，妳是知道這裡是超自然研究部的社辦才來拜訪的吧？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen005_033.mp3\"}, {\"speaker\": \"めぐる\", \"avatar\": \"SabbatOfTheWitch_めぐる.jpg\", \"text\": \"「はい！　噂を聞いて来たんです。ここに来れば、 綾地先輩が相談に乗ってくれるんですよね？」\", \"translation\": \"是的！我是聽了傳聞才來的。只要來這裡，綾地學姊就會聽我商量煩惱對吧？\", \"align\": \"right\", \"is_target\": true, \"audio\": \"SabbatOfTheWitch_meg005_006.mp3\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「占いじゃなく、相談ですか？」\", \"translation\": \"不是占卜，而是商量煩惱嗎？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen005_034.mp3\"}, {\"speaker\": \"めぐる\", \"avatar\": \"SabbatOfTheWitch_めぐる.jpg\", \"text\": \"「ダメ……ですか？」\", \"translation\": \"不行……嗎？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_meg005_007.mp3\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"少し俯き、軽く身体を揺らす少女。\", \"translation\": \"少女微微低頭，輕輕搖晃著身體。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"その気鬱した様子を見ていると、なんだかオレの胸まで 強く締め付けられるようで……。\", \"translation\": \"看著她那憂鬱的模樣，不知為何連我的胸口也彷彿被緊緊揪住似的……。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"――というか本当にイタッ！　イタタッ！\", \"translation\": \"――或者說真的好痛！痛痛痛！\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"この子、結構本気で悩んでるみたいだ。\", \"translation\": \"這孩子，看來是真的很認真在煩惱。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「いえ、困っていることがあって、私に力になれること でしたらお手伝いさせてもらいます」\", \"translation\": \"不，如果有什麼困難，而我又幫得上忙的話，我會協助妳的。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen005_035.mp3\"}, {\"speaker\": \"めぐる\", \"avatar\": \"SabbatOfTheWitch_めぐる.jpg\", \"text\": \"「ありがとうございます」\", \"translation\": \"謝謝妳。\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_meg005_010.mp3\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"安堵した女の子がペコリと頭を下げる。すると、 ようやくオレの胸も楽になった。\", \"translation\": \"鬆了一口氣的女孩輕輕鞠了個躬。接著，我的胸口總算也輕鬆下來了。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"寧々\", \"avatar\": \"SabbatOfTheWitch_寧々.jpg\", \"text\": \"「それじゃあ、えっと……」\", \"translation\": \"那麼，那個……\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nen005_038.mp3\"}]",
+      "Master_Note_ID": "1782042908601",
+      "Card_ID": "ec-1782400168735-a29275b3"
+    }
+  },
+  {
+    "id": 1782400170858,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "「はい！　噂を聞いて来たんです。ここに来れば、\n綾地先輩が相談____くれるんですよね？」",
+      "Full_Sentence_HTML": "「はい！　噂を聞いて来たんです。ここに来れば、\n綾地先輩が相談<u class=\"error-line\">に乗って</u>くれるんですよね？」",
+      "Translation": "是的！我是聽了傳聞才來的。只要來這裡，綾地學姊就會聽我商量煩惱對吧？",
+      "Verb_Pair_JSON": "{\"intransitive\": \"乗[の]る\", \"transitive\": \"乗[の]す\", \"used\": \"intransitive\"}",
+      "Audio": "SabbatOfTheWitch_meg005_006.mp3",
+      "Speaker": "めぐる",
+      "Avatar": "SabbatOfTheWitch_めぐる.jpg",
+      "Master_Note_ID": "1782042908601",
+      "Context_Note_ID": "1782400170746",
+      "Card_ID": "ec-1782400170752-a30a3836"
+    }
+  },
+  {
+    "id": 1782400194327,
+    "model": "JP_VerbPair_Context_Dark",
+    "fields": {
+      "Summary": "柊史向朋友透露自己因為不擅長拒絕別人的請求，經常勉強答應幫忙。和奏聽完後，半開玩笑地猜測他是不是有受虐傾向，故意被人使喚來獲得快感。",
+      "Dialog_JSON": "[{\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「秘密……それってどういうことだよ、和奏ちゃん？」\", \"translation\": \"秘密……那是怎麼一回事啊，和奏同學？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_016.mp3\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「もしかしたらアレなんじゃない？　保科って ドＭなんじゃない？」\", \"translation\": \"該不會是那個吧？保科你該不會是個超級抖Ｍ吧？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_wak001_003.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「発想が極端すぎる」\", \"translation\": \"這想法也太極端了。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「ドＭだと！？　なるほど。学内で興奮するために、 他人の仕事を引き受けていたのか……まさか柊史が Ｍだったなんて……」\", \"translation\": \"抖Ｍ！？原來如此。為了在學校裡獲得興奮感，才接下別人的工作嗎……沒想到柊史居然是Ｍ……\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_017.mp3\"}, {\"speaker\": \"秀明\", \"avatar\": \"SabbatOfTheWitch_秀明.jpg\", \"text\": \"「なんだ同志じゃないですかー」\", \"translation\": \"什麼嘛，原來是同志啊ー\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_hid001_018.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「さらりと自分の性癖を暴露するのはやめろ！　 ビックリしちゃうだろ！」\", \"translation\": \"不要若無其事地暴露自己的性癖啦！會嚇死人好嗎！\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"和奏\", \"avatar\": \"SabbatOfTheWitch_和奏.jpg\", \"text\": \"「あれ？　人にこき使われて、興奮をしてしまう 特殊な性的嗜好を持ってるんじゃないの？」\", \"translation\": \"咦？你該不會是擁有那種被人使喚就會感到興奮的特殊性癖吧？\", \"align\": \"right\", \"is_target\": true, \"audio\": \"SabbatOfTheWitch_wak001_004.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「そんなキョトンとした顔で言われると傷つくわ」\", \"translation\": \"妳用那種一臉無辜的表情說出這種話，真的很傷人耶。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「というかそもそも、昼間っから女の子が変な話題を振るの ってどうなの？」\", \"translation\": \"話說回來，女孩子大白天就聊這種奇怪的話題，這樣好嗎？\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}]",
+      "Master_Note_ID": "1782042908601",
+      "Card_ID": "ec-1782400192232-15a3f29f"
+    }
+  },
+  {
+    "id": 1782400194424,
+    "model": "JP_VerbPair_Cloze_Dark",
+    "fields": {
+      "Cloze_Sentence": "「あれ？　人________、興奮をしてしまう\n特殊な性的嗜好を持ってるんじゃないの？」",
+      "Full_Sentence_HTML": "「あれ？　人<u class=\"error-line\">に</u><u class=\"error-line\">こき使われて</u>、興奮をしてしまう\n特殊な性的嗜好を持ってるんじゃないの？」",
+      "Translation": "咦？你該不會是擁有那種被人使喚就會感到興奮的特殊性癖吧？",
+      "Verb_Pair_JSON": "{\"intransitive\": \"のる\", \"transitive\": \"のす\", \"used\": \"transitive\"}",
+      "Audio": "SabbatOfTheWitch_wak001_004.mp3",
+      "Speaker": "和奏",
+      "Avatar": "SabbatOfTheWitch_和奏.jpg",
+      "Master_Note_ID": "1782042908601",
+      "Context_Note_ID": "1782400194327",
+      "Card_ID": "ec-1782400194333-fcecb06e"
+    }
+  }
+]

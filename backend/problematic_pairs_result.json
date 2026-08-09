@@ -1,0 +1,106 @@
+{
+  "problematic_pairs": [
+    {
+      "id": 1782042908473,
+      "in_word": "捏[こ]ねる",
+      "tr_word": "熟[こな]す",
+      "issue": "Not a valid Intransitive/Transitive pair (both are transitive, etymologically unrelated in standard modern usage)."
+    },
+    {
+      "id": 1782042908587,
+      "in_word": "来[きた]る",
+      "tr_word": "来[きた]す",
+      "issue": "Not considered a standard valid pair."
+    },
+    {
+      "id": 1782042908593,
+      "in_word": "合[あ]う",
+      "tr_word": "和[あ]える",
+      "issue": "Unrelated kanji and meaning (to match vs to dress a salad)."
+    },
+    {
+      "id": 1782042908640,
+      "in_word": "脱[ぬ]ぐ",
+      "tr_word": "脱[ぬ]がす",
+      "issue": "Both are transitive (脱ぐ is a transitive verb)."
+    },
+    {
+      "id": 1782042908719,
+      "in_word": "教[おそ]わる",
+      "tr_word": "教[おし]える",
+      "issue": "Both are transitive."
+    },
+    {
+      "id": 1782042908730,
+      "in_word": "舞[ま]う",
+      "tr_word": "回[まわ]す",
+      "issue": "Unrelated pair/kanji (to dance/flutter vs to turn)."
+    },
+    {
+      "id": 1782042908736,
+      "in_word": "仕[つか]える",
+      "tr_word": "使[つか]う",
+      "issue": "Unrelated meaning and kanji (to serve vs to use)."
+    },
+    {
+      "id": 1782042908759,
+      "in_word": "開[あ]ける",
+      "tr_word": "開[あ]く",
+      "issue": "Swapped: 開ける is Transitive, 開く is Intransitive in this reading context."
+    },
+    {
+      "id": 1782042908791,
+      "in_word": "浴[あ]びせる",
+      "tr_word": "浴[あ]びる",
+      "issue": "Swapped (and technically both can take objects, but 浴びる is the base and 浴びせる is the causative/transitive)."
+    },
+    {
+      "id": 1782042908863,
+      "in_word": "借[か]る",
+      "tr_word": "貸[か]す",
+      "issue": "Both are transitive (to borrow vs to lend); they are antonyms, not an Intransitive/Transitive pair."
+    },
+    {
+      "id": 1782042908876,
+      "in_word": "寄[よ]せる",
+      "tr_word": "寄[よ]る",
+      "issue": "Swapped: 寄せる is Transitive, 寄る is Intransitive."
+    },
+    {
+      "id": 1782042908888,
+      "in_word": "廃[すた]る",
+      "tr_word": "捨[す]てる",
+      "issue": "Unrelated kanji/meaning (to become obsolete vs to throw away)."
+    },
+    {
+      "id": 1782042908925,
+      "in_word": "交[か]う",
+      "tr_word": "換[か]える",
+      "issue": "Unrelated kanji and not a valid pair."
+    },
+    {
+      "id": 1782042908929,
+      "in_word": "回[まわ]る",
+      "tr_word": "舞[ま]う",
+      "issue": "Both are intransitive and unrelated."
+    },
+    {
+      "id": 1782042908973,
+      "in_word": "擦[す]れる",
+      "tr_word": "擦[かす]る",
+      "issue": "Mismatched pair due to readings (擦れる [すれる] pairs with 擦る [する]; 擦る [かする] pairs with 擦れる [かすれる])."
+    },
+    {
+      "id": 1782042908998,
+      "in_word": "尖[とが]る",
+      "tr_word": "磨[と]ぐ, 研[と]ぐ",
+      "issue": "Unrelated meaning and kanji (to become sharp vs to polish/sharpen)."
+    },
+    {
+      "id": 1782042909034,
+      "in_word": "生[う]む",
+      "tr_word": "生[う]まれる",
+      "issue": "Swapped: 生む is Transitive, 生まれる is Intransitive."
+    }
+  ]
+}

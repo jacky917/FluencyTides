@@ -1,0 +1,15 @@
+{
+  "modelName": "JP_CoreVerb_Cloze_Dark",
+  "inOrderFields": [
+    "Cloze_Sentence",
+    "Full_Sentence_HTML",
+    "Translation",
+    "Verb_Analysis_JSON",
+    "Audio",
+    "Speaker",
+    "Avatar",
+    "Master_Note_ID",
+    "Context_Note_ID",
+    "Card_ID"
+  ]
+}

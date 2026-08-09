@@ -1,0 +1,404 @@
+{{FrontSide}}
+
+<hr class="divider">
+
+<!-- ============================================ -->
+<!-- 三語練習區段 (ZH → JA → EN，預設全部折疊)      -->
+<!-- 每區段：歷史錄音 + 參考範本 + 提交新錄音按鈕     -->
+<!-- ============================================ -->
+<div id="lang-sections"></div>
+
+<!-- 隱藏欄位供 JS 解析 (不含 [sound:] 語法) -->
+<div id="recordings-data-ZH" style="display:none;">{{Recordings_ZH}}</div>
+<div id="recordings-data-JA" style="display:none;">{{Recordings_JA}}</div>
+<div id="recordings-data-EN" style="display:none;">{{Recordings_EN}}</div>
+<div id="references-data-ZH" style="display:none;">{{References_ZH}}</div>
+<div id="references-data-JA" style="display:none;">{{References_JA}}</div>
+<div id="references-data-EN" style="display:none;">{{References_EN}}</div>
+
+<script>
+    (function () {
+        // ============================
+        // 翻面後隱藏正面的「文脈」區塊與錄音按鈕列
+        // ============================
+        var ctxSections = document.querySelectorAll('.context-section');
+        for (var i = 0; i < ctxSections.length; i++) {
+            ctxSections[i].style.display = 'none';
+        }
+        var frontRecBtns = document.getElementById('front-rec-buttons');
+        if (frontRecBtns) {
+            frontRecBtns.style.display = 'none';
+        }
+
+        var SECTION_TITLES = {
+            ZH: '🇹🇼 中文練習',
+            JA: '🇯🇵 日本語練習',
+            EN: '🇺🇸 English Practice'
+        };
+
+        // ============================
+        // 工具函式
+        // ============================
+        function escapeHtml(str) {
+            var div = document.createElement('div');
+            div.appendChild(document.createTextNode(str));
+            return div.innerHTML;
+        }
+
+        function safeParseJsonArray(elementId) {
+            var el = document.getElementById(elementId);
+            if (!el) return [];
+            var raw = (el.textContent || '').trim();
+            if (!raw) return [];
+            try {
+                var parsed = JSON.parse(raw);
+                return Object.prototype.toString.call(parsed) === '[object Array]' ? parsed : [];
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function toggleEl(el, arrowEl) {
+            var isHidden = el.style.display === 'none';
+            el.style.display = isHidden ? 'block' : 'none';
+            if (arrowEl) arrowEl.textContent = isHidden ? '▾' : '▸';
+        }
+
+        var tgBot = (document.getElementById('tg-bot-data') ? document.getElementById('tg-bot-data').textContent : '').trim();
+        var cardId = (document.getElementById('card-id-data') ? document.getElementById('card-id-data').textContent : '').trim();
+
+        // per-language References 狀態 (AnkiConnect 存檔用)
+        window._sctRefs = {};
+        window._sctChanged = {};
+        window._sctNoteId = null;
+
+        // ============================
+        // 渲染單一語言區段 (預設折疊)
+        // ============================
+        function renderLangSection(suffix, parent) {
+            var recordings = safeParseJsonArray('recordings-data-' + suffix);
+            var references = safeParseJsonArray('references-data-' + suffix);
+            window._sctRefs[suffix] = references;
+
+            // --- 語言區段外框 (可收合，預設折疊) ---
+            var wrap = document.createElement('div');
+            wrap.className = 'lang-section lang-' + suffix;
+
+            var header = document.createElement('div');
+            header.className = 'lang-section-header';
+            header.innerHTML =
+                '<span class="lang-section-title">' + SECTION_TITLES[suffix] + '</span>' +
+                '<span class="lang-section-meta">🎙️' + recordings.length + ' ・ 📝' + references.length + '</span>' +
+                '<span class="accordion-arrow">▸</span>';
+
+            var body = document.createElement('div');
+            body.className = 'lang-section-body';
+            body.style.display = 'none';  // 預設折疊
+
+            header.onclick = (function (bodyEl, headerEl) {
+                return function (e) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    toggleEl(bodyEl, headerEl.querySelector('.accordion-arrow'));
+                };
+            })(body, header);
+
+            // --- 歷史錄音 ---
+            var recSection = document.createElement('div');
+            recSection.className = 'section recordings-section';
+            recSection.innerHTML = '<div class="section-title">🎙️ 我的歷史錄音 (My Recordings)</div>';
+            var recContainer = document.createElement('div');
+
+            if (!recordings.length) {
+                var recEmpty = document.createElement('div');
+                recEmpty.className = 'empty-hint';
+                recEmpty.textContent = '尚無錄音紀錄';
+                recContainer.appendChild(recEmpty);
+            } else {
+                for (var i = 0; i < recordings.length; i++) {
+                    recContainer.appendChild(buildRecordingItem(recordings[i], i, suffix));
+                }
+            }
+
+            // 提交新錄音按鈕 (與正面同一深連結)
+            var recTgBtn = typeof scCreateTgBtn === 'function'
+                ? scCreateTgBtn('rec', 'Recordings_' + suffix, 'last') : null;
+            if (recTgBtn) {
+                recTgBtn.className = 'rec-submit-btn';
+                recTgBtn.innerHTML = '<span class="rec-submit-icon">🎤</span><span class="rec-submit-text">提交新錄音</span>';
+                recContainer.appendChild(recTgBtn);
+            }
+            recSection.appendChild(recContainer);
+            body.appendChild(recSection);
+
+            // --- 參考範本 ---
+            var refSection = document.createElement('div');
+            refSection.className = 'section references-section';
+            refSection.innerHTML = '<div class="section-title">📝 參考範本回覆 (References)</div>';
+            var refContainer = document.createElement('div');
+
+            if (!references.length) {
+                var refEmpty = document.createElement('div');
+                refEmpty.className = 'empty-hint';
+                refEmpty.textContent = '尚無範本';
+                refContainer.appendChild(refEmpty);
+            } else {
+                for (var j = 0; j < references.length; j++) {
+                    refContainer.appendChild(buildReferenceItem(references[j], j, suffix));
+                }
+            }
+            refSection.appendChild(refContainer);
+            body.appendChild(refSection);
+
+            wrap.appendChild(header);
+            wrap.appendChild(body);
+            parent.appendChild(wrap);
+        }
+
+        // ============================
+        // 單筆錄音 (手風琴，沿用 Speaking_Coach_Dark 結構)
+        // ============================
+        function buildRecordingItem(r, index, suffix) {
+            var score = parseInt(r.score, 10) || 0;
+            var dotClass = score >= 90 ? 'dot-green' : (score >= 60 ? 'dot-orange' : 'dot-red');
+
+            var item = document.createElement('div');
+            item.className = 'accordion-item';
+
+            var summary = document.createElement('div');
+            summary.className = 'accordion-summary';
+            summary.innerHTML =
+                '<span class="status-dot ' + dotClass + '"></span>' +
+                '<span class="accordion-date">' + escapeHtml(r.date || '') + '</span>' +
+                '<span class="accordion-score">' + score + '</span>' +
+                '<span class="accordion-arrow">▸</span>';
+
+            var detail = document.createElement('div');
+            detail.className = 'accordion-detail';
+            detail.style.display = 'none';
+
+            summary.onclick = (function (detailEl, summaryEl) {
+                return function (e) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    toggleEl(detailEl, summaryEl.querySelector('.accordion-arrow'));
+                };
+            })(detail, summary);
+
+            if (r.audio) {
+                var audioRow = document.createElement('div');
+                audioRow.className = 'rec-audio';
+                var audioEl = document.createElement('audio');
+                audioEl.controls = true;
+                audioEl.preload = 'none';
+                audioEl.src = r.audio;
+                audioRow.appendChild(audioEl);
+                detail.appendChild(audioRow);
+            }
+            if (r.transcript) {
+                var labelT = document.createElement('div');
+                labelT.className = 'rec-label';
+                labelT.textContent = '逐字稿';
+                detail.appendChild(labelT);
+                var transDiv = document.createElement('div');
+                transDiv.className = 'rec-transcript';
+                transDiv.textContent = r.transcript;
+                detail.appendChild(transDiv);
+            }
+            if (r.comment) {
+                var labelC = document.createElement('div');
+                labelC.className = 'rec-label';
+                labelC.textContent = 'AI 評語';
+                detail.appendChild(labelC);
+                var commentDiv = document.createElement('div');
+                commentDiv.className = 'rec-comment';
+                commentDiv.textContent = r.comment;
+                detail.appendChild(commentDiv);
+            }
+
+            if (tgBot && cardId) {
+                var delBtn = document.createElement('a');
+                delBtn.className = 'rec-delete-btn';
+                delBtn.style.display = 'block';
+                delBtn.style.marginTop = '10px';
+                delBtn.style.color = '#ff4444';
+                delBtn.style.textDecoration = 'none';
+                delBtn.style.fontSize = '0.9em';
+                var isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+                var tgBase = isMobile ? 'tg://resolve?domain=' : 'https://t.me/';
+                var tgParam = isMobile ? '&start=' : '?start=';
+                delBtn.href = tgBase + tgBot + tgParam + 'del-Recordings_' + suffix + '-' + index + '-' + encodeURIComponent(cardId);
+                delBtn.innerHTML = '🗑️ 刪除此錄音';
+                delBtn.onclick = function (e) { e.stopPropagation(); };
+                detail.appendChild(delBtn);
+            }
+
+            item.appendChild(summary);
+            item.appendChild(detail);
+            return item;
+        }
+
+        // ============================
+        // 單筆參考範本 (含語音頭像列與狀態切換)
+        // ============================
+        function buildReferenceItem(ref, index, suffix) {
+            var statusVal = parseInt(ref.status, 10);
+            var statusDot = statusVal === 1 ? 'dot-green' : 'dot-red';
+
+            var refItem = document.createElement('div');
+            refItem.className = 'ref-item';
+            refItem.setAttribute('data-index', index);
+            refItem.setAttribute('data-lang', suffix);
+            if (statusVal === 0) { refItem.classList.add('ref-disabled'); }
+
+            var header = document.createElement('div');
+            header.className = 'ref-header';
+            header.innerHTML =
+                '<span class="status-dot ' + statusDot + '"></span>' +
+                '<span class="ref-date">' + escapeHtml(ref.date || '') + '</span>';
+            refItem.appendChild(header);
+
+            var content = document.createElement('div');
+            content.className = 'ref-content';
+            content.textContent = ref.content || '';
+            refItem.appendChild(content);
+
+            var refAudios = ref.audios || [];
+            if (refAudios.length > 0 || tgBot) {
+                var avatarRow = document.createElement('div');
+                avatarRow.className = 'avatar-row';
+
+                for (var j = 0; j < refAudios.length; j++) {
+                    if (typeof scCreateAvatarBtn === 'function') {
+                        avatarRow.appendChild(scCreateAvatarBtn(refAudios[j], j));
+                    }
+                }
+                if (typeof scCreateTgBtn === 'function') {
+                    var addBtn = scCreateTgBtn('addaudio', 'References_' + suffix, index, '＋', '透過 Telegram 上傳現成語音');
+                    var ttsBtn = scCreateTgBtn('ttsaudio', 'References_' + suffix, index, 'AI', '透過 AI TTS 生成語音');
+                    if (addBtn) avatarRow.appendChild(addBtn);
+                    if (ttsBtn) avatarRow.appendChild(ttsBtn);
+                }
+                refItem.appendChild(avatarRow);
+            }
+            return refItem;
+        }
+
+        // ============================
+        // 渲染三個語言區段
+        // ============================
+        var sectionsRoot = document.getElementById('lang-sections');
+        var SUFFIXES = ['ZH', 'JA', 'EN'];
+        for (var s = 0; s < SUFFIXES.length; s++) {
+            renderLangSection(SUFFIXES[s], sectionsRoot);
+        }
+
+        // ============================
+        // AnkiConnect：References 狀態切換 (僅電腦端本地)
+        // 一次寫回所有有變更的 References_{lang} 欄位
+        // ============================
+        function buildChangedFields() {
+            var fields = {};
+            for (var key in window._sctChanged) {
+                if (window._sctChanged[key]) {
+                    fields['References_' + key] = JSON.stringify(window._sctRefs[key]);
+                }
+            }
+            return fields;
+        }
+
+        function hasChanges() {
+            for (var key in window._sctChanged) {
+                if (window._sctChanged[key]) return true;
+            }
+            return false;
+        }
+
+        if (cardId) {
+            fetch('http://127.0.0.1:8765', {
+                method: 'POST',
+                body: JSON.stringify({ action: 'findNotes', version: 6, params: { query: 'Card_ID:' + cardId } })
+            }).then(function (res) {
+                return res.json();
+            }).then(function (findData) {
+                if (findData.result && findData.result.length > 0) {
+                    window._sctNoteId = findData.result[0];
+
+                    var refItems = document.querySelectorAll('.ref-item');
+                    for (var k = 0; k < refItems.length; k++) {
+                        (function (itemEl) {
+                            itemEl.style.cursor = 'pointer';
+                            itemEl.onclick = function (e) {
+                                e.stopPropagation();
+                                e.preventDefault();
+
+                                var index = parseInt(itemEl.getAttribute('data-index'), 10);
+                                var lang = itemEl.getAttribute('data-lang');
+                                var refs = window._sctRefs[lang];
+                                if (!refs || !refs[index]) return;
+
+                                var newStatus = refs[index].status === 1 ? 0 : 1;
+                                if (newStatus === 1) {
+                                    itemEl.classList.remove('ref-disabled');
+                                    var dot = itemEl.querySelector('.status-dot');
+                                    if (dot) { dot.classList.remove('dot-red'); dot.classList.add('dot-green'); }
+                                } else {
+                                    itemEl.classList.add('ref-disabled');
+                                    var dot2 = itemEl.querySelector('.status-dot');
+                                    if (dot2) { dot2.classList.remove('dot-green'); dot2.classList.add('dot-red'); }
+                                }
+                                refs[index].status = newStatus;
+                                window._sctChanged[lang] = true;
+                            };
+                        })(refItems[k]);
+                    }
+                }
+            }).catch(function (e) {
+                console.log('AnkiConnect 未執行或在手機端，關閉狀態切換功能。');
+            });
+
+            window.addEventListener('beforeunload', function () {
+                if (hasChanges() && window._sctNoteId) {
+                    var payload = JSON.stringify({
+                        action: 'updateNoteFields',
+                        version: 6,
+                        params: { note: { id: window._sctNoteId, fields: buildChangedFields() } }
+                    });
+                    if (navigator.sendBeacon) {
+                        navigator.sendBeacon('http://127.0.0.1:8765', payload);
+                    } else {
+                        var xhr = new XMLHttpRequest();
+                        xhr.open('POST', 'http://127.0.0.1:8765', false);
+                        xhr.send(payload);
+                    }
+                }
+            });
+
+            // 攔截 TG 跳轉，先強制存檔
+            document.body.addEventListener('click', function (e) {
+                var target = e.target;
+                while (target && target.tagName !== 'A') {
+                    target = target.parentElement;
+                }
+                if (target && (target.href.indexOf('t.me') > -1 || target.href.indexOf('tg://') > -1)) {
+                    if (hasChanges() && window._sctNoteId) {
+                        e.preventDefault();
+                        e.stopPropagation();
+
+                        var payload = JSON.stringify({
+                            action: 'updateNoteFields',
+                            version: 6,
+                            params: { note: { id: window._sctNoteId, fields: buildChangedFields() } }
+                        });
+                        var xhr = new XMLHttpRequest();
+                        xhr.open('POST', 'http://127.0.0.1:8765', false);
+                        try { xhr.send(payload); } catch (err) { console.error(err); }
+
+                        window._sctChanged = {};
+                        window.location.href = target.href;
+                    }
+                }
+            }, true);
+        }
+    })();
+</script>

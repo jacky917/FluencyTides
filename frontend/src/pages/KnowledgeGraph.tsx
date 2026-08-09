@@ -10,6 +10,10 @@ import { Skeleton } from '../components/ui/skeleton'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 
+/**
+ * 節點文字標籤的可選字型樣式。
+ * Selectable font styles for node text labels.
+ */
 const FONT_STYLES = [
   { id: 'classic', name: 'Classic White', fill: '#ffffff', stroke: '#000000', strokeWidth: 3 },
   { id: 'slate', name: 'Slate Gray', fill: '#f8fafc', stroke: '#334155', strokeWidth: 3 },
@@ -19,6 +23,10 @@ const FONT_STYLES = [
   { id: 'cyber', name: 'Cyber Pink', fill: '#f472b6', stroke: '#4c1d95', strokeWidth: 3 },
 ];
 
+/**
+ * 節點文字標籤的可選字級倍率。
+ * Selectable font size multipliers for node text labels.
+ */
 const FONT_SIZES = [
   { id: 'small', name: 'Small (80%)', value: 0.8 },
   { id: 'medium', name: 'Medium (100%)', value: 1.0 },
@@ -26,6 +34,12 @@ const FONT_SIZES = [
   { id: 'xlarge', name: 'Extra Large (200%)', value: 2.0 },
 ];
 
+/**
+ * 知識圖譜頁面：以力導向圖視覺化單字關聯，支援建立/刪除關聯與卡片編輯。
+ * Knowledge graph page: visualizes word relations with a force-directed graph,
+ * supporting relation create/delete and card editing.
+ * @returns 知識圖譜頁面 JSX。Knowledge graph page JSX.
+ */
 export default function KnowledgeGraph() {
   const defaultDeck = import.meta.env.VITE_DEFAULT_DECK || 'All Decks'
   const [selectedDeck, setSelectedDeck] = useLocalStorage('kg_selectedDeck', defaultDeck)
@@ -58,7 +72,7 @@ export default function KnowledgeGraph() {
 
   const { data: graphData, isLoading, isError } = useQuery({
     queryKey: ['graph', selectedDeck],
-    queryFn: () => FluencyTidesAPI.getKnowledgeGraph(selectedDeck),
+    queryFn: () => FluencyTidesAPI.getHandlerGraph('vocabulary_mining', selectedDeck),
   })
 
   // Fetch individual card details when a node is selected

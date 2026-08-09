@@ -1,7 +1,7 @@
 <div class="card front-card">
-    <!-- 對方的發言 (翻面後依舊保留) -->
+    <!-- 提示/目標句 (翻面後依舊保留)；標題左側國旗由 JS 依 Target_Language 注入 -->
     <div class="expression-box">
-        <div class="topic-tag">🗣️ 對方 (Partner)</div>
+        <div class="topic-tag" id="prompt-topic-tag">🗣️ 提示 (Prompt)</div>
         <div class="prompt-content">{{Prompt}}</div>
         <!-- 語音頭像列 (由 JS 渲染) -->
         <div id="prompt-avatars" class="avatar-row"></div>
@@ -18,114 +18,154 @@
 <div id="prompt-audios-data" style="display:none;">{{Prompt_Audios}}</div>
 <div id="card-id-data" style="display:none;">{{Card_ID}}</div>
 <div id="tg-bot-data" style="display:none;">{{TG_Bot}}</div>
+<div id="target-language-data" style="display:none;">{{Target_Language}}</div>
 
 <script>
-// ============================
-// 共用：音訊播放控制
-// ============================
-var _scCurrentAudio = null;
-var _scActiveBtn = null;
-
-function scPlayAudio(filename, btn) {
-    // 阻止 Anki 翻面
-    if (event) { event.stopPropagation(); event.preventDefault(); }
-
-    // 如果點擊的是正在播放的同一個按鈕，停止播放
-    if (_scCurrentAudio && _scActiveBtn === btn) {
-        _scCurrentAudio.pause();
-        _scCurrentAudio.currentTime = 0;
-        _scCurrentAudio = null;
-        btn.classList.remove('playing');
-        _scActiveBtn = null;
-        return;
-    }
-
-    // 停止上一個
-    if (_scCurrentAudio) {
-        _scCurrentAudio.pause();
-        _scCurrentAudio.currentTime = 0;
-        if (_scActiveBtn) _scActiveBtn.classList.remove('playing');
-    }
-
-    var audio = new Audio(filename);
-    _scCurrentAudio = audio;
-    _scActiveBtn = btn;
-    btn.classList.add('playing');
-
-    audio.onended = function() {
-        btn.classList.remove('playing');
-        _scCurrentAudio = null;
-        _scActiveBtn = null;
-    };
-    audio.onerror = function() {
-        btn.classList.remove('playing');
-        _scCurrentAudio = null;
-        _scActiveBtn = null;
-    };
-    audio.play();
-}
-
-// ============================
-// 共用：建立頭像播放按鈕
-// ============================
-function scCreateAvatarBtn(item, index) {
-    var btn = document.createElement('div');
-    btn.className = 'avatar-btn';
-    btn.title = item.speaker || '';
-    btn.onclick = function(e) { scPlayAudio(item.audio, btn); };
-
-    if (item.avatar) {
-        var img = document.createElement('img');
-        img.src = item.avatar;
-        img.alt = item.speaker || 'voice';
-        btn.appendChild(img);
-    } else {
-        btn.innerHTML = '<span class="avatar-icon">▶</span>';
-    }
-    return btn;
-}
-
-// ============================
-// 共用：建立 Telegram「+」按鈕
-// ============================
-function scCreateTgBtn(section, index) {
-    var cardId = (document.getElementById('card-id-data').textContent || '').trim();
-    var tgBot = (document.getElementById('tg-bot-data').textContent || '').trim();
-    if (!tgBot) return null;
-
-    var param = section + '_' + encodeURIComponent(cardId);
-    if (typeof index !== 'undefined' && index !== null) {
-        param = section + '_' + index + '_' + encodeURIComponent(cardId);
-    }
-    var deepLink = 'https://t.me/' + tgBot + '?start=' + param;
-
-    var btn = document.createElement('a');
-    btn.className = 'avatar-btn tg-add-btn';
-    btn.href = deepLink;
-    btn.title = '透過 Telegram 提交修改請求';
-    btn.onclick = function(e) { e.stopPropagation(); };
-    btn.innerHTML = '<span class="avatar-icon">＋</span>';
-    return btn;
-}
-
-// ============================
-// 渲染 Prompt 語音頭像列
-// ============================
-(function() {
-    var raw = (document.getElementById('prompt-audios-data').textContent || '').trim();
-    var audios = [];
-    try { audios = JSON.parse(raw); } catch(e) { audios = []; }
-
-    var container = document.getElementById('prompt-avatars');
-    if (!container) return;
-
-    if (audios && audios.length > 0) {
-        for (var i = 0; i < audios.length; i++) {
-            container.appendChild(scCreateAvatarBtn(audios[i], i));
+    // ============================
+    // 目標語言 → 國旗 Emoji
+    // ============================
+    // 由 BCP-47 代碼的地區子標籤（如 ja-JP 的 "JP"）以 Regional
+    // Indicator 符號動態合成國旗，任何 xx-YY 代碼都支援；
+    // 只有語言碼（無地區）時退回常用語言對照表，未知則顯示 🌐。
+    function scLangFlag(code) {
+        code = (code || '').trim();
+        if (!code) return '';
+        var m = /-([A-Za-z]{2})$/.exec(code);
+        if (m) {
+            var cc = m[1].toUpperCase();
+            return String.fromCodePoint(
+                0x1F1E6 + cc.charCodeAt(0) - 65,
+                0x1F1E6 + cc.charCodeAt(1) - 65
+            );
         }
+        var fallback = { en: '🇺🇸', ja: '🇯🇵', zh: '🇹🇼', ko: '🇰🇷', fr: '🇫🇷', de: '🇩🇪', es: '🇪🇸' };
+        return fallback[code.toLowerCase()] || '🌐';
     }
 
-    var tgBtn = scCreateTgBtn('prompt', null);
-    if (tgBtn) container.appendChild(tgBtn);
-})();
+    (function () {
+        var langEl = document.getElementById('target-language-data');
+        var lang = langEl ? (langEl.textContent || '').trim() : '';
+        var flag = scLangFlag(lang);
+        if (!flag) return;
+
+        // 標題加國旗：「🗣️ 提示 (Prompt)」→「🇯🇵 提示 (Prompt)」
+        var tag = document.getElementById('prompt-topic-tag');
+        if (tag) tag.textContent = flag + ' 提示 (Prompt)';
+    })();
+</script>
+
+<script>
+    // ============================
+    // 共用：音訊播放控制
+    // ============================
+    var _scCurrentAudio = null;
+    var _scActiveBtn = null;
+
+    function scPlayAudio(filename, btn) {
+        // 阻止 Anki 翻面
+        if (event) { event.stopPropagation(); event.preventDefault(); }
+
+        // 如果點擊的是正在播放的同一個按鈕，停止播放
+        if (_scCurrentAudio && _scActiveBtn === btn) {
+            _scCurrentAudio.pause();
+            _scCurrentAudio.currentTime = 0;
+            _scCurrentAudio = null;
+            btn.classList.remove('playing');
+            _scActiveBtn = null;
+            return;
+        }
+
+        // 停止上一個
+        if (_scCurrentAudio) {
+            _scCurrentAudio.pause();
+            _scCurrentAudio.currentTime = 0;
+            if (_scActiveBtn) _scActiveBtn.classList.remove('playing');
+        }
+
+        var audio = new Audio(filename);
+        _scCurrentAudio = audio;
+        _scActiveBtn = btn;
+        btn.classList.add('playing');
+
+        audio.onended = function () {
+            btn.classList.remove('playing');
+            _scCurrentAudio = null;
+            _scActiveBtn = null;
+        };
+        audio.onerror = function () {
+            btn.classList.remove('playing');
+            _scCurrentAudio = null;
+            _scActiveBtn = null;
+        };
+        audio.play();
+    }
+
+    // ============================
+    // 共用：建立頭像播放按鈕
+    // ============================
+    function scCreateAvatarBtn(item, index) {
+        var btn = document.createElement('div');
+        btn.className = 'avatar-btn';
+        btn.title = item.speaker || '';
+        btn.onclick = function (e) { scPlayAudio(item.audio, btn); };
+
+        if (item.avatar) {
+            var img = document.createElement('img');
+            img.src = item.avatar;
+            img.alt = item.speaker || 'voice';
+            btn.appendChild(img);
+        } else {
+            btn.innerHTML = '<span class="avatar-icon">▶</span>';
+        }
+        return btn;
+    }
+
+    // ============================
+    // 共用：建立 Telegram 功能按鈕
+    // ============================
+    function scCreateTgBtn(action, fieldName, index, iconText, titleText) {
+        var cardId = (document.getElementById('card-id-data').textContent || '').trim();
+        var tgBot = (document.getElementById('tg-bot-data').textContent || '').trim();
+        if (!tgBot) return null;
+
+        var idxStr = (typeof index !== 'undefined' && index !== null) ? index : 'none';
+        var param = action + '-' + fieldName + '-' + idxStr + '-' + encodeURIComponent(cardId);
+
+        var isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        var tgBase = isMobile ? 'tg://resolve?domain=' : 'https://t.me/';
+        var tgParam = isMobile ? '&start=' : '?start=';
+        var deepLink = tgBase + tgBot + tgParam + param;
+
+        var btn = document.createElement('a');
+        btn.className = 'avatar-btn tg-add-btn';
+        btn.href = deepLink;
+        btn.title = titleText || '透過 Telegram 提交修改請求';
+        btn.onclick = function (e) { e.stopPropagation(); };
+        btn.innerHTML = '<span class="avatar-icon">' + (iconText || '＋') + '</span>';
+        return btn;
+    }
+
+    // ============================
+    // 渲染 Prompt 語音頭像列
+    // ============================
+    (function () {
+        var raw = (document.getElementById('prompt-audios-data').textContent || '').trim();
+        var audios = [];
+        try { audios = JSON.parse(raw); } catch (e) { audios = []; }
+
+        var container = document.getElementById('prompt-avatars');
+        if (!container) return;
+
+        if (audios && audios.length > 0) {
+            for (var i = 0; i < audios.length; i++) {
+                container.appendChild(scCreateAvatarBtn(audios[i], i));
+            }
+        }
+
+        var tgBtn = scCreateTgBtn('addaudio', 'Prompt_Audios', 'none', '＋', '透過 Telegram 上傳現成語音');
+        var ttsBtn = scCreateTgBtn('ttsaudio', 'Prompt_Audios', 'none', 'AI', '透過 AI TTS 生成語音');
+
+        if (tgBtn) container.appendChild(tgBtn);
+        if (ttsBtn) container.appendChild(ttsBtn);
+    })();
 </script>

@@ -1,0 +1,8 @@
+{
+  "modelName": "JP_CoreVerb_Master_Dark",
+  "inOrderFields": [
+    "Word",
+    "Word_Data_JSON",
+    "Card_ID"
+  ]
+}

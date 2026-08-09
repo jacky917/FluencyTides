@@ -1,8 +1,13 @@
 """
 非同步資料庫引擎與 Session 管理模組。
 
+Async database engine and session management module.
+
 提供 SQLAlchemy 2.0 AsyncEngine 與 AsyncSession 工廠，
 供 FastAPI 依賴注入使用。
+
+Provides the SQLAlchemy 2.0 AsyncEngine and AsyncSession factory for FastAPI
+dependency injection.
 
 設計決策：
 - 使用 SQLAlchemy 2.0 的原生 async engine（而非 SQLModel 的同步 engine），
@@ -11,11 +16,25 @@
 - Session 使用 expire_on_commit=False，避免在 commit 後存取屬性時
   觸發隱式的 lazy load（在 async 環境中 lazy load 會直接報錯）。
 
+Design decisions:
+- Uses SQLAlchemy 2.0's native async engine (not SQLModel's sync engine)
+  because FluencyTides is fully async (FastAPI + httpx + aiogram); sync I/O
+  would block the event loop.
+- Sessions use expire_on_commit=False so that attribute access after commit
+  does not trigger implicit lazy loads (which raise in async contexts).
+
 MySQL 相容性注意事項：
 - 此模組不包含任何 SQLite 特有的連線參數。
 - DATABASE_URL 從 Settings 讀取，切換 MySQL 只需改 .env。
 - pool_pre_ping=True 在 MySQL 長連線場景下可防止
   'MySQL server has gone away' 錯誤。
+
+MySQL compatibility notes:
+- No SQLite-specific connection parameters are used here.
+- DATABASE_URL is read from Settings; switching to MySQL only requires an
+  .env change.
+- pool_pre_ping=True prevents 'MySQL server has gone away' errors on
+  long-lived MySQL connections.
 """
 
 import logging
@@ -57,11 +76,19 @@ async_session_factory = async_sessionmaker(
 async def create_db_and_tables() -> None:
     """建立所有 SQLModel 定義的資料表。
 
+    Create all tables defined by SQLModel models.
+
     僅在開發環境或首次啟動時使用。
     生產環境應透過 Alembic migration 管理 schema。
 
+    Intended for development or first startup only; production schemas should
+    be managed via Alembic migrations.
+
     注意：此函數依賴 conventions.py 中的 MetaData 設定，
     確保建表時所有約束名稱遵循顯式命名規範。
+
+    Note: relies on the MetaData configured in conventions.py so that all
+    constraint names follow the explicit naming conventions.
     """
     # 必須在此處 import models，確保所有 Table Model 已註冊到 metadata
     import app.infrastructure.database.models  # noqa: F401
@@ -74,7 +101,11 @@ async def create_db_and_tables() -> None:
 async def dispose_engine() -> None:
     """釋放資料庫引擎的所有連線池資源。
 
+    Dispose all connection-pool resources held by the database engine.
+
     應在應用程式關閉時呼叫（lifespan shutdown）。
+
+    Should be called at application shutdown (lifespan shutdown).
     """
     await engine.dispose()
     logger.info("資料庫引擎連線池已釋放。")
@@ -83,11 +114,16 @@ async def dispose_engine() -> None:
 async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI 依賴注入用的 AsyncSession 生成器。
 
+    AsyncSession generator for FastAPI dependency injection.
+
     每個 HTTP 請求取得一個獨立的 Session，
     請求結束後自動關閉，確保不會洩漏連線。
 
+    Each HTTP request gets its own session, which is closed automatically
+    when the request ends, preventing connection leaks.
+
     Yields:
-        AsyncSession: 非同步資料庫 Session。
+        AsyncSession: 非同步資料庫 Session。The async database session.
     """
     async with async_session_factory() as session:
         yield session

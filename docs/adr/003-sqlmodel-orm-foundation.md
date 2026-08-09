@@ -37,3 +37,12 @@ FluencyTides 的核心資料雖然儲存於使用者的本地端 Anki 中（如�
   - 專案依賴增加（sqlmodel, aiosqlite, alembic）。
   - 開發者需要遵守更嚴謹的 SQLModel 模型定義限制（例如強制填寫 `max_length`）。
   - 需要維護 Alembic 的遷移檔案。
+
+## 實作現狀補充（2026-07-09）
+
+本 ADR 主張「Alembic 從第一天追蹤、`create_all()` 不可靠」。實際代碼在早期偏離此決策（每次啟動無條件 `create_all`、且缺 baseline 遷移導致全新環境無法 `alembic upgrade head`），已於第二、三輪修正對齊：
+
+- **Schema 建立策略明確分流（F036）**：`create_db_and_tables()` 僅在**開發模式**（`ENVIRONMENT != production`）執行 `create_all`；**生產模式一律以 Alembic 管理**，與本 ADR 意圖一致。
+- **遷移鏈補齊（F009）**：新增 baseline 遷移 `7f3d1a2b4c5e`（建立 `card_relations` 表與索引），`9bbc72f7c470` 的 `down_revision` 指向它，全新環境 `alembic upgrade head` 可一次建齊三表（已由 `backend/tests/test_alembic.py` 驗證）。
+- **方言中立（F052）**：`9bbc72f7c470` 的 `server_default` 由 SQLite 特有的 `text('(CURRENT_TIMESTAMP)')` 改為 `sa.func.now()`，符合本 ADR 為 MySQL 遷移預留的相容規範。
+- **已知張力**：`alembic/env.py` 於 import 期實例化 `settings`，故生產環境跑遷移需提供 `API_SECRET_KEY`（否則 fail-closed validator 在 import 期中止），詳見 [docs/11_Implementation_Log.md](../11_Implementation_Log.md) §6 與 [docs/05_DevOps_and_Deployment.md](../05_DevOps_and_Deployment.md)。

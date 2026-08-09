@@ -1,0 +1,248 @@
+<!-- 核心動詞克漏字背面：以 JP_VerbPair_Cloze_Dark 背面為底——
+     移除自/他對照高亮區塊，改為 Verb_Analysis_JSON 動詞深度解析區；
+     氣泡、音檔播放、母卡/情境卡按鈕、Narrator 邏輯原樣保留 -->
+<div class="card front-card">
+    <div class="section" style="border-left-color: #f39c12;">
+        <div class="section-title" style="color: #f39c12;">🎯 搭配詞克漏字 (Cloze)</div>
+        <div id="cloze-chat-container-back" class="chat-container"></div>
+    </div>
+
+    <div id="verb-analysis-mount-point"></div>
+
+</div>
+
+<div id="speaker-data" style="display:none;">{{Speaker}}</div>
+<div id="avatar-data" style="display:none;">{{Avatar}}</div>
+<div id="audio-data" style="display:none;">{{Audio}}</div>
+<div id="full-sentence-data" style="display:none;">{{Full_Sentence_HTML}}</div>
+<div id="translation-data" style="display:none;">{{Translation}}</div>
+<div id="master-note-id-data" style="display:none;">{{Master_Note_ID}}</div>
+<div id="context-note-id-data" style="display:none;">{{Context_Note_ID}}</div>
+<div id="verb-analysis-data" style="display:none;">{{Verb_Analysis_JSON}}</div>
+
+<script>
+    (function() {
+        var speaker = (document.getElementById('speaker-data').textContent || '').trim();
+        var avatar = (document.getElementById('avatar-data').textContent || '').trim();
+        var audioUrl = (document.getElementById('audio-data').textContent || '').trim();
+        var fullSentence = (document.getElementById('full-sentence-data').innerHTML || '').trim();
+        var translation = (document.getElementById('translation-data').textContent || '').trim();
+        var container = document.getElementById('cloze-chat-container-back');
+        if (!container) return;
+
+        var bubbleWrap = document.createElement('div');
+        bubbleWrap.className = 'chat-bubble-wrap chat-left';
+
+        var avatarWrap = document.createElement('div');
+        avatarWrap.className = 'avatar-btn';
+        avatarWrap.style.margin = '0 12px 0 0';
+
+        if (audioUrl) {
+            var audio = document.createElement('audio');
+            audio.src = audioUrl;
+            avatarWrap.appendChild(audio);
+            avatarWrap.onclick = function(e) {
+                if (e.target.tagName !== 'AUDIO') audio.play();
+            };
+            audio.onplay = function() { avatarWrap.classList.add('playing'); };
+            audio.onended = function() { avatarWrap.classList.remove('playing'); };
+        } else {
+            avatarWrap.classList.add('no-audio');
+        }
+
+        var isNarration = !speaker || speaker === "-" || speaker === "";
+
+        if (!isNarration) {
+            if (avatar && avatar !== 'none') {
+                var img = document.createElement('img');
+                img.src = avatar;
+                avatarWrap.appendChild(img);
+            } else {
+                var icon = document.createElement('div');
+                icon.className = 'avatar-icon';
+                icon.textContent = speaker ? speaker.charAt(0).toUpperCase() : '👤';
+                avatarWrap.appendChild(icon);
+            }
+        }
+
+        var contentCol = document.createElement('div');
+        contentCol.style.display = 'flex';
+        contentCol.style.flexDirection = 'column';
+        contentCol.style.gap = '6px';
+        contentCol.style.maxWidth = '85%';
+
+        var bubble = document.createElement('div');
+        bubble.className = 'chat-bubble';
+        bubble.style.maxWidth = '100%';
+
+        // 只有旁白 (無說話人) 時，對話框才使用最普通的底色（灰色），不套用左右分色
+        if (isNarration) {
+            bubble.classList.add('chat-no-avatar');
+        }
+
+        bubble.innerHTML = fullSentence;
+        if (translation) {
+            var trans = document.createElement('div');
+            trans.style.marginTop = '10px';
+            trans.style.fontSize = '14px';
+            trans.style.color = '#95a5a6';
+            trans.textContent = translation;
+            bubble.appendChild(trans);
+        }
+        contentCol.appendChild(bubble);
+
+        var actions = document.createElement('div');
+        actions.className = 'chat-actions-row';
+        actions.style.marginLeft = '0';
+        actions.style.marginTop = '0';
+
+        var masterBtn = document.createElement('div');
+        masterBtn.className = 'mini-action-btn btn-blue';
+        masterBtn.textContent = '🔍 查看母卡片';
+        masterBtn.onclick = openMasterCard;
+        actions.appendChild(masterBtn);
+
+        var contextBtn = document.createElement('div');
+        contextBtn.className = 'mini-action-btn btn-green';
+        contextBtn.textContent = '📖 查看情境卡';
+        contextBtn.onclick = openContextCard;
+        actions.appendChild(contextBtn);
+
+        contentCol.appendChild(actions);
+
+        if (isNarration) {
+            avatarWrap.style.visibility = 'hidden';
+        }
+        bubbleWrap.appendChild(avatarWrap);
+        bubbleWrap.appendChild(contentCol);
+        container.appendChild(bubbleWrap);
+    })();
+
+    /* 動詞深度解析區：渲染 Verb_Analysis_JSON 五欄
+       {conjugation_chain, transitivity, collocation, nuance, colloquial_score} */
+    (function renderVerbAnalysis() {
+        var rawData = (document.getElementById('verb-analysis-data').textContent || '').trim();
+        if (!rawData) return;
+        var data;
+        try {
+            data = JSON.parse(rawData);
+        } catch(e) {
+            return;
+        }
+
+        var mount = document.getElementById('verb-analysis-mount-point');
+        if (!mount) return;
+
+        var container = document.createElement('div');
+        container.className = 'glass-container verb-analysis-container';
+
+        // 標題列：區塊標題 + 自他徽章 + 口語自然度色階徽章
+        var header = document.createElement('div');
+        header.className = 'va-header';
+
+        var title = document.createElement('div');
+        title.className = 'section-title';
+        title.style.color = '#f39c12';
+        title.style.marginBottom = '0';
+        title.textContent = '🔍 動詞深度解析';
+        header.appendChild(title);
+
+        var badgeRow = document.createElement('div');
+        badgeRow.className = 'va-badge-row';
+
+        // 自他分類徽章：自動詞=藍、他動詞=紅、自他兩用=紫、補助動詞用法=灰
+        if (data.transitivity) {
+            var transBadge = document.createElement('div');
+            transBadge.className = 'pane-badge va-badge';
+            var transClassMap = {
+                '自動詞': 'badge-blue',
+                '他動詞': 'badge-red',
+                '自他兩用': 'badge-purple',
+                '補助動詞用法': 'badge-gray'
+            };
+            transBadge.classList.add(transClassMap[data.transitivity] || 'badge-gray');
+            transBadge.textContent = data.transitivity;
+            badgeRow.appendChild(transBadge);
+        }
+
+        // 口語自然度色階徽章：>=80 綠「口語自然」、40-79 黃「通用」、<40 紅「書面/台詞腔」
+        if (typeof data.colloquial_score === 'number') {
+            var score = data.colloquial_score;
+            var scoreBadge = document.createElement('div');
+            scoreBadge.className = 'pane-badge va-badge';
+            var label;
+            if (score >= 80) {
+                scoreBadge.classList.add('score-green');
+                label = '日常語';
+            } else if (score >= 40) {
+                scoreBadge.classList.add('score-yellow');
+                label = '書面語';
+            } else {
+                scoreBadge.classList.add('score-red');
+                label = '角色語';
+            }
+            scoreBadge.textContent = '🗣 ' + label + ' ' + score;
+            badgeRow.appendChild(scoreBadge);
+        }
+
+        header.appendChild(badgeRow);
+        container.appendChild(header);
+
+        // 三列文字資訊：變化過程 / 搭配 / 語感
+        function appendRow(labelText, valueText, useFurigana) {
+            if (!valueText) return;
+            var row = document.createElement('div');
+            row.className = 'va-row';
+
+            var label = document.createElement('div');
+            label.className = 'va-label';
+            label.textContent = labelText;
+            row.appendChild(label);
+
+            var value = document.createElement('div');
+            value.className = 'va-value';
+            // 變化過程/搭配可能含 furigana 標音，轉為 ruby 呈現
+            if (useFurigana) {
+                value.innerHTML = renderFurigana(valueText);
+            } else {
+                value.textContent = valueText;
+            }
+            row.appendChild(value);
+
+            container.appendChild(row);
+        }
+
+        appendRow('變化過程', data.conjugation_chain, true);
+        appendRow('搭配', data.collocation, true);
+        appendRow('語感', data.nuance, false);
+
+        mount.appendChild(container);
+    })();
+
+    function renderFurigana(text) {
+        if (!text) return '-';
+        // 解析 Anki 的 furigana 格式 (例如: " 広[ひろ]がる" 或 "広[ひろ]がる")
+        // 把 [ ] 前面的字包成 ruby
+        return text.replace(/ ?([^\s\[\]]+)\[([^\]]+)\]/g, function(match, base, furi) {
+            return '<ruby>' + base + '<rt>' + furi + '</rt></ruby>';
+        });
+    }
+
+    function openMasterCard() {
+        var masterId = (document.getElementById('master-note-id-data').textContent || '').trim();
+        if (!masterId) return;
+        fetch('http://127.0.0.1:8765', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'guiBrowse', version: 6, params: { query: 'nid:' + masterId } })
+        }).catch(function() {});
+    }
+
+    function openContextCard() {
+        var contextId = (document.getElementById('context-note-id-data').textContent || '').trim();
+        if (!contextId) return;
+        fetch('http://127.0.0.1:8765', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'guiBrowse', version: 6, params: { query: 'nid:' + contextId } })
+        }).catch(function() {});
+    }
+</script>

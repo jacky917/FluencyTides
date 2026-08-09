@@ -1,8 +1,24 @@
 """
 Telegram Bot 一般文字訊息處理模組。
 
-負責接收使用者發送的文字（視為單字/片語），組裝成 CardGenerateRequest，
-並委託由 Middleware 注入的 CardService 進行核心生成邏輯。
+負責接收使用者發送的文字（視為單字/片語），
+透過 HandlerRegistry 動態分派到 VocabularyMiningHandler 進行生卡。
+
+Phase 9 更新：
+- 不再直接呼叫 CardService.generate_card()。
+- 改為透過 HandlerRegistry 取得 vocabulary_mining handler 並呼叫 execute_create。
+- 不再依賴硬編碼的 TG_DEFAULT_DECK / TG_DEFAULT_MODEL_NAME。
+
+Telegram Bot plain-text message handler module.
+
+Receives user-sent text (treated as a word/phrase) and dispatches it to
+VocabularyMiningHandler via HandlerRegistry for card generation.
+
+Phase 9 update:
+- No longer calls CardService.generate_card() directly.
+- Instead fetches the vocabulary_mining handler from HandlerRegistry and
+  calls execute_create.
+- No longer relies on hard-coded TG_DEFAULT_DECK / TG_DEFAULT_MODEL_NAME.
 """
 
 import logging
@@ -10,10 +26,13 @@ import logging
 from aiogram import F, Router
 from aiogram.types import Message
 
-from app.core.config import settings
 from app.core.exceptions import FluencyTidesError
-from app.schemas.card import CardGenerateRequest
 from app.services.card_service import CardService
+from app.services.relation_service import RelationService
+from app.services.task_handlers.registry import HandlerRegistry
+
+from app.bot.state import UserStateManager
+from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 
 logger = logging.getLogger(__name__)
 
@@ -23,70 +42,106 @@ router = Router(name="messages_router")
 @router.message(F.text)
 async def process_word_handler(
     message: Message,
+    handler_registry: HandlerRegistry,
     card_service: CardService,
+    relation_service: RelationService,
+    user_state_manager: UserStateManager,
+    anki_client: AnkiClient
 ) -> None:
     """處理使用者發送的一般文字訊息。
 
-    將使用者發送的文字視為要學習的字詞，呼叫 CardService 自動生成卡片。
+    Handle plain text messages sent by the user.
+
+    如果狀態為 wait_speaker_name，則攔截作為說話者名稱，並完成上傳語音流程。
+    否則將文字視為要學習的字詞，呼叫 VocabularyMiningHandler 自動生成卡片。
+
+    If the state is wait_speaker_name, the text is intercepted as the
+    speaker's name to finish the audio-upload flow. Otherwise the text is
+    treated as a word to learn and VocabularyMiningHandler generates a card.
 
     Args:
-        message: Telegram 訊息物件。
-        card_service: 由 ServiceInjectionMiddleware 注入的 CardService 實例。
+        message: Telegram 訊息物件。The Telegram message object.
+        handler_registry: 注入的 HandlerRegistry。Injected HandlerRegistry.
+        card_service: 注入的 CardService。Injected CardService instance.
+        relation_service: 注入的 RelationService。Injected RelationService.
+        user_state_manager: 注入的使用者狀態管理器。
+            Injected UserStateManager instance.
+        anki_client: 注入的 AnkiClient。Injected AnkiClient instance.
     """
-    word = message.text.strip()
+    word = message.text.strip() if message.text else ""
     if not word:
         return
 
-    # 回覆處理中訊息，提升使用者體驗
-    status_msg = await message.reply("⏳ 正在為您生成卡片，請稍候...")
+    chat_id = message.chat.id
+    state = user_state_manager.get_state(chat_id)
 
-    # 使用環境變數設定的預設牌組與模型
-    deck_name = settings.TG_DEFAULT_DECK
-    model_name = settings.TG_DEFAULT_MODEL_NAME
-    model_file_name = settings.TG_DEFAULT_MODEL_FILE
-
-    # 建立請求物件
-    request = CardGenerateRequest(
-        user_input=word,
-        deck_name=deck_name,
-        model_name=model_name,
-        model_file_name=model_file_name,
-        primary_field_name="Expression",
-        tags=["TelegramBot"],
-    )
-
-    try:
-        # 呼叫與 Web API 完全共用的業務邏輯層
-        response = await card_service.generate_card(request)
+    # ── 攔截：互動式頭像設定完成 ──
+    if state and state.action == "wait_speaker_name":
+        speaker_name = word
+        status_msg = await message.reply("🔄 <b>處理中...</b>\n\n正在將資料寫回 Anki...")
         
-        await status_msg.edit_text(
-            f"✅ <b>建立成功！</b>\n\n"
-            f"字詞：「<b>{word}</b>」\n"
-            f"牌組：<code>{deck_name}</code>\n"
-            f"模型：<code>{model_name}</code>\n"
-            f"筆記 ID：<code>{response.note_id}</code>\n\n"
-            f"<i>趕快去 Anki 看看生成的內容吧！</i>"
-        )
-    except FluencyTidesError as e:
-        # 捕捉已定義的業務錯誤，回報給使用者
-        logger.warning("Telegram Bot 卡片生成失敗 (業務異常): %s", e.message)
-        
-        error_icon = "⚠️"
-        if e.error_code == "DUPLICATE_CARD":
-            error_icon = "🔁"
-        elif e.error_code == "DECK_NOT_FOUND":
-            error_icon = "📂"
+        try:
+            # 取前同步 (有防抖)
+            await anki_client.sync(raise_errors=False)
+
+            card_id = state.card_id
+            note_ids = await anki_client.find_notes(f"Card_ID:{card_id}")
+            if not note_ids:
+                await status_msg.edit_text(f"❌ 找不到 Card ID 為 <code>{card_id}</code> 的卡片。")
+                user_state_manager.clear_state(chat_id)
+                return
+
+            notes_info = await anki_client.get_notes_info(notes=note_ids[:1])
+            note_id = notes_info[0].noteId
+
+            speaking_handler = handler_registry.get_handler("speaking_coach")
             
-        await status_msg.edit_text(
-            f"{error_icon} <b>生成失敗</b>\n\n"
-            f"錯誤碼：<code>{e.error_code}</code>\n"
-            f"原因：{e.message}"
-        )
-    except Exception as e:
-        # 捕捉預期外的系統錯誤
-        logger.exception("Telegram Bot 卡片生成發生未預期錯誤: %s", e)
-        await status_msg.edit_text(
-            f"❌ <b>系統發生異常</b>\n\n"
-            f"無法完成生成卡片，請檢查後端日誌或確認 AnkiConnect 是否正常運作。\n"
-            f"詳細: {str(e)}"
-        )
+            field_name = state.extra.get("field_name")
+            index_str = state.extra.get("index")
+            audio_filename = state.extra.get("audio_filename")
+            avatar_filename = state.extra.get("avatar", "")
+            
+            await speaking_handler.execute_update(
+                card_service,
+                relation_service,
+                note_id,
+                {
+                    "action": "add_audio", 
+                    "field_name": field_name,
+                    "index": index_str,
+                    "audio": audio_filename,
+                    "avatar": avatar_filename,
+                    "speaker": speaker_name
+                },
+            )
+            
+            user_state_manager.clear_state(chat_id)
+
+            # 寫入完成後觸發同步
+            from app.bot.handlers.callbacks import _sync_with_warning
+            sync_warning = await _sync_with_warning(anki_client)
+
+            await status_msg.edit_text(
+                f"✅ <b>語音上傳完成！</b>\n\n"
+                f"🎯 卡片：<code>{card_id}</code>\n"
+                f"📂 目標欄位：<code>{field_name}</code>\n"
+                f"👤 說話者：<code>{speaker_name}</code>\n\n"
+                f"<i>音檔與頭像設定已寫入本地！🎉</i>{sync_warning}"
+            )
+        except (AnkiConnectError, FluencyTidesError) as e:
+            logger.error("寫回 Anki 失敗: %s", e)
+            await status_msg.edit_text(f"❌ 寫回 Anki 失敗: {str(e)[:200]}")
+            user_state_manager.clear_state(chat_id)
+            
+        return
+
+    # ── 預設流程：無狀態兜底 (防呆) ──
+    # 不再提供隨打即查的服務，強制使用者使用明確的指令與狀態機流程
+    await message.reply(
+        "❌ <b>系統不明白您的意思。</b>\n\n"
+        "您目前不在任何新增卡片的流程中。請使用以下指令開始操作：\n\n"
+        "📝 /newcard - 新增各式卡片 (單字、糾錯、對話)\n"
+        "📖 /help - 查看完整教學\n"
+        "🔄 /sync - 同步資料庫",
+        parse_mode="HTML"
+    )
