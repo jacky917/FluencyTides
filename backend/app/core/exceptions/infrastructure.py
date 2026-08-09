@@ -42,6 +42,34 @@ class AnkiServiceError(InfrastructureBaseError):
     error_code = "ANKI_SERVICE_ERROR"
 
 
+class AnkiFieldCorruptedError(InfrastructureBaseError):
+    """Anki JSON 欄位內容損毀異常。
+
+    Anki JSON field corruption error.
+
+    當卡片欄位中儲存的 JSON 陣列無法解析（或非陣列型別）時拋出，
+    以阻止後續寫入操作靜默清空既有資料。
+
+    Raised when the JSON array stored in a note field cannot be parsed
+    (or is not a list), preventing subsequent write operations from
+    silently wiping existing data.
+    """
+    error_code = "ANKI_FIELD_CORRUPTED"
+
+
+class STTServiceError(InfrastructureBaseError):
+    """自架 STT (Whisper/Speaches) 服務異常。
+
+    Self-hosted STT (Whisper/Speaches) service error.
+
+    當 STT 服務連線失敗、逾時、模型未安裝或轉錄請求失敗時拋出。
+
+    Raised when the STT service is unreachable, times out, the model is
+    not installed, or the transcription request fails.
+    """
+    error_code = "STT_SERVICE_ERROR"
+
+
 class StorageServiceError(InfrastructureBaseError):
     """物件存儲服務異常。
 

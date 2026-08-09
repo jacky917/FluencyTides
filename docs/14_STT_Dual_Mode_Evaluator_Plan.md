@@ -1,6 +1,10 @@
 # 14. STT 雙模式語音評分整合計畫（STT+Diff / STT+LLM）
 
-> 狀態：計畫（已完成兩輪可行性調查，尚未實作）
+> 狀態：**已實作**（2026-08-09，§7 步驟 0–6 全部完成；自動化測試 18/18 通過，
+> 手動驗證〔§5〕與部署清單〔§6〕待執行）
+> 實作備註：樣板分支因 TemplateEngine 使用 StrictUndefined，實際寫法為
+> `{% if user_transcript is defined and user_transcript %}`（計畫原假設 falsy 即可）。
+> 測試基線採 §2.9 選項 (b)：新建 backend/tests/ 起步。
 > 日期：2026-08-09
 > 前置：自架 Speaches (faster-whisper) 服務已於區網 `192.168.50.171:8000` 驗證可用（OpenAI 相容 `/v1/audio/transcriptions` 端點，測試腳本見開發機 `WorkSpace/Python/AI/main.py`）
 
@@ -107,6 +111,32 @@ Telegram 語音為 `.ogg` (Opus)。Speaches 底層 faster-whisper 經 ffmpeg/PyA
 - `STT_LLM_MODEL_NAME` 預設值統一為 `gemini-2.5-flash`（原計畫一處誤寫為不存在的 `gemini-3.5-flash`）。
 - 原計畫遺漏 `proxy` 為現存合法 provider（factory 有三個分支，不是兩個）。
 - 原計畫的樣板路徑寫的是已遷移前的 `services/prompts/`，實際為 `templates/prompts/`。
+
+### 2.9 ⚠️ 前置修復（2026-08-09 全項目掃描後新增，實作前必修）
+
+第三輪可行性複查（全項目 bug 掃描）發現三個直接影響本計畫的外部前提：
+
+1. **`json_modifier.py` 靜默清空風險（High，必修）**：`append_to_list` 在欄位 JSON 解析失敗時
+   靜默回傳 `[]` 再寫回單元素陣列，會**清空整個錄音歷史**。STT 模式（尤其 `stt_diff` 秒回、
+   使用頻率預期上升）會放大此風險。實作本計畫前先修：解析失敗時拋例外而非回傳空列表。
+2. **`voice.py` feedback 未 escape（Med，隨本計畫一併修）**：現有代碼將 `result.feedback`
+   未轉義直接嵌入 TG HTML 訊息。`stt_diff` 的 feedback 天生含標記，§3.3 的 escape 要求
+   必須同時套用到 `voice.py` 的訊息組裝端（對其餘 provider 的純文字 feedback 也一併
+   `html.escape` 後再包安全標籤）。
+3. **測試基線不在 main 上（影響 §5 驗證計畫）**：docs 記載的 48+11 測試實際位於未合併的
+   本地分支 `claude/distracted-borg-2cfed8`（第二～四輪工作，342 檔差異），main 無
+   `backend/tests/`。§5 的自動化測試需要先擇一：(a) 先合併該分支恢復測試基線（推薦，
+   否則 CI 的 pytest 防線也不存在）；(b) 為本計畫新建獨立的 `backend/tests/` 起步。
+   **處置（2026-08-10）**：採 (b)，`backend/tests/` 已建立，目前 38 個測試
+   （STT 雙模式 18 ＋ High 修復回歸 20）。(a) 的合併決策仍待處理。
+
+**上述三項的最新狀態（2026-08-10）**：S001 與 S013 已隨 STT 實作修復；其餘 High 級別
+缺陷（S002–S011）亦已全數修復，詳見 [15_Bug_Scan_Report.md](15_Bug_Scan_Report.md)
+的「High 實作紀錄」。
+
+另註：掃描亦確認三個現存 audio evaluator 重試策略不一致（gemini 有退避重試、openai/proxy
+無）。兩個新 evaluator 對 STT 呼叫採單次嘗試＋明確錯誤（區網服務失敗重試意義低）；
+`stt_llm` 的 LLM 呼叫比照 openai_client 現狀（不重試），統一重試策略留待獨立重構。
 
 ---
 
@@ -339,6 +369,8 @@ if key == "AUDIO_EVALUATOR_PROVIDER":
 
 ## 7. 建議實作順序
 
+0. **前置修復（§2.9）**：json_modifier 解析失敗改拋例外；決定測試基線來源（合併
+   `claude/distracted-borg-2cfed8` 或新建 tests/）。
 1. Config + 例外類別（§3.1、§3.2 例外部分）—— 無風險純新增。
 2. `WhisperClient` + 單元測試（語言映射可離線測，轉錄以區網服務實測）。
 3. `stt_diff` evaluator + schema 新欄位 + `voice.py` 一行改動 + 測試（此模式不依賴 LLM，可完整本地驗證）。

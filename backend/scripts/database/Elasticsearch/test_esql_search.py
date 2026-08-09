@@ -8,8 +8,16 @@ import sys
 import asyncio
 from pathlib import Path
 
-# 強制指向 backend 資料夾
-sys.path.insert(0, r'c:\Users\forip\Desktop\WorkSpace\Python\FluencyTides\backend')
+# 統一 bootstrap：向上尋找第一個含 app/ 的目錄即為 backend 根，與檔案深度無關；
+# 取代原先硬編碼的開發者本機絕對路徑，任何機器（CI／伺服器）皆可執行。
+# Unified bootstrap: walk up the parent chain and take the first directory
+# containing app/ as the backend root. Replaces the hard-coded developer
+# machine path so the script runs on any machine (CI/server included).
+_BACKEND_DIR = next(
+    p for p in Path(__file__).resolve().parents if (p / "app").is_dir()
+)
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 import scripts.common.env  # noqa
 
 from app.infrastructure.database.elasticsearch_client import get_elasticsearch_client

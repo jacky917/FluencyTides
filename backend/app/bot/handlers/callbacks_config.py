@@ -8,6 +8,8 @@ command.
 """
 
 import logging
+from typing import Any
+
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -110,13 +112,23 @@ async def handle_setconfig_back(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("setcfg_val:"))
-async def handle_setconfig_value_selection(callback: CallbackQuery) -> None:
+async def handle_setconfig_value_selection(callback: CallbackQuery, app: "Any" = None) -> None:
     """處理使用者選擇設定的新值並動態套用。
 
     Handle the user's chosen new value and apply it dynamically.
 
+    修改 AUDIO_EVALUATOR_PROVIDER 時會即時重建 app.state.audio_evaluator
+    （STT 計畫 §2.3 解法 1）；重建失敗則回滾設定，避免「設定已改但實例
+    是舊的」的不一致狀態。
+
+    When AUDIO_EVALUATOR_PROVIDER changes, app.state.audio_evaluator is
+    rebuilt immediately (STT plan §2.3, solution 1); on rebuild failure
+    the setting is rolled back to avoid a stale-instance mismatch.
+
     Args:
         callback: 回呼查詢物件。The callback query object.
+        app: dispatcher 注入的 FastAPI app 實例。The FastAPI app
+            instance injected by the dispatcher.
     """
     if callback.from_user is None or settings.TG_ADMIN_CHAT_ID is None:
         await callback.answer("系統未設定管理員。", show_alert=True)
@@ -140,7 +152,34 @@ async def handle_setconfig_value_selection(callback: CallbackQuery) -> None:
 
     # 動態覆寫 settings (這只存在記憶體中)
     if hasattr(settings, key):
+        old_value = getattr(settings, key)
         setattr(settings, key, value)
+
+        # Provider 切換必須重建 Singleton，否則舊實例繼續生效（S011 同族缺口）
+        # Switching providers must rebuild the singleton, or the stale
+        # instance stays in effect.
+        if key == "AUDIO_EVALUATOR_PROVIDER":
+            if app is None:
+                setattr(settings, key, old_value)
+                await callback.answer(
+                    "無法取得應用程式實例，已回滾設定。", show_alert=True
+                )
+                return
+            try:
+                from app.infrastructure.audio_evaluator.factory import (
+                    create_audio_evaluator,
+                )
+                app.state.audio_evaluator = create_audio_evaluator()
+            except Exception as e:
+                setattr(settings, key, old_value)
+                logger.error("切換 Audio Evaluator 失敗，已回滾: %s", e)
+                await callback.message.edit_text(
+                    f"❌ 切換評分器失敗，設定已回滾為 <b>{old_value}</b>。\n\n"
+                    f"<i>原因：{type(e).__name__}，詳見伺服器日誌。</i>",
+                    parse_mode="HTML",
+                )
+                return
+
         logger.info("動態修改設定成功: %s = %s", key, value)
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="⬅️ 返回設定列表", callback_data="setconfig_back")]]

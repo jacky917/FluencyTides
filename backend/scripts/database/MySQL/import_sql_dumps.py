@@ -10,10 +10,16 @@ import glob
 import asyncio
 from pathlib import Path
 
-# 加入 backend 目錄到 sys.path 確保能匯入 app 模組
-backend_dir = Path(__file__).resolve().parent.parent.parent
-if str(backend_dir) not in sys.path:
-    sys.path.insert(0, str(backend_dir))
+# 統一 bootstrap：向上尋找第一個含 app/ 的目錄即為 backend 根，與檔案深度無關；
+# 腳本搬移目錄層級時不需再調整 parent 的層數，避免匯入路徑失準。
+# Unified bootstrap: walk up the parent chain and take the first directory
+# containing app/ as the backend root. Depth-independent, so relocating this
+# script never breaks the import path.
+_BACKEND_DIR = next(
+    p for p in Path(__file__).resolve().parents if (p / "app").is_dir()
+)
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 
 import pymysql
 from pymysql.constants import CLIENT
@@ -70,7 +76,10 @@ def import_sql_files():
 
     Import every .sql file found in the ../../sql directory into MySQL.
     """
-    sql_dir = backend_dir.parent / "sql"
+    # 由統一 bootstrap 推導 SQL 目錄（專案根目錄下的 sql/），不再各自硬算路徑。
+    # Derive the SQL directory (sql/ at the project root) from the backend
+    # root resolved by the unified bootstrap instead of re-computing it.
+    sql_dir = _BACKEND_DIR.parent / "sql"
     if not sql_dir.exists():
         print(f"❌ 找不到 SQL 目錄: {sql_dir}")
         return

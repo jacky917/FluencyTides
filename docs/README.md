@@ -22,6 +22,7 @@
 | [12_Implementation_Log.md](12_Implementation_Log.md) | 第三輪：測試基線（48+11 測試）+ CI/CD + 死代碼清理 + 文檔對齊；§9 第四輪遺留項收尾（CI 接入測試、F023/F096 完全修復、webhook 原子性） |
 | [13_Implementation_Log.md](13_Implementation_Log.md) | 多語言口說教練支援：Target_Language 欄位、FSM 語言選取、Evaluator 簽名重構 |
 | [14_STT_Dual_Mode_Evaluator_Plan.md](14_STT_Dual_Mode_Evaluator_Plan.md) | STT 雙模式語音評分整合計畫（stt_diff / stt_llm）：可行性調查結論與設計方案 |
+| [15_Bug_Scan_Report.md](15_Bug_Scan_Report.md) | 全項目 Bug 掃描報告（S001–S062：High 16 / Med 21 / Low 25），修復狀態追蹤 |
 
 ### 早期專案文檔（與上表共存，已於第三輪修正對齊實況）
 

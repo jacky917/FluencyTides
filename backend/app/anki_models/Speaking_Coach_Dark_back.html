@@ -140,7 +140,7 @@
                     detail.appendChild(labelC);
                     var commentDiv = document.createElement('div');
                     commentDiv.className = 'rec-comment';
-                    commentDiv.textContent = r.comment;
+                    commentDiv.innerHTML = r.comment; // stt_diff 紅綠差異標記需要 HTML 渲染 / diff markup needs HTML rendering
                     detail.appendChild(commentDiv);
                 }
 

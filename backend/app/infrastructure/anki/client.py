@@ -154,7 +154,9 @@ class AnkiClient:
     # 核心方法（Core）
     # ========================================================================
 
-    async def _invoke(self, action: str, **params: object) -> object:
+    async def _invoke(
+        self, action: str, *, _timeout: float | None = None, **params: object
+    ) -> object:
         """向 AnkiConnect 發送 API 請求的底層方法。
 
         Low-level method sending API requests to AnkiConnect.
@@ -162,8 +164,22 @@ class AnkiClient:
         組裝 JSON-RPC 請求體，發送非同步 HTTP POST 請求至 AnkiConnect
         伺服器，並解析回應結果。此方法是所有公開 API 方法的基礎。
 
+        S011 修復：需要較長超時的動作（如 sync）改以 `_timeout` 對「單次請求」
+        指定，不再竄改共享 client 的 timeout 屬性，避免併發下污染其他請求。
+        `_timeout` 為 keyword-only 且由簽名顯式接住，確保不會混入 `**params`
+        被誤送給 AnkiConnect 當成 API 參數。
+
+        S011 fix: actions needing a longer timeout (e.g. sync) pass `_timeout`
+        for that single request instead of mutating the shared client's
+        timeout attribute, which would corrupt concurrent requests.
+        `_timeout` is keyword-only and captured explicitly by the signature so
+        it can never leak into `**params` and be sent to AnkiConnect as an
+        API parameter.
+
         Args:
             action: AnkiConnect API 動作名稱，例如 'deckNames'、'addNote'。AnkiConnect action name, e.g. 'deckNames', 'addNote'.
+            _timeout: 本次請求專用的超時秒數；None 表示使用預設值。
+                Per-request timeout in seconds; None uses the default.
             **params: 傳遞給 API 動作的關鍵字參數。Keyword parameters for the action.
 
         Returns:
@@ -196,6 +212,9 @@ class AnkiClient:
                 response = await self._client.post(
                     self._url,
                     json=req.model_dump(exclude_none=True),
+                    # 單次請求覆寫，不動共享 client 狀態（S011）
+                    # Per-request override; shared client state untouched.
+                    timeout=_timeout if _timeout is not None else self._timeout,
                 )
                 response.raise_for_status()
                 break  # 成功，跳出重試迴圈
@@ -211,9 +230,10 @@ class AnkiClient:
                 )
             except httpx.TimeoutException:
                 # 超時通常不需要立即重試
+                effective_timeout = _timeout if _timeout is not None else self._timeout
                 logger.error("AnkiConnect 請求超時: action=%s", action)
                 raise AnkiConnectError(
-                    f"AnkiConnect 請求超時（{self._timeout}秒），action: {action}"
+                    f"AnkiConnect 請求超時（{effective_timeout}秒），action: {action}"
                 )
             except httpx.HTTPStatusError as e:
                 # HTTP 狀態碼錯誤（如 400, 500），伺服器已正常回應，不重試
@@ -1181,18 +1201,19 @@ class AnkiClient:
             return
             
         logger.info("正在觸發 Anki 同步...")
-        old_timeout = self._client.timeout
+        # S011：以 per-request timeout 取代竄改共享 client.timeout，
+        # 避免同時進行中的其他請求繼承到錯誤的超時設定（競態）。
+        # S011: use a per-request timeout instead of mutating the shared
+        # client.timeout, which would leak the wrong timeout into other
+        # in-flight requests (race condition).
         try:
-            self._client.timeout = httpx.Timeout(self.SYNC_TIMEOUT)
-            await self._invoke("sync")
+            await self._invoke("sync", _timeout=self.SYNC_TIMEOUT)
             self._last_sync_time = time.time()
             logger.info("✅ Anki 同步完成。")
         except AnkiConnectError as e:
             logger.warning("⚠️ Anki 同步失敗，這不影響本地操作，請確認 AnkiWeb 狀態或稍後手動同步: %s", e)
             if raise_errors:
                 raise
-        finally:
-            self._client.timeout = old_timeout
 
     async def request_permission(self) -> dict[str, object]:
         """請求使用 AnkiConnect API 的權限。

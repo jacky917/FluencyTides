@@ -11,15 +11,20 @@ expression_correction task handler.
 
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
-import os
-from pathlib import Path
 
-# 確保 sys.path 包含 backend 根目錄並載入 .env
-_backend_dir = Path(__file__).resolve().parents[4]
-if str(_backend_dir) not in sys.path:
-    sys.path.insert(0, str(_backend_dir))
+# 統一 bootstrap：向上尋找第一個含 app/ 的目錄即為 backend 根，與檔案深度無關；
+# 腳本搬移目錄層級時不需再調整硬編碼的上層層數，避免匯入路徑失準。
+# Unified bootstrap: walk up the parent chain and take the first directory
+# containing app/ as the backend root. Depth-independent, so relocating this
+# script never breaks the import path.
+_BACKEND_DIR = next(
+    p for p in Path(__file__).resolve().parents if (p / "app").is_dir()
+)
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 import scripts.common.env  # noqa
 
 from app.infrastructure.anki.client import AnkiClient
@@ -51,10 +56,10 @@ async def generate() -> None:
     # 1. 初始化相依服務
     try:
         anki_client = AnkiClient()
-        # 本檔位於 backend/scripts/local_anki/Expression_Correction/，
-        # parents[3] = backend/（原三層 parent 只到 scripts/，會錯指
-        # backend/scripts/app/anki_models 並自動建立空資料夾）
-        model_dir = Path(__file__).resolve().parents[3] / "app" / "anki_models"
+        # 由統一 bootstrap 推導模型目錄，不再各自硬算層級路徑。
+        # Derive the model directory from the backend root resolved by the
+        # unified bootstrap instead of re-computing parent levels here.
+        model_dir = _BACKEND_DIR / "app" / "anki_models"
         model_manager = AnkiModelManager(anki_client=anki_client, model_dir=model_dir)
         card_service = CardService(anki_client=anki_client, model_manager=model_manager)
     except Exception as e:

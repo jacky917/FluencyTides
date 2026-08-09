@@ -55,7 +55,14 @@ def build_nlp_index():
     insert them into the index table.
     """
     print(f"🔌 連線至遠端資料庫 ({settings.MYSQL_HOST}:{settings.MYSQL_PORT})...")
-    conn = pymysql.connect(
+    # S008 修復：SSCursor 的 streaming 結果集在讀完前，同一條連線不得發送其他
+    # 語句，否則觸發 "Commands out of sync" 或結果集被截斷。因此讀取與寫入必須
+    # 各用「獨立的連線」——原本只分成兩個 cursor 但共用同一 conn，並不足夠。
+    # S008 fix: while an SSCursor result set is still being streamed, no other
+    # statement may be sent on the same connection, or MySQL raises "Commands
+    # out of sync" / truncates the stream. Reads and writes therefore need
+    # separate connections; two cursors on one shared conn is not enough.
+    conn_params = dict(
         host=settings.MYSQL_HOST,
         port=settings.MYSQL_PORT,
         user=settings.MYSQL_USER,
@@ -63,8 +70,10 @@ def build_nlp_index():
         database=settings.MYSQL_DATABASE,
         charset='utf8mb4'
     )
-    
-    setup_database(conn)
+    read_conn = pymysql.connect(**conn_params)
+    write_conn = pymysql.connect(**conn_params)
+
+    setup_database(write_conn)
     
     print("🧠 正在初始化 Fugashi NLP Tagger (UniDic)...")
     tagger = fugashi.Tagger()
@@ -86,8 +95,9 @@ def build_nlp_index():
     start_time = time.time()
     
     try:
-        # SSCursor 必須單獨佔用一個連線，因此我們需要兩個 cursor，一個讀一個寫
-        with conn.cursor(SSCursor) as read_cursor, conn.cursor() as write_cursor:
+        # 讀取走 read_conn 的 SSCursor，寫入走獨立的 write_conn（見上方 S008 說明）
+        # Reads use read_conn's SSCursor; writes use the separate write_conn.
+        with read_conn.cursor(SSCursor) as read_cursor, write_conn.cursor() as write_cursor:
             read_sql = """
                 SELECT id, source, dialogue 
                 FROM scripts 
@@ -120,19 +130,23 @@ def build_nlp_index():
                 # 批次寫入
                 if len(batch_data) >= BATCH_SIZE:
                     write_cursor.executemany(insert_sql, batch_data)
-                    conn.commit()
+                    # 只 commit 寫入連線，讀取流不受影響
+                    # Commit only the write connection; the read stream is safe.
+                    write_conn.commit()
                     batch_data.clear()
                     print(f"  [進度] 處理了 {total_processed} 筆句型... 已寫入 {total_indexed} 個動詞索引。")
             
             # 寫入最後殘餘的批次
             if batch_data:
                 write_cursor.executemany(insert_sql, batch_data)
-                conn.commit()
+                write_conn.commit()
                 batch_data.clear()
                 print(f"  [進度] 處理了 {total_processed} 筆句型... 已寫入 {total_indexed} 個動詞索引。")
                 
     finally:
-        conn.close()
+        # 兩條連線都必須關閉（S008）/ Both connections must be closed.
+        read_conn.close()
+        write_conn.close()
         
     elapsed = time.time() - start_time
     print(f"🎉 預處理完成！共花費 {elapsed:.2f} 秒。")

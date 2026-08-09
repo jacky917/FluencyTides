@@ -30,6 +30,7 @@ Phase 9 update:
 """
 
 import base64
+import html
 import json
 import logging
 from datetime import datetime, timezone
@@ -249,7 +250,8 @@ async def process_voice_handler(
                 "date": datetime.now(tz=timezone.utc).strftime("%Y-%m-%d"),
                 "audio": audio_filename,
                 "transcript": result.transcript,
-                "comment": result.feedback,
+                # stt_diff 提供 Anki 專用的紅綠標記版；其餘 provider 沿用 feedback
+                "comment": result.feedback_anki_html or result.feedback,
                 "score": result.score,
             }
             if trilingual_lang:
@@ -291,14 +293,32 @@ async def process_voice_handler(
         from app.bot.handlers.callbacks import _sync_with_warning
         sync_warning = await _sync_with_warning(anki_client)
 
+        # feedback_anki_html 存在時，feedback 為 evaluator 自行組裝的 TG 安全
+        # 標記（stt_diff 差異），不可再轉義也不可截斷（避免切斷標籤）；
+        # 其餘 provider 的 feedback 為 LLM 純文字，先截斷再轉義。
+        safe_transcript = html.escape(result.transcript[:300])
+        if result.feedback_anki_html is not None:
+            safe_feedback = result.feedback
+        else:
+            safe_feedback = html.escape(result.feedback[:500])
+
+        # 各 evaluator 自行回報的模式/模型標籤；缺省時退回目前設定值
+        # Mode/model label self-reported by the evaluator; falls back to
+        # the current setting when absent.
+        from app.core.config import settings as _settings
+        evaluator_label = html.escape(
+            result.evaluator_label or _settings.AUDIO_EVALUATOR_PROVIDER
+        )
+
         await status_msg.edit_text(
             f"✅ <b>錄音評分完成！</b>\n\n"
             f"🎯 卡片：<code>{card_id}</code>\n"
+            f"⚙️ 模式：<code>{evaluator_label}</code>\n"
             f"{score_emoji} 分數：<b>{score}</b> / 100\n\n"
             f"📝 <b>逐字稿</b>\n"
-            f"<i>{result.transcript[:300]}</i>\n\n"
+            f"<i>{safe_transcript}</i>\n\n"
             f"💬 <b>AI 評語</b>\n"
-            f"{result.feedback[:500]}\n\n"
+            f"{safe_feedback}\n\n"
             f"<i>結果已自動寫入本地 Anki！🎉</i>{sync_warning}"
         )
 

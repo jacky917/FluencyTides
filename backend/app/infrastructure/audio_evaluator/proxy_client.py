@@ -213,8 +213,10 @@ class ProxyAudioEvaluator(BaseAudioEvaluator):
             for key in required_keys:
                 if key not in parsed:
                     raise ValueError(f"JSON 缺少必填欄位: {key}")
-                    
-            return AudioEvaluationResult(**parsed)
+
+            result = AudioEvaluationResult(**parsed)
+            result.evaluator_label = settings.AUDIO_MODEL_NAME
+            return result
         except (json.JSONDecodeError, ValueError) as e:
             logger.error("Proxy Audio Evaluator 回傳格式錯誤: %s", content)
             raise LLMServiceError(

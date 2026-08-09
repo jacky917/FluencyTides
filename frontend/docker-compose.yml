@@ -11,13 +11,21 @@ services:
       
     environment:
       - TZ=Asia/Tokyo
-      
+      # S009：供 nginx entrypoint 的 envsubst 注入 proxy_set_header X-API-Key。
+      # 必須與後端 .env 的 API_SECRET_KEY 相同；未設定時代換為空字串，
+      # 此時後端也會因未設定金鑰而跳過認證（行為與現況一致）。
+      # S009: consumed by the nginx entrypoint's envsubst to fill in
+      # proxy_set_header X-API-Key. Must match the backend's API_SECRET_KEY;
+      # when unset it substitutes to an empty string and the backend skips
+      # auth as it does today.
+      - API_SECRET_KEY=${API_SECRET_KEY:-}
+
     # 將前端容器明確加入我們自訂的 Docker 網路
     networks:
       - fluencytides_net
-      
-    # 前端純靜態網頁，不需要掛載資料卷 (Volumes)，也不需要 env_file
-    # (因為環境變數在 build 階段就已經打包進 JS 裡面了)
+
+    # 前端純靜態網頁不需掛載資料卷；API 金鑰改由 nginx 於代理層注入，
+    # 不再依賴 build 階段打包（見上方 environment 說明）。
       
     x-casaos:
       ports:

@@ -11,6 +11,8 @@ import html
 import re
 from typing import Any, TYPE_CHECKING
 
+from app.core.exceptions import AnkiFieldCorruptedError
+
 if TYPE_CHECKING:
     from app.services.card_service import CardService
 
@@ -41,9 +43,14 @@ class AnkiJsonFieldManager:
             field_str: Anki 欄位的原始字串內容。Raw Anki field string.
 
         Returns:
-            解析出的 JSON 陣列；失敗或非陣列時回傳空陣列。The parsed JSON
-            list, or an empty list if parsing fails or the result is not a
-            list.
+            解析出的 JSON 陣列；空欄位回傳空陣列。The parsed JSON list, or
+            an empty list for an empty field.
+
+        Raises:
+            AnkiFieldCorruptedError: 欄位含內容但無法解析為 JSON 陣列時拋出，
+                以避免後續寫入靜默清空既有資料（S001）。Raised when the field
+                has content that cannot be parsed as a JSON list, preventing
+                follow-up writes from silently wiping existing data (S001).
         """
         if not field_str:
             return []
@@ -57,15 +64,22 @@ class AnkiJsonFieldManager:
         # 將 Anki 中的 HTML Entity 解析回正常字元 (必須在 Regex 修復之後執行)
         field_str = html.unescape(field_str)
 
-        try:
-            items = json.loads(field_str) if field_str.strip() else []
-            if not isinstance(items, list):
-                logger.warning("解析結果並非 list 型別，將回傳空陣列")
-                return []
-            return items
-        except json.JSONDecodeError:
-            logger.warning("JSON 解析失敗，回傳空陣列。字串前段: %s", field_str[:30])
+        if not field_str.strip():
             return []
+        try:
+            items = json.loads(field_str)
+        except json.JSONDecodeError as e:
+            logger.error("JSON 解析失敗（欄位可能損毀）。字串前段: %s", field_str[:30])
+            raise AnkiFieldCorruptedError(
+                f"Anki 欄位 JSON 損毀，無法解析（前段: {field_str[:30]!r}）。"
+                "為避免資料遺失已中止操作，請先手動修復該欄位。"
+            ) from e
+        if not isinstance(items, list):
+            logger.error("解析結果並非 list 型別: %s", type(items).__name__)
+            raise AnkiFieldCorruptedError(
+                f"Anki 欄位內容為 {type(items).__name__} 而非 JSON 陣列，已中止操作。"
+            )
+        return items
 
     @classmethod
     async def safe_read_list(cls, card_service: "CardService", note_id: int, field_name: str) -> list[Any]:
