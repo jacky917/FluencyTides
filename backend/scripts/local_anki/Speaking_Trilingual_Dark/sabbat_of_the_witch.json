@@ -1,0 +1,146 @@
+[
+  {
+    "deckName": "FluencyTides::Speaking_Trilingual",
+    "modelName": "Speaking_Trilingual_Dark",
+    "tags": [
+      "TelegramBot",
+      "Sample",
+      "Yuzusoft"
+    ],
+    "fields": {
+      "Prompt": "這週末要不要一起去逛街？聽說新開了一間甜點店。",
+      "Prompt_Audios": [
+        {
+          "lang": "JA",
+          "audio": "C:/Users/forip/Desktop/WorkSpace/material/voice/yuzusoft/SabbatOfTheWitch/aka010_001.mp3",
+          "speaker": "綾地寧々",
+          "avatar": "C:/Users/forip/Desktop/WorkSpace/material/avatar/yuzusoft/SabbatOfTheWitch/寧々.jpg"
+        }
+      ],
+      "Context": "情境：朋友之間的輕鬆邀約。\n重點：\n1. 提出週末邀約\n2. 提到新開的甜點店",
+      "Recordings_ZH": [],
+      "Recordings_JA": [],
+      "Recordings_EN": [],
+      "References_ZH": [
+        {
+          "date": "2026-07-18",
+          "content": "這週末要不要一起去逛街？聽說新開了一間甜點店呢。",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_JA": [
+        {
+          "date": "2026-07-18",
+          "content": "今週末、一緒に買い物に行かない？新しくできたスイーツのお店があるらしいよ。",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_EN": [
+        {
+          "date": "2026-07-18",
+          "content": "Do you want to go shopping this weekend? I heard a new dessert shop just opened.",
+          "status": 1,
+          "audios": []
+        }
+      ]
+    }
+  },
+  {
+    "deckName": "FluencyTides::Speaking_Trilingual",
+    "modelName": "Speaking_Trilingual_Dark",
+    "tags": [
+      "TelegramBot",
+      "Sample",
+      "Yuzusoft"
+    ],
+    "fields": {
+      "Prompt": "不好意思，我今天有點不舒服，能不能請個假？",
+      "Prompt_Audios": [
+        {
+          "lang": "JA",
+          "audio": "C:/Users/forip/Desktop/WorkSpace/material/voice/yuzusoft/SabbatOfTheWitch/aka010_002.mp3",
+          "speaker": "因幡めぐる",
+          "avatar": "C:/Users/forip/Desktop/WorkSpace/material/avatar/yuzusoft/SabbatOfTheWitch/めぐる.jpg"
+        }
+      ],
+      "Context": "情境：打電話給主管請病假。\n重點：\n1. 禮貌地道歉\n2. 說明身體不適\n3. 請求請假",
+      "Recordings_ZH": [],
+      "Recordings_JA": [],
+      "Recordings_EN": [],
+      "References_ZH": [
+        {
+          "date": "2026-07-18",
+          "content": "不好意思，我今天身體有點不舒服，想向您請個假。",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_JA": [
+        {
+          "date": "2026-07-18",
+          "content": "申し訳ありません、今日は少し体調が優れないので、お休みをいただいてもよろしいでしょうか？",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_EN": [
+        {
+          "date": "2026-07-18",
+          "content": "I'm sorry, I'm not feeling well today. Could I take the day off?",
+          "status": 1,
+          "audios": []
+        }
+      ]
+    }
+  },
+  {
+    "deckName": "FluencyTides::Speaking_Trilingual",
+    "modelName": "Speaking_Trilingual_Dark",
+    "tags": [
+      "TelegramBot",
+      "Sample",
+      "Yuzusoft"
+    ],
+    "fields": {
+      "Prompt": "你看過昨天晚上那場球賽了嗎？最後的逆轉太精彩了！",
+      "Prompt_Audios": [
+        {
+          "lang": "JA",
+          "audio": "C:/Users/forip/Desktop/WorkSpace/material/voice/yuzusoft/SabbatOfTheWitch/aka010_003.mp3",
+          "speaker": "椎葉紬",
+          "avatar": "C:/Users/forip/Desktop/WorkSpace/material/avatar/yuzusoft/SabbatOfTheWitch/紬.jpg"
+        }
+      ],
+      "Context": "情境：和同事在休息時間聊天。\n重點：\n1. 詢問是否看了球賽\n2. 表達對逆轉勝的驚嘆",
+      "Recordings_ZH": [],
+      "Recordings_JA": [],
+      "Recordings_EN": [],
+      "References_ZH": [
+        {
+          "date": "2026-07-18",
+          "content": "你看過昨晚的球賽了嗎？最後的逆轉真的太精彩了！",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_JA": [
+        {
+          "date": "2026-07-18",
+          "content": "昨日の夜の試合見た？最後の大逆転、本当にすごかったよね！",
+          "status": 1,
+          "audios": []
+        }
+      ],
+      "References_EN": [
+        {
+          "date": "2026-07-18",
+          "content": "Did you watch the game last night? That comeback at the end was amazing!",
+          "status": 1,
+          "audios": []
+        }
+      ]
+    }
+  }
+]

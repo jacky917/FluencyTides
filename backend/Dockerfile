@@ -1,5 +1,5 @@
 # 1. 使用官方 Python 瘦身版映像檔 (兼顧體積與完美的套件相容性)
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 # 2. 設定環境變數
 # 避免 Python 寫入 .pyc 隱藏檔，減少容器體積

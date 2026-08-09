@@ -3,6 +3,11 @@ import { FluencyTidesAPI } from '../api/client'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Skeleton } from '../components/ui/skeleton'
 
+/**
+ * 儀表板頁面：顯示後端 API 連線健康狀態。
+ * Dashboard page: displays backend API connection health status.
+ * @returns 儀表板頁面 JSX。Dashboard page JSX.
+ */
 export default function Dashboard() {
   const { data: health, isLoading, isError } = useQuery({
     queryKey: ['health'],

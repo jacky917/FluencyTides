@@ -1,5 +1,12 @@
 import { useState, useEffect } from 'react';
 
+/**
+ * 將 React state 同步至 localStorage 的自訂 Hook，並支援跨分頁同步。
+ * Custom hook that syncs React state to localStorage, with cross-tab synchronization.
+ * @param key - localStorage 的鍵名。The localStorage key.
+ * @param initialValue - 無既存值時的初始值。Initial value when no stored value exists.
+ * @returns [目前值, 設定函數] 的元組。Tuple of [current value, setter function].
+ */
 export function useLocalStorage<T>(key: string, initialValue: T) {
   // State to store our value
   // Pass initial state function to useState so logic is only executed once

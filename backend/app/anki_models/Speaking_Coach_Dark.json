@@ -1,12 +1,13 @@
 {
   "modelName": "Speaking_Coach_Dark",
   "inOrderFields": [
-    "Card_ID",
     "Prompt",
     "Prompt_Audios",
     "Context",
     "Recordings",
     "References",
+    "Target_Language",
+    "Card_ID",
     "TG_Bot"
   ]
 }

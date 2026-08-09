@@ -1,0 +1,135 @@
+{{FrontSide}}
+
+<hr class="divider">
+
+<div class="section" style="border-left-color: #3498db;">
+    <div id="intransitive-container"></div>
+</div>
+
+<div class="section" style="border-left-color: #e74c3c;">
+    <div id="transitive-container"></div>
+</div>
+
+
+
+<!-- 隱藏資料區 -->
+<div id="intransitive-data" style="display:none;">{{Intransitive_Data_JSON}}</div>
+<div id="transitive-data" style="display:none;">{{Transitive_Data_JSON}}</div>
+<div id="card-id-data" style="display:none;">{{Card_ID}}</div>
+
+<script>
+    function renderData(dataId, containerId) {
+        var raw = (document.getElementById(dataId) || {}).textContent || '';
+        var container = document.getElementById(containerId);
+        if (!container || !raw.trim()) return;
+
+        var items = [];
+        try { items = JSON.parse(raw.trim()); } catch (e) { return; }
+
+        items.forEach(function(item) {
+            var wrap = document.createElement('div');
+            wrap.className = 'chat-row-container';
+
+            var bubbleWrap = document.createElement('div');
+            bubbleWrap.className = 'chat-bubble-wrap chat-left';
+
+            var isNarration = !item.speaker || item.speaker.trim() === "-" || item.speaker.trim() === "";
+
+            // 語音按鈕與頭像
+            var btn = document.createElement('div');
+            btn.className = 'avatar-btn';
+            if (item.audio) {
+                var audio = document.createElement('audio');
+                audio.src = item.audio;
+                btn.appendChild(audio);
+                btn.onclick = function(e) {
+                    if (e.target.tagName !== 'AUDIO') {
+                        audio.play();
+                    }
+                };
+                audio.onplay = function() { btn.classList.add('playing'); };
+                audio.onended = function() { btn.classList.remove('playing'); };
+            } else {
+                btn.classList.add('no-audio');
+            }
+            
+            if (!isNarration) {
+                if (item.avatar && item.avatar !== 'none') {
+                    var img = document.createElement('img');
+                    img.src = item.avatar;
+                    btn.appendChild(img);
+                } else {
+                    var icon = document.createElement('div');
+                    icon.className = 'avatar-icon';
+                    icon.textContent = item.speaker ? item.speaker.charAt(0).toUpperCase() : '👤';
+                    btn.appendChild(icon);
+                }
+            } else {
+                btn.style.visibility = 'hidden';
+            }
+            bubbleWrap.appendChild(btn);
+
+            var contentCol = document.createElement('div');
+            contentCol.style.display = 'flex';
+            contentCol.style.flexDirection = 'column';
+            contentCol.style.gap = '6px';
+            contentCol.style.maxWidth = '85%';
+
+            if (item.text) {
+                var bubble = document.createElement('div');
+                bubble.className = 'chat-bubble';
+                bubble.style.maxWidth = '100%';
+                
+                // 只有旁白 (無說話人) 時，對話框才使用最普通的底色（灰色），不套用左右分色
+                if (isNarration) {
+                    bubble.classList.add('chat-no-avatar');
+                }
+                
+                bubble.innerHTML = item.text;
+                contentCol.appendChild(bubble);
+            }
+
+            var actions = document.createElement('div');
+            actions.className = 'chat-actions-row';
+            actions.style.marginLeft = '0';
+            actions.style.marginTop = '0';
+            
+            if (item.context_note_id) {
+                var ctxBtn = document.createElement('div');
+                ctxBtn.className = 'mini-action-btn btn-blue';
+                ctxBtn.textContent = '📖 查看情境卡';
+                ctxBtn.onclick = function() { openSpecificChildCard(item.context_note_id); };
+                actions.appendChild(ctxBtn);
+            }
+            if (item.cloze_note_id) {
+                var clzBtn = document.createElement('div');
+                clzBtn.className = 'mini-action-btn btn-green';
+                clzBtn.textContent = '🎯 查看克漏字';
+                clzBtn.onclick = function() { openSpecificChildCard(item.cloze_note_id); };
+                actions.appendChild(clzBtn);
+            }
+            
+            if (actions.children.length > 0) {
+                contentCol.appendChild(actions);
+            }
+
+            bubbleWrap.appendChild(contentCol);
+            wrap.appendChild(bubbleWrap);
+
+            container.appendChild(wrap);
+        });
+    }
+
+    renderData('intransitive-data', 'intransitive-container');
+    renderData('transitive-data', 'transitive-container');
+
+    function openSpecificChildCard(noteId) {
+        if (!noteId) return;
+        var query = 'nid:' + noteId;
+        
+        fetch('http://127.0.0.1:8765', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'guiBrowse', version: 6, params: { query: query } })
+        }).catch(function() {});
+    }
+</script>

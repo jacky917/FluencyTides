@@ -11,6 +11,21 @@ Telegram Bot 使用者狀態機模組。
 - 使用記憶體字典而非 Redis/DB，因為 FluencyTides 為單人本地使用，
   不需要跨進程共享狀態。若未來部署到多 Worker 環境，需改用 Redis。
 - 所有狀態都帶有 action 欄位以區分不同操作類型，預留擴充空間。
+
+Telegram Bot user state machine module.
+
+Provides simple in-memory state management for tracking multi-step flows.
+Currently used mainly for Workflow B (recording evaluation) transitions:
+1. User clicks a deep link -> enters the Recording state
+2. User sends a voice message -> the card_id in the state is read and handled
+3. Processing finished -> the state is cleared
+
+Design decisions:
+- An in-memory dict is used instead of Redis/DB because FluencyTides is a
+  single-user local app with no cross-process state sharing. Switch to Redis
+  if deployed to a multi-worker environment in the future.
+- Every state carries an action field to distinguish operation types,
+  leaving room for extension.
 """
 
 import logging
@@ -26,10 +41,16 @@ logger = logging.getLogger(__name__)
 class UserState:
     """使用者當前操作狀態。
 
+    The user's current operation state.
+
     Attributes:
         action: 操作類型標識（例如 'recording'）。
+            Operation type identifier (e.g. 'recording').
         card_id: 關聯的 Anki Card_ID 欄位值。
+            The associated Anki Card_ID field value.
         extra: 附加上下文資訊（預留擴充）。
+            Additional context info (reserved for extension).
+        expires_at: 狀態過期時間（UTC）。State expiry time in UTC.
     """
 
     action: str
@@ -41,23 +62,38 @@ class UserState:
 class UserStateManager:
     """使用者狀態管理器（In-Memory Singleton）。
 
+    User state manager (in-memory singleton).
+
     透過 chat_id 追蹤每位使用者的當前操作狀態。
+
+    Tracks each user's current operation state keyed by chat_id.
 
     設計決策：
     - 不使用全域字典，改用類別封裝，便於測試時注入 Mock。
     - 使用 dataclass UserState 而非裸字典，避免 key typo 導致的靜默錯誤。
+
+    Design decisions:
+    - Encapsulated in a class instead of a global dict so mocks can be
+      injected during testing.
+    - Uses the UserState dataclass rather than a bare dict to avoid silent
+      errors from key typos.
     """
 
     def __init__(self) -> None:
-        """初始化空的狀態字典。"""
+        """初始化空的狀態字典。
+
+        Initialize the empty state dict.
+        """
         self._states: dict[int, UserState] = {}
 
     def set_state(self, chat_id: int, state: UserState) -> None:
         """設定使用者狀態。
 
+        Set the user's state.
+
         Args:
-            chat_id: Telegram Chat ID。
-            state: 要設定的 UserState 實例。
+            chat_id: Telegram Chat ID。The Telegram chat ID.
+            state: 要設定的 UserState 實例。The UserState instance to set.
         """
         # 如果沒有特別設定過期時間，就自動以設定檔為主
         if state.expires_at is None:
@@ -75,11 +111,14 @@ class UserStateManager:
     def get_state(self, chat_id: int) -> UserState | None:
         """取得使用者的當前狀態。
 
+        Get the user's current state.
+
         Args:
-            chat_id: Telegram Chat ID。
+            chat_id: Telegram Chat ID。The Telegram chat ID.
 
         Returns:
             UserState 實例，若無狀態或已過期則回傳 None。
+            The UserState instance, or None if absent or expired.
         """
         state = self._states.get(chat_id)
         if state and state.expires_at and datetime.now(tz=timezone.utc) > state.expires_at:
@@ -91,8 +130,10 @@ class UserStateManager:
     def clear_state(self, chat_id: int) -> None:
         """清除使用者狀態。
 
+        Clear the user's state.
+
         Args:
-            chat_id: Telegram Chat ID。
+            chat_id: Telegram Chat ID。The Telegram chat ID.
         """
         removed = self._states.pop(chat_id, None)
         if removed:
@@ -105,11 +146,13 @@ class UserStateManager:
     def has_state(self, chat_id: int) -> bool:
         """檢查使用者是否有活躍狀態。
 
+        Check whether the user has an active state.
+
         Args:
-            chat_id: Telegram Chat ID。
+            chat_id: Telegram Chat ID。The Telegram chat ID.
 
         Returns:
-            是否存在有效狀態。
+            是否存在有效狀態。Whether a valid state exists.
         """
         # 利用 get_state 會自動清理過期狀態的特性
         return self.get_state(chat_id) is not None

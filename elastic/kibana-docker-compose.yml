@@ -1,0 +1,36 @@
+name: kibana-service
+services:
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.19.15
+    container_name: kibana
+    restart: unless-stopped
+    networks:
+      - fluencytides_net
+    # 完全依賴 .env 檔案提供環境變數
+    env_file:
+      - /DATA/AppData/kibana/.env
+    ports:
+      - "5601:5601"
+    volumes:
+      # 讓 Kibana 把「已完成驗證、多設備授權」的硬碟記憶寫進 Debian 實體硬碟！
+      - /DATA/AppData/kibana/data:/usr/share/kibana/data
+    mem_limit: 2g
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  main_app: kibana
+  author: "Expert Guide"
+  category: "Database"
+  description:
+    en_us: "Kibana 8.19.15 Web Dashboard for Visualizing Elasticsearch"
+    zh_cn: "Kibana 8.19.15 視覺化管理面板 (已限制 1G 記憶體)"
+  developer: "Elastic"
+  icon: "https://cdn.iconscout.com/icon/free/png-256/kibana-3629122-3030237.png"
+  index: "/"
+  port_map: "5601"
+  title:
+    en_us: "Kibana Dashboard"
+networks:
+  fluencytides_net:
+    external: true

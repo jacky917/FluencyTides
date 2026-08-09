@@ -1,0 +1,16 @@
+{
+  "modelName": "Speaking_Trilingual_Dark",
+  "inOrderFields": [
+    "Prompt",
+    "Prompt_Audios",
+    "Context",
+    "Recordings_ZH",
+    "Recordings_JA",
+    "Recordings_EN",
+    "References_ZH",
+    "References_JA",
+    "References_EN",
+    "Card_ID",
+    "TG_Bot"
+  ]
+}

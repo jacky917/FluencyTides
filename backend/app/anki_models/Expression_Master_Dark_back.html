@@ -1,0 +1,194 @@
+<div class="card back-card">
+    {{#Error_Comparison}}
+    <div class="expression-box" style="border-top-color: #e74c3c; margin-bottom: 16px;">
+        <div class="topic-tag" style="color: #e74c3c; text-shadow: 0 0 8px rgba(231, 76, 60, 0.3);">⚠️ 我的原句 (標錯)</div>
+        <div class="error-comparison">{{Error_Comparison}}</div>
+    </div>
+    {{/Error_Comparison}}
+
+    <div class="expression-box" style="border-top-color: #2ecc71; margin-bottom: 16px;">
+        <div class="topic-tag" style="color: #2ecc71; text-shadow: 0 0 8px rgba(46, 204, 113, 0.3);">✨ 文法修正 (Grammar Correction)</div>
+        <div class="prompt-content">{{Correct_Answer}}</div>
+    </div>
+
+    {{#Reorganized_Expression}}
+    <div class="expression-box" style="border-top-color: #9b59b6;">
+        <div class="topic-tag" style="color: #9b59b6; text-shadow: 0 0 8px rgba(155, 89, 182, 0.3);">🚀 道地重組 (Native Reorganization)</div>
+        <div class="prompt-content">{{Reorganized_Expression}}</div>
+        <div id="answer-avatars" class="avatar-row"></div>
+    </div>
+    {{/Reorganized_Expression}}
+
+    <div class="section references-section">
+        <div class="section-title">💡 詳細解說 (Explanation)</div>
+        <div id="explanation-container"></div>
+        <div id="explanation-empty" class="empty-hint" style="display:none;">尚無詳細解說</div>
+    </div>
+</div>
+
+<!-- 隱藏欄位供 JS 解析 -->
+<div id="explanation-data" style="display:none;">{{Detailed_Explanation}}</div>
+<div id="answer-audios-data" style="display:none;">{{Answer_Audios}}</div>
+<div id="card-id-data" style="display:none;">{{Card_ID}}</div>
+<div id="tg-bot-data" style="display:none;">{{TG_Bot}}</div>
+
+<script>
+    // 工具函式
+    function toggleAccordion(targetId, summaryEl) {
+        var el = document.getElementById(targetId);
+        if (!el) return;
+        var isHidden = el.style.display === 'none';
+        el.style.display = isHidden ? 'block' : 'none';
+        var arrow = summaryEl.querySelector('.accordion-arrow');
+        if (arrow) {
+            arrow.textContent = isHidden ? '▾' : '▸';
+        }
+    }
+
+    // JS 音訊播放控制 (與 Speaking_Coach_Dark 一致)
+    var _scCurrentAudio = null;
+    var _scActiveBtn = null;
+
+    function scPlayAudio(filename, btn) {
+        if (event) { event.stopPropagation(); event.preventDefault(); }
+        if (_scCurrentAudio && _scActiveBtn === btn) {
+            _scCurrentAudio.pause();
+            _scCurrentAudio.currentTime = 0;
+            _scCurrentAudio = null;
+            btn.classList.remove('playing');
+            _scActiveBtn = null;
+            return;
+        }
+        if (_scCurrentAudio) {
+            _scCurrentAudio.pause();
+            _scCurrentAudio.currentTime = 0;
+            if (_scActiveBtn) _scActiveBtn.classList.remove('playing');
+        }
+        var audio = new Audio(filename);
+        _scCurrentAudio = audio;
+        _scActiveBtn = btn;
+        btn.classList.add('playing');
+        audio.onended = function () { btn.classList.remove('playing'); _scCurrentAudio = null; _scActiveBtn = null; };
+        audio.onerror = function () { btn.classList.remove('playing'); _scCurrentAudio = null; _scActiveBtn = null; };
+        audio.play();
+    }
+
+    function scCreateAvatarBtn(item) {
+        var btn = document.createElement('div');
+        btn.className = 'avatar-btn';
+        btn.title = item.speaker || '';
+        btn.onclick = function (e) { scPlayAudio(item.audio, btn); };
+        if (item.avatar && item.avatar !== "none") {
+            var img = document.createElement('img');
+            img.src = item.avatar;
+            img.alt = item.speaker || 'voice';
+            btn.appendChild(img);
+        } else {
+            btn.innerHTML = '<span class="avatar-icon">▶</span>';
+        }
+        return btn;
+    }
+
+    function scCreateTgBtn(action, fieldName, iconText, titleText) {
+        var cardId = (document.getElementById('card-id-data').textContent || '').trim();
+        var tgBot = (document.getElementById('tg-bot-data').textContent || '').trim();
+        if (!tgBot) return null;
+
+        var param = action + '-' + fieldName + '-none-' + encodeURIComponent(cardId);
+        var isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        var tgBase = isMobile ? 'tg://resolve?domain=' : 'https://t.me/';
+        var tgParam = isMobile ? '&start=' : '?start=';
+        var deepLink = tgBase + tgBot + tgParam + param;
+
+        var btn = document.createElement('a');
+        btn.className = 'avatar-btn tg-add-btn';
+        btn.href = deepLink;
+        btn.title = titleText || '透過 Telegram 執行';
+        btn.onclick = function (e) { e.stopPropagation(); };
+        btn.innerHTML = '<span class="avatar-icon">' + (iconText || '＋') + '</span>';
+        return btn;
+    }
+
+    (function () {
+        var raw = (document.getElementById('answer-audios-data').textContent || '').trim();
+        var audios = [];
+        try { audios = JSON.parse(raw); } catch (e) { audios = []; }
+
+        var container = document.getElementById('answer-avatars');
+        if (!container) return;
+
+        var hasValidAudio = false;
+        if (audios && audios.length > 0) {
+            for (var i = 0; i < audios.length; i++) {
+                if (audios[i].audio) {
+                    container.appendChild(scCreateAvatarBtn(audios[i]));
+                    hasValidAudio = true;
+                }
+            }
+        }
+
+        // 如果連一個有效的 audio 都沒有，顯示 TTS 按鈕
+        if (!hasValidAudio) {
+            var ttsBtn = scCreateTgBtn('ttsaudio', 'Answer_Audios', 'AI', '透過 AI TTS 生成語音');
+            if (ttsBtn) container.appendChild(ttsBtn);
+        }
+    })();
+
+    // 渲染 JSON Detailed Explanation
+    (function () {
+        var raw = (document.getElementById('explanation-data').textContent || '').trim();
+        var explanations = [];
+        try { explanations = JSON.parse(raw); } catch (e) { explanations = []; }
+
+        var container = document.getElementById('explanation-container');
+        var emptyHint = document.getElementById('explanation-empty');
+        if (!container) return;
+
+        if (!explanations || explanations.length === 0) {
+            emptyHint.style.display = 'block';
+            return;
+        }
+
+        for (var i = 0; i < explanations.length; i++) {
+            var exp = explanations[i];
+            var itemId = 'exp-detail-' + i;
+
+            var item = document.createElement('div');
+            item.className = 'accordion-item';
+
+            // 標題摘要
+            var summary = document.createElement('div');
+            summary.className = 'accordion-summary';
+            summary.setAttribute('data-target', itemId);
+            summary.innerHTML =
+                '<span class="status-dot dot-green"></span>' +
+                '<span class="accordion-date" style="font-size: 16px;">' + (exp.point || '重點 ' + (i+1)) + '</span>' +
+                '<span class="accordion-arrow">▾</span>';
+            
+            // 點擊展開/收合
+            summary.onclick = (function (id) {
+                return function (e) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    toggleAccordion(id, this);
+                };
+            })(itemId);
+
+            // 詳情區塊 (預設展開，但可以收合以節省空間)
+            var detail = document.createElement('div');
+            detail.className = 'accordion-detail';
+            detail.id = itemId;
+            detail.style.display = 'block'; // 預設展開
+
+            var expContent = document.createElement('div');
+            expContent.className = 'rec-transcript';
+            expContent.style.fontSize = '18px';
+            expContent.textContent = exp.explanation || '';
+            
+            detail.appendChild(expContent);
+            item.appendChild(summary);
+            item.appendChild(detail);
+            container.appendChild(item);
+        }
+    })();
+</script>

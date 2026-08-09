@@ -90,3 +90,15 @@ Telegram 的 Deep Link 格式為 `https://t.me/<BOT_USERNAME>?start=<payload>`�
    - 接收 Service 回傳的評分結果後，格式化為漂亮的 HTML 回傳給使用者。
 
 這樣的設計保證了不管我們今天是透過 Telegram 還是未來的 Web 前端提交錄音，核心邏輯（`CardService`）都不需要修改一行程式碼。
+
+## 7. 嚴格狀態驅動與卡片新增 (Strict State-Driven FSM)
+
+從 Phase 11 開始，Telegram Bot 放棄了「無狀態兜底」的自動查單字功能，全面轉向 **嚴格的狀態機 (FSM) 驅動架構**。
+
+1. **唯一入口 (`/newcard`)**：所有卡片的新增（包含單字卡、對話卡、外語糾錯）都必須透過 `/newcard` 呼叫選單來啟動。
+2. **統一的 FSM 套件 (`app/bot/handlers/fsm/`)**：
+   - 包含 `vocabulary_fsm.py`, `speaking_fsm.py`, `expression_fsm.py`。
+   - 每種卡片類型都有自己專屬的 `StatesGroup`（如 `SpeakingStates`），透過互動式問答一步步引導使用者完成必填資訊。
+3. **防呆兜底 (`messages.py`)**：
+   - 若使用者身上沒有任何 FSM 狀態（也就是「沒掛狗牌」），且輸入了普通的文字訊息，`messages.py` 不會擅自呼叫 LLM 查字典，而是會直接回傳錯誤提示，並列出可用的指令（`/newcard`, `/help` 等）。
+   - 此設計徹底解決了以往「誤傳一句話就被當成單字去查」的誤判問題，大幅提升了操作的可預期性與容錯率。

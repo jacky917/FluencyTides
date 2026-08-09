@@ -1,8 +1,13 @@
 """
 卡片關聯 REST API 路由模組。
 
+Card relation REST API router module.
+
 提供知識圖譜查詢與關聯資料的手動增刪改查介面。
 遵守 Clean Architecture，所有業務邏輯委託給 RelationService 執行。
+
+Provides knowledge-graph queries and manual CRUD endpoints for relation data.
+Follows Clean Architecture: all business logic is delegated to RelationService.
 """
 
 import logging
@@ -38,13 +43,17 @@ async def get_graph_data(
 ) -> dict[str, list[dict]]:
     """取得知識圖譜資料的 Controller 端點。
 
+    Controller endpoint that returns global knowledge graph data.
+
     Args:
-        deck_name: (可選) 篩選特定牌組的名稱。
-        anki_client: 注入的 AnkiClient 實例。
+        deck_name: (可選) 篩選特定牌組的名稱。Optional deck name filter.
+        anki_client: 注入的 AnkiClient 實例。Injected AnkiClient instance.
         relation_service: 注入的 RelationService 實例。
+            Injected RelationService instance.
 
     Returns:
-        圖譜資料字典: {"nodes": [...], "links": [...]}
+        圖譜資料字典: {"nodes": [...], "links": [...]}。
+        Graph data dict: {"nodes": [...], "links": [...]}.
     """
     query = f'deck:"{deck_name}"' if deck_name else "deck:*"
     note_ids = await anki_client.find_notes(query)
@@ -75,12 +84,15 @@ async def create_relation(
 ) -> CardRelationRead:
     """手動建立關聯的 Controller 端點。
 
+    Controller endpoint that manually creates a card relation.
+
     Args:
-        request: 關聯建立 DTO。
+        request: 關聯建立 DTO。The relation-creation DTO.
         relation_service: 注入的 RelationService 實例。
+            Injected RelationService instance.
 
     Returns:
-        已建立的關聯資料。
+        已建立的關聯資料。The created relation record.
     """
     return await relation_service.create_relation(request)
 
@@ -94,7 +106,17 @@ async def create_relation(
 async def get_relation_types(
     relation_service: RelationService = Depends(get_relation_service),
 ) -> list[str]:
-    """取得關聯類型的 Controller 端點。"""
+    """取得關聯類型的 Controller 端點。
+
+    Controller endpoint that returns all registered relation type names.
+
+    Args:
+        relation_service: 注入的 RelationService 實例。
+            Injected RelationService instance.
+
+    Returns:
+        關聯類型名稱列表。A list of relation type names.
+    """
     return await relation_service.get_all_relation_types()
 
 
@@ -108,7 +130,19 @@ async def delete_relation_by_nodes(
     request: CardRelationDelete,
     relation_service: RelationService = Depends(get_relation_service),
 ) -> dict[str, int]:
-    """刪除指定關聯的 Controller 端點。"""
+    """刪除指定關聯的 Controller 端點。
+
+    Controller endpoint that precisely deletes the relation between two nodes.
+
+    Args:
+        request: 關聯刪除 DTO。The relation-deletion DTO.
+        relation_service: 注入的 RelationService 實例。
+            Injected RelationService instance.
+
+    Returns:
+        刪除結果摘要，例如 {"deleted_count": 2}。
+        Deletion summary, e.g. {"deleted_count": 2}.
+    """
     return await relation_service.delete_relation_by_nodes(request)
 
 
@@ -124,12 +158,16 @@ async def delete_relations_by_note_id(
 ) -> dict[str, int]:
     """連動刪除卡片關聯的 Controller 端點。
 
+    Controller endpoint that cascades relation deletion for a removed note.
+
     Args:
-        note_id: 目標 Anki Note ID。
+        note_id: 目標 Anki Note ID。Target Anki note ID.
         relation_service: 注入的 RelationService 實例。
+            Injected RelationService instance.
 
     Returns:
         刪除結果摘要，例如 {"deleted_count": 2}。
+        Deletion summary, e.g. {"deleted_count": 2}.
     """
     deleted_count = await relation_service.delete_relations_by_note_id(note_id)
     return {"deleted_count": deleted_count}
@@ -150,12 +188,16 @@ async def sync_relations(
 ) -> dict[str, int]:
     """同步清理孤兒關聯的 Controller 端點。
 
+    Controller endpoint that syncs with Anki and prunes orphan relations.
+
     Args:
-        anki_client: 注入的 AnkiClient 實例。
+        anki_client: 注入的 AnkiClient 實例。Injected AnkiClient instance.
         relation_service: 注入的 RelationService 實例。
+            Injected RelationService instance.
 
     Returns:
         刪除結果摘要，例如 {"deleted_count": 2}。
+        Deletion summary, e.g. {"deleted_count": 2}.
     """
     # 查詢所有 Anki 筆記，取得所有有效的 Note ID
     # 註解: 'deck:*' 可涵蓋所有牌組內的卡片

@@ -1,6 +1,8 @@
 # Architecture and Structure
 
-這份文件定義了 FluencyTides 的系統架構與初始目錄樹狀結構，嚴格遵守 Clean Architecture 與 Domain-Driven Design (DDD) 原則。
+這份文件定義了 FluencyTides 的系統架構與目錄樹狀結構。設計以 Clean Architecture 的分層與依賴方向為指導原則（Controller → Service → Infrastructure），Web 與 Telegram 雙端共用同一層 Service。
+
+> 說明：專案實際落地的是「三層分層 + 依賴注入」，並未實作獨立的 DDD 領域模型層——`backend/app/domain/` 目前為空殼 scaffold 殘留（見第 5 節與 docs/02 §1.3）。本文目錄樹已對齊當前實際代碼；若與早期規劃描述有出入，以本文與 `docs/` 審查文檔為準。
 
 ## 1. 系統上下文圖 (System Context Diagram)
 
@@ -38,8 +40,8 @@ C4Container
   
   System_Boundary(c1, "FluencyTides System") {
     Container(spa, "Web Application", "React, TypeScript, Vite", "提供知識圖譜與卡片管理的視覺化互動介面。")
-    Container(backend, "API Application", "Python, FastAPI", "後端核心系統。提供 RESTful API 與 Telegram Webhook 路由，並封裝共用的業務邏輯層 (Services)。")
-    ContainerDb(db, "Database", "PostgreSQL / SQLite", "儲存使用者狀態、設定與學習紀錄。")
+    Container(backend, "API Application", "Python, FastAPI", "後端核心系統。提供 RESTful API 與 Telegram Webhook 路由，並封裝共用的業務邏輯層 (Services)，同進程寄生 aiogram 3 Telegram Bot。")
+    ContainerDb(db, "Database", "SQLite (未來遷移 MySQL)", "以 SQLAlchemy 2.0 async ORM 儲存卡片關聯資料 (card_relations / relation_types)；依 MySQL 相容準則設計，見 ADR 003。")
   }
 
   System_Ext(anki, "Anki Connect", "本地端 Anki")
@@ -163,15 +165,23 @@ FluencyTides/
 ├── backend/                          # Python FastAPI 後端
 │   ├── app/
 │   │   ├── api/                      # [Controller] Web RESTful API 路由 (Routers)
-│   │   │   ├── cards.py              # 卡片生成與模型/牌組列表端點
+│   │   │   ├── cards.py              # 卡片生成、模型/牌組列表、卡片 RUD 端點
+│   │   │   ├── relations.py          # 知識圖譜關聯 CRUD 與 /graph、/sync 端點
 │   │   │   ├── storage.py            # MinIO 媒體存取端點
-│   │   │   └── health.py             # Health Check 端點
+│   │   │   ├── health.py             # Health Check 端點（不受認證保護）
+│   │   │   └── webhook.py            # Telegram Webhook 接收端點（背景 ACK）
 │   │   ├── bot/                      # [Controller] Telegram Webhook/Polling 處理器
 │   │   │   ├── handlers/             # Bot 指令與訊息接收
-│   │   │   │   ├── commands.py       # /start, /help 與 Deep Link 處理
-│   │   │   │   ├── messages.py       # 單字輸入與卡片生成處理
+│   │   │   │   ├── fsm/              # 嚴格狀態機 (FSM) 套件，負責所有卡片新增互動
+│   │   │   │   │   ├── vocabulary_fsm.py # 單字卡流程 (對應 TOEIC_Coach_Dark 系列)
+│   │   │   │   │   ├── speaking_fsm.py   # 對話卡流程 (對應 Speaking_Coach_Dark)
+│   │   │   │   │   └── expression_fsm.py # 外語糾錯流程 (對應 Expression_Master_Dark 等)
+│   │   │   │   ├── commands.py       # /start, /help, /sync 與 Deep Link 處理
+│   │   │   │   ├── messages.py       # 防呆兜底 (攔截無狀態文字，拒絕自動生成)
+│   │   │   │   ├── newcard_menu.py   # /newcard 選單入口
 │   │   │   │   └── voice.py          # 語音接收與評分流程
-│   │   │   ├── dependencies.py       # aiogram 白名單與 Service 注入中介層
+│   │   │   ├── utils/                # deep_link_parser（/start payload 解析）
+│   │   │   ├── dependencies.py       # aiogram 白名單與 Service 注入雙 middleware
 │   │   │   ├── dispatcher.py         # aiogram Dispatcher 與 Bot 初始化
 │   │   │   └── state.py              # In-Memory 使用者狀態機
 │   │   ├── core/
@@ -179,16 +189,23 @@ FluencyTides/
 │   │   │   ├── config.py             # Pydantic V2 Settings (全環境變數集中管理)
 │   │   │   ├── dependencies.py       # 依賴注入工廠 (DI Container)
 │   │   │   └── exceptions.py         # 全域異常類別階層 (FluencyTidesError)
-│   │   ├── domain/                   # [DDD] 領域模型 (Entities, Value Objects)
+│   │   ├── domain/                   # ⚠️ 空殼 scaffold 殘留（僅空 __init__.py，無 DDD 領域模型，全庫無引用）
 │   │   ├── services/                 # [Use Case] 核心業務邏輯
-│   │   │   ├── prompts/              # Jinja2 Prompt 模板目錄 (*.j2)
-│   │   │   ├── anki_model_manager.py # 模型管理、Schema 讀取、防重複檢查
-│   │   │   ├── card_service.py       # 卡片生成流程 (LLM → 組裝 → 提交)
+│   │   │   ├── prompts/              # Jinja2 Prompt 模板目錄（5 個 *.j2）
+│   │   │   ├── anki_model/           # 拆分後套件：repository / manager / note_builder
+│   │   │   ├── anki_model_manager.py # 相容 re-export shim（指向 anki_model/ 套件）
+│   │   │   ├── card_service.py       # 卡片生成編排 + 卡片 RUD (LLM → 組裝 → 提交)
+│   │   │   ├── speaking_service.py   # 語音影子跟讀評估全流程（自 CardService 拆出）
+│   │   │   ├── relation_service.py   # 知識圖譜關聯 CRUD 與 Anki 同步
+│   │   │   ├── schema_composer.py    # Graph_Relations 子 Schema 組裝（純函數）
 │   │   │   ├── prompt_manager.py     # Jinja2 Prompt 模板管理器
 │   │   │   └── storage_service.py    # MinIO 物件存儲業務邏輯
 │   │   ├── infrastructure/           # 基礎設施實作 (外部服務客戶端)
-│   │   │   ├── anki/
-│   │   │   │   └── client.py         # 非同步 AnkiConnect v6 完整 CRUD 客戶端
+│   │   │   ├── anki/                 # 拆分後套件：client 組合類 + transport + 6 領域 Mixin
+│   │   │   │   ├── client.py         # 60 行純組合類（公開 API 不變）
+│   │   │   │   ├── transport.py      # _invoke / _invoke_typed + AnkiConnectError
+│   │   │   │   ├── notes.py / cards.py / decks.py / media.py / models.py / misc.py  # 六個領域 Mixin
+│   │   │   │   └── utils.py          # escape_anki_search_value（查詢跳脫）
 │   │   │   ├── audio_evaluator/      # 語音評分器 (策略模式)
 │   │   │   │   ├── base.py           # 抽象基底類別
 │   │   │   │   ├── factory.py        # 根據環境變數建立對應的 Evaluator
@@ -209,13 +226,14 @@ FluencyTides/
 │   │   ├── schemas/
 │   │   │   ├── anki.py               # Pydantic V2 驗證模型 (Note, Model, Media)
 │   │   │   ├── card.py               # 卡片生成 API 請求/回應模型
+│   │   │   ├── common.py             # ErrorResponse 等共用模型
+│   │   │   ├── deep_link.py          # Telegram Deep Link 動作模型
 │   │   │   ├── llm.py                # LLM 內部資料傳遞模型
 │   │   │   ├── relation.py           # 卡片關聯 API 請求/回應模型 (DTO)
 │   │   │   ├── speaking.py           # Speaking_Coach_Dark 專屬結構 (RecordingItem 等)
 │   │   │   ├── storage.py            # MinIO 內部資料傳遞模型
 │   │   │   ├── storage_api.py        # 媒體存取 API 請求/回應模型
 │   │   │   └── voice.py              # Pydantic V2 驗證模型 (Voicepeak/FFmpeg)
-
 │   │   ├── anki_models/              # Anki 筆記類型模板 (9 套完整模板)
 │   │   │   ├── TOEIC_Coach_Dark.json / _front.html / _back.html / _style.css
 │   │   │   ├── Conversation_Coach_Dark.json / ...
@@ -226,25 +244,47 @@ FluencyTides/
 │   │   │   ├── AI_QA_Dark.json / ...
 │   │   │   ├── Notion_SRS_Dark.json / ...
 │   │   │   └── TOEIC_Coach_Dark_v2.json / ...
-│   │   └── main.py                   # FastAPI 進入點
+│   │   └── main.py                   # FastAPI 進入點（lifespan 管理全部 Singleton 與 Bot 啟停）
+│   ├── alembic/                      # async 遷移環境 (env.py) + versions/（baseline + relation_types）
+│   ├── scripts/                      # 三支 CLI 維運腳本 + _bootstrap.py（共用引導）+ samples/
 │   ├── .env.example                  # 環境變數配置範例
-│   ├── tests/                        # 測試案例
 │   └── requirements.txt              # Python 依賴管理
+│   ├── tests/                        # pytest 測試套件（第三輪建立，48 個測試，見 docs/06 F063）
+│   │   ├── conftest.py               # TestClient / mock AnkiClient fixtures
+│   │   ├── test_api_smoke.py         # 全端點 smoke（health/cards/relations/OpenAPI）
+│   │   ├── test_config.py            # fail-closed validator
+│   │   ├── test_anki_escape.py       # Anki 查詢跳脫
+│   │   ├── test_relation_sync.py     # sync 空列表防護
+│   │   ├── test_llm_client.py        # 圍欄清理 / 重試分類
+│   │   ├── test_schema_composer.py   # Graph_Relations schema
+│   │   └── test_alembic.py           # baseline 遷移
 │
-├── frontend/                         # React + Vite 前端 (Tailwind CSS v4)
+├── frontend/                         # React 18 + Vite 6 前端 (Tailwind CSS v4)
 │   ├── src/
+│   │   ├── api/
+│   │   │   └── client.ts             # 單一 axios instance，集中所有後端呼叫
+│   │   ├── types/
+│   │   │   └── api.ts                # 手寫對齊後端 Pydantic 的 TypeScript 介面
+│   │   ├── pages/                    # 三個路由頁面
+│   │   │   ├── Dashboard.tsx         # 儀表板
+│   │   │   ├── CardGenerator.tsx     # 卡片生成介面
+│   │   │   └── KnowledgeGraph.tsx    # 知識圖譜（react-force-graph-2d，全前端最複雜元件）
+│   │   ├── components/               # CardDetailModal + ui/（shadcn 手動拷貝）
+│   │   ├── hooks/
+│   │   │   └── useLocalStorage.ts    # localStorage 狀態 hook
 │   │   ├── lib/
 │   │   │   └── utils.ts              # cn() 工具函數 (clsx + tailwind-merge)
-│   │   ├── components/               # UI 組件庫 (shadcn/ui 及共用組件)
 │   │   ├── index.css                 # Tailwind v4 + shadcn/ui CSS Variables
-│   │   ├── main.tsx                  # React 進入點
-│   │   └── App.tsx                   # 主頁面 (含 Health Check 狀態)
+│   │   ├── main.tsx                  # React 進入點 (createRoot + react-query v5 + react-router v6)
+│   │   └── App.tsx                   # 路由與版面骨架
 │   ├── components.json               # shadcn/ui 配置
 │   ├── package.json                  # NPM 依賴
-│   └── vite.config.ts                # Vite 配置 (含 API Proxy)
+│   ├── nginx.conf                    # 部署用：SPA try_files + /api/ 反代後端
+│   └── vite.config.ts                # Vite 配置 (含 /api 代理至 127.0.0.1:8000)
 │
 ├── .github/workflows/
-│   └── main.yml                      # CI/CD (Ruff Lint + TS Build)
+│   └── main.yml                      # CI/CD：paths-filter →（後端 Ruff Lint / 前端 tsc + Vite Build）
+│                                     #   → GHCR 多架構映像 (amd64+arm64) → Portainer webhook 部署
 │
 └── docs/                             # 專案架構與開發文件
     └── adr/                          # 架構決策記錄 (Architecture Decision Records)

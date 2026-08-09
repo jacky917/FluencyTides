@@ -1,0 +1,23 @@
+{
+    "modelName": "Expression_Micro_Dark",
+    "inOrderFields": [
+        "Target_Phrase",
+        "Native_Translation",
+        "Context_Hint",
+        "Context_Sentence",
+        "Phrase_Audios",
+        "Error_Hint",
+        "Master_Note_ID",
+        "Card_ID",
+        "Card_Type",
+        "TG_Bot"
+    ],
+    "css": "Expression_Micro_Dark_style.css",
+    "cardTemplates": [
+        {
+            "Name": "Card 1",
+            "Front": "Expression_Micro_Dark_front.html",
+            "Back": "Expression_Micro_Dark_back.html"
+        }
+    ]
+}

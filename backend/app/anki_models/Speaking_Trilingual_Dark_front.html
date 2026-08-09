@@ -1,0 +1,190 @@
+<div class="card front-card">
+    <!-- 共通提示 (Prompt)：三語共用，標題固定不需動態國旗 -->
+    <div class="expression-box">
+        <div class="topic-tag">🗣️ 提示 (Prompt)</div>
+        <div class="prompt-content">{{Prompt}}</div>
+        <!-- 提示語音頭像列 (按 lang 鍵疊加國旗徽章，由 JS 渲染) -->
+        <div id="prompt-avatars" class="avatar-row"></div>
+    </div>
+
+    <!-- 文脈：正面即完整顯示 (翻面後隱藏) -->
+    <div class="section context-section">
+        <div class="section-title">📖 文脈 (Context)</div>
+        <div class="section-content">{{Context}}</div>
+    </div>
+
+    <!-- 三語錄音按鈕列：不翻面直接練習提交 (由 JS 渲染) -->
+    <div id="front-rec-buttons" class="front-rec-row"></div>
+</div>
+
+<!-- 隱藏欄位供 JS 解析 -->
+<div id="prompt-audios-data" style="display:none;">{{Prompt_Audios}}</div>
+<div id="card-id-data" style="display:none;">{{Card_ID}}</div>
+<div id="tg-bot-data" style="display:none;">{{TG_Bot}}</div>
+
+<script>
+    // ============================
+    // 語言常數 (ZH/JA/EN → 國旗與顯示名)
+    // ============================
+    var SCT_LANGS = [
+        { code: 'ZH', flag: '🇹🇼', label: '中文' },
+        { code: 'JA', flag: '🇯🇵', label: '日本語' },
+        { code: 'EN', flag: '🇺🇸', label: 'English' }
+    ];
+
+    function sctLangFlag(code) {
+        for (var i = 0; i < SCT_LANGS.length; i++) {
+            if (SCT_LANGS[i].code === code) return SCT_LANGS[i].flag;
+        }
+        return '🌐';
+    }
+
+    // ============================
+    // 共用：音訊播放控制
+    // ============================
+    var _scCurrentAudio = null;
+    var _scActiveBtn = null;
+
+    function scPlayAudio(filename, btn) {
+        if (event) { event.stopPropagation(); event.preventDefault(); }
+
+        if (_scCurrentAudio && _scActiveBtn === btn) {
+            _scCurrentAudio.pause();
+            _scCurrentAudio.currentTime = 0;
+            _scCurrentAudio = null;
+            btn.classList.remove('playing');
+            _scActiveBtn = null;
+            return;
+        }
+
+        if (_scCurrentAudio) {
+            _scCurrentAudio.pause();
+            _scCurrentAudio.currentTime = 0;
+            if (_scActiveBtn) _scActiveBtn.classList.remove('playing');
+        }
+
+        var audio = new Audio(filename);
+        _scCurrentAudio = audio;
+        _scActiveBtn = btn;
+        btn.classList.add('playing');
+
+        audio.onended = function () {
+            btn.classList.remove('playing');
+            _scCurrentAudio = null;
+            _scActiveBtn = null;
+        };
+        audio.onerror = function () {
+            btn.classList.remove('playing');
+            _scCurrentAudio = null;
+            _scActiveBtn = null;
+        };
+        audio.play();
+    }
+
+    // ============================
+    // 共用：建立頭像播放按鈕 (角落疊加國旗徽章)
+    // ============================
+    function scCreateAvatarBtn(item, index) {
+        var btn = document.createElement('div');
+        btn.className = 'avatar-btn';
+        btn.title = item.speaker || '';
+        btn.onclick = function (e) { scPlayAudio(item.audio, btn); };
+
+        if (item.avatar) {
+            var img = document.createElement('img');
+            img.src = item.avatar;
+            img.alt = item.speaker || 'voice';
+            btn.appendChild(img);
+        } else {
+            btn.innerHTML = '<span class="avatar-icon">▶</span>';
+        }
+
+        if (item.lang) {
+            var badge = document.createElement('span');
+            badge.className = 'lang-badge';
+            badge.textContent = sctLangFlag(item.lang);
+            btn.appendChild(badge);
+        }
+        return btn;
+    }
+
+    // ============================
+    // 共用：建立 Telegram 深連結按鈕
+    // 參數格式: {action}-{FieldName}-{index}-{cardId}
+    // (Prompt_Audios 的 index 槽位傳語言碼 ZH/JA/EN)
+    // ============================
+    function scCreateTgBtn(action, fieldName, index, iconText, titleText) {
+        var cardId = (document.getElementById('card-id-data').textContent || '').trim();
+        var tgBot = (document.getElementById('tg-bot-data').textContent || '').trim();
+        if (!tgBot) return null;
+
+        var idxStr = (typeof index !== 'undefined' && index !== null) ? index : 'none';
+        var param = action + '-' + fieldName + '-' + idxStr + '-' + encodeURIComponent(cardId);
+
+        var isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        var tgBase = isMobile ? 'tg://resolve?domain=' : 'https://t.me/';
+        var tgParam = isMobile ? '&start=' : '?start=';
+        var deepLink = tgBase + tgBot + tgParam + param;
+
+        var btn = document.createElement('a');
+        btn.className = 'avatar-btn tg-add-btn';
+        btn.href = deepLink;
+        btn.title = titleText || '透過 Telegram 提交修改請求';
+        btn.onclick = function (e) { e.stopPropagation(); };
+        btn.innerHTML = '<span class="avatar-icon">' + (iconText || '＋') + '</span>';
+        return btn;
+    }
+
+    // ============================
+    // 渲染 Prompt 語音頭像列 (含各語言上傳/TTS 按鈕)
+    // ============================
+    (function () {
+        var raw = (document.getElementById('prompt-audios-data').textContent || '').trim();
+        var audios = [];
+        try { audios = JSON.parse(raw); } catch (e) { audios = []; }
+        if (!audios || Object.prototype.toString.call(audios) !== '[object Array]') audios = [];
+
+        var container = document.getElementById('prompt-avatars');
+        if (!container) return;
+
+        // 依序檢查三個語言 (ZH, JA, EN)，固定產生三個圓圈
+        for (var j = 0; j < SCT_LANGS.length; j++) {
+            var lang = SCT_LANGS[j];
+            var matchedAudio = null;
+            var matchedIndex = -1;
+            
+            for (var k = 0; k < audios.length; k++) {
+                if (audios[k].lang === lang.code) {
+                    matchedAudio = audios[k];
+                    matchedIndex = k;
+                    break;
+                }
+            }
+
+            if (matchedAudio) {
+                container.appendChild(scCreateAvatarBtn(matchedAudio, matchedIndex));
+            } else {
+                var addBtn = scCreateTgBtn('addaudio', 'Prompt_Audios', lang.code,
+                    lang.flag, '上傳 ' + lang.label + ' 語音');
+                if (addBtn) container.appendChild(addBtn);
+            }
+        }
+    })();
+
+    // ============================
+    // 渲染三語錄音提交按鈕列 (正面直接練習)
+    // ============================
+    (function () {
+        var container = document.getElementById('front-rec-buttons');
+        if (!container) return;
+        for (var i = 0; i < SCT_LANGS.length; i++) {
+            var lang = SCT_LANGS[i];
+            var btn = scCreateTgBtn('rec', 'Recordings_' + lang.code, 'last');
+            if (!btn) continue;
+            btn.className = 'rec-submit-btn front-rec-btn lang-' + lang.code;
+            btn.innerHTML =
+                '<span class="rec-submit-text">' + lang.flag + ' ' + lang.label + '</span>';
+            container.appendChild(btn);
+        }
+    })();
+</script>

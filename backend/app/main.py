@@ -1,17 +1,32 @@
 """
 FluencyTides API 應用程式進入點。
 
+FluencyTides API application entry point.
+
 本模組是 FastAPI 後端的根進入點，負責：
 1. 透過 lifespan 事件管理 Infrastructure Client 的生命週期（Singleton）。
 2. 註冊全域 Exception Handler，統一回傳 ErrorResponse JSON。
 3. 掛載所有 API 路由（Health、Cards、Storage）。
 4. 配置 CORS 中介層與 Swagger UI 元資料。
 
+This module is the root entry point of the FastAPI backend. It:
+1. Manages infrastructure client singletons via the lifespan events.
+2. Registers global exception handlers returning ErrorResponse JSON.
+3. Mounts all API routers (Health, Cards, Storage).
+4. Configures the CORS middleware and Swagger UI metadata.
+
 Phase 2 改進：
 - 新增 lifespan 上下文管理器，啟動時初始化 AnkiClient、LLMClient、MinioClient。
 - 新增 FluencyTidesError 全域異常處理器。
 - 掛載 /api/v1/ 前綴下的 Cards 與 Storage 路由。
 - 增強 Swagger UI 元資料（title、description、version、tags）。
+
+Phase 2 improvements:
+- Added the lifespan context manager initializing AnkiClient, LLMClient
+  and MinioClient at startup.
+- Added the global FluencyTidesError exception handler.
+- Mounted the Cards and Storage routers under the /api/v1/ prefix.
+- Enhanced Swagger UI metadata (title, description, version, tags).
 """
 
 import asyncio
@@ -23,10 +38,14 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.cards import router as cards_router
+from app.api import handlers
+from app.api.handlers import router as handlers_router
 from app.api.health import router as health_router
 from app.api.relations import router as relations_router
 from app.api.storage import router as storage_router
+from app.api.verb_pair import router as verb_pair_router
+from app.api.core_verb import router as core_verb_router
+from app.api.example.verb_pair import router as example_verb_pair_router
 from app.api.webhook import router as webhook_router
 from app.bot.dispatcher import create_bot, setup_dispatcher
 from app.core.config import settings
@@ -36,6 +55,7 @@ from app.infrastructure.database.database import (
     create_db_and_tables,
     dispose_engine,
 )
+from app.infrastructure.database.corpus_database import dispose_corpus_engine
 from app.infrastructure.llm.client import LLMClient
 from app.infrastructure.storage.minio_client import MinioClient
 from app.schemas.card import ErrorResponse
@@ -52,6 +72,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """管理 FastAPI 應用程式的生命週期事件。
 
+    Manage the FastAPI application lifespan events.
+
     Startup（yield 之前）：
         - 初始化全域日誌系統。
         - 建立 AnkiClient Singleton（httpx.AsyncClient 連線池）。
@@ -64,8 +86,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         - 釋放 AnkiClient 的 httpx 連線池。
         - 停止 Telegram Bot Polling。
 
+    Startup (before yield): initialize global logging, create the
+    AnkiClient/LLMClient/MinioClient singletons, start Telegram Bot
+    polling or webhook binding if a token is configured, and store all
+    singletons in app.state.
+
+    Shutdown (after yield): release the AnkiClient httpx connection pool
+    and stop the Telegram Bot polling/webhook.
+
     Yields:
-        None: lifespan 上下文。
+        None: lifespan 上下文。The lifespan context.
     """
     # === Startup ===
     settings.setup_logging()
@@ -182,6 +212,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await dispose_engine()
     logger.info("✅ 資料庫引擎已釋放。")
     
+    await dispose_corpus_engine()
+    
     logger.info("🏁 FluencyTides API 已關閉。")
 
 
@@ -227,17 +259,23 @@ async def fluencytides_error_handler(
 ) -> JSONResponse:
     """統一處理所有 FluencyTidesError 子類別的異常。
 
+    Uniformly handle all FluencyTidesError subclasses.
+
     將業務異常轉換為統一的 ErrorResponse JSON 格式回傳，
     符合 03_Acceptance_Criteria.md §2 的要求。
 
+    Converts business exceptions into the unified ErrorResponse JSON
+    format, per 03_Acceptance_Criteria.md §2.
+
     Args:
-        request: FastAPI Request 物件。
-        exc: FluencyTidesError 異常實例。
+        request: FastAPI Request 物件。The FastAPI Request object.
+        exc: FluencyTidesError 異常實例。The FluencyTidesError instance.
 
     Returns:
-        JSONResponse 包含 ErrorResponse 結構。
+        JSONResponse 包含 ErrorResponse 結構。A JSONResponse carrying the
+        ErrorResponse structure.
     """
-    logger.error(
+    logger.warning(
         "業務異常 [%s] -> %s (HTTP %d)",
         exc.error_code,
         exc.message,
@@ -254,6 +292,53 @@ async def fluencytides_error_handler(
         content=error_response.model_dump(),
     )
 
+
+# ============================================================================
+# 全域未知崩潰攔截 (Global Crash Middleware)
+# ============================================================================
+
+from fastapi import Request, Response
+from fastapi.responses import JSONResponse
+import asyncio
+
+@app.middleware("http")
+async def global_crash_middleware(request: Request, call_next) -> Response:
+    """作為終極安全網攔截所有未捕捉的 Exception (500 Error)。
+
+    Ultimate safety net intercepting every uncaught exception (HTTP 500).
+
+    1. 記錄 ERROR 級別日誌並輸出 Traceback。
+    2. 非同步發送 Telegram 警報。
+    3. 回傳標準 500 JSON (遮蔽系統真實錯誤)。
+
+    1. Logs at ERROR level with the traceback.
+    2. Sends a Telegram alert asynchronously.
+    3. Returns a standard 500 JSON that masks the real system error.
+    """
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        logger.exception(f"系統發生未預期崩潰: {request.url.path}")
+        
+        # 觸發 TG 警報 (非同步背景執行，不阻塞當前回應)
+        from app.bot.alerts import send_crash_alert
+        asyncio.create_task(
+            send_crash_alert(
+                url=str(request.url),
+                method=request.method,
+                error_msg=repr(exc)
+            )
+        )
+        
+        # 回傳給前端，絕對不可暴露 Traceback
+        error_response = ErrorResponse(
+            error_code="INTERNAL_SERVER_ERROR",
+            message="系統發生未預期錯誤，已通知工程團隊處理"
+        )
+        return JSONResponse(
+            status_code=500,
+            content=error_response.model_dump()
+        )
 
 # ============================================================================
 # CORS 中介層
@@ -276,11 +361,14 @@ app.add_middleware(
 app.include_router(health_router, prefix="/api", tags=["Health"])
 
 # Phase 2 核心路由（受 API Key 認證保護）
-app.include_router(cards_router, prefix="/api/v1")
+app.include_router(handlers.router, prefix="/api/v1")
 app.include_router(storage_router, prefix="/api/v1")
 app.include_router(relations_router, prefix="/api/v1")
+app.include_router(verb_pair_router, prefix="/api/v1")
+app.include_router(core_verb_router, prefix="/api/v1")
+app.include_router(example_verb_pair_router, prefix="/api/v1/example")
 
-# Webhook 路由 (不受 prefix 限制，完全依照 TG_WEBHOOK_PATH 設定)
+# 註冊 Webhook Router路由 (不受 prefix 限制，完全依照 TG_WEBHOOK_PATH 設定)
 app.include_router(webhook_router)
 
 
@@ -288,7 +376,9 @@ app.include_router(webhook_router)
 async def root() -> dict[str, str]:
     """根路徑歡迎訊息。
 
+    Root-path welcome message.
+
     Returns:
-        包含歡迎訊息的字典。
+        包含歡迎訊息的字典。A dict containing the welcome message.
     """
     return {"message": "Welcome to FluencyTides API v0.2.0"}

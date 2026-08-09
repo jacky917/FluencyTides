@@ -1,0 +1,68 @@
+[
+  {
+    "noteId": 1782198703881,
+    "profile": "User 1",
+    "tags": [
+      "FluencyTides::Generated",
+      "Game::サノバウィッチ"
+    ],
+    "fields": {
+      "Summary": {
+        "value": "「治まる」在此處意為「平息」、「平靜下來」。當強烈的魔法光芒或混亂的現象結束，恢復到原本平靜的狀態時使用。對話中描述了原本被光芒籠罩的空間，在光芒消散後，角色恢復原狀的過程。",
+        "order": 0
+      },
+      "Dialog_JSON": {
+        "value": "[{\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"『簡単な物だけだよ。そしてその代わり、 自分たち自身が魔女になることはできない』\", \"translation\": \"簡單的物體而已。而且作為代價，我們自己無法成為魔女。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nan003_096.mp3\"}, {\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"『つまり、寧々のような魔女が望んでいる大規模な魔法を 使うことはできないんだ』\", \"translation\": \"也就是說，無法使用像寧那樣的魔女所期望的大規模魔法。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nan003_097.mp3\"}, {\"speaker\": \"柊史\", \"avatar\": \"SabbatOfTheWitch_柊史.jpg\", \"text\": \"「全ての猫がアルプ？　でしたっけ？　そんな特殊な存在に なるっていうわけじゃないですよね？」\", \"translation\": \"所有的貓都是阿爾普？是這樣嗎？並不是說會變成那種特殊的生物吧？\", \"align\": \"right\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"『その点はどう説明すればいいか……強い感情……つまり 魔力に長く触れることで動物の中に変化が訪れる者がいる』\", \"translation\": \"關於那一點該怎麼說明呢……接觸強烈的情感……也就是魔力久了之後，動物身上會產生變化。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nan003_098.mp3\"}, {\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"『日本にも猫が年老いて猫又になるという伝説があるだろう？　アレは、そういうことだ。まずこの時点で、長命になる』\", \"translation\": \"日本也有貓老了會變成貓又的傳說吧？就是那樣。首先在這一點上，壽命會變長。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nan003_099.mp3\"}, {\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"『その上で長い月日を重ねていくと、この世の理以外の物が 見えてくるようになり、こうして――』\", \"translation\": \"在此之上經過漫長的歲月，就會開始看見這世間道理之外的東西，就像這樣——\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nan003_100.mp3\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"再び店の中が光に包まれ、オレの視界を奪われた。\", \"translation\": \"店內再次被光芒包圍，我的視野被奪走了。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"が、その光が収まった次の瞬間、先ほどまで黒猫が立っていた場所に相馬さんが再び立っていた。\", \"translation\": \"但是，當那道光芒平息的瞬間，相馬小姐再次站在了剛才黑貓站著的地方。\", \"align\": \"left\", \"is_target\": true, \"audio\": \"\"}, {\"speaker\": \"七緒\", \"avatar\": \"SabbatOfTheWitch_七緒.jpg\", \"text\": \"「人間の姿に変化できる存在になる、と言うわけだ」\", \"translation\": \"也就是說，變成了能夠變化成人類姿態的存在。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"SabbatOfTheWitch_nan003_101.mp3\"}, {\"speaker\": \"-\", \"avatar\": \"none\", \"text\": \"――裸でね。\", \"translation\": \"——而且是裸體的。\", \"align\": \"left\", \"is_target\": false, \"audio\": \"\"}]",
+        "order": 1
+      },
+      "Master_Note_ID": {
+        "value": "1782042908426",
+        "order": 2
+      },
+      "Card_ID": {
+        "value": "ec-1782198703783-1a52e748",
+        "order": 3
+      }
+    },
+    "modelName": "JP_VerbPair_Context_Dark",
+    "mod": 1782198703,
+    "cards": [
+      1782198703881
+    ]
+  },
+  {
+    "noteId": 1782042908426,
+    "profile": "User 1",
+    "tags": [
+      "Migrated",
+      "VerbPair"
+    ],
+    "fields": {
+      "Intransitive_Word": {
+        "value": "治[おさ]まる",
+        "order": 0
+      },
+      "Transitive_Word": {
+        "value": "治[おさ]める",
+        "order": 1
+      },
+      "Intransitive_Data_JSON": {
+        "value": "[{\"audio\": \"\", \"avatar\": \"none\", \"speaker\": \"-\", \"text\": \"が、その光が収まった次の瞬間、先ほどまで黒猫が立っていた場所に相馬さんが再び立っていた。\", \"context_note_id\": 1782198703881, \"cloze_note_id\": 1782198704026}, {\"audio\": \"\", \"avatar\": \"none\", \"speaker\": \"-\", \"text\": \"そしてガラス瓶<u class=\\\"error-line\\\">の光も収まって</u>――\", \"context_note_id\": 1782198707381, \"cloze_note_id\": 1782198709822}]",
+        "order": 2
+      },
+      "Transitive_Data_JSON": {
+        "value": "[]",
+        "order": 3
+      },
+      "Card_ID": {
+        "value": "vp-m-1782042908365-db4d83c3",
+        "order": 4
+      }
+    },
+    "modelName": "JP_VerbPair_Master_Dark",
+    "mod": 1782198709,
+    "cards": [
+      1782042908426
+    ]
+  }
+]

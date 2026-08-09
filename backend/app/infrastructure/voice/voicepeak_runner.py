@@ -23,9 +23,24 @@
 - narrator_id 直接接受 CLI 英文 ID，角色名稱到 ID 的映射
   應由上層 Service 或 CharacterManager 負責轉換。
 
+English summary:
+    Async VOICEPEAK CLI speech-synthesis client. Wraps all interaction with
+    the VOICEPEAK engine (CLI edition) using
+    asyncio.create_subprocess_exec() for fully async subprocess management.
+    Improvements over the legacy runner: native async subprocess calls, all
+    CLI parameters supported (emotion, speed, pitch, volume), a hardened
+    clean-environment mechanism defending against iconv crashes, Pydantic V2
+    input validation, and a dedicated VoicepeakSynthesisError. The clean_env
+    isolation strips LANG/LC_ALL inherited from the parent process, which on
+    some systems triggers iconv-related crashes in VOICEPEAK. Async
+    subprocesses are used because synthesis can take seconds to tens of
+    seconds, and blocking would freeze the FastAPI event loop. narrator_id
+    accepts the CLI English ID directly; name-to-ID mapping is the
+    responsibility of the upper service layer.
+
 Dependencies:
-    - asyncio: 非同步子程序管理
-    - pydantic: 入參資料驗證
+    - asyncio: 非同步子程序管理。Async subprocess management.
+    - pydantic: 入參資料驗證。Input validation.
 """
 
 import asyncio
@@ -43,20 +58,30 @@ logger = logging.getLogger(__name__)
 class VoicepeakSynthesisError(Exception):
     """VOICEPEAK 語音合成操作錯誤異常類別。
 
+    Exception for VOICEPEAK speech-synthesis errors.
+
     當 VOICEPEAK CLI 執行失敗、找不到執行檔、或合成程序非正常退出時
     拋出此異常。
 
+    Raised when the VOICEPEAK CLI fails, the executable is missing, or the
+    synthesis process exits abnormally.
+
     Attributes:
-        message: 錯誤訊息字串。
-        return_code: CLI 程序的退出碼（若可取得）。
+        message: 錯誤訊息字串。The error message string.
+        return_code: CLI 程序的退出碼（若可取得）。The CLI exit code, if
+            available.
     """
 
     def __init__(self, message: str, return_code: int | None = None) -> None:
         """初始化 VoicepeakSynthesisError。
 
+        Initialize VoicepeakSynthesisError.
+
         Args:
-            message: 描述錯誤原因的訊息字串。
-            return_code: VOICEPEAK CLI 的退出碼，若未執行則為 None。
+            message: 描述錯誤原因的訊息字串。Message describing the error
+                cause.
+            return_code: VOICEPEAK CLI 的退出碼，若未執行則為 None。The
+                VOICEPEAK CLI exit code, or None if never run.
         """
         super().__init__(message)
         self.message = message
@@ -66,15 +91,25 @@ class VoicepeakSynthesisError(Exception):
 class VoicepeakRunner:
     """非同步 VOICEPEAK CLI 語音合成客戶端。
 
+    Async VOICEPEAK CLI speech-synthesis client.
+
     封裝 VOICEPEAK 命令列工具的完整參數支援，包括角色選擇、
     情緒設定、語速/音高/音量調整，並透過環境變數隔離機制
     確保跨平台穩定性。
 
+    Wraps the full VOICEPEAK CLI parameter set (narrator, emotions, speed,
+    pitch, volume) and uses environment-variable isolation for cross-platform
+    stability.
+
     所有 CLI 參數均接受英文 ID（而非日文顯示名稱），
     角色名稱到 CLI ID 的映射應由上層 CharacterManager 負責。
 
+    All CLI parameters take English IDs (not Japanese display names);
+    name-to-ID mapping is handled by the upper-layer CharacterManager.
+
     Attributes:
-        _executable_path: VOICEPEAK CLI 執行檔的絕對路徑。
+        _executable_path: VOICEPEAK CLI 執行檔的絕對路徑。Absolute path to
+            the VOICEPEAK CLI executable.
 
     Example:
         >>> runner = VoicepeakRunner()
@@ -96,14 +131,22 @@ class VoicepeakRunner:
     ) -> None:
         """初始化 VOICEPEAK 非同步語音合成客戶端。
 
+        Initialize the async VOICEPEAK synthesis client.
+
         優先使用參數傳入的路徑，若未提供則從 Settings 讀取。
 
+        Prefers the path passed as an argument, falling back to Settings.
+
         Args:
-            executable_path: VOICEPEAK CLI 執行檔路徑。
-                             若為 None，從 Settings.VOICEPEAK_EXECUTABLE_PATH 讀取。
+            executable_path: VOICEPEAK CLI 執行檔路徑；若為 None，從
+                Settings.VOICEPEAK_EXECUTABLE_PATH 讀取。Path to the
+                VOICEPEAK CLI executable; read from
+                Settings.VOICEPEAK_EXECUTABLE_PATH when None.
 
         Raises:
-            VoicepeakSynthesisError: 執行檔路徑未提供且 Settings 中也未設定時。
+            VoicepeakSynthesisError: 執行檔路徑未提供且 Settings 中也未設定
+                時。Raised when no executable path is provided and none is
+                configured in Settings.
         """
         self._executable_path = executable_path or settings.VOICEPEAK_EXECUTABLE_PATH
 
@@ -132,18 +175,28 @@ class VoicepeakRunner:
     ) -> VoicepeakSynthesisResult:
         """執行 VOICEPEAK 語音合成。
 
+        Run VOICEPEAK speech synthesis.
+
         根據傳入的 Pydantic 模型參數組裝 CLI 命令，透過非同步子程序
         執行 VOICEPEAK，並在隔離的環境變數中運行以避免編碼問題。
 
+        Builds the CLI command from the Pydantic request, runs VOICEPEAK in
+        an async subprocess with an isolated environment to avoid encoding
+        issues.
+
         Args:
-            request: VoicepeakSynthesisRequest Pydantic 模型實例，
-                     包含所有合成所需參數。
+            request: VoicepeakSynthesisRequest Pydantic 模型實例，包含所有
+                合成所需參數。The request model containing all synthesis
+                parameters.
 
         Returns:
-            VoicepeakSynthesisResult: 包含合成結果的 Pydantic 模型。
+            VoicepeakSynthesisResult: 包含合成結果的 Pydantic 模型。The
+                Pydantic model describing the synthesis outcome.
 
         Raises:
             VoicepeakSynthesisError: VOICEPEAK CLI 執行失敗或非正常退出時。
+                Raised when the VOICEPEAK CLI fails to start or exits
+                abnormally.
 
         Example:
             >>> request = VoicepeakSynthesisRequest(
@@ -209,14 +262,20 @@ class VoicepeakRunner:
     ) -> list[str]:
         """根據合成請求組裝 VOICEPEAK CLI 命令列參數。
 
+        Build the VOICEPEAK CLI argument list from the synthesis request.
+
         將 Pydantic 模型中的各項參數轉換為 VOICEPEAK CLI 可接受的
         命令列引數格式。
 
+        Converts the Pydantic model's fields into VOICEPEAK CLI argument
+        format.
+
         Args:
-            request: VoicepeakSynthesisRequest 模型實例。
+            request: VoicepeakSynthesisRequest 模型實例。The request model
+                instance.
 
         Returns:
-            完整的命令列引數字串列表。
+            完整的命令列引數字串列表。The complete argument string list.
         """
         command: list[str] = [
             self._executable_path,
@@ -249,16 +308,27 @@ class VoicepeakRunner:
     def _build_clean_env() -> dict[str, str]:
         """構建用於 VOICEPEAK 子程序的隔離環境變數。
 
+        Build the isolated environment variables for the VOICEPEAK
+        subprocess.
+
         VOICEPEAK 在某些系統上（特別是 macOS）會因繼承到父程序的
         環境變數而觸發 iconv 相關的編碼崩潰。此方法構建一個僅包含
         最小必要變數的乾淨環境，徹底隔離潛在的衝突。
+
+        On some systems (notably macOS) VOICEPEAK crashes in iconv when
+        inheriting the parent environment; this method builds a minimal
+        clean environment to fully isolate potential conflicts.
 
         跨平台處理：
         - Unix/macOS: 設定 LANG/LC_ALL 為 ja_JP.UTF-8
         - Windows: 繼承 SystemRoot 與 TEMP 等必要路徑
 
+        Cross-platform handling:
+        - Unix/macOS: sets LANG/LC_ALL to ja_JP.UTF-8.
+        - Windows: inherits required paths such as SystemRoot and TEMP.
+
         Returns:
-            乾淨的環境變數字典。
+            乾淨的環境變數字典。The clean environment-variable dict.
         """
         if platform.system() == "Windows":
             # Windows 環境需要 SystemRoot 等系統變數才能正常運行子程序

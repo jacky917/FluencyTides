@@ -1,0 +1,222 @@
+<div class="card front-card">
+    <div class="section" style="border-left-color: #f39c12;">
+        <div class="section-title" style="color: #f39c12;">🎯 搭配詞克漏字 (Cloze)</div>
+        <div id="cloze-chat-container-back" class="chat-container"></div>
+    </div>
+
+    <div id="verb-pair-mount-point"></div>
+
+    {{#Conjugation_Explanation}}
+    <div class="section context-section" style="margin-top: 15px;">
+        <div class="section-title" style="color: #9b59b6;">💡 動詞變化與助詞解析</div>
+        <div class="section-content" style="font-size: 16px;">{{Conjugation_Explanation}}</div>
+    </div>
+    {{/Conjugation_Explanation}}
+
+</div>
+
+<div id="speaker-data" style="display:none;">{{Speaker}}</div>
+<div id="avatar-data" style="display:none;">{{Avatar}}</div>
+<div id="audio-data" style="display:none;">{{Audio}}</div>
+<div id="full-sentence-data" style="display:none;">{{Full_Sentence_HTML}}</div>
+<div id="translation-data" style="display:none;">{{Translation}}</div>
+<div id="master-note-id-data" style="display:none;">{{Master_Note_ID}}</div>
+<div id="context-note-id-data" style="display:none;">{{Context_Note_ID}}</div>
+<div id="verb-pair-data" style="display:none;">{{Verb_Pair_JSON}}</div>
+
+<script>
+    (function() {
+        var speaker = (document.getElementById('speaker-data').textContent || '').trim();
+        var avatar = (document.getElementById('avatar-data').textContent || '').trim();
+        var audioUrl = (document.getElementById('audio-data').textContent || '').trim();
+        var fullSentence = (document.getElementById('full-sentence-data').innerHTML || '').trim();
+        var translation = (document.getElementById('translation-data').textContent || '').trim();
+        var container = document.getElementById('cloze-chat-container-back');
+        if (!container) return;
+
+        var bubbleWrap = document.createElement('div');
+        bubbleWrap.className = 'chat-bubble-wrap chat-left';
+
+        var avatarWrap = document.createElement('div');
+        avatarWrap.className = 'avatar-btn';
+        avatarWrap.style.margin = '0 12px 0 0';
+
+        if (audioUrl) {
+            var audio = document.createElement('audio');
+            audio.src = audioUrl;
+            avatarWrap.appendChild(audio);
+            avatarWrap.onclick = function(e) {
+                if (e.target.tagName !== 'AUDIO') audio.play();
+            };
+            audio.onplay = function() { avatarWrap.classList.add('playing'); };
+            audio.onended = function() { avatarWrap.classList.remove('playing'); };
+        } else {
+            avatarWrap.classList.add('no-audio');
+        }
+
+        var isNarration = !speaker || speaker === "-" || speaker === "";
+
+        if (!isNarration) {
+            if (avatar && avatar !== 'none') {
+                var img = document.createElement('img');
+                img.src = avatar;
+                avatarWrap.appendChild(img);
+            } else {
+                var icon = document.createElement('div');
+                icon.className = 'avatar-icon';
+                icon.textContent = speaker ? speaker.charAt(0).toUpperCase() : '👤';
+                avatarWrap.appendChild(icon);
+            }
+        }
+
+        var contentCol = document.createElement('div');
+        contentCol.style.display = 'flex';
+        contentCol.style.flexDirection = 'column';
+        contentCol.style.gap = '6px';
+        contentCol.style.maxWidth = '85%';
+
+        var bubble = document.createElement('div');
+        bubble.className = 'chat-bubble';
+        bubble.style.maxWidth = '100%';
+        
+        // 只有旁白 (無說話人) 時，對話框才使用最普通的底色（灰色），不套用左右分色
+        if (isNarration) {
+            bubble.classList.add('chat-no-avatar');
+        }
+        
+        bubble.innerHTML = fullSentence;
+        if (translation) {
+            var trans = document.createElement('div');
+            trans.style.marginTop = '10px';
+            trans.style.fontSize = '14px';
+            trans.style.color = '#95a5a6';
+            trans.textContent = translation;
+            bubble.appendChild(trans);
+        }
+        contentCol.appendChild(bubble);
+
+        var actions = document.createElement('div');
+        actions.className = 'chat-actions-row';
+        actions.style.marginLeft = '0';
+        actions.style.marginTop = '0';
+        
+        var masterBtn = document.createElement('div');
+        masterBtn.className = 'mini-action-btn btn-blue';
+        masterBtn.textContent = '🔍 查看母卡片';
+        masterBtn.onclick = openMasterCard;
+        actions.appendChild(masterBtn);
+        
+        var contextBtn = document.createElement('div');
+        contextBtn.className = 'mini-action-btn btn-green';
+        contextBtn.textContent = '📖 查看情境卡';
+        contextBtn.onclick = openContextCard;
+        actions.appendChild(contextBtn);
+        
+        contentCol.appendChild(actions);
+
+        if (isNarration) {
+            avatarWrap.style.visibility = 'hidden';
+        }
+        bubbleWrap.appendChild(avatarWrap);
+        bubbleWrap.appendChild(contentCol);
+        container.appendChild(bubbleWrap);
+    })();
+
+    (function renderVerbPair() {
+        var rawData = (document.getElementById('verb-pair-data').textContent || '').trim();
+        if (!rawData) return;
+        var data;
+        try {
+            data = JSON.parse(rawData);
+        } catch(e) {
+            return;
+        }
+
+        var mount = document.getElementById('verb-pair-mount-point');
+        if (!mount) return;
+
+        var container = document.createElement('div');
+        container.className = 'glass-container';
+
+        var flexContainer = document.createElement('div');
+        flexContainer.className = 'verb-container';
+
+        // Intransitive Pane
+        var inPane = document.createElement('div');
+        inPane.className = 'verb-pane intransitive-pane';
+        if (data.used === 'intransitive') {
+            inPane.classList.add('used-pane');
+        } else if (data.used) {
+            inPane.classList.add('unused-pane');
+        }
+
+        var inBadge = document.createElement('div');
+        inBadge.className = 'pane-badge badge-blue';
+        inBadge.textContent = '✨ 自動詞';
+
+        var inText = document.createElement('div');
+        inText.className = 'verb-text';
+        inText.innerHTML = renderFurigana(data.intransitive);
+
+        inPane.appendChild(inBadge);
+        inPane.appendChild(inText);
+
+        // Divider
+        var divider = document.createElement('div');
+        divider.className = 'pane-divider';
+
+        // Transitive Pane
+        var transPane = document.createElement('div');
+        transPane.className = 'verb-pane transitive-pane';
+        if (data.used === 'transitive') {
+            transPane.classList.add('used-pane');
+        } else if (data.used) {
+            transPane.classList.add('unused-pane');
+        }
+
+        var transBadge = document.createElement('div');
+        transBadge.className = 'pane-badge badge-red';
+        transBadge.textContent = '🔥 他動詞';
+
+        var transText = document.createElement('div');
+        transText.className = 'verb-text';
+        transText.innerHTML = renderFurigana(data.transitive);
+
+        transPane.appendChild(transBadge);
+        transPane.appendChild(transText);
+
+        flexContainer.appendChild(inPane);
+        flexContainer.appendChild(divider);
+        flexContainer.appendChild(transPane);
+
+        container.appendChild(flexContainer);
+        mount.appendChild(container);
+    })();
+
+    function renderFurigana(text) {
+        if (!text) return '-';
+        // 解析 Anki 的 furigana 格式 (例如: " 広[ひろ]がる" 或 "広[ひろ]がる")
+        // 把 [ ] 前面的字包成 ruby
+        return text.replace(/ ?([^\s\[\]]+)\[([^\]]+)\]/g, function(match, base, furi) {
+            return '<ruby>' + base + '<rt>' + furi + '</rt></ruby>';
+        });
+    }
+
+    function openMasterCard() {
+        var masterId = (document.getElementById('master-note-id-data').textContent || '').trim();
+        if (!masterId) return;
+        fetch('http://127.0.0.1:8765', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'guiBrowse', version: 6, params: { query: 'nid:' + masterId } })
+        }).catch(function() {});
+    }
+
+    function openContextCard() {
+        var contextId = (document.getElementById('context-note-id-data').textContent || '').trim();
+        if (!contextId) return;
+        fetch('http://127.0.0.1:8765', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'guiBrowse', version: 6, params: { query: 'nid:' + contextId } })
+        }).catch(function() {});
+    }
+</script>

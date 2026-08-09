@@ -2,7 +2,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, BackgroundTasks
 
 from app.core.config import settings
 
@@ -12,10 +12,24 @@ router = APIRouter(tags=["Telegram Webhook"])
 
 
 @router.post(settings.TG_WEBHOOK_PATH)
-async def telegram_webhook(request: Request) -> dict[str, object]:
+async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) -> dict[str, object]:
     """接收 Telegram 伺服器推播的 Webhook 更新。
-    
+
+    Receive webhook updates pushed from Telegram servers.
+
     此端點路徑由環境變數 TG_WEBHOOK_PATH 動態決定（預設為 /api/webhook）。
+
+    The endpoint path is determined dynamically by the TG_WEBHOOK_PATH
+    environment variable (defaults to /api/webhook).
+
+    Args:
+        request: FastAPI 請求物件。The incoming FastAPI request object.
+        background_tasks: 背景任務佇列，用於非同步處理 Update。
+            Background task queue used to process the update asynchronously.
+
+    Returns:
+        狀態字典（永遠回傳 200，避免 Telegram 重試風暴）。
+        A status dict (always HTTP 200 to avoid Telegram retry storms).
     """
     app = request.app
     bot: Bot | None = getattr(app.state, "bot", None)
@@ -43,8 +57,10 @@ async def telegram_webhook(request: Request) -> dict[str, object]:
         update = Update(**update_data)
         
         # 餵給 aiogram 的 Dispatcher 處理
-        # 注意: feed_update 是非同步的，且不會拋出業務異常(由 aiogram 內部攔截)
-        await dp.feed_update(bot=bot, update=update)
+        # 為了避免語音評分等耗時任務超過 Telegram 的 15 秒 webhook timeout，
+        # 導致 Telegram 不斷重發相同的 Update，我們改用 BackgroundTasks 來非同步執行。
+        # 注意：千萬不要使用沒有保留參照的 asyncio.create_task()，否則會在 await I/O 時被 Python GC 靜默回收導致卡死！
+        background_tasks.add_task(dp.feed_update, bot=bot, update=update)
         
         return {"ok": True}
     except Exception as e:

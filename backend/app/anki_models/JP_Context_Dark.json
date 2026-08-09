@@ -1,0 +1,9 @@
+{
+  "modelName": "JP_Context_Dark",
+  "inOrderFields": [
+    "Summary",
+    "Dialog_JSON",
+    "Master_Note_ID",
+    "Card_ID"
+  ]
+}

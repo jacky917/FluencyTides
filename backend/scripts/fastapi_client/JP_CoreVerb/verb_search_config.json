@@ -1,0 +1,32 @@
+{
+  "見[み]る": {
+    "include_keywords": [],
+    "exclude_keywords": [],
+    "exclude_speakers": ["柊史"],
+    "exclude_narration": true,
+    "exclude_script_ids": [],
+    "max_cards": 20,
+    "allow_auxiliary": false,
+    "priority_collocations": ["大目に"]
+  },
+  "見[み]える": {
+    "include_keywords": [],
+    "exclude_keywords": [],
+    "exclude_speakers": ["柊史"],
+    "exclude_narration": true,
+    "exclude_script_ids": [],
+    "max_cards": 20,
+    "allow_auxiliary": false,
+    "priority_collocations": []
+  },
+  "見[み]せる": {
+    "include_keywords": [],
+    "exclude_keywords": [],
+    "exclude_speakers": ["柊史"],
+    "exclude_narration": true,
+    "exclude_script_ids": [],
+    "max_cards": 20,
+    "allow_auxiliary": false,
+    "priority_collocations": []
+  }
+}

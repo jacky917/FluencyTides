@@ -1,0 +1,23 @@
+{
+    "modelName": "Expression_Master_Dark",
+    "inOrderFields": [
+        "My_Original",
+        "Context",
+        "Error_Comparison",
+        "Correct_Answer",
+        "Reorganized_Expression",
+        "Answer_Audios",
+        "Detailed_Explanation",
+        "Child_Cards_Data",
+        "Card_ID",
+        "TG_Bot"
+    ],
+    "css": "Expression_Master_Dark_style.css",
+    "cardTemplates": [
+        {
+            "Name": "Card 1",
+            "Front": "Expression_Master_Dark_front.html",
+            "Back": "Expression_Master_Dark_back.html"
+        }
+    ]
+}

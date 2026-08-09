@@ -11,9 +11,11 @@
 ## 決策內容
 
 ### 1. 依賴注入與生命週期 (Lifespan & Dependency Injection)
-- **決策**：所有 Infrastructure Client（AnkiClient, LLMClient, MinioClient）作為 Singleton 實例，在 FastAPI 的 `lifespan` 啟動階段初始化並存入 `app.state`；在關閉時統一釋放資源（如 `httpx.AsyncClient` 連線池）。
+- **決策**：所有 Infrastructure Client（AnkiClient, LLMClient, MinioClient）作為 Singleton 實例，在 FastAPI 的 `lifespan` 啟動階段初始化並存入 `app.state`；在關閉時釋放需要顯式關閉的資源。
 - **決策**：Service 層（CardService, AnkiModelManager 等）透過 FastAPI 的 `Depends()` 依賴注入，每次請求建立新實例，並注入對應的 Infrastructure Singleton。
 - **原因**：確保網路連線資源高效重用，同時保持 Service 層的無狀態特性，避免不同請求間的狀態污染。
+
+> **實作現狀補充（2026-07-09 校正，對應 docs/06 F141）**：關閉階段（`backend/app/main.py` lifespan 的 shutdown）實際只釋放兩項資源——`AnkiClient.close()`（httpx 連線池）與 `dispose_engine()`（SQLAlchemy AsyncEngine），另加關閉 Telegram Bot session。**`LLMClient` 目前沒有 `close()` 方法、其內部的 `AsyncOpenAI`（httpx）連線從未被顯式關閉；`MinioClient`（同步 SDK，無持久連線池）亦不在關閉流程中。** 因此本節「統一釋放所有 Infrastructure Client 資源」的原始承諾與代碼不符：正確描述應為「釋放持有顯式連線池、需要主動關閉的資源」。LLMClient 的連線清理屬未竟事項（進程結束時交由 OS 回收，開發階段無實質洩漏，但與 ADR 原文的「統一釋放」語意有落差）。
 
 ### 2. 全域異常處理 (Global Exception Handling)
 - **決策**：建立統一的業務例外繼承體系 `FluencyTidesError`。所有基礎設施的原生錯誤（如 `AnkiConnectError`）必須在 Service 層被捕捉，並重新拋出為具備明確業務語意（如 `DuplicateCardError`, `DeckNotFoundError`）的自訂例外。

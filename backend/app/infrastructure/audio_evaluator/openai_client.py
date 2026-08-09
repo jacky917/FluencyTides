@@ -1,16 +1,29 @@
 """
 OpenAI 相容層語音評分器實作。
 
+OpenAI-compatible speech evaluator implementation.
+
 使用 AsyncOpenAI SDK 將音檔轉為 Base64 並透過
 Chat Completions API 的 input_audio 功能傳送給 LLM 進行評分。
+
+Uses the AsyncOpenAI SDK to base64-encode audio and send it to the LLM for
+scoring via the Chat Completions input_audio feature.
 
 適用場景：
 - 使用 OpenAI GPT-4o-audio-preview 等支援音訊輸入的模型。
 - 使用其他提供 OpenAI 相容端點的服務商。
 
+Applicable scenarios:
+- OpenAI models with audio input support, e.g. GPT-4o-audio-preview.
+- Any provider exposing an OpenAI-compatible endpoint.
+
 設計決策：
 - 使用 response_format 強制 JSON Schema 輸出，
   與現有 LLMClient 的 generate_structured_data 邏輯一致。
+
+Design decision:
+- Enforces JSON Schema output via response_format, consistent with the
+  existing LLMClient.generate_structured_data logic.
 """
 
 import base64
@@ -18,11 +31,13 @@ import json
 import logging
 
 from openai import AsyncOpenAI
+import openai
+import httpx
 
 from app.core.config import settings
 from app.core.exceptions import LLMServiceError
 from app.infrastructure.audio_evaluator.base import BaseAudioEvaluator
-from app.schemas.speaking import AudioEvaluationResult
+from app.schemas.llm.speaking import AudioEvaluationResult
 
 logger = logging.getLogger(__name__)
 
@@ -31,88 +46,57 @@ _EVALUATION_SCHEMA: dict[str, object] = {
     "type": "object",
     "properties": {
         "score": {"type": "integer", "description": "總分 0-100"},
-        "status_code": {
-            "type": "integer",
-            "description": "0=吻合範例且高分, 1=有瑕疵或低分, 2=無匹配但自然",
-        },
         "feedback": {"type": "string", "description": "AI 評語"},
         "transcript": {"type": "string", "description": "語音逐字稿"},
     },
-    "required": ["score", "status_code", "feedback", "transcript"],
+    "required": ["score", "feedback", "transcript"],
     "additionalProperties": False,
 }
 
 
-def _build_evaluation_prompt(
-    prompt_text: str,
-    reference_answers: list[str],
-) -> str:
-    """組裝語音評分的系統提示詞。
-
-    根據參考答案數量動態調整 Prompt 的評分標準，
-    確保 LLM 能正確區分三種 status_code。
-
-    Args:
-        prompt_text: 卡片 Prompt (對方的發言)。
-        reference_answers: 參考範本列表。
-
-    Returns:
-        組裝完成的系統提示詞。
-    """
-    refs_section = ""
-    if reference_answers:
-        refs_list = "\n".join(
-            f"  {i + 1}. {ans}" for i, ans in enumerate(reference_answers)
-        )
-        refs_section = f"\n## 參考範本回覆\n{refs_list}\n"
-    else:
-        refs_section = "\n## 參考範本回覆\n（無範本，請根據 Prompt 語境判斷）\n"
-
-    return (
-        "你是一位專業的外語口說教練。請根據以下資訊評估使用者的語音回覆。\n\n"
-        f"## 對方的發言 (Prompt)\n{prompt_text}\n"
-        f"{refs_section}\n"
-        "## 評分規則\n"
-        "- status_code=0: 語意完全吻合參考範本且表達自然，score >= 80\n"
-        "- status_code=1: 接近範本或無範本但有語法/發音瑕疵，score < 80\n"
-        "- status_code=2: 無匹配範本，但回覆整體自然流暢，score >= 80\n\n"
-        "## 輸出要求\n"
-        "只回傳 JSON，包含 score (0-100), status_code (0/1/2), "
-        "feedback (繁體中文評語), transcript (語音逐字稿)。"
-    )
+from app.core.dependencies import get_template_engine
 
 
 class OpenAIAudioEvaluator(BaseAudioEvaluator):
     """使用 OpenAI 相容 API 的語音評分器。
 
+    Speech evaluator using an OpenAI-compatible API.
+
     將音檔編碼為 Base64 後，透過 Chat Completions 的
     多模態輸入功能發送給 LLM 進行語音分析與評分。
 
+    Encodes the audio as base64 and sends it to the LLM via Chat Completions
+    multimodal input for speech analysis and scoring.
+
     Attributes:
-        _client: AsyncOpenAI 客戶端實例。
-        _model_name: 使用的模型名稱。
+        _client: AsyncOpenAI 客戶端實例。The AsyncOpenAI client instance.
+        _model_name: 使用的模型名稱。The model name in use.
     """
 
     def __init__(self) -> None:
         """初始化 OpenAI 相容層語音評分器。
 
+        Initialize the OpenAI-compatible speech evaluator.
+
         使用與 LLMClient 相同的 API Key 和 Base URL。
 
+        Uses the same API key and base URL as LLMClient.
+
         Raises:
-            LLMServiceError: 當必要設定未提供時。
+            LLMServiceError: 當必要設定未提供時。Raised when required
+                settings are missing.
         """
-        if not settings.LLM_API_KEY:
+        if not settings.AUDIO_API_KEY:
             raise LLMServiceError(
-                "LLM_API_KEY 未設定，無法初始化 OpenAI Audio Evaluator。"
+                "AUDIO_API_KEY 未設定，無法初始化 OpenAI Audio Evaluator。"
             )
 
         self._client = AsyncOpenAI(
-            api_key=settings.LLM_API_KEY,
-            base_url=settings.LLM_BASE_URL,
+            api_key=settings.AUDIO_API_KEY,
+            base_url=settings.AUDIO_BASE_URL,
         )
-        self._model_name = settings.LLM_MODEL_NAME
         logger.info(
-            "OpenAI Audio Evaluator 初始化完成，模型: %s", self._model_name
+            "OpenAI Audio Evaluator 初始化完成",
         )
 
     async def evaluate_audio(
@@ -120,27 +104,45 @@ class OpenAIAudioEvaluator(BaseAudioEvaluator):
         audio_data: bytes,
         audio_filename: str,
         prompt_text: str,
+        context_text: str,
         reference_answers: list[str],
+        target_language: str | None = None,
+        template_name: str = "prompts/audio_evaluator.j2",
     ) -> AudioEvaluationResult:
-        """透過 OpenAI 相容 API 評估語音。
+        """評估使用者語音，產出結構化評分結果。
 
-        將音檔編碼為 Base64，嵌入 Chat Completions 的 user message 中，
-        並強制使用 JSON Schema response_format 確保結構化輸出。
+        Evaluate the user's speech and produce a structured scoring result.
 
         Args:
-            audio_data: 音檔二進位資料。
-            audio_filename: 音檔檔名。
-            prompt_text: 卡片 Prompt。
-            reference_answers: 參考範本列表。
+            audio_data: 音檔的原始二進位資料（.ogg 格式）。Raw audio bytes
+                (.ogg format).
+            audio_filename: 音檔檔名。Audio file name.
+            prompt_text: 卡片 Prompt。The card prompt.
+            context_text: 卡片正面的 Context（文脈）。The card-front context.
+            reference_answers: 參考範本列表。Reference answer list.
+            target_language: 目標語言。Target language.
+            template_name: 評分提示詞 j2 樣板。Jinja2 template for the
+                evaluation prompt.
 
         Returns:
-            AudioEvaluationResult 結構化評分結果。
+            AudioEvaluationResult 結構化評分結果。The structured evaluation
+            result.
 
         Raises:
-            LLMServiceError: API 呼叫失敗或輸出格式不符時。
+            LLMServiceError: API 呼叫失敗或輸出格式不符時。Raised when the
+                API call fails or the output format is invalid.
         """
         audio_b64 = base64.b64encode(audio_data).decode("utf-8")
-        system_prompt = _build_evaluation_prompt(prompt_text, reference_answers)
+        
+        engine = get_template_engine()
+        system_prompt = engine.render(
+            template_name,
+            prompt_text=prompt_text,
+            context_text=context_text,
+            reference_answers=reference_answers,
+            target_language=target_language,
+            disable_markdown=False,
+        )
 
         # 組裝含音訊的多模態訊息
         user_content: list[dict[str, object]] = [
@@ -164,27 +166,47 @@ class OpenAIAudioEvaluator(BaseAudioEvaluator):
         }
 
         try:
-            response = await self._client.chat.completions.create(
-                model=self._model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                response_format=structured_format,
-                temperature=0.3,
+            import asyncio
+            response = await asyncio.wait_for(
+                self._client.chat.completions.create(
+                    model=settings.AUDIO_MODEL_NAME,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                    response_format=structured_format,
+                    temperature=0.3,
+                ),
+                timeout=90.0
             )
-        except Exception as e:
+        except asyncio.TimeoutError as e:
+            logger.error("OpenAI Audio Evaluator API 呼叫超時 (Timeout)")
+            raise LLMServiceError("OpenAI Audio Evaluator API 超時失敗") from e
+        except (openai.OpenAIError, httpx.RequestError) as e:
             logger.error("OpenAI Audio Evaluator API 呼叫失敗: %s", e)
             raise LLMServiceError(
                 f"OpenAI Audio Evaluator API 失敗: {e}"
             ) from e
 
-        content = response.choices[0].message.content
+        message = response.choices[0].message if response.choices else None
+        content = message.content if message else None
         if not content:
             raise LLMServiceError("OpenAI Audio Evaluator 回傳空內容。")
 
+        # 清理可能的 Markdown 格式
+        cleaned = content.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        elif cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+
         try:
-            parsed: dict[str, object] = json.loads(content)
+            # 使用 raw_decode 可以自動忽略結尾多餘的字元
+            decoder = json.JSONDecoder()
+            parsed, idx = decoder.raw_decode(cleaned.lstrip())
             return AudioEvaluationResult(**parsed)
         except (json.JSONDecodeError, ValueError) as e:
             logger.error("OpenAI Audio Evaluator 回傳格式錯誤: %s", content)

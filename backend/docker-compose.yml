@@ -18,6 +18,8 @@ services:
     volumes:
       # 將 SQLite 資料庫獨立放在一個資料夾中進行映射，避免覆蓋到容器內的程式碼
       - /DATA/AppData/FluencyTides/backend/data:/app/data
+      # 映射日誌資料夾以利外部存取與分析
+      - /DATA/AppData/FluencyTides/backend/logs:/app/logs
       
     # 明確指定加入自訂網路
     networks:
@@ -34,6 +36,10 @@ services:
           description:
             en_US: Database Storage
             zh_CN: 資料庫儲存區
+        - container: /app/logs
+          description:
+            en_US: Application Logs
+            zh_CN: 應用程式日誌
 
 x-casaos:
   architectures:
