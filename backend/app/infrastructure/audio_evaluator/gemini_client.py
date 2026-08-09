@@ -205,7 +205,9 @@ class GeminiNativeAudioEvaluator(BaseAudioEvaluator):
             # 使用 raw_decode 可以自動忽略結尾多餘的字元（例如 LLM 偶爾多吐出的 '}'）
             decoder = json.JSONDecoder()
             parsed, idx = decoder.raw_decode(cleaned.lstrip())
-            return AudioEvaluationResult(**parsed)
+            result = AudioEvaluationResult(**parsed)
+            result.evaluator_label = model_name
+            return result
         except (json.JSONDecodeError, ValueError) as e:
             logger.error(
                 "Gemini Native Audio Evaluator 回傳格式錯誤: %s", content

@@ -5,16 +5,23 @@ master cards, copying the intransitive/transitive words over.
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
 
-# 確保 sys.path 包含 backend 根目錄並載入 .env
-backend_dir = str(Path(__file__).resolve().parents[4])
-if backend_dir not in sys.path:
-    sys.path.insert(0, backend_dir)
+# 統一 bootstrap：向上尋找第一個含 app/ 的目錄即為 backend 根，與檔案深度無關；
+# 腳本搬移目錄層級時不需再調整硬編碼的上層層數，避免匯入路徑失準。
+# Unified bootstrap: walk up the parent chain and take the first directory
+# containing app/ as the backend root. Depth-independent, so relocating this
+# script never breaks the import path.
+_BACKEND_DIR = next(
+    p for p in Path(__file__).resolve().parents if (p / "app").is_dir()
+)
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 import scripts.common.env  # noqa
 
 import asyncio
@@ -46,7 +53,9 @@ async def main():
     client = AnkiClient()
     try:
         print("🔧 確保所需的 Anki 筆記模型已經匯入...")
-        await import_all_models(client, backend_dir)
+        # 由統一 bootstrap 推導的 backend 根目錄，避免二次硬算路徑。
+        # Reuse the backend root resolved by the unified bootstrap above.
+        await import_all_models(client, str(_BACKEND_DIR))
         print("-" * 50 + "\n")
         
         target_name = "Japanese Verbs - Transitive and Intransitive Pairs"

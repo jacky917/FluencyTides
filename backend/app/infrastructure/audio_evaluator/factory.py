@@ -76,7 +76,24 @@ def create_audio_evaluator() -> BaseAudioEvaluator:
         logger.info("Audio Evaluator 工廠: 建立 Gemini Native SDK 實例。")
         return GeminiNativeAudioEvaluator()
 
+    if provider == "stt_diff":
+        # 延遲匯入，維持工廠的延遲載入慣例
+        from app.infrastructure.audio_evaluator.stt_diff_evaluator import (
+            STTDiffEvaluator,
+        )
+
+        logger.info("Audio Evaluator 工廠: 建立 STT + difflib 零成本比對實例。")
+        return STTDiffEvaluator()
+
+    if provider == "stt_llm":
+        from app.infrastructure.audio_evaluator.stt_llm_evaluator import (
+            STTLLMEvaluator,
+        )
+
+        logger.info("Audio Evaluator 工廠: 建立 STT + 純文字 LLM 實例。")
+        return STTLLMEvaluator()
+
     raise ValueError(
         f"不支援的 AUDIO_EVALUATOR_PROVIDER: '{provider}'。"
-        f"可選值: 'openai', 'gemini_native', 'proxy'。"
+        f"可選值: 'gemini_native', 'openai', 'proxy', 'stt_diff', 'stt_llm'。"
     )

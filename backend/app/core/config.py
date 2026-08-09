@@ -477,10 +477,31 @@ class Settings(BaseSettings):
         default="gemini_native",
         description=(
             "語音評分器的供應商選擇。"
-            "可選值: 'openai' (使用 OpenAI 相容 API) 或 "
-            "'gemini_native' (使用 Google 原生 SDK)。"
+            "可選值: 'gemini_native' (Google 原生 SDK)、'openai' (OpenAI 相容 API)、"
+            "'proxy' (第三方中轉)、'stt_diff' (本地 Whisper + difflib 零成本比對)、"
+            "'stt_llm' (本地 Whisper + 純文字 LLM 低成本評分)。"
             "策略模式允許在不修改業務邏輯的前提下切換供應商。"
         ),
+    )
+
+    # ====================================================================
+    # STT (自架 Whisper / Speaches) 設定
+    # ====================================================================
+    STT_SERVER_URL: str | None = Field(
+        default=None,
+        description="自架 Speaches/Whisper 的 OpenAI 相容端點 (含 /v1)",
+    )
+    STT_MODEL_NAME: str = Field(
+        default="Systran/faster-whisper-large-v3",
+        description="faster-whisper 模型 ID",
+    )
+    STT_API_KEY: str = Field(
+        default="speaches",
+        description="自架 STT 服務金鑰 (OpenAI SDK 要求非空即可)",
+    )
+    STT_LLM_MODEL_NAME: str = Field(
+        default="gemini-2.5-flash",
+        description="stt_llm 模式專用的純文字評分模型 (與多模態 AUDIO_MODEL_NAME 脫鉤)",
     )
 
     # ====================================================================

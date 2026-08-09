@@ -1,0 +1,49 @@
+# Ruff 設定：本專案的靜態檢查基準。
+# Ruff configuration: the project's static-check baseline.
+#
+# 為什麼需要（S004 共通防線）：
+# `migrate_master_cards.py` 曾發生「使用 re 卻沒有 import re」而必定崩潰的問題，
+# 這類錯誤 py_compile 抓不到（語法合法），只有在執行到該行時才會 NameError。
+# 啟用 pyflakes（F）規則後，F821 undefined-name 會在 lint 階段就攔下。
+#
+# Why (the S004 systemic guard): `migrate_master_cards.py` used `re` without
+# importing it, guaranteeing a crash. py_compile cannot catch this (the syntax
+# is valid) — it only fails at runtime. Enabling the pyflakes (F) rules makes
+# F821 undefined-name surface during linting instead.
+
+line-length = 120
+target-version = "py313"
+
+# 排除不維護的舊代碼與快取
+# Exclude unmaintained legacy code and caches.
+exclude = [
+    "old",
+    "**/old/**",
+    "__pycache__",
+    ".venv",
+]
+
+[lint]
+# 目前只選「會在執行期真的爆炸」的規則作為 CI 阻擋條件：
+#   E9   語法 / IO 錯誤
+#   F821 使用了未定義的名稱（S004 的根治規則）
+#   F823 在賦值前就使用區域變數
+#   F502/F522/F701 格式化與語法層級的硬錯誤
+# 專案目前另有 80 件整潔性問題（F401 未用匯入 54、F541 無佔位符 f-string 17、
+# F841 未用變數 6、F811 重複定義 3），屬 Low 等級、與執行正確性無關，
+# 待獨立的整潔化工作處理後再把 select 擴大為 ["F", "E9"]。
+#
+# Only rules that genuinely break at runtime gate CI for now: E9 (syntax/IO),
+# F821 (undefined name — the systemic guard for S004), F823 (use before
+# assignment) and the hard formatting/syntax errors. The project currently has
+# 80 tidiness findings (54 F401, 17 F541, 6 F841, 3 F811) that are Low severity
+# and unrelated to correctness; once a dedicated cleanup lands, widen this to
+# ["F", "E9"].
+select = ["E9", "F821", "F823", "F502", "F522", "F701"]
+
+[lint.per-file-ignores]
+# 腳本的 bootstrap 必須在 import 專案模組「之前」執行，
+# 因此 E402（import 不在檔案頂端）與 F401（bootstrap 的 noqa 匯入）在此不適用。
+# Script bootstraps must run before project imports, so E402 (import not at
+# top) and F401 (the bootstrap's side-effect import) do not apply there.
+"scripts/**" = ["E402"]

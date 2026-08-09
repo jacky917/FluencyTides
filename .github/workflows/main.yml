@@ -71,8 +71,14 @@ jobs:
           pip install ruff
           if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
       - name: Lint with Ruff
+        # 掃描範圍含 scripts/ 與 tests/：S004（使用 re 卻未 import）正是發生在
+        # scripts/ 底下，只掃 app/ 無法攔下這類必定崩潰的錯誤。
+        # 規則集定義於 backend/ruff.toml。
+        # The scan covers scripts/ and tests/ as well: S004 (using `re` without
+        # importing it) happened under scripts/, so linting only app/ cannot
+        # catch such guaranteed crashes. Rule set lives in backend/ruff.toml.
         run: |
-          ruff check backend/app
+          cd backend && ruff check app scripts tests
 
   # =============================================================================
   # Job 3: 前端 Type Check & Build 驗證

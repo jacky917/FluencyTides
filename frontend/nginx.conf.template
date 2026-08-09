@@ -23,6 +23,16 @@ server {
         # 使用 Docker 內部網路解析後端容器名稱，徹底解決所有防火牆/Hairpin NAT 問題
         proxy_pass http://fluencytides-backend:8000;
 
+        # S009 修復：由反向代理層注入 API 金鑰，瀏覽器端完全不接觸金鑰。
+        # 若改在前端 axios 帶 header，金鑰會被打包進 JS bundle，任何人開 F12 都看得到。
+        # 值由容器啟動時的 envsubst 從環境變數 API_SECRET_KEY 代入（見 Dockerfile）。
+        # S009 fix: the API key is injected at the reverse-proxy layer so the
+        # browser never holds it. Putting it in the frontend axios client would
+        # bake the secret into the JS bundle, visible to anyone via DevTools.
+        # The value is substituted from the API_SECRET_KEY env var by envsubst
+        # at container start-up (see Dockerfile).
+        proxy_set_header X-API-Key "${API_SECRET_KEY}";
+
         # 將使用者的真實 IP 和 Host 資訊傳遞給後端（後端 log 才看得到真實來源）
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

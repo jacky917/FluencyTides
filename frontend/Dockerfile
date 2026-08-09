@@ -25,9 +25,17 @@ FROM nginx:alpine
 # 1. 移除 Nginx 預設的設定檔
 RUN rm /etc/nginx/conf.d/default.conf
 
-# 2. 複製我們自訂的 nginx.conf (替換掉 default.conf)
-# 這樣 Nginx 才會套用您的 API Proxy 和 SPA 路由設定
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# 2. 複製自訂設定為「樣板」(S009)
+# nginx:alpine 的 entrypoint 會在容器啟動時，以 envsubst 將
+# /etc/nginx/templates/*.template 中的 ${VAR} 代換為環境變數值，
+# 輸出到 /etc/nginx/conf.d/。藉此把 API_SECRET_KEY 注入 proxy_set_header，
+# 讓金鑰只存在於伺服器端，不會被打包進前端 JS bundle。
+# S009: copy the config as a *template*. The nginx:alpine entrypoint runs
+# envsubst over /etc/nginx/templates/*.template at start-up and writes the
+# result to /etc/nginx/conf.d/, injecting API_SECRET_KEY into
+# proxy_set_header so the secret stays server-side and never reaches the
+# browser bundle.
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 
 # 3. 建立 Nginx 設定檔中指定的根目錄
 RUN mkdir -p /usr/share/nginx/FluencyTides

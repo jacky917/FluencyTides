@@ -31,6 +31,7 @@ from app.infrastructure.utils.id_generator import generate_unique_card_id
 from app.core.dependencies import get_template_engine
 from app.infrastructure.llm.client import LLMClient
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
+from app.services.task_handlers.shared.anki_transaction import AnkiNoteTransaction
 from app.schemas.relation import CardRelationCreate
 
 if TYPE_CHECKING:
@@ -284,122 +285,146 @@ class JPCoreVerbHandler(BaseHandler):
         llm_tag = f"LLM::{raw_result.model_name}"
         tags = ["FluencyTides::Generated", f"Game::{source_game}", llm_tag] if source_game else ["FluencyTides::Generated", llm_tag]
 
-        new_context_id = await card_service.create_note(
-            deck_name=context_deck_name,
-            model_name="JP_Context_Dark",
-            fields=context_fields,
-            tags=tags,
-            allow_duplicate=True
-        )
+        # S003 修復：Context 卡、Cloze 卡與母卡 JSON 回寫屬同一組不可分割的
+        # 產出。任一步失敗（含 S001 修復後 append_to_list 會對損毀欄位主動
+        # 拋錯）時，補償式交易會反序刪除已建立的子卡，避免母卡無引用的孤兒卡。
+        # S003 fix: the Context note, the Cloze note and the master JSON
+        # write-back form one indivisible unit. If any step fails (including
+        # append_to_list now raising on corrupted fields after the S001 fix),
+        # the compensating transaction deletes the created child notes in
+        # reverse, preventing orphans the master never references.
+        async with AnkiNoteTransaction(card_service) as tx:
+            new_context_id = await tx.create_note(
+                deck_name=context_deck_name,
+                model_name="JP_Context_Dark",
+                fields=context_fields,
+                tags=tags,
+                allow_duplicate=True
+            )
 
-        # 7. 建立 Cloze 子卡片
-        cloze_deck_name = f"{deck_name}::Cloze"
-        cloze_card_uuid = generate_unique_card_id(prefix="cv")
+            # 7. 建立 Cloze 子卡片
+            cloze_deck_name = f"{deck_name}::Cloze"
+            cloze_card_uuid = generate_unique_card_id(prefix="cv")
 
-        word = str(master_note.get("fields", {}).get("Word", {}).get("value", ""))
-        target_particle_verb = llm_result.cloze.target_particle_verb
+            word = str(master_note.get("fields", {}).get("Word", {}).get("value", ""))
+            target_particle_verb = llm_result.cloze.target_particle_verb
 
-        # 檢查句子實際使用的漢字是否與本次生成的目標動詞 (target_verb) 漢字一致
-        # 因為母卡片可能包含多個同義寫法，直接檢查母卡片欄位會導致誤判
-        kanji_in_word = set(re.findall(r'[一-龥々]', target_verb))
+            # 檢查句子實際使用的漢字是否與本次生成的目標動詞 (target_verb) 漢字一致
+            # 因為母卡片可能包含多個同義寫法，直接檢查母卡片欄位會導致誤判
+            kanji_in_word = set(re.findall(r'[一-龥々]', target_verb))
 
-        mismatch = False
-        if kanji_in_word:
-            for k in kanji_in_word:
-                if k not in target_particle_verb:
-                    mismatch = True
-                    break
+            mismatch = False
+            if kanji_in_word:
+                for k in kanji_in_word:
+                    if k not in target_particle_verb:
+                        mismatch = True
+                        break
 
-        # 若漢字不一致 (例如目標動詞是 見る，但句子用平假名 みた)
-        # 則將面板文字退化為純平假名，避免造成學習者尋找漢字的困惑
-        if mismatch:
-            def to_pure_kana(text: str) -> str:
-                """把 furigana 標音格式的 Base[Ruby] 退化為純假名 Ruby。
+            # 若漢字不一致 (例如目標動詞是 見る，但句子用平假名 みた)
+            # 則將面板文字退化為純平假名，避免造成學習者尋找漢字的困惑
+            if mismatch:
+                def to_pure_kana(text: str) -> str:
+                    """把 furigana 標音格式的 Base[Ruby] 退化為純假名 Ruby。
 
-                Degrade furigana Base[Ruby] notation into pure kana.
+                    Degrade furigana Base[Ruby] notation into pure kana.
 
-                Args:
-                    text: furigana 標音字串，例如 "見[み]る"。Furigana
-                        string, e.g. "見[み]る".
+                    Args:
+                        text: furigana 標音字串，例如 "見[み]る"。Furigana
+                            string, e.g. "見[み]る".
 
-                Returns:
-                    str: 純假名字串，例如 "みる"。Pure kana string, e.g.
-                        "みる".
-                """
-                # 把 Base[Ruby] 替換為 Ruby
-                # 例如 "見[み]る" -> "みる"
-                return re.sub(r'[^\s\[\]]+\[([^\]]+)\]', r'\1', text)
+                    Returns:
+                        str: 純假名字串，例如 "みる"。Pure kana string, e.g.
+                            "みる".
+                    """
+                    # 把 Base[Ruby] 替換為 Ruby
+                    # 例如 "見[み]る" -> "みる"
+                    return re.sub(r'[^\s\[\]]+\[([^\]]+)\]', r'\1', text)
 
-            word = to_pure_kana(word)
+                word = to_pure_kana(word)
 
-        # Verb_Analysis_JSON 為 Cloze 卡解析區的單一事實來源；
-        # 額外附上（可能已退化為純假名的）word 供前端渲染動詞標題使用
-        verb_analysis_data = llm_result.cloze.verb_analysis.model_dump()
-        verb_analysis_data["word"] = word
+            # Verb_Analysis_JSON 為 Cloze 卡解析區的單一事實來源；
+            # 額外附上（可能已退化為純假名的）word 供前端渲染動詞標題使用
+            verb_analysis_data = llm_result.cloze.verb_analysis.model_dump()
+            verb_analysis_data["word"] = word
 
-        cloze_fields = {
-            "Cloze_Sentence": cloze_sentence,
-            "Full_Sentence_HTML": full_sentence_html,
-            "Translation": llm_result.cloze.translation.replace("\n", " "),
-            "Verb_Analysis_JSON": json.dumps(verb_analysis_data, ensure_ascii=False),
-            "Audio": target_audio_filename,
-            "Speaker": target_speaker,
-            "Avatar": target_avatar,
-            "Master_Note_ID": str(master_note_id),
-            "Context_Note_ID": str(new_context_id),
-            "Card_ID": cloze_card_uuid
-        }
+            cloze_fields = {
+                "Cloze_Sentence": cloze_sentence,
+                "Full_Sentence_HTML": full_sentence_html,
+                "Translation": llm_result.cloze.translation.replace("\n", " "),
+                "Verb_Analysis_JSON": json.dumps(verb_analysis_data, ensure_ascii=False),
+                "Audio": target_audio_filename,
+                "Speaker": target_speaker,
+                "Avatar": target_avatar,
+                "Master_Note_ID": str(master_note_id),
+                "Context_Note_ID": str(new_context_id),
+                "Card_ID": cloze_card_uuid
+            }
 
-        cloze_tags = list(tags)
-        if target_speaker in ("-", "", "none") and target_avatar == "none":
-            cloze_tags.append("Narrator")
+            cloze_tags = list(tags)
+            if target_speaker in ("-", "", "none") and target_avatar == "none":
+                cloze_tags.append("Narrator")
 
-        new_cloze_id = await card_service.create_note(
-            deck_name=cloze_deck_name,
-            model_name="JP_CoreVerb_Cloze_Dark",
-            fields=cloze_fields,
-            tags=cloze_tags,
-            allow_duplicate=True
-        )
+            new_cloze_id = await tx.create_note(
+                deck_name=cloze_deck_name,
+                model_name="JP_CoreVerb_Cloze_Dark",
+                fields=cloze_fields,
+                tags=cloze_tags,
+                allow_duplicate=True
+            )
 
-        # 8. 反向更新母卡片 JSON（CoreVerb 為單欄 Word_Data_JSON）
-        new_example_item = {
-            "audio": target_audio_filename,
-            "avatar": target_avatar,
-            "speaker": target_speaker,
-            "text": full_sentence_html,
-            "context_note_id": new_context_id,
-            "cloze_note_id": new_cloze_id
-        }
-        await AnkiJsonFieldManager.append_to_list(
-            card_service, master_note_id, "Word_Data_JSON", new_example_item
-        )
+            # 8. 反向更新母卡片 JSON（CoreVerb 為單欄 Word_Data_JSON）
+            new_example_item = {
+                "audio": target_audio_filename,
+                "avatar": target_avatar,
+                "speaker": target_speaker,
+                "text": full_sentence_html,
+                "context_note_id": new_context_id,
+                "cloze_note_id": new_cloze_id
+            }
+            await AnkiJsonFieldManager.append_to_list(
+                card_service, master_note_id, "Word_Data_JSON", new_example_item
+            )
 
         # 9. 圖譜關聯
-        await relation_service.create_relation(
-            CardRelationCreate(
-                source_note_id=master_note_id,
-                target_note_id=new_context_id,
-                relation_type="has_context",
-                source_label=target_verb,
-                target_label=f"{target_verb}_context"
+        # S003：卡片與母卡 JSON 此時已提交，圖譜關聯失敗屬「可事後補救」等級
+        # （/sync 的孤兒清理會處理），不應為了圖譜一致性回頭刪除使用者已看得到
+        # 的卡片。因此改為記錄警告並以旗標回報，不讓例外中斷整個生成流程。
+        # S003: the notes and the master JSON are already committed here, so a
+        # failed graph link is recoverable (the /sync orphan sweep handles it)
+        # and must not delete notes the user can already see. It is logged and
+        # reported via a flag instead of aborting the whole generation.
+        relation_failed = False
+        try:
+            await relation_service.create_relation(
+                CardRelationCreate(
+                    source_note_id=master_note_id,
+                    target_note_id=new_context_id,
+                    relation_type="has_context",
+                    source_label=target_verb,
+                    target_label=f"{target_verb}_context"
+                )
             )
-        )
-        await relation_service.create_relation(
-            CardRelationCreate(
-                source_note_id=master_note_id,
-                target_note_id=new_cloze_id,
-                relation_type="has_cloze",
-                source_label=target_verb,
-                target_label=f"{target_verb}_cloze"
+            await relation_service.create_relation(
+                CardRelationCreate(
+                    source_note_id=master_note_id,
+                    target_note_id=new_cloze_id,
+                    relation_type="has_cloze",
+                    source_label=target_verb,
+                    target_label=f"{target_verb}_cloze"
+                )
             )
-        )
+        except Exception as e:  # noqa: BLE001 - 圖譜失敗不得中斷已成功的建卡
+            relation_failed = True
+            logger.warning(
+                "圖譜關聯建立失敗（卡片已建立，可由 /sync 後續修正）: %s", e
+            )
 
         return {
             "context_note_id": new_context_id,
             "cloze_note_id": new_cloze_id,
             "kept_dialog": dialog_turns,
-            "llm_model": raw_result.model_name
+            "llm_model": raw_result.model_name,
+            "relation_failed": relation_failed
         }
 
     @override

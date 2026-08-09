@@ -30,6 +30,18 @@ import type {
  * Axios instance whose baseURL maps to the backend `/api/v1`.
  * Vite 的 proxy 會自動轉發到後端。
  * The Vite proxy automatically forwards requests to the backend.
+ *
+ * 認證設計（S009）：後端的 `/handlers/*` 與 `/relations/*` 需要 `X-API-Key`，
+ * 但此處**刻意不設定**該 header——金鑰由 nginx 於反向代理層注入
+ * （見 `frontend/nginx.conf.template`）。若改在前端帶金鑰，它會被打包進 JS
+ * bundle，任何人開 DevTools 都看得到。請勿在此加入 API 金鑰。
+ *
+ * Auth design (S009): the backend's `/handlers/*` and `/relations/*` require
+ * `X-API-Key`, but this client deliberately does NOT set it — the key is
+ * injected by nginx at the reverse-proxy layer (see
+ * `frontend/nginx.conf.template`). Sending it from the frontend would bake
+ * the secret into the JS bundle, visible in DevTools. Do not add the API key
+ * here.
  */
 const apiClient = axios.create({
   baseURL: '/api/v1',

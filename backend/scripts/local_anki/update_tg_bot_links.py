@@ -22,10 +22,16 @@ import os
 import sys
 from pathlib import Path
 
-# 確保 sys.path 包含 backend 根目錄並載入 .env
-_backend_dir = Path(__file__).resolve().parents[3]
-if str(_backend_dir) not in sys.path:
-    sys.path.insert(0, str(_backend_dir))
+# 統一 bootstrap：向上尋找第一個含 app/ 的目錄即為 backend 根，與檔案深度無關；
+# 腳本搬移目錄層級時不需再調整硬編碼的上層層數，避免匯入路徑失準。
+# Unified bootstrap: walk up the parent chain and take the first directory
+# containing app/ as the backend root. Depth-independent, so relocating this
+# script never breaks the import path.
+_BACKEND_DIR = next(
+    p for p in Path(__file__).resolve().parents if (p / "app").is_dir()
+)
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 import scripts.common.env  # noqa
 
 from app.core.config import settings

@@ -207,7 +207,9 @@ class OpenAIAudioEvaluator(BaseAudioEvaluator):
             # 使用 raw_decode 可以自動忽略結尾多餘的字元
             decoder = json.JSONDecoder()
             parsed, idx = decoder.raw_decode(cleaned.lstrip())
-            return AudioEvaluationResult(**parsed)
+            result = AudioEvaluationResult(**parsed)
+            result.evaluator_label = settings.AUDIO_MODEL_NAME
+            return result
         except (json.JSONDecodeError, ValueError) as e:
             logger.error("OpenAI Audio Evaluator 回傳格式錯誤: %s", content)
             raise LLMServiceError(

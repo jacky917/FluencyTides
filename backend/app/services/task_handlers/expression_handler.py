@@ -24,6 +24,7 @@ from app.infrastructure.llm.client import LLMClient
 from app.schemas.llm.expression import LLMExpressionCorrectionResult
 from app.core.config import settings
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
+from app.services.task_handlers.shared.anki_transaction import AnkiNoteTransaction
 
 if TYPE_CHECKING:
     from app.services.card_service import CardService
@@ -239,63 +240,69 @@ class ExpressionCorrectionHandler(BaseHandler):
             
         allow_duplicate = parameters.get("allow_duplicate", False)
 
-        master_note_id = await card_service.create_note(
-            deck_name=master_deck,
-            model_name="Expression_Master_Dark",
-            fields=master_fields,
-            tags=base_tags + ["HandlerGenerated"],
-            allow_duplicate=allow_duplicate
-        )
-
-        created_ids = [master_note_id]
-
-        # 3. 建立統一編號的子卡片列表
-        # 統一編號規則：grammar_micro_points 在前，reorganized_micro_points 在後，
-        # 按照 LLM 回傳順序從 1 開始連續編號。
-        all_micro_entries: list[tuple[str, str, object]] = []
-        for mp in correction_result.grammar_micro_points:
-            all_micro_entries.append(("Grammar", "文法修正", mp))
-        for mp in correction_result.reorganized_micro_points:
-            all_micro_entries.append(("Reorganized", "重新組織", mp))
-
-        base_micro_deck = "日本語::外語糾錯::子卡片"
-        micro_tags = base_tags + ["MicroPoint"]
-
-        for idx, (card_type, sub_deck_name, mp) in enumerate(all_micro_entries):
-            # 使用 1-based 編號
-            card_number = idx + 1
-
-            # 如果有指定篩選，且此卡片不在選擇列表中，則跳過
-            if selected_indices is not None and card_number not in selected_indices:
-                continue
-
-            deck_name_full = f"{base_micro_deck}::{sub_deck_name}"
-            micro_card_id = generate_unique_card_id(prefix="ec-s")
-
-            phrase_audios = json.dumps([{"audio": "", "speaker": "AI", "avatar": "none"}], ensure_ascii=False)
-
-            micro_fields = {
-                "Target_Phrase": mp.target_phrase,
-                "Native_Translation": mp.native_translation,
-                "Context_Hint": mp.context_hint,
-                "Context_Sentence": mp.context_sentence,
-                "Phrase_Audios": phrase_audios,
-                "Error_Hint": mp.error_hint,
-                "Master_Note_ID": str(master_note_id),
-                "Card_ID": micro_card_id,
-                "Card_Type": card_type,
-                "TG_Bot": tg_bot
-            }
-
-            micro_note_id = await card_service.create_note(
-                deck_name=deck_name_full,
-                model_name="Expression_Micro_Dark",
-                fields=micro_fields,
-                tags=micro_tags
+        # S002 修復：母卡與子卡屬同一個知識群組，必須整組成功或整組不留痕跡。
+        # 以補償式交易包裹，任一子卡建立失敗（最常見為 DuplicateCardError）時
+        # 反序刪除已建立的卡片，避免殘留孤兒母卡與半套群組。
+        # S002 fix: the master and its children form one knowledge group and
+        # must either all succeed or leave nothing behind. The compensating
+        # transaction deletes created notes in reverse when any child fails
+        # (most often DuplicateCardError), preventing orphan masters and
+        # half-created groups.
+        async with AnkiNoteTransaction(card_service) as tx:
+            master_note_id = await tx.create_note(
+                deck_name=master_deck,
+                model_name="Expression_Master_Dark",
+                fields=master_fields,
+                tags=base_tags + ["HandlerGenerated"],
+                allow_duplicate=allow_duplicate
             )
-            created_ids.append(micro_note_id)
 
-        return created_ids
+            # 3. 建立統一編號的子卡片列表
+            # 統一編號規則：grammar_micro_points 在前，reorganized_micro_points 在後，
+            # 按照 LLM 回傳順序從 1 開始連續編號。
+            all_micro_entries: list[tuple[str, str, object]] = []
+            for mp in correction_result.grammar_micro_points:
+                all_micro_entries.append(("Grammar", "文法修正", mp))
+            for mp in correction_result.reorganized_micro_points:
+                all_micro_entries.append(("Reorganized", "重新組織", mp))
+
+            base_micro_deck = "日本語::外語糾錯::子卡片"
+            micro_tags = base_tags + ["MicroPoint"]
+
+            for idx, (card_type, sub_deck_name, mp) in enumerate(all_micro_entries):
+                # 使用 1-based 編號
+                card_number = idx + 1
+
+                # 如果有指定篩選，且此卡片不在選擇列表中，則跳過
+                if selected_indices is not None and card_number not in selected_indices:
+                    continue
+
+                deck_name_full = f"{base_micro_deck}::{sub_deck_name}"
+                micro_card_id = generate_unique_card_id(prefix="ec-s")
+
+                phrase_audios = json.dumps([{"audio": "", "speaker": "AI", "avatar": "none"}], ensure_ascii=False)
+
+                micro_fields = {
+                    "Target_Phrase": mp.target_phrase,
+                    "Native_Translation": mp.native_translation,
+                    "Context_Hint": mp.context_hint,
+                    "Context_Sentence": mp.context_sentence,
+                    "Phrase_Audios": phrase_audios,
+                    "Error_Hint": mp.error_hint,
+                    "Master_Note_ID": str(master_note_id),
+                    "Card_ID": micro_card_id,
+                    "Card_Type": card_type,
+                    "TG_Bot": tg_bot
+                }
+
+                await tx.create_note(
+                    deck_name=deck_name_full,
+                    model_name="Expression_Micro_Dark",
+                    fields=micro_fields,
+                    tags=micro_tags
+                )
+
+            return list(tx.created_ids)
 
     @override
     async def execute_read_list(

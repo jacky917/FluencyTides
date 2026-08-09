@@ -23,11 +23,13 @@ import pydantic
 from app.core.exceptions import FluencyTidesError
 
 from aiogram import Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 
 from app.bot.state import UserState, UserStateManager
 from app.bot.utils.deep_link_parser import DeepLinkParser
+from app.bot.utils.formatting import anki_field_to_tg_text
 from app.schemas.tg.deep_link import (
     DeleteEntryAction,
     GenerateCardAction,
@@ -80,7 +82,7 @@ async def command_start_handler(
         # 一般 /start
         await message.answer(
             f"👋 歡迎使用 FluencyTides Bot！\n\n"
-            f"請使用 <code>/newcard</code> 指令開啟選單，"
+            f"請使用 /newcard 指令開啟選單，"
             f"來新增單字、對話或外語糾錯卡片。\n\n"
             f"💡 <i>您可以隨時輸入 /help 了解更多。</i>",
             parse_mode="HTML"
@@ -120,16 +122,7 @@ async def command_start_handler(
             )
             return
 
-        # 切換使用者狀態為 Recording
         chat_id = message.chat.id
-        user_state_manager.set_state(
-            chat_id,
-            UserState(
-                action="recording", 
-                card_id=action.card_id,
-                extra={"field_name": action.field_name, "index": action.index}
-            ),
-        )
 
         # 抓取卡片內容以顯示題目給使用者（取第一個欄位）
         try:
@@ -149,18 +142,45 @@ async def command_start_handler(
             logger.error("取得卡片內容時發生錯誤: %s", e)
             display_text = action.card_id
 
-        # 若內容太長，做個簡單截斷
-        if len(display_text) > 300:
-            display_text = display_text[:300] + "..."
+        # S010 修復：Anki 欄位本身含 HTML（<div>/<ruby>/<span>），未經處理直接
+        # 插入 Telegram HTML 訊息會拋 TelegramBadRequest。統一以工具函數
+        # 去標籤 → 截斷 → 轉義。
+        # S010 fix: Anki fields contain HTML (<div>/<ruby>/<span>); embedding
+        # them raw in a Telegram HTML message raises TelegramBadRequest. The
+        # helper strips tags, truncates, then escapes.
+        display_text = anki_field_to_tg_text(display_text, limit=300)
 
-        await message.answer(
-            f"🎙️ <b>錄音模式已啟動</b>\n\n"
-            f"目標題目：\n<blockquote>{display_text}</blockquote>\n\n"
-            f"請直接發送語音訊息，我會進行以下處理：\n"
-            f"1️⃣ 語音辨識（逐字稿）\n"
-            f"2️⃣ AI 評分（0-100）\n"
-            f"3️⃣ 自動寫回 Anki 卡片\n\n"
-            f"<i>💡 發送語音後請稍候數秒等待 AI 分析完成。</i>"
+        # S010 修復：狀態改為「提示訊息成功送出後」才設定。原本先設狀態再發訊息，
+        # 一旦發送失敗，使用者已進入錄音模式卻收不到任何提示，體感是「按了沒反應」。
+        # S010 fix: the state is set only after the prompt is delivered.
+        # Previously the state was set first, so a send failure left the user
+        # silently in recording mode — it felt like the button did nothing.
+        try:
+            await message.answer(
+                f"🎙️ <b>錄音模式已啟動</b>\n\n"
+                f"目標題目：\n<blockquote>{display_text}</blockquote>\n\n"
+                f"請直接發送語音訊息，我會進行以下處理：\n"
+                f"1️⃣ 語音辨識（逐字稿）\n"
+                f"2️⃣ AI 評分（0-100）\n"
+                f"3️⃣ 自動寫回 Anki 卡片\n\n"
+                f"<i>💡 發送語音後請稍候數秒等待 AI 分析完成。</i>"
+            )
+        except TelegramAPIError as e:
+            # 降級為純文字重試，確保使用者至少知道錄音模式已就緒
+            logger.error("錄音提示訊息發送失敗，改以純文字重送: %s", e)
+            await message.answer(
+                "🎙️ 錄音模式已啟動，請直接發送語音訊息。",
+                parse_mode=None,
+            )
+
+        # 切換使用者狀態為 Recording
+        user_state_manager.set_state(
+            chat_id,
+            UserState(
+                action="recording",
+                card_id=action.card_id,
+                extra={"field_name": action.field_name, "index": action.index}
+            ),
         )
         return
 
@@ -364,7 +384,7 @@ async def command_help_handler(message: Message) -> None:
     help_text = (
         "📚 <b>FluencyTides 使用指南</b>\n\n"
         "1️⃣ <b>新增卡片（統一入口）</b>\n"
-        "輸入 <code>/newcard</code>，Bot 會彈出選單讓您選擇要新增的卡片類型：\n"
+        "輸入 /newcard ，Bot 會彈出選單讓您選擇要新增的卡片類型：\n"
         "  • 📚 單字卡 — 輸入單字自動查字典並建立卡片\n"
         "  • 🎙️ 對話卡 — 以問答方式建立口說練習情境卡片\n"
         "  • 📝 外語糾錯 — AI 糾錯並拆解成原子化知識點\n\n"
@@ -374,7 +394,16 @@ async def command_help_handler(message: Message) -> None:
         "3️⃣ <b>刪除條目</b>\n"
         "點擊 Anki 卡片上的刪除按鈕，即可遠端刪除特定的參考範本或歷史錄音。\n\n"
         "4️⃣ <b>同步清理</b>\n"
-        "輸入 /sync 手動清理資料庫中已不存在於 Anki 的孤兒關聯。"
+        "輸入 /sync 手動清理資料庫中已不存在於 Anki 的孤兒關聯。\n\n"
+        "5️⃣ <b>動態設定（管理員限定）</b>\n"
+        "輸入 /setconfig 開啟設定選單，不需重啟即可切換：\n"
+        "  • <b>語音評分模式</b>（AUDIO_EVALUATOR_PROVIDER）：\n"
+        "    ├ <code>gemini_native</code> — Gemini 多模態直接聽音檔（預設）\n"
+        "    ├ <code>openai</code> — OpenAI 相容 API 聽音檔\n"
+        "    ├ <code>stt_diff</code> — 本地 Whisper 轉文字＋逐字比對，零 API 費用、秒回\n"
+        "    └ <code>stt_llm</code> — 本地 Whisper 轉文字＋輕量 LLM 評分，低成本\n"
+        "  • <b>模型切換</b>：AUDIO_MODEL_NAME / LLM_MODEL_NAME / STT_LLM_MODEL_NAME\n"
+        "<i>設定僅本次執行期間有效，重啟後回到 .env 預設值。</i>"
     )
     await message.answer(help_text)
 
