@@ -14,8 +14,11 @@ media library and clears the Recordings_ZH/JA/EN fields.
 1. 清除「所有」Speaking_Trilingual_Dark 卡片的語音:
    python scripts/local_anki/Speaking_Trilingual_Dark/clear_recordings.py
 
-2. 僅清除特定「主牌組及所有子牌組」的語音 (例如買花情境):
-   python scripts/local_anki/Speaking_Trilingual_Dark/clear_recordings.py --deck "FluencyTides::Speaking_Trilingual::お花屋さんで花を買う"
+2. 僅清除特定「主牌組及所有子牌組」的語音:
+   # 牌組名請填 import_cards.py 實際推導出的完整名稱，
+   # 其根牌組來自 settings.SPEAKING_TRILINGUAL_ROOT_DECK (預設「日常會話」)
+   python scripts/local_anki/Speaking_Trilingual_Dark/clear_recordings.py --deck "日常會話::お花屋さんで花を買う"
+   python scripts/local_anki/Speaking_Trilingual_Dark/clear_recordings.py --deck "日常會話::日本語面接::Queen Bee Capital株式会社::志望動機"
 
 3. 僅清除「特定卡片 ID」的語音:
    python scripts/local_anki/Speaking_Trilingual_Dark/clear_recordings.py --card-id st-12345678
