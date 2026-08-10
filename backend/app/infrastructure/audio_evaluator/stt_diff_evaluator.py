@@ -42,9 +42,22 @@ from app.schemas.llm.speaking import AudioEvaluationResult
 logger = logging.getLogger(__name__)
 
 # 比對前剝除的標點與空白字元集
+#
+# 注意：不可納入 ー（U+30FC 長音符）。它在日文中並非標點，而是承載語意的
+# 音韻字元——剝除後「ビール／ビル」「コード／コド」會被判為相同，長音的
+# 發音錯誤將完全無法偵測，且差異顯示也會缺字。半形 ｰ（U+FF70）經 NFKC 會
+# 正規化為 U+30FC，一併保留。
+#
 # Punctuation and whitespace stripped before comparison.
+#
+# Note: ー (U+30FC, prolonged sound mark) must NOT be listed here. It is a
+# meaning-bearing phonemic character in Japanese, not punctuation —
+# stripping it makes "ビール"/"ビル" and "コード"/"コド" compare equal, hides
+# long-vowel pronunciation errors entirely, and drops the character from the
+# rendered diff. Half-width ｰ (U+FF70) NFKC-normalizes to U+30FC and is
+# likewise preserved.
 _STRIP_CHARS = set(
-    "。、．，,.!?！？「」『』（）()［］[]｛｝{}…・：:；;〜~ー－-—\"'‘’“”　 \t\r\n"
+    "。、．，,.!?！？「」『』（）()［］[]｛｝{}…・：:；;〜~－-—\"'‘’“”　 \t\r\n"
 )
 
 

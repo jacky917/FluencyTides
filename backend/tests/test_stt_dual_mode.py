@@ -60,6 +60,35 @@ class TestNormalization(unittest.TestCase):
         self.assertEqual(norm, "ab")
         self.assertEqual(mapping, ["Ａ", "b"])
 
+    def test_prolonged_sound_mark_is_preserved(self) -> None:
+        """長音符 ー 不得被當成標點剝除。
+
+        The prolonged sound mark must not be stripped as punctuation.
+
+        ー 是承載語意的音韻字元：剝除後「ビール／ビル」會比對相等，長音
+        發音錯誤無法偵測，且差異顯示會缺字。半形 ｰ 經 NFKC 併入 U+30FC。
+
+        It is a meaning-bearing phonemic character: stripping it makes
+        "ビール"/"ビル" compare equal, hides long-vowel errors, and drops the
+        character from the rendered diff. Half-width ｰ folds into U+30FC.
+        """
+        norm, mapping = _normalize_with_map("データエラー")
+        self.assertEqual(norm, "データエラー")
+        self.assertEqual("".join(mapping), "データエラー")
+
+        # 長音的有無必須造成差異，否則評分無法辨別發音錯誤
+        self.assertNotEqual(
+            _normalize_with_map("ビール")[0], _normalize_with_map("ビル")[0]
+        )
+
+        # 半形長音符 ｰ 經 NFKC 併入 U+30FC 後同樣保留；顯示映射仍還原原始半形字元
+        norm_half, mapping_half = _normalize_with_map("ｻｰﾋﾞｽ"[:2])
+        self.assertEqual(norm_half, "サー")
+        self.assertEqual("".join(mapping_half), "ｻｰ")
+
+        # 真正的破折號／連字號仍應被剝除
+        self.assertEqual(_normalize_with_map("a-b—c－d")[0], "abcd")
+
 
 class TestDiffEvaluator(unittest.TestCase):
     """stt_diff 邏輯測試（計畫 §5 測試 3-5）。stt_diff tests (plan §5 #3-5)."""
