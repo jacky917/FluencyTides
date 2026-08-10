@@ -8,8 +8,16 @@ creating cards in bulk from JSON files (native JSON arrays are serialized).
 
 用法：
     cd backend
-    python scripts/local_anki/Speaking_Trilingual_Dark/import_cards.py --file <path> [--dry-run]
-    # 省略 --file 時使用 samples/speaking_trilingual_sample.json
+    python scripts/local_anki/Speaking_Trilingual_Dark/import_cards.py [--name <相對路徑>] [--dry-run]
+    # 省略 --name 時遞迴掃描 jsons/ 下所有 JSON
+
+已存在的卡片（同牌組 + 同 Prompt）**預設跳過**；加 ``--update-existing``
+才會覆寫 Prompt / Context / References_×3。Recordings 等使用者資料在任何
+模式下都不會被動到。
+
+Existing cards (same deck + same Prompt) are skipped by default; pass
+``--update-existing`` to overwrite Prompt / Context / References. User
+data such as Recordings is never touched in either mode.
 """
 
 import argparse
@@ -44,6 +52,78 @@ JSON_FIELDS = (
 DEFAULT_SAMPLE = (
     backend_dir / "scripts" / "common" / "samples" / "speaking_trilingual_sample.json"
 )
+#: 卡片 JSON 的存放根目錄；牌組階層由檔案在此目錄下的相對路徑推導
+JSONS_DIR = Path(__file__).parent / "jsons"
+
+
+def resolve_deck_name(file_path: Path, card_deck_name: str | None) -> str:
+    """組合最終牌組名稱：``<根牌組>::<相對路徑>::<檔名>::<deckName>``。
+
+    Build the final Anki deck name from the configured root deck, the
+    file's path relative to ``jsons/``, and an optional trailing
+    sub-deck declared by the JSON's ``deckName``.
+
+    階層一律由**檔案位置**決定：根牌組來自
+    ``settings.SPEAKING_TRILINGUAL_ROOT_DECK``（單一事實來源，改該設定即可
+    整批搬家），``jsons/`` 下的每層子資料夾各成一層子牌組。``deckName``
+    為選填，若有值則**再往下追加一層**。
+
+    Args:
+        file_path: 卡片 JSON 的路徑。Path to the card JSON file.
+        card_deck_name: JSON 中的 ``deckName``，選填；有值時追加在路徑
+            之後成為最深一層。可為 ``None`` 或空字串。The JSON's optional
+            ``deckName``, appended as the deepest level when present;
+            may be ``None`` or empty.
+
+    Returns:
+        以 ``::`` 串接的完整牌組名稱。The full ``::``-joined deck name.
+
+    Examples:
+        根牌組為 ``日常會話`` 時：
+
+        - ``jsons/お花屋さんで花を買う.json`` + ``deckName=""``
+          → ``日常會話::お花屋さんで花を買う``
+        - ``jsons/日本語面接/Queen Bee Capital株式会社/志望動機.json`` + ``deckName=""``
+          → ``日常會話::日本語面接::Queen Bee Capital株式会社::志望動機``
+        - 同上但 ``deckName="Step1"``
+          → ``日常會話::日本語面接::Queen Bee Capital株式会社::志望動機::Step1``
+    """
+    segments: list[str] = []
+
+    root = (settings.SPEAKING_TRILINGUAL_ROOT_DECK or "").strip().strip(":")
+    if root:
+        segments.append(root)
+
+    # 子資料夾 → 子牌組（不在 jsons/ 底下時退化為僅用檔名）
+    try:
+        rel_path = file_path.resolve().relative_to(JSONS_DIR.resolve())
+        segments.extend(rel_path.parent.parts)
+    except ValueError:
+        logger.warning("⚠️ %s 不在 jsons/ 目錄下，牌組階層僅使用檔名。", file_path.name)
+
+    segments.append(file_path.stem)
+
+    # deckName 為選填的額外末層
+    trailing = (card_deck_name or "").strip().strip(":")
+    # 向後相容：舊 JSON 的 deckName 可能重複寫了根牌組
+    if root and trailing == root:
+        # 恰等於根牌組 → 視為未填（沿用路徑推導，避免掉失檔名層或重複一層）
+        logger.warning(
+            "⚠️ %s 的 deckName 與根牌組相同，已忽略（階層由檔案位置決定）。",
+            file_path.name,
+        )
+        trailing = ""
+    elif root and trailing.startswith(f"{root}::"):
+        # 含根牌組前綴的完整路徑 → 直接沿用整串
+        logger.warning(
+            "⚠️ %s 的 deckName 含根牌組前綴，已視為完整牌組名沿用: %s",
+            file_path.name, trailing,
+        )
+        return trailing
+    if trailing:
+        segments.append(trailing)
+
+    return "::".join(segments)
 
 
 async def _process_media_paths(client: AnkiClient, data: any) -> any:
@@ -116,39 +196,40 @@ async def _normalize_fields(client: AnkiClient, fields: dict) -> dict[str, str]:
     return out
 
 
-async def import_cards(file_path: Path, dry_run: bool) -> None:
-    """讀 JSON 檔並逐張建卡。
+async def import_cards(file_path: Path, dry_run: bool, update_existing: bool = False) -> None:
+    """讀 JSON 檔並逐張建卡；已存在的卡片預設跳過。
 
-    Read the JSON file and create or update cards one by one.
+    Read the JSON file and create cards one by one; existing cards are
+    skipped by default.
 
     Args:
         file_path: JSON 檔案路徑。Path to the JSON file.
         dry_run: 預覽模式，不實際寫入 Anki。Preview mode; no writes to Anki.
+        update_existing: 已存在的卡片是否更新。預設 ``False``（跳過），
+            傳 ``True`` 才會覆寫 Prompt / Context / References_×3
+            （Recordings 等使用者資料一律不動）。Whether to update cards
+            that already exist. Defaults to ``False`` (skip); pass ``True``
+            to overwrite Prompt / Context / References (user data such as
+            Recordings is never touched).
     """
     logger.info(f"📂 開始載入 JSON 檔案: {file_path.name} ({file_path})")
     with open(file_path, "r", encoding="utf-8") as f:
         cards_data = json.load(f)
-    logger.info(f"📄 成功載入，共包含 {len(cards_data)} 筆卡片資料。開始與 Anki 同步...")
+    mode_hint = "更新" if update_existing else "跳過"
+    logger.info(
+        f"📄 成功載入，共包含 {len(cards_data)} 筆卡片資料。"
+        f"（已存在的卡片將{mode_hint}）開始與 Anki 同步..."
+    )
 
     client = AnkiClient()
-    success = 0
+    created = updated = skipped = failed = 0
     try:
         for i, card in enumerate(cards_data, 1):
             fields = await _normalize_fields(client, card.get("fields", {}))
             if not fields.get("Prompt"):
                 logger.warning(f"⚠️ [{i}] 缺少 Prompt 欄位，跳過。")
                 continue
-            base_deck_name = card.get("deckName", "FluencyTides::Speaking_Trilingual")
-            
-            try:
-                jsons_dir = Path(__file__).parent / "jsons"
-                rel_path = file_path.relative_to(jsons_dir)
-                parts = list(rel_path.parent.parts)
-                deck_suffix = "::".join(parts + [file_path.stem]) if parts else file_path.stem
-            except ValueError:
-                deck_suffix = file_path.stem
-
-            deck_name = f"{base_deck_name}::{deck_suffix}" if not base_deck_name.endswith(f"::{deck_suffix}") else base_deck_name
+            deck_name = resolve_deck_name(file_path, card.get("deckName"))
 
             escaped_prompt = fields["Prompt"].replace('"', '\\"')
             escaped_deck = deck_name.replace('"', '\\"')
@@ -157,27 +238,37 @@ async def import_cards(file_path: Path, dry_run: bool) -> None:
 
             if existing_notes:
                 note_id = existing_notes[0]
+
+                # 預設行為：卡片已存在就跳過，完全不碰（需 --update-existing 才更新）
+                if not update_existing:
+                    logger.info(
+                        f"⏭️ [{i}] 已存在，跳過 note_id={note_id}: {fields['Prompt'][:40]}"
+                    )
+                    skipped += 1
+                    continue
+
                 # 更新模式：排除會破壞使用者資料的欄位
                 update_fields = {
                     k: v for k, v in fields.items()
                     if k not in ("Prompt_Audios", "Recordings_ZH", "Recordings_JA", "Recordings_EN", "Card_ID", "TG_Bot")
                 }
-                
+
                 if dry_run:
                     logger.info(f"🧪 [DRY-RUN] [{i}] {deck_name} <- 更新現有卡片 note_id={note_id}: {fields['Prompt'][:40]}")
-                    success += 1
+                    updated += 1
                     continue
-                    
+
                 try:
                     await client.update_note_fields(note_id, update_fields)
                     logger.info(f"🔄 [{i}] 更新成功 note_id={note_id}")
-                    success += 1
+                    updated += 1
                 except Exception as e:
                     logger.warning(f"⚠️ [{i}] 更新失敗 note_id={note_id}，原因: {e}")
+                    failed += 1
             else:
                 if dry_run:
                     logger.info(f"🧪 [DRY-RUN] [{i}] {deck_name} <- 新增卡片 {fields['Card_ID']}: {fields['Prompt'][:40]}")
-                    success += 1
+                    created += 1
                     continue
 
                 await client.create_deck(deck_name)
@@ -191,11 +282,17 @@ async def import_cards(file_path: Path, dry_run: bool) -> None:
                 try:
                     note_id = await client.add_note(note)
                     logger.info(f"🎉 [{i}] 建立成功 Card_ID={fields['Card_ID']} note_id={note_id}")
-                    success += 1
+                    created += 1
                 except Exception as e:
                     logger.warning(f"⚠️ [{i}] 建立失敗（可能重複）Card_ID={fields['Card_ID']}，原因: {e}")
-            
-        logger.info(f"📊 共處理 {len(cards_data)} 筆，成功 {success} 筆。")
+                    failed += 1
+
+        summary = f"📊 共 {len(cards_data)} 筆｜新增 {created}｜更新 {updated}｜跳過 {skipped}"
+        if failed:
+            summary += f"｜失敗 {failed}"
+        if skipped and not update_existing:
+            summary += "　(要覆寫既有卡片請加 --update-existing)"
+        logger.info(summary)
     finally:
         await client.close()
 
@@ -207,12 +304,20 @@ async def main() -> None:
     or every JSON file under the jsons directory.
     """
     parser = argparse.ArgumentParser(description="Speaking_Trilingual_Dark 卡片匯入腳本")
-    parser.add_argument("--name", type=str, default=None, help="位於 jsons 目錄下的 JSON 檔名 (不含 .json)。不指定則掃描 jsons 目錄下所有檔案。")
+    parser.add_argument("--name", type=str, default=None, help="jsons 目錄下的 JSON 相對路徑 (不含 .json，子資料夾需一併給，如 '日本語面接/Q社/志望動機')。不指定則遞迴掃描 jsons 目錄下所有檔案。")
     parser.add_argument("--dry-run", action="store_true", help="僅列印執行計畫，不寫入 Anki")
+    parser.add_argument(
+        "--update-existing",
+        action="store_true",
+        help=(
+            "已存在的卡片改為更新（覆寫 Prompt / Context / References_×3）。"
+            "預設不加此參數時一律跳過既有卡片。Recordings 等使用者資料在任何模式下都不會被動到。"
+        ),
+    )
     args = parser.parse_args()
     
-    jsons_dir = Path(__file__).parent / "jsons"
-    
+    jsons_dir = JSONS_DIR
+
     if args.name:
         file_path = jsons_dir / f"{args.name}.json"
         if not file_path.exists():
@@ -222,7 +327,7 @@ async def main() -> None:
             else:
                 logger.error(f"❌ 找不到 JSON 檔案: {args.name}.json")
                 return
-        await import_cards(file_path, args.dry_run)
+        await import_cards(file_path, args.dry_run, args.update_existing)
     else:
         if not jsons_dir.exists():
             logger.error(f"❌ 找不到 jsons 資料夾: {jsons_dir}")
@@ -235,7 +340,7 @@ async def main() -> None:
             
         logger.info(f"🔍 準備批量匯入 {len(json_files)} 個 JSON 檔案...")
         for file_path in json_files:
-            await import_cards(file_path, args.dry_run)
+            await import_cards(file_path, args.dry_run, args.update_existing)
 
 
 if __name__ == "__main__":

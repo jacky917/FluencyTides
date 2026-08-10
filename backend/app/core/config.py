@@ -244,6 +244,17 @@ class Settings(BaseSettings):
         description="核心動詞母卡片所在的 Anki 牌組名稱",
     )
 
+    # ====================================================================
+    # Speaking_Trilingual_Dark 卡片匯入設定
+    # ====================================================================
+    SPEAKING_TRILINGUAL_ROOT_DECK: str = Field(
+        default="日常會話",
+        description=(
+            "三語口說卡的根牌組名稱。所有由 jsons/ 匯入的卡片都掛在此牌組之下，"
+            "其後的階層由 JSON 的 deckName 與檔案相對路徑決定。改這一處即可整批搬家"
+        ),
+    )
+
     @property
     def mysql_async_url(self) -> str:
         """組裝非同步 MySQL 連線字串 (使用 aiomysql)。
