@@ -42,7 +42,9 @@ from aiogram.exceptions import TelegramAPIError
 from app.core.exceptions import FluencyTidesError
 
 from app.bot.state import UserStateManager
+from app.core.exceptions import AnkiFieldCorruptedError
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
+from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.audio_evaluator.base import BaseAudioEvaluator
 from app.services.card_service import CardService
 from app.services.relation_service import RelationService
@@ -179,14 +181,26 @@ async def process_voice_handler(
             target_language = str(fields.get("Target_Language", {}).get("value", ""))
             eval_template = "prompts/audio_evaluator.j2"
             ref_json_str = str(fields.get("References", {}).get("value", "[]"))
+        # 以共用解析器讀取（S065）：References 欄位可能是未轉義的原始 JSON
+        # （匯入腳本直寫），也可能是 HTML 轉義過的（經 AnkiJsonFieldManager
+        # 寫入）。直接 json.loads 只對前者成立，後者會被 except 吞掉而導致
+        # 參考範本靜默變成空清單——stt_diff 會誤報「此卡片沒有參考答案」，
+        # LLM 評分則會失去比對基準。
+        # Use the shared parser (S065): the References field may be raw JSON
+        # (written directly by import scripts) or HTML-escaped (written via
+        # AnkiJsonFieldManager). A bare json.loads only works for the former;
+        # for the latter the except branch silently yields an empty list, so
+        # stt_diff would wrongly report "no reference answers" and the LLM
+        # evaluators would lose their comparison baseline.
         try:
-            ref_list = json.loads(ref_json_str)
+            ref_list = AnkiJsonFieldManager.parse_field_string(ref_json_str)
             reference_answers = [
-                str(r.get("content", "")) 
-                for r in ref_list 
+                str(r.get("content", ""))
+                for r in ref_list
                 if isinstance(r, dict) and r.get("status", 1) == 1
             ]
-        except (json.JSONDecodeError, TypeError):
+        except (AnkiFieldCorruptedError, TypeError):
+            logger.warning("References 欄位解析失敗，本次評分將不帶參考範本。")
             reference_answers = []
     except AnkiConnectError as e:
         logger.error("讀取卡片資訊失敗: %s", e)

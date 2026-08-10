@@ -19,8 +19,12 @@ Handles all commands starting with '/', covering three main workflows:
 import json
 import logging
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 import pydantic
 from app.core.exceptions import FluencyTidesError
+
+if TYPE_CHECKING:
+    from app.services.card_service import CardService
 
 from aiogram import Router
 from aiogram.exceptions import TelegramAPIError
@@ -30,6 +34,8 @@ from aiogram.types import Message
 from app.bot.state import UserState, UserStateManager
 from app.bot.utils.deep_link_parser import DeepLinkParser
 from app.bot.utils.formatting import anki_field_to_tg_text
+from app.core.exceptions import AnkiFieldCorruptedError
+from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.tg.deep_link import (
     DeleteEntryAction,
     GenerateCardAction,
@@ -53,6 +59,7 @@ async def command_start_handler(
     message: Message,
     anki_client: AnkiClient,
     user_state_manager: UserStateManager,
+    card_service: "CardService",
 ) -> None:
     """處理 /start 指令與 Deep Link 邏輯。
 
@@ -221,7 +228,7 @@ async def command_start_handler(
         return
 
     if isinstance(action, DeleteEntryAction):
-        await _handle_delete_entry(message, anki_client, action)
+        await _handle_delete_entry(message, anki_client, card_service, action)
         return
 
     if isinstance(action, GenerateCardAction):
@@ -232,15 +239,29 @@ async def command_start_handler(
 async def _handle_delete_entry(
     message: Message,
     anki_client: AnkiClient,
+    card_service: "CardService",
     action: DeleteEntryAction,
 ) -> None:
     """處理 Workflow C 的刪除邏輯。
 
     Handle the Workflow C deletion logic.
 
+    JSON 欄位的讀寫一律經由 `AnkiJsonFieldManager`（S065）：這些欄位的儲存
+    格式並不一致——經語音流程寫入的 `Recordings_*` 是 HTML 轉義過的
+    （`&quot;`），而匯入腳本直寫的 `References_*` 是未轉義的原始 JSON。
+    直接 `json.loads` 只在後者碰巧成立，刪除錄音時必定失敗。
+
+    All JSON field reads and writes go through `AnkiJsonFieldManager` (S065):
+    the stored format is not uniform — `Recordings_*` written by the voice
+    flow are HTML-escaped (`&quot;`), while `References_*` written directly by
+    import scripts are raw JSON. A bare `json.loads` only happens to work for
+    the latter and always fails when deleting a recording.
+
     Args:
         message: Telegram 訊息物件。The Telegram message object.
         anki_client: 注入的 AnkiClient。Injected AnkiClient instance.
+        card_service: 注入的 CardService，供 JSON 欄位安全寫回。Injected
+            CardService used for safe JSON field write-back.
         action: 刪除條目的動作模型。The delete-entry action model.
     """
     from app.services.task_handlers.shared.trilingual_lang import LANG_CODES
@@ -293,11 +314,13 @@ async def _handle_delete_entry(
         )
         return
 
+    # 以共用解析器讀取：會先剝除 Anki 插入的 HTML、還原 &quot; 等實體，
+    # 因此對「轉義」與「未轉義」兩種既存格式都成立（S065）。
+    # The shared parser strips Anki-injected HTML and unescapes entities such
+    # as &quot;, so it handles both stored formats (S065).
     try:
-        items_list = json.loads(raw_json)
-        if not isinstance(items_list, list):
-            raise ValueError("欄位內容不是 JSON 陣列")
-    except (json.JSONDecodeError, ValueError) as e:
+        items_list = AnkiJsonFieldManager.parse_field_string(raw_json)
+    except AnkiFieldCorruptedError as e:
         await message.answer(
             f"❌ 無法解析 <code>{field_name}</code> 欄位的 JSON: {e}"
         )
@@ -323,14 +346,19 @@ async def _handle_delete_entry(
 
     # 執行刪除
     removed_item = items_list.pop(index_val)
-    new_json = json.dumps(items_list, ensure_ascii=False)
 
+    # 以共用寫入器回寫：內部會 html.escape，避免 Anki 富文本編輯器把值內含的
+    # HTML（如評語中的 <span style="color:red">）當成標籤解析而損毀 JSON。
+    # 直接寫入未轉義的 json.dumps 會讓欄位格式與語音流程不一致（S065）。
+    # The shared writer html-escapes the payload so Anki's rich-text editor
+    # cannot reinterpret embedded HTML (e.g. <span style="color:red"> inside a
+    # comment) as markup and corrupt the JSON. Writing raw json.dumps here
+    # would desync the field format from the voice flow (S065).
     try:
-        await anki_client.update_note_fields(
-            note_id=note_id,
-            fields={field_name: new_json},
+        await AnkiJsonFieldManager.update_field(
+            card_service, note_id, field_name, items_list
         )
-    except AnkiConnectError as e:
+    except (AnkiConnectError, FluencyTidesError) as e:
         logger.error("更新 Anki 卡片欄位失敗: %s", e)
         await message.answer(f"❌ 寫回 Anki 失敗: {e}")
         return
