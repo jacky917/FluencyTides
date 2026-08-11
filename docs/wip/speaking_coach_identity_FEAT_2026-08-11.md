@@ -6,9 +6,9 @@
 | **性質** | 新增機能設計 + 實作工作項(含既有匯入路徑的缺陷修復) |
 | **狀態** | 📝 未實作 |
 | **範圍** | `scripts/local_anki/Speaking_Coach_Dark/import_cards.py`、`scripts/local_anki/Speaking_Coach_Dark/clear_identity.py`(新檔)、`scripts/local_anki/Speaking_Coach_Dark/jsons/`(新目錄)、`app/core/config.py`(新增根牌組設定)、`.env.example` |
-| **不動** | Anki 內既有 63 張卡片的**內容與錄音**、`Speaking_Coach_Dark` note model 的 8 欄位定義、**`common/card_identity.py` 的內容**(只 import 不修改)、**`Speaking_Trilingual_Dark/` 下的任何檔案**(屬 [card_identity_writeback_FEAT](card_identity_writeback_FEAT_2026-08-11.md) 的職責)、`app/bot/` 下任何 handler、`generate_interview_cards.py`(見 §2 非目標) |
+| **不動** | Anki 內既有 63 張卡片的**內容與錄音**、`Speaking_Coach_Dark` note model 的 8 欄位定義、**`common/card_identity.py` 的內容**(只 import 不修改)、**`Speaking_Trilingual_Dark/` 下的任何檔案**(屬 [card_identity_writeback_FEAT](../archive/card_identity_writeback_FEAT_2026-08-11.md) 的職責)、`app/bot/` 下任何 handler、`generate_interview_cards.py`(見 §2 非目標) |
 | **PR / 進度** | 尚未開始 |
-| **關聯文件** | [`card_identity_writeback_FEAT_2026-08-11.md`](card_identity_writeback_FEAT_2026-08-11.md)(**前置案** —— 本案沿用其決策表與清除工具設計, 並依賴**該案 P5** 產出的 `common/card_identity.py`)、[`jsons/README.md`](../../backend/scripts/local_anki/Speaking_Trilingual_Dark/jsons/README.md)(Trilingual 的卡片撰寫準則, 本案需產出對應版本) |
+| **關聯文件** | [`card_identity_writeback_FEAT_2026-08-11.md`](../archive/card_identity_writeback_FEAT_2026-08-11.md)(**前置案** —— 本案沿用其決策表與清除工具設計, 並依賴**該案 P5** 產出的 `common/card_identity.py`)、[`jsons/README.md`](../../backend/scripts/local_anki/Speaking_Trilingual_Dark/jsons/README.md)(Trilingual 的卡片撰寫準則, 本案需產出對應版本) |
 
 ---
 
@@ -97,7 +97,7 @@ target_language = str(fields.get("Target_Language", {}).get("value", ""))
 
 - G2 `Speaking_Coach_Dark` 改為**由 `jsons/` 目錄驅動**, 與 Trilingual 同構(路徑決定牌組、
   根牌組來自設定、內容不進版控)。
-- G3 存在判斷改用[身分決策表](card_identity_writeback_FEAT_2026-08-11.md)的同一套四狀態;
+- G3 存在判斷改用[身分決策表](../archive/card_identity_writeback_FEAT_2026-08-11.md)的同一套四狀態;
   支援 `--update-existing`(現在完全沒有更新能力)。
 - G4 匯入時填入 `Target_Language`, 並讓既有 62 張空值卡片可被一次補齊。
 - G5 提供 `clear_identity.py`(與 Trilingual 同介面), 並可用 `--adopt-by-prompt` 接管既有 63 張卡。
@@ -111,7 +111,7 @@ target_language = str(fields.get("Target_Language", {}).get("value", ""))
   該檔已不存在, 屬一次性歷史腳本。本案不修不刪, 但會在 README 標明它已停用。
 - **不抽取共用的 importer 主體** —— 理由見 §3.5。
 - **完全不動 `Speaking_Trilingual_Dark/` 下的任何檔案** —— 含共用模組的搬移在內, 皆屬
-  [card_identity_writeback_FEAT](card_identity_writeback_FEAT_2026-08-11.md) 的職責(見 §3.1)。
+  [card_identity_writeback_FEAT](../archive/card_identity_writeback_FEAT_2026-08-11.md) 的職責(見 §3.1)。
   兩案因此不會爭奪同一批檔案, PR 可獨立審閱。
 
 ## 3. 設計決策
@@ -121,15 +121,19 @@ target_language = str(fields.get("Target_Language", {}).get("value", ""))
 本案**直接 import** `scripts/local_anki/common/card_identity.py`, 不複製、不修改其內容。
 
 該模組的搬移由前置案
-[card_identity_writeback_FEAT §3.8 / **該案 P5**](card_identity_writeback_FEAT_2026-08-11.md) 負責 ——
+[card_identity_writeback_FEAT §3.8 / **該案 P5**](../archive/card_identity_writeback_FEAT_2026-08-11.md) 負責 ——
 搬移會動到 `Speaking_Trilingual_Dark/` 下的檔案與既有 import, 屬於那份計劃的檔案範圍。
 本案只承接結果。
 
 **開工前的檢查**:確認 `scripts/local_anki/common/card_identity.py` 存在且
-`pytest backend/tests/` 全綠。若前置案的該階段尚未執行, 本案的 P1 起無法開始。
+`pytest backend/tests/` 全綠。
+
+> **前置條件已滿足(2026-08-11)**:前置案已由 PR
+> [#7](https://github.com/jacky917/FluencyTides/pull/7) 合併並歸檔至 `docs/archive/`,
+> `common/card_identity.py` 已就位。本案可隨時開工。
 
 **為什麼不自己複製一份**:身分格式一旦分岔, 就會重演
-[S065](card_identity_writeback_FEAT_2026-08-11.md) 那種「同一份資料兩種格式、
+[S065](../archive/card_identity_writeback_FEAT_2026-08-11.md) 那種「同一份資料兩種格式、
 某個呼叫點靜默失效」的問題。
 
 ### 3.2 建立 `Speaking_Coach_Dark/jsons/` 與根牌組設定
@@ -143,7 +147,7 @@ target_language = str(fields.get("Target_Language", {}).get("value", ""))
 ### 3.3 存在判斷沿用同一套決策表
 
 四種身分狀態的處理與
-[§3.2 決策表](card_identity_writeback_FEAT_2026-08-11.md)完全一致, 不另立規則:
+[§3.2 決策表](../archive/card_identity_writeback_FEAT_2026-08-11.md)完全一致, 不另立規則:
 兩者皆無 → 警告後建卡並寫回;兩者皆有且一致 → 依 `--update-existing` 更新或跳過;
 對不上或只有其一 → 印診斷並跳過。
 

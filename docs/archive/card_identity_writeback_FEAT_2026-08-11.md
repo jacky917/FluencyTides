@@ -1,14 +1,16 @@
-# FEAT — 卡片身分證:建卡後把 Card_ID 與 Anki nid 寫回 JSON, 查重改以身分為準
+# FEAT — 卡片身分證:建卡後把 Card_ID 與 Anki nid 寫回 JSON, 查重改以身分為準 ✅
+
+> **已合併**: [PR #7](https://github.com/jacky917/FluencyTides/pull/7) · merge `fb156bb` · 2026-08-11
 
 | 欄位 | 內容 |
 |---|---|
 | **創建日期** | 2026-08-11 |
 | **性質** | 新增機能設計 + 實作工作項(含同工具鏈的一項 bug 修復) |
-| **狀態** | 🚧 P0–P5 全數完成，實機驗證通過；**僅餘 `clear_recordings` 的正式執行未做**（該操作會刪除錄音，留待實際需要時） |
+| **狀態** | ✅ 完成（2026-08-11）—— P0–P5 全數實作、實機遷移與驗證通過、已合併並歸檔。唯一未執行的驗收項會刪除現存錄音，留待實際需要時 |
 | **範圍** | `scripts/local_anki/Speaking_Trilingual_Dark/import_cards.py`、`scripts/local_anki/Speaking_Trilingual_Dark/clear_identity.py`(新檔)、`scripts/local_anki/Speaking_Trilingual_Dark/card_identity.py`(新檔, 見 §3.5)、`tests/test_card_identity.py`(新檔)、`scripts/local_anki/common/card_identity.py`(P5 由本目錄上移)、`scripts/local_anki/common/clear_audio_fields.py`、`scripts/local_anki/Speaking_Trilingual_Dark/jsons/**.json`(新增身分欄位)、`jsons/README.md` |
-| **不動** | Anki note model 的 11 欄位定義(不新增欄位)、`app/` 下的 bot/handler/service 任何代碼、卡片模板 HTML/CSS、`Recordings_*` 的既有內容與格式、**`Speaking_Coach_Dark` 的匯入腳本與其卡片**(屬 [speaking_coach_identity_FEAT](speaking_coach_identity_FEAT_2026-08-11.md) 的職責, 見 §2 職責邊界) |
-| **PR / 進度** | 尚未開始 |
-| **關聯文件** | [`jsons/README.md`](../../backend/scripts/local_anki/Speaking_Trilingual_Dark/jsons/README.md)(卡片 JSON 生成準則, 本案需同步更新 §2/§7)、PR [#4](https://github.com/jacky917/FluencyTides/pull/4)(S065 前兩個呼叫點的修復)、[`speaking_coach_identity_FEAT_2026-08-11.md`](speaking_coach_identity_FEAT_2026-08-11.md)(下游案, 消費本案 P5 產出的共用模組) |
+| **不動** | Anki note model 的 11 欄位定義(不新增欄位)、`app/` 下的 bot/handler/service 任何代碼、卡片模板 HTML/CSS、`Recordings_*` 的既有內容與格式、**`Speaking_Coach_Dark` 的匯入腳本與其卡片**(屬 [speaking_coach_identity_FEAT](../wip/speaking_coach_identity_FEAT_2026-08-11.md) 的職責, 見 §2 職責邊界) |
+| **PR / 進度** | [#7](https://github.com/jacky917/FluencyTides/pull/7)（已合併 2026-08-11, merge `fb156bb`）—— 單一 PR 交付 P0–P5，逐筆 commit 見 §8 |
+| **關聯文件** | [`jsons/README.md`](../../backend/scripts/local_anki/Speaking_Trilingual_Dark/jsons/README.md)(卡片 JSON 生成準則, 本案需同步更新 §2/§7)、PR [#4](https://github.com/jacky917/FluencyTides/pull/4)(S065 前兩個呼叫點的修復)、[`speaking_coach_identity_FEAT_2026-08-11.md`](../wip/speaking_coach_identity_FEAT_2026-08-11.md)(下游案, 消費本案 P5 產出的共用模組) |
 
 ---
 
@@ -118,7 +120,7 @@ note 1784357183736 / Recordings_JA
 
 本案的範圍是 **`Speaking_Trilingual_Dark` 這條線, 加上身分層本身**:
 
-| 屬於本案 | 屬於 [speaking_coach_identity_FEAT](speaking_coach_identity_FEAT_2026-08-11.md) |
+| 屬於本案 | 屬於 [speaking_coach_identity_FEAT](../wip/speaking_coach_identity_FEAT_2026-08-11.md) |
 |---|---|
 | `Speaking_Trilingual_Dark/` 下的所有腳本與 `jsons/` | `Speaking_Coach_Dark/` 下的所有腳本與 `jsons/` |
 | `card_identity.py` 的實作、測試, 以及**上移至 `common/`**(P5) | 消費 `common/card_identity.py`;不修改其內容 |
@@ -524,3 +526,46 @@ P2 遷移與全套工具已對實機 Anki 執行完畢。
 - [x] **接管命中多張時跳過並列出候選**，不任選一張
 - [x] **接管查詢限定模型**，不會接管到別種 model 的 note
 - [x] `clear_audio_fields` 對轉義／未轉義／巢狀 `audios` 三種形態皆能取出檔名
+
+## 8. 實作走查與 GitHub 紀錄
+
+### GitHub 紀錄
+
+| 項目 | 內容 |
+|---|---|
+| PR | [#7 feat: identify Speaking_Trilingual_Dark cards by cardId + noteId instead of Prompt](https://github.com/jacky917/FluencyTides/pull/7) |
+| 合併 | 2026-08-11 · merge commit `fb156bb` · 7 檔 +2375 / −154 |
+
+**commits 逐筆（刻意不壓成一個）**
+
+| commit | 內容 | 為何獨立 |
+|---|---|---|
+| `44265ed` | `fix:` `clear_audio_fields` 的 S065 第三個呼叫點 | 與身分機制無耦合, 是既有 bug 的修復。獨立保留才能單獨回退, 也讓「這個修復解決了什麼」不被身分機制的大量改動淹沒 |
+| `bdeda16` | `feat:` 身分機制本體 | 本案的核心交付 |
+| `42a2187` | `docs:` 實作紀錄 + 切出下游計劃 | 文件內容**只有實作完才寫得出來**(§3.5 的三個細節、§3.9 的審查發現、§6.5 的實機數據)。與代碼分開, 讀者可只看其中一邊 |
+
+### 與計劃的落差
+
+實作大致依 §5 的階段進行, 但有三處是計劃當時沒預見、實作或驗證時才浮現的:
+
+1. **`card_identity.py` 這個共用模組不在原改動清單中**(§3.5)。原本打算把身分讀寫直接寫在
+   `import_cards.py` 裡, 動手時發現 `clear_identity.py` 需要同一組操作, 各寫一份必然分歧。
+2. **身分寫回改置於 `finally`**(§3.3)。原設計放在正常路徑上, 會在迴圈中途拋例外時
+   讓已建好的卡片變成孤兒 —— 正是本案要消滅的問題。
+3. **P2 的閘門比計劃寫的更嚴格**。§6 原本只要求核對 dry-run 摘要, 實際執行時改為
+   **兩次 dry-run 都要對**(不加旗標顯示「新增 18」、加旗標顯示「接管 18」), 因為前者才能
+   證明來源檔可被正確解析。
+
+### 未完成的部分
+
+| 項目 | 狀態 |
+|---|---|
+| `clear_recordings.py` 正式執行 | ⏳ 未做。修復已驗證(dry-run 能列出真實 `.ogg`), 但正式執行會刪除現存 8 筆錄音, 留待實際需要時 |
+| 其他 model 的無主媒體檔 | ⏳ 未做。全 Anki 掃描發現 60 個無主 `rec_*.ogg`, 其中 35 個屬 `Speaking_Coach_Dark`、24 個屬早期測試卡、1 個屬本 model(`rec_st-1784357183153-a3c21ae7_20260718_070012.ogg`, 應是 S065 期間刪除錄音失敗的殘留)。超出本案授權範圍, 建議併入下游案處理 |
+
+### 後續
+
+- 下游案 [`speaking_coach_identity_FEAT_2026-08-11.md`](../wip/speaking_coach_identity_FEAT_2026-08-11.md)
+  消費本案 P5 產出的 `common/card_identity.py`。
+- 本案完成後, `jsons/お花屋さんで花を買う.json` 已 `git rm --cached` 脫離版控, 與
+  `.gitignore` 對整個 `jsons/` 的忽略規則一致。
