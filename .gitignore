@@ -115,3 +115,4 @@ old/
 # -------------------------
 # 個人練習用的 Anki 卡片 JSON：內容因人而異、且可能含私人素材路徑，不進版控
 backend/scripts/local_anki/Speaking_Trilingual_Dark/jsons/
+backend/scripts/local_anki/Speaking_Coach_Dark/jsons/
