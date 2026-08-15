@@ -255,6 +255,17 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ====================================================================
+    # Speaking_Coach_Dark 卡片匯入設定
+    # ====================================================================
+    SPEAKING_COACH_ROOT_DECK: str = Field(
+        default="封存::日本語::AI點評",
+        description=(
+            "單語口說卡（Speaking_Coach_Dark）的根牌組名稱。與三語卡各自獨立設定，"
+            "因為兩者是不同的學習軌道，應能分別搬家而互不影響"
+        ),
+    )
+
     @property
     def mysql_async_url(self) -> str:
         """組裝非同步 MySQL 連線字串 (使用 aiomysql)。

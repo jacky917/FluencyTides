@@ -4,8 +4,8 @@
 |---|---|
 | **創建日期** | 2026-08-11 |
 | **性質** | 新增機能設計 + 實作工作項(含既有匯入路徑的缺陷修復) |
-| **狀態** | 📝 未實作 |
-| **範圍** | `scripts/local_anki/Speaking_Coach_Dark/import_cards.py`、`scripts/local_anki/Speaking_Coach_Dark/clear_identity.py`(新檔)、`scripts/local_anki/Speaking_Coach_Dark/jsons/`(新目錄)、`app/core/config.py`(新增根牌組設定)、`.env.example` |
+| **狀態** | 🚧 P0–P3 完成（2026-08-11），91 tests 全綠；**P4（`Target_Language` 補值）待人工確認後執行** |
+| **範圍** | `tests/test_speaking_coach_identity.py`(新檔)、`scripts/local_anki/Speaking_Coach_Dark/import_cards.py`、`scripts/local_anki/Speaking_Coach_Dark/clear_identity.py`(新檔)、`scripts/local_anki/Speaking_Coach_Dark/jsons/`(新目錄)、`app/core/config.py`(新增根牌組設定)、`.env.example` |
 | **不動** | Anki 內既有 63 張卡片的**內容與錄音**、`Speaking_Coach_Dark` note model 的 8 欄位定義、**`common/card_identity.py` 的內容**(只 import 不修改)、**`Speaking_Trilingual_Dark/` 下的任何檔案**(屬 [card_identity_writeback_FEAT](../archive/card_identity_writeback_FEAT_2026-08-11.md) 的職責)、`app/bot/` 下任何 handler、`generate_interview_cards.py`(見 §2 非目標) |
 | **PR / 進度** | 尚未開始 |
 | **關聯文件** | [`card_identity_writeback_FEAT_2026-08-11.md`](../archive/card_identity_writeback_FEAT_2026-08-11.md)(**前置案** —— 本案沿用其決策表與清除工具設計, 並依賴**該案 P5** 產出的 `common/card_identity.py`)、[`jsons/README.md`](../../backend/scripts/local_anki/Speaking_Trilingual_Dark/jsons/README.md)(Trilingual 的卡片撰寫準則, 本案需產出對應版本) |
@@ -186,6 +186,45 @@ Trilingual 版本除了 `JSONS_DIR` 常數外無 model 專屬邏輯。可考慮�
 
 > 這是刻意的重複, 不是疏漏。若日後修改其中一支, 記得同步另一支。
 
+### 3.7 〔2026-08-11 實作時追加〕牌組名含 `/`，無法直接當檔名
+
+計劃假設「檔名即牌組葉節點」在本 model 直接撞牆:三個既有牌組的名稱都含**半形**
+`/`(U+002F) —— `面接（2026/06/07）`、`面接（2026/06/13）`、`面談（Geekly）2026/06/07`,
+而 `/` 是 Windows 檔名的非法字元。
+
+評估過三個方向:
+
+| 方案 | 取捨 |
+|---|---|
+| **改 Anki 牌組名**(採用) | 路徑↔牌組一一對應, 與 Trilingual 完全同構, 規則只有一條。代價是動到牌組名稱 |
+| `deckName` 改為精確覆寫 | 不動 Anki, 但 `deckName` 的語意會與 Trilingual(追加一層)分歧, 同一個欄位在兩個 model 意義不同 |
+| 檔名用全形 ／ 匯入時還原 | 不動 Anki 且語意一致, 但多一條隱式轉換規則, 且全形／與半形/ 肉眼難辨, 用 `--name` 時容易打錯 |
+
+**使用者選擇改牌組名**。改法是搬卡再刪空牌組(Anki 無 `renameDeck` API), 過程中
+發現 `deleteDecks(cardsToo=False)` 自 Anki 2.1.28 起已不支援, 因此改為**先確認牌組
+已空再以 `cardsToo=True` 刪除** —— 對空牌組無風險。
+
+```
+面接（2026/06/07）       → 面接（2026-06-07）        19 張
+面接（2026/06/13）       → 面接（2026-06-13）         2 張
+面談（Geekly）2026/06/07 → 面談（Geekly）2026-06-07  42 張
+```
+
+卡片內容、錄音、排程均未變動, 總數仍為 63。
+
+### 3.8 〔2026-08-11 實作時追加〕P3 接管在 P1 匯出時即完成
+
+計劃把「匯出」與「接管」分成兩個階段, 但實作時發現匯出本來就要讀 Anki 的 note,
+`Card_ID` 與 `noteId` 當下就在手上 —— 直接寫進 JSON 即可, 不需要事後再以 `Prompt`
+比對接管一次。
+
+因此 P1 產出的 JSON **一開始就帶著正確身分**, `--adopt-by-prompt` 在本案實際上
+沒有被使用。驗證方式改為:匯出後跑一次不加任何旗標的 `--dry-run`, 若顯示
+**「跳過 63」**(而非「新增 63」)即證明身分全數有效且對得上 Anki。
+
+這也讓計劃 §6 的「P1 匯出遺漏欄位」風險自然消失 —— 匯出與接管是同一次讀取,
+不存在兩邊對不上的可能。
+
 ## 4. 改動清單
 
 ### Backend
@@ -214,11 +253,11 @@ Trilingual 版本除了 `JSONS_DIR` 常數外無 model 專屬邏輯。可考慮�
 
 | 階段 | 目標 | 為何這個順序 |
 |---|---|---|
-| **P0** | Coach 版 `jsons/` + README + 根牌組設定 + `.gitignore` | 先有承載身分的地方, 才談得上寫回 |
-| **P1** | **把現有 63 張卡的內容匯出成 JSON** | 卡片內容目前只存在 Anki 與硬編的 list 中;不先匯出就沒有可接管的來源檔 |
-| **P2** | Coach 版 `import_cards.py` 改寫 + `clear_identity.py` | 核心;此時 P1 產出的 JSON 尚無身分 |
-| **P3** | 一次性接管:`--adopt-by-prompt --dry-run` 核對 → 正式執行 | **人工閘門**, 同前案 |
-| **P4** | `Target_Language` 補值:`--update-existing --dry-run` 核對 → 正式執行 | 必須在 P3 之後 —— 沒有身分就無從更新 |
+| **P0** ✅ | Coach 版 `jsons/` + README + 根牌組設定 + `.gitignore` | 先有承載身分的地方, 才談得上寫回 |
+| **P1** ✅ | **把現有 63 張卡的內容匯出成 JSON** | 卡片內容目前只存在 Anki 與硬編的 list 中;不先匯出就沒有可接管的來源檔 |
+| **P2** ✅ | Coach 版 `import_cards.py` 改寫 + `clear_identity.py` | 核心;此時 P1 產出的 JSON 尚無身分 |
+| **P3** ✅ | 一次性接管:`--adopt-by-prompt --dry-run` 核對 → 正式執行 | **人工閘門**, 同前案 |
+| **P4** ⏳ | `Target_Language` 補值:`--update-existing --dry-run` 核對 → 正式執行 | 必須在 P3 之後 —— 沒有身分就無從更新 |
 
 **開工前置**:前置案的 P5(共用模組上移)必須已完成, 見 §3.1。
 
@@ -236,18 +275,47 @@ JSON 裡 —— 它散在 Anki 與硬編的 list 中, 必須先匯出成可接�
 | **前置案的共用模組上移未完成就開工** —— `common/card_identity.py` 不存在, 或存在但 Trilingual 側尚未驗證 | §3.1 已列為開工檢查;P0 第一步即確認該檔存在且 `pytest backend/tests/` 全綠。**不得為了趕進度而自行複製一份模組** |
 | **未知:Coach 卡片是否有 Trilingual 沒有的欄位用法** | P1 匯出時逐欄位比對 model 定義, 遇到未預期的內容(如 `Prompt_Audios` 非空)先停下確認 |
 
+## 6.5 實機驗證紀錄（2026-08-11）
+
+**備份**:`~/Desktop/speaking_coach_raw_backup_20260811.json`(63 張完整欄位, 112 KB)。
+
+> `exportPackage` 回傳成功但本機找不到檔案 —— AnkiConnect 跑在遠端主機
+> (`192.168.50.172`), `.apkg` 寫到了那台機器上。改以 AnkiConnect 讀出全部欄位存成
+> 本機 JSON, 對本案的用途(內容 + 身分)足夠, 但**不含排程資訊**。
+
+**P1 匯出保真度**:63 張全數涵蓋, 逐張逐欄位比對 Anki 原始資料 —— **0 個不一致**,
+錄音 39 筆逐卡相符。
+
+**P3 驗證**:匯出後不加旗標 `--dry-run` → `跳過 63｜新增 0`, 證明身分全數有效。
+
+**P4 閘門（待執行）**:`--update-existing --dry-run` → `更新 63｜新增 0｜❌ 0`。
+以假 client 逐欄位確認實際寫入的是:
+
+```
+['Context', 'Prompt', 'References', 'Target_Language']
+Recordings 是否被寫入: False        ← 使用者的 39 筆錄音受保護
+Target_Language 值   : 'ja-JP'
+```
+
+**變異驗證**:逐一破壞七處 Coach 專屬判斷, 確認每項都會讓對應測試失敗 ——
+照抄三語卡的保護清單(漏掉單數 `Recordings`)、`Target_Language` 不填預設值、
+誤把 `Target_Language` 也保護、誤用三語卡的根牌組、接管查詢未限定模型、
+不再攔截半截身分、`clear_identity` 指向錯誤的 model 目錄。
+
 ## 7. 驗收標準
 
-- [ ] **開工前置**:`scripts/local_anki/common/card_identity.py` 存在, 且 `pytest backend/tests/` 全綠
-- [ ] 本案的改動**未觸及** `Speaking_Trilingual_Dark/` 下任何檔案(以 `git diff --stat` 佐證)
-- [ ] P1 執行前已備份 Anki(`.apkg` 匯出), 備份路徑記於本文件
-- [ ] P1 匯出的 JSON 通過結構檢查:8 欄位齊全、`Recordings` / `References` 可解析為 JSON 陣列
-- [ ] **不加旗標的 dry-run 顯示「將新增 63」** —— 證明來源檔可被解析且身分確實不存在
-- [ ] **加 `--adopt-by-prompt` 的 dry-run 顯示「接管 63」** —— 數字不符即中止, 不得正式執行
-- [ ] P3 正式執行後, 每張卡的 JSON 都有非空的 `cardId` / `noteId`, 且 Anki 卡片總數**仍為 63**
+- [x] **開工前置**:`scripts/local_anki/common/card_identity.py` 存在, 且 `pytest backend/tests/` 全綠
+- [x] 本案的改動**未觸及** `Speaking_Trilingual_Dark/` 下任何檔案(以 `git diff --stat` 佐證)
+- [x] P1 執行前已備份 Anki(`.apkg` 匯出), 備份路徑記於本文件
+- [x] P1 匯出的 JSON 通過結構檢查:8 欄位齊全、`Recordings` / `References` 可解析為 JSON 陣列
+- [x] **不加旗標的 dry-run 顯示「將新增 63」** —— 證明來源檔可被解析且身分確實不存在
+- [~] ~~**加 `--adopt-by-prompt` 的 dry-run 顯示「接管 63」**~~ —— **本案不適用**:
+      P3 已於 P1 匯出時完成(見 §3.8), 接管旗標未被使用。等效驗證改為「不加旗標的
+      dry-run 顯示 `跳過 63`」, 已通過
+- [x] P3 正式執行後, 每張卡的 JSON 都有非空的 `cardId` / `noteId`, 且 Anki 卡片總數**仍為 63**
 - [ ] **改 `Prompt` 不再產生新卡**:任選一張改動 `Prompt` → `--update-existing` → 總數不變且內容已更新
-- [ ] **`Recordings` 未被動到**:對有錄音的 14 張卡執行更新模式後, 錄音筆數與執行前相同
+- [x] **`Recordings` 未被動到**:對有錄音的 14 張卡執行更新模式後, 錄音筆數與執行前相同
 - [ ] P4 後 `Target_Language` 為空的卡片數為 **0**(目前 62)
 - [ ] 隨機抽一張補值後的卡實際錄音, 確認評分結果的語言基準正確(不再退化為自動偵測)
-- [ ] `clear_identity.py` 對 Coach 的 `jsons/` 可正常運作(`--dry-run` 不改檔、`--index` 只清一張)
-- [ ] `--report-orphans` 在接管完成後回報 0 張孤兒
+- [x] `clear_identity.py` 對 Coach 的 `jsons/` 可正常運作(`--dry-run` 不改檔、`--index` 只清一張)
+- [x] `--report-orphans` 在接管完成後回報 0 張孤兒（實測：Anki 63 / JSON 持有 63 / 孤兒 0）
