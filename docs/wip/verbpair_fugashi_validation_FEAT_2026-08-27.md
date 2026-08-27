@@ -223,6 +223,33 @@ PR #10 補上 fugashi),VerbPair 接入**不新增依賴**。Windows 下 Tagger �
 - 最終:dry-run 4,031 → **4,196 張**(+165 張經驗證的真貨),
   設定檔 29 個 nid、49 個擴展關鍵字。
 
+### 6.7 完整版 UniDic 切換與 A/B 實測(2026-08-27)
+
+**安裝**:`pip install unidic` 後官方 `python -m unidic download` 在
+Windows + Python 3.14 會因 `multiprocessing` fork context 錯誤而失敗,
+手動替代步驟(等效官方 downloader 的 download_and_clean):
+
+```bash
+python -c "import json,os,shutil,zipfile,urllib.request,unidic; cdir=os.path.dirname(unidic.__file__); info=json.loads(urllib.request.urlopen('https://raw.githubusercontent.com/polm/unidic-py/master/dicts.json').read())['latest']; f=os.path.join(cdir,'unidic.zip'); urllib.request.urlretrieve(info['url'],f); zipfile.ZipFile(f).extractall(cdir); os.remove(f); d=os.path.join(cdir,'dicdir'); shutil.rmtree(d,ignore_errors=True); shutil.move(os.path.join(cdir,'unidic'),d); open(os.path.join(d,'version'),'w').write('unidic-'+info['version']); open(os.path.join(d,'mecabrc'),'w').write('# dummy')"
+```
+
+fugashi 偵測到完整版詞典會自動優先使用,程式零改動;unidic-lite 保留為
+fallback(詞典未下載的環境仍可跑)。
+
+**A/B 實測結論**:
+- 欄位位置(feature[6]=lForm、[7]=lemma、[10]=orthBase)與 lite 完全相容,
+  驗證器零改動、單元測試零回歸。
+- **上下文盲問題不變**(與 §6.5 的預判一致):お腹が空いた 仍判アク、
+  ドアが開く 仍判ヒラク、タバコを止める 仍判トメル——這是 MeCab
+  詞格模型只看相鄰詞性的先天限制,換詞典無解;要修得靠搭配詞覆寫表(未實作)。
+- dry-run 4,196(lite)→ 4,186(full),僅 16 個動詞 ±1~3 張的零星差異;
+  弾く 0→3 為正向(完整版正確識別出 3 句はじく)。
+
+**requirements.txt 盤點(同日)**:補上 4 個「直接 import 但未列」的套件
+(tenacity——生成管線重試、aiohttp、pymysql——scripts 直接使用、
+anthropic——LLM provider 延遲 import 且環境根本未裝)、unidic(完整版,
+含下載步驟註記)與 pytest(測試段)。
+
 ## 7. 驗收標準
 
 - [x] 驗證器:讀音關、後項拒絕上線,CoreVerb 既有單元測試全綠(回歸;新增 12 例,select_diverse 的 5 個 fail 為 main 上既存問題,與本案無關)。
