@@ -50,30 +50,136 @@ from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.core.config import settings
 from sqlalchemy import text
 from scripts.common.database.log_repository import PROJECT_JP_VERB_PAIR
+from scripts.common.llm_label import build_llm_model_label
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import DedupManager
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.backend_api_client import BackendAPIClient
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.anki_media_uploader import AnkiMediaUploader
+# token 級驗證器與 CoreVerb 共用（跨包引用已有先例：CoreVerb 引用本包的
+# DedupManager/uploader），詳見 docs/wip/verbpair_fugashi_validation_FEAT_2026-08-27.md §D1
+from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
+    validate_candidate,
+)
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
 MASTER_DECK = "日本語::自他動詞::Master"
 
-def _clean_verb_field(raw: str) -> list[str]:
-    """從 Anki 欄位中的原始動詞字串，解析出可查詢的乾淨動詞列表。
+# 純假名判定（讀音導出用）。Kana-only pattern for reading derivation.
+_KANA_ONLY = re.compile(r'^[ぁ-ゖー]+$')
 
-    Parse the raw Anki verb field into a clean, queryable verb list,
-    handling furigana brackets and multi-verb separators.
+# ── 純呻吟句偵測（.env: JP_VERB_PAIR_FILTER_MOAN_SENTENCES）──
+# 兩個樣式須同時命中才判定（2026-08-27 全量體檢的分類標準，28/4196 命中，
+# 誤殺率抽驗為零——僅帶「♪」等單一記號的正常句只中 _MOAN_HINT 不中
+# _MOAN_DENSITY，會被放行）：
+# _MOAN_HINT：伏字/音符記號，或小假名・促音三連以上，或擬態音節三連以上。
+# _MOAN_DENSITY：擬態音節與感嘆符號連續 12 字以上（純呻吟串的密度特徵）。
+_MOAN_HINT = re.compile(r'[●♪]|[ぁぃぅぇぉゃゅょっ]{3,}|(?:ちゅ|じゅる|れろ|ぷち|んん|はぁ){3,}')
+_MOAN_DENSITY = re.compile(r'(?:[ぁぃぅぇぉゃゅょっんあはぅ、…！ッ]|ぢゅ|ちゅ|れろ|じゅ){12,}')
+
+REJECTION_MOAN = "呻吟句樣式"
+
+
+def _is_moan_sentence(text: str) -> bool:
+    """判定句子是否為「純呻吟句」（擬態音節密度過高的 R18 台詞）。
+
+    Detect "pure moan" sentences (R18 lines dominated by onomatopoeic
+    syllables) — the verb usage in them is usually valid but the teaching
+    value is near zero.
 
     Args:
-        raw: Anki 欄位原始字串。Raw Anki field string.
+        text: 已去除注音標記的句子。Sentence with furigana stripped.
 
     Returns:
-        list[str]: 乾淨動詞列表。List of clean verb strings.
+        bool: True 表示應過濾。True when the sentence should be filtered.
     """
-    clean = re.sub(r'\[.*?\]', '', raw)
-    parts = [v.strip() for v in re.split(r'[,、/・]', clean) if v.strip()]
-    return parts if parts else [clean.strip()]
+    return bool(_MOAN_HINT.search(text) and _MOAN_DENSITY.search(text))
+# base[ruby] → ruby 的替換（埋[う]まる → うまる），同 jp_core_verb_handler 的 to_pure_kana
+_FURIGANA_TO_KANA = re.compile(r'[^\s\[\]]+\[([^\]]+)\]')
+_BRACKET = re.compile(r'\[.*?\]')
+
+
+def _parse_verb_field(raw: str) -> list[tuple[str, str]]:
+    """從 Anki 欄位原始字串解析出 (表層, 期待讀音) 配對列表。
+
+    Parse the raw Anki verb field into (surface, expected reading) pairs.
+
+    表層 = 去除 furigana 標記；讀音 = base[ruby] 全部替換為 ruby 後的純假名
+    （``埋[う]まる`` → ``うまる``）。無標音且表層非純假名時讀音為空字串
+    （呼叫端對空讀音跳過讀音驗證）。
+    Surface strips furigana; the reading replaces every base[ruby] with
+    ruby. Entries without furigana whose surface is not pure kana get an
+    empty reading (the caller skips reading validation for those).
+
+    Args:
+        raw: Anki 欄位原始字串（可含逗號等分隔的多動詞）。Raw field string,
+            possibly holding multiple separator-delimited verbs.
+
+    Returns:
+        list[tuple[str, str]]: ``(表層, 讀音)`` 列表。(surface, reading) pairs.
+    """
+    parts = [v.strip() for v in re.split(r'[,、/・]', raw) if v.strip()]
+    results: list[tuple[str, str]] = []
+    for part in parts:
+        surface = _BRACKET.sub('', part).strip()
+        if not surface:
+            continue
+        if '[' in part:
+            reading = _FURIGANA_TO_KANA.sub(r'\1', part).strip()
+            reading = reading if _KANA_ONLY.match(reading) else ""
+        elif _KANA_ONLY.match(surface):
+            reading = surface
+        else:
+            reading = ""
+        results.append((surface, reading))
+    return results
+
+
+def _load_validation_config() -> dict:
+    """讀取 extra_search_keywords.json 並正規化為 per-verb 驗證設定。
+
+    Load extra_search_keywords.json normalized into per-verb validation
+    settings.
+
+    支援兩種格式（向下相容，計劃 §D4）：
+        舊：``{nid: {表層: [擴展關鍵字]}}``
+        新：``{nid: {表層: {"extra_keywords": [...], "allow_auxiliary": bool,
+             "allow_compound_suffix": bool}}}``
+
+    Returns:
+        dict: ``{nid_str: {表層: {"extra_keywords": list, "allow_auxiliary":
+        bool, "allow_compound_suffix": bool}}}``；檔案不存在或損毀時回傳
+        空 dict。Normalized config, or an empty dict when the file is
+        missing or malformed.
+    """
+    config_path = os.path.join(os.path.dirname(__file__), "extra_search_keywords.json")
+    if not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw_config = json.load(f)
+    except Exception as e:
+        logger.warning(f"⚠️ 無法讀取 extra_search_keywords.json: {e}")
+        return {}
+
+    normalized: dict = {}
+    for nid, verbs in raw_config.items():
+        if not isinstance(verbs, dict):
+            continue
+        normalized[nid] = {}
+        for surface, value in verbs.items():
+            if isinstance(value, list):
+                entry = {"extra_keywords": value}
+            elif isinstance(value, dict):
+                entry = dict(value)
+            else:
+                continue
+            entry.setdefault("extra_keywords", [])
+            entry.setdefault("allow_auxiliary", False)
+            entry.setdefault("allow_compound_suffix", False)
+            entry.setdefault("ignore_reading", False)
+            normalized[nid][surface] = entry
+    return normalized
 
 async def process_verb_group(
     anki_client: AnkiClient,
@@ -92,7 +198,11 @@ async def process_verb_group(
     skip_narrator: bool = False,
     verb_category: str = "",
     verb_stats: dict[str, int] = None,
-    dry_run_generated: Set[tuple[str, int]] = None
+    dry_run_generated: Set[tuple[str, int]] = None,
+    tagger=None,
+    validation_config: dict = None,
+    rejection_stats: dict[str, int] = None,
+    filter_moan: bool = True,
 ) -> int:
     """處理自動詞或他動詞欄位中的所有同義動詞。回傳本次新增的卡片數量。
 
@@ -117,6 +227,16 @@ async def process_verb_group(
         verb_category: 統計用類別標籤（自/他動詞）。Category label for stats.
         verb_stats: 各動詞生成統計 dict。Per-verb stats accumulator.
         dry_run_generated: dry-run 模擬去重集合。Dry-run dedup set.
+        tagger: fugashi 分詞器（token 級驗證用）；None 時跳過驗證（僅供
+            單元測試，正式執行必傳）。Fugashi tagger for token validation;
+            validation is skipped when None (tests only).
+        validation_config: `_load_validation_config()` 的正規化設定。
+            Normalized per-verb validation config.
+        rejection_stats: 拒絕原因統計 accumulator（鍵為「動詞|原因」）。
+            Rejection-reason accumulator keyed by "verb|reason".
+        filter_moan: 是否過濾純呻吟句（.env
+            JP_VERB_PAIR_FILTER_MOAN_SENTENCES，預設 True）。Whether to
+            filter pure-moan sentences.
 
     Returns:
         int: 本次新增的卡片數。Number of cards added this call.
@@ -125,15 +245,19 @@ async def process_verb_group(
         verb_stats = {}
     if dry_run_generated is None:
         dry_run_generated = set()
+    if validation_config is None:
+        validation_config = {}
+    if rejection_stats is None:
+        rejection_stats = {}
     if not raw_verb_str.strip():
         return 0
-        
-    clean_verbs = _clean_verb_field(raw_verb_str)
+
+    clean_verbs = _parse_verb_field(raw_verb_str)
     processed_lemmas: Set[str] = set()
     success_count = current_count
     new_generated = 0
-    
-    for raw_verb in clean_verbs:
+
+    for raw_verb, verb_reading in clean_verbs:
         if success_count >= max_cards:
             logger.info(f"✅ 動詞欄位 [{raw_verb_str}] 已達到生成上限 ({max_cards})，跳過後續同義詞。")
             break
@@ -151,36 +275,35 @@ async def process_verb_group(
             
         processed_lemmas.add(normalized_verb)
         
-        logger.info(f"🎯 開始處理單字: '{raw_verb}' (正規化為 '{normalized_verb}')...")
-        
+        logger.info(f"🎯 開始處理單字: '{raw_verb}' (正規化為 '{normalized_verb}', 讀音 '{verb_reading or '未標註'}')...")
+
         target_keywords = [normalized_verb]
         str_nid = str(master_note_id)
-        
-        config_path = os.path.join(os.path.dirname(__file__), "extra_search_keywords.json")
-        extra_keywords_config = {}
-        if os.path.exists(config_path):
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    extra_keywords_config = json.load(f)
-            except Exception as e:
-                logger.warning(f"⚠️ 無法讀取 extra_search_keywords.json: {e}")
 
-        if str_nid in extra_keywords_config and normalized_verb in extra_keywords_config[str_nid]:
-            extra_kw = extra_keywords_config[str_nid][normalized_verb]
-            if isinstance(extra_kw, list):
-                target_keywords.extend(extra_kw)
-                logger.info(f"   ➕ 偵測到額外搜尋關鍵字，擴展為: {target_keywords}")
+        verb_cfg = validation_config.get(str_nid, {}).get(normalized_verb, {})
+        allow_auxiliary = bool(verb_cfg.get("allow_auxiliary", False))
+        allow_compound_suffix = bool(verb_cfg.get("allow_compound_suffix", False))
+        # 同漢字表層多讀（開く=あく/ひらく）時 unidic-lite 是上下文盲的
+        # 固定選讀，讀音關會變成贏者全拿；per-verb 設 ignore_reading 可
+        # 關閉讀音關（其餘三關照常），取捨詳見計畫書 §6.5。
+        if verb_cfg.get("ignore_reading"):
+            verb_reading = ""
+            logger.info("   ⚙️ 此動詞設定 ignore_reading=true，跳過讀音驗證關。")
+        extra_kw = verb_cfg.get("extra_keywords", [])
+        if extra_kw:
+            target_keywords.extend(extra_kw)
+            logger.info(f"   ➕ 偵測到額外搜尋關鍵字，擴展為: {target_keywords}")
 
         total_needed = max_cards - success_count
         if total_needed <= 0:
             break
-            
+
         keyword_data = []
         num_kw = len(target_keywords)
         # 計算基本目標配額：將總配額平均分給所有關鍵字，多的分給前面的
         base_quota = total_needed // num_kw
         remainder = total_needed % num_kw
-        
+
         # 開局只查兩次 ES (Fetch All Upfront)，抓取所有備用候選名單
         for idx, kw in enumerate(target_keywords):
             logger.info(f"   🔍 正在預先獲取 '{kw}' 的 ES 候選對話...")
@@ -192,8 +315,15 @@ async def process_verb_group(
                 last_script_id=0
             )
             target = base_quota + (1 if idx < remainder else 0)
+            # 驗證參數：target_lemma 固定用母卡的標準表層——句中假名寫法
+            # （ほぐす）的 UniDic lemma 即為標準形（解す），假名擴展關鍵字
+            # 因此天然收斂；期待讀音一律繼承母卡欄位的 furigana 導出值。
             keyword_data.append({
                 "keyword": kw,
+                "target_lemma": normalized_verb,
+                "expected_reading": verb_reading,
+                "allow_auxiliary": allow_auxiliary,
+                "allow_compound_suffix": allow_compound_suffix,
                 "es_results": es_results,
                 "cursor": 0,
                 "target": target,
@@ -223,7 +353,42 @@ async def process_verb_group(
                 
                 if global_limit > 0 and global_total + new_generated >= global_limit:
                     return False
-                    
+
+                # ── token 級驗證（計劃 §D5）：ES 命中 ≠ 真命中 ──
+                # 四關：lemma（擋 による≠撚る）、讀音（擋同表層異讀
+                # めくる/まくる）、複合動詞前後項（擋 見送る、使い切れない）、
+                # 補助動詞（擋 食べてみる）。失敗即換下一句，游標邏輯不變。
+                if tagger is not None:
+                    dialogue = row.get("dialogue", "") or ""
+                    clean_sentence = _BRACKET.sub("", dialogue)
+
+                    # ── 第零關：純呻吟句過濾（.env 可關） ──
+                    if filter_moan and _is_moan_sentence(clean_sentence):
+                        stat_key = f"{kd['target_lemma']}|{REJECTION_MOAN}"
+                        rejection_stats[stat_key] = rejection_stats.get(stat_key, 0) + 1
+                        logger.info(
+                            f"   🚫 驗證拒絕 (script_id={script_id}, {REJECTION_MOAN}): "
+                            f"{clean_sentence[:40]}"
+                        )
+                        continue
+
+                    v_result = validate_candidate(
+                        clean_sentence,
+                        kd["target_lemma"],
+                        allow_auxiliary=kd["allow_auxiliary"],
+                        tagger=tagger,
+                        expected_reading=kd["expected_reading"],
+                        allow_compound_suffix=kd["allow_compound_suffix"],
+                    )
+                    if not v_result.accepted:
+                        stat_key = f"{kd['target_lemma']}|{v_result.reason}"
+                        rejection_stats[stat_key] = rejection_stats.get(stat_key, 0) + 1
+                        logger.info(
+                            f"   🚫 驗證拒絕 (script_id={script_id}, {v_result.reason}): "
+                            f"{clean_sentence[:40]}"
+                        )
+                        continue
+
                 target_query = text("SELECT chapter FROM scripts WHERE id = :script_id")
                 target_result = await session.execute(target_query, {"script_id": script_id})
                 target_row = target_result.fetchone()
@@ -270,13 +435,7 @@ async def process_verb_group(
                     
                 logger.info(f"🚀 發送生成請求 (script_id: {script_id})...")
                 
-                llm_model_name = settings.LLM_MODEL_NAME
-                if settings.LLM_PROVIDER and settings.LLM_PROVIDER.lower() not in ("google", "openai", ""):
-                    llm_model_name = f"({settings.LLM_PROVIDER}){llm_model_name}"
-                # claude-code provider 的推理力度會影響生成品質，
-                # 需一併記錄才能事後區分同模型不同力度產出的卡片。
-                if settings.LLM_PROVIDER and settings.LLM_PROVIDER.lower() == "claude-code":
-                    llm_model_name = f"{llm_model_name}@{settings.LLM_CLAUDE_CODE_EFFORT}"
+                llm_model_name = build_llm_model_label()
 
                 try:
                     response_json = await api_client.invoke_generation_pipeline(payload)
@@ -401,9 +560,18 @@ async def main() -> None:
     skip_narrator = args.skip_narrator
     global_total = 0
     verb_stats: dict[str, int] = {}
+    rejection_stats: dict[str, int] = {}
     dry_run_generated: Set[tuple[str, int]] = set()
 
     logger.info("=== 批量生成子卡片腳本 (ES 版) ===")
+
+    # token 級驗證器的分詞器：整個執行期共用一顆（初始化約 1 秒）
+    import fugashi
+    logger.info("🧠 初始化 Fugashi NLP Tagger (UniDic)...")
+    tagger = fugashi.Tagger()
+    validation_config = _load_validation_config()
+    filter_moan = bool(getattr(settings, "JP_VERB_PAIR_FILTER_MOAN_SENTENCES", True))
+    logger.info(f"🧹 純呻吟句過濾: {'開啟' if filter_moan else '關閉'} (JP_VERB_PAIR_FILTER_MOAN_SENTENCES)")
     if dry_run:
         logger.info("🧪 測試模式 (DRY-RUN) 已開啟：不會有任何實際寫入，僅作計數")
     if global_limit > 0:
@@ -521,7 +689,11 @@ async def main() -> None:
                         skip_narrator=skip_narrator,
                         verb_category="自動詞",
                         verb_stats=verb_stats,
-                        dry_run_generated=dry_run_generated
+                        dry_run_generated=dry_run_generated,
+                        tagger=tagger,
+                        validation_config=validation_config,
+                        rejection_stats=rejection_stats,
+                        filter_moan=filter_moan,
                     )
                     global_total += new_cards
                     if global_limit > 0 and global_total >= global_limit:
@@ -557,7 +729,11 @@ async def main() -> None:
                         skip_narrator=skip_narrator,
                         verb_category="他動詞",
                         verb_stats=verb_stats,
-                        dry_run_generated=dry_run_generated
+                        dry_run_generated=dry_run_generated,
+                        tagger=tagger,
+                        validation_config=validation_config,
+                        rejection_stats=rejection_stats,
+                        filter_moan=filter_moan,
                     )
                     global_total += new_cards
                     if global_limit > 0 and global_total >= global_limit:
@@ -574,6 +750,12 @@ async def main() -> None:
                 for verb_key, count in sorted_stats:
                     padding = '　' * (max_key_len - len(verb_key))
                     logger.info(f"   - {verb_key}{padding} : {count:>3} 張")
+            if rejection_stats:
+                total_rejected = sum(rejection_stats.values())
+                logger.info(f"\n   [token 級驗證拒絕明細] 共擋下 {total_rejected} 句")
+                for stat_key, count in sorted(rejection_stats.items(), key=lambda x: x[1], reverse=True):
+                    verb_part, reason = stat_key.split("|", 1)
+                    logger.info(f"   - {verb_part}（{reason}） : {count:>3} 句")
 
     except Exception as e:
         logger.error(f"💥 發生非預期嚴重錯誤，腳本提前終止: {e}")

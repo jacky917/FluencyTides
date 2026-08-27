@@ -33,8 +33,10 @@ from typing import Any, Callable, Iterable
 
 # 拒絕原因常數（漏斗層統計用，字面對齊計劃 §6.7 報告項）
 REJECTION_COMPOUND_VERB = "複合動詞前項"
+REJECTION_COMPOUND_SUFFIX = "複合動詞後項"
 REJECTION_AUXILIARY = "補助動詞"
 REJECTION_LEMMA_MISMATCH = "lemma 不符"
+REJECTION_READING_MISMATCH = "讀音不符"
 
 
 def token_surface(token: Any) -> str:
@@ -100,6 +102,111 @@ def token_lemma(token: Any) -> str:
         if lemma and lemma != "*":
             return lemma
     return token_surface(token)
+
+
+def token_orth_base(token: Any) -> str:
+    """取得 token 的書字形基本形（UniDic feature[10]，如帰る句的「帰る」）。
+
+    Get the token's orthographic base form (UniDic ``feature[10]``).
+
+    UniDic 的語彙素（lemma）會把同義異體字形統合到單一寫法
+    （帰る→返る、治る→直る、刺す→差す-他動詞…），orthBase 則保留
+    句中實際書寫的基本形——lemma 精確比對誤殺的字形變體靠它兜底。
+    UniDic lemmas unify orthographic variants under one canonical spelling;
+    orthBase keeps the actually-written base form and rescues variants the
+    strict lemma comparison would reject.
+
+    Args:
+        token: fugashi node 或具 ``feature`` 可索引序列的假 token。A fugashi
+            node or fake token with an indexable ``feature`` sequence.
+
+    Returns:
+        str: 書字形基本形；無法取得時回傳空字串。Orth base, or "".
+    """
+    feature = getattr(token, "feature", None)
+    if feature is None:
+        return ""
+    try:
+        orth_base = feature[10]
+    except (IndexError, KeyError, TypeError):
+        return ""
+    if orth_base and orth_base != "*":
+        return orth_base
+    return ""
+
+
+def lemma_matches_target(token: Any, target_verb: str) -> bool:
+    """判定 token 是否對應目標動詞（lemma 或 orthBase 任一相符）。
+
+    Decide whether the token corresponds to the target verb via lemma or
+    orthBase.
+
+    比對順序：
+    1. lemma 全等，或去掉 UniDic 語彙素細分後綴（``差す-他動詞`` → 差す）
+       後全等。
+    2. orthBase（書字形基本形）全等——兜底 UniDic 字形統合
+       （帰る lemma=返る，但 orthBase=帰る）。
+    「による」（lemma=因る、orthBase=よる）對目標「撚る」兩關皆不符,
+    仍會被正確拒絕。
+
+    Args:
+        token: fugashi node 或假 token。A fugashi node or fake token.
+        target_verb: 目標動詞字典形（去標音）。Target verb dictionary form.
+
+    Returns:
+        bool: 是否視為目標動詞。Whether the token matches the target.
+    """
+    lemma = token_lemma(token)
+    if lemma == target_verb or lemma.split("-", 1)[0] == target_verb:
+        return True
+    orth_base = token_orth_base(token)
+    return bool(orth_base) and orth_base == target_verb
+
+
+def token_reading(token: Any) -> str:
+    """取得 token 的語彙素読み（UniDic feature[6]，片假名，如「ウマル」）。
+
+    Get the token's lexeme reading (UniDic ``feature[6]``, katakana).
+
+    與 ``token_lemma`` 的 feature[7] 相鄰同源；unidic-lite 實測
+    （2026-08-27）：埋まっ→ウマル、めくる→メクル、まくる→マクル、
+    よっ→ヨル（lemma 因る）。取不到有效值時回傳空字串——
+    呼叫端對空值**放行**讀音關（寧可漏擋不誤殺）。
+
+    Args:
+        token: fugashi node 或具 ``feature`` 可索引序列的假 token。A fugashi
+            node or fake token with an indexable ``feature`` sequence.
+
+    Returns:
+        str: 片假名讀音；無法取得時回傳空字串。Katakana reading, or "".
+    """
+    feature = getattr(token, "feature", None)
+    if feature is None:
+        return ""
+    try:
+        reading = feature[6]
+    except (IndexError, KeyError, TypeError):
+        return ""
+    if reading and reading != "*":
+        return reading
+    return ""
+
+
+def to_katakana(text: str) -> str:
+    """把字串中的平假名轉為片假名（讀音比對用的正規化）。
+
+    Convert hiragana characters to katakana for reading comparison.
+
+    Args:
+        text: 任意字串。Any string.
+
+    Returns:
+        str: 平假名皆轉為片假名後的字串。The string with hiragana
+        converted to katakana.
+    """
+    return "".join(
+        chr(ord(ch) + 0x60) if "ぁ" <= ch <= "ゖ" else ch for ch in text or ""
+    )
 
 
 @dataclass
@@ -177,15 +284,25 @@ def validate_candidate(
     target_verb: str,
     allow_auxiliary: bool,
     tagger: Callable[[str], Iterable[Any]],
+    *,
+    expected_reading: str | None = None,
+    allow_compound_suffix: bool = False,
 ) -> ValidationResult:
-    """驗證候選句是否包含目標動詞的獨立用法（計劃 §6.1 四條規則）。
+    """驗證候選句是否包含目標動詞的獨立用法（計劃 §6.1 規則 + VerbPair 擴充）。
 
     Validate that the sentence contains an independent usage of the target
-    verb (the four rules of plan §6.1).
+    verb (plan §6.1 rules plus the VerbPair extensions).
 
     通過條件：句中存在一個 token 同時滿足——
         1. 詞性大類為「動詞」且 lemma 等於目標動詞（已去標音的字典形）。
+        1'. 讀音驗證（``expected_reading`` 有值時）：token 的語彙素読み
+            （feature[6]）與期待讀音片假名比對相符——擋同表層異讀
+            （めくる[メクル] vs まくる[マクル] 的 lemma 同為捲る）。
+            token 讀音缺值時放行本關（寧可漏擋不誤殺）。
         2. 緊鄰的下一 token 不是動詞（複合動詞前項拒絕：見＋送る）。
+        2'. 緊鄰的前一 token 不是動詞（複合動詞後項拒絕：使い＋切れ、
+            弾き＋まくる——連用形直接接續的後項非獨立用法）；
+            ``allow_compound_suffix=True`` 時放行。
         3. 補助動詞拒絕：前一 token 為「て／で」**且再前一 token 為動詞**
            時拒絕（食べ[動詞]てみる → 拒；あと[名詞]で見る → 放行——
            格助詞「で」不構成補助動詞接續）；``allow_auxiliary=True`` 時放行。
@@ -200,6 +317,13 @@ def validate_candidate(
         tagger: 注入的分詞器——以句子呼叫後回傳 token 可迭代物
             （``fugashi.Tagger()`` 實例或測試假 tagger）。Injected tokenizer
             returning an iterable of tokens when called with a sentence.
+        expected_reading: 期待的動詞讀音（平/片假名皆可，如「うまる」）；
+            ``None`` 或空字串時不驗讀音——CoreVerb 既有呼叫端不傳，
+            行為完全回歸。Expected verb reading (hira/katakana); reading
+            validation is skipped when None/empty, keeping legacy callers
+            unchanged.
+        allow_compound_suffix: 是否放行複合動詞後項用法（per-verb 設定）。
+            Whether to allow compound-suffix usage (per-verb setting).
 
     Returns:
         ValidationResult: ``accepted=True`` 時附帶 ``VerifiedCandidate``
@@ -211,16 +335,37 @@ def validate_candidate(
     tokens = list(tagger(sentence))
     offsets = _compute_char_offsets(sentence, tokens)
 
+    expected_kata = to_katakana(expected_reading) if expected_reading else ""
+
     rejection_reasons: list[str] = []
     for index, token in enumerate(tokens):
         if token_pos1(token) != "動詞":
             continue
-        if token_lemma(token) != target_verb:
+        if not lemma_matches_target(token, target_verb):
             continue
+
+        # 規則 ①'：讀音驗證——同表層異讀（メクル vs マクル）靠語彙素読み區分。
+        # token 讀音缺值（lForm 為 * 或欄位不存在）時放行，避免誤殺。
+        if expected_kata:
+            actual = token_reading(token)
+            if actual and to_katakana(actual) != expected_kata:
+                rejection_reasons.append(REJECTION_READING_MISMATCH)
+                continue
 
         # 規則 ②：複合動詞前項拒絕（下一 token 是動詞 → 見＋送る）
         if index + 1 < len(tokens) and token_pos1(tokens[index + 1]) == "動詞":
             rejection_reasons.append(REJECTION_COMPOUND_VERB)
+            continue
+
+        # 規則 ②'：複合動詞後項拒絕（前一 token 是動詞 → 使い＋切れ、
+        # 弾き＋まくる）。連用形直接接續的後項在自他動詞教學語境下
+        # 必然不是獨立用法；per-verb 可以 allow_compound_suffix 放行。
+        if (
+            not allow_compound_suffix
+            and index > 0
+            and token_pos1(tokens[index - 1]) == "動詞"
+        ):
+            rejection_reasons.append(REJECTION_COMPOUND_SUFFIX)
             continue
 
         # 規則 ③：補助動詞拒絕——前一 token 是「て／で」且再前一 token 為

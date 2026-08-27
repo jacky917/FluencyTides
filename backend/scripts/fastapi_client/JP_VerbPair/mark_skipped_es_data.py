@@ -4,6 +4,13 @@ Batch child-card generator for intransitive/transitive verb pairs; this
 variant additionally marks normally-deduped log rows with
 ``failure_count = 9`` so they are skipped permanently on future runs.
 
+【行為差異註記 2026-08-27】主腳本 generate_child_cards.py 已接上
+fugashi token 級驗證（lemma/讀音/複合動詞前後項/補助動詞四關，
+詳見 docs/wip/verbpair_fugashi_validation_FEAT_2026-08-27.md），
+本維運變體**刻意未接**：其 UPDATE 只影響既有 DB 紀錄、不會創造新卡，
+未驗證的 ES 誤命中在此最多是對不存在的紀錄空更新。若日後把本腳本
+當生成器使用，須先移植同款驗證。
+
 此腳本負責從 Anki 中掃描 `日本語::自他動詞::Master` 牌組，針對每張母卡片中的動詞欄位，
 向 Elasticsearch 檢索遊戲台詞，並呼叫 FastAPI 後端自動產生對應的 Context 與 Cloze 兩種類型的子卡片。
 
@@ -48,6 +55,7 @@ from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.core.config import settings
 from sqlalchemy import text
 from scripts.common.database.log_repository import PROJECT_JP_VERB_PAIR
+from scripts.common.llm_label import build_llm_model_label
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import DedupManager
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.backend_api_client import BackendAPIClient
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.anki_media_uploader import AnkiMediaUploader
@@ -234,10 +242,8 @@ async def process_verb_group(
                 
                 # 若 API 發生嚴重錯誤 (例如無法連線、LLM多重失敗等)，BackendAPIClient 內部如果拋出 Exception 會中斷這層，
                 # 我們應該讓它向上拋出，以便觸發安全退出。
-                # 解析 model 標籤前綴
-                llm_model_name = settings.LLM_MODEL_NAME
-                if settings.LLM_PROVIDER and settings.LLM_PROVIDER.lower() not in ("google", "openai", ""):
-                    llm_model_name = f"({settings.LLM_PROVIDER}){llm_model_name}"
+                # 解析 model 標籤（統一規則見 scripts/common/llm_label.py）
+                llm_model_name = build_llm_model_label()
                     
                 try:
                     response_json = await api_client.invoke_generation_pipeline(payload)
