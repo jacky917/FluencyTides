@@ -45,7 +45,8 @@ async def init_generated_sentences_log():
         -- 核心關聯鍵 (複合 Unique 基礎)
         script_id BIGINT UNSIGNED NOT NULL COMMENT '來源台詞 ID (對應 scripts.id)',
         verb_lemma VARCHAR(255) NOT NULL COMMENT '正規化後的動詞原型',
-        
+        project VARCHAR(32) NOT NULL DEFAULT 'jp_verb_pair' COMMENT '所屬卡片專案 (jp_verb_pair / jp_core_verb)',
+
         -- 關聯還原資訊 (方便 JOIN 與追溯)
         source VARCHAR(255) NOT NULL COMMENT '遊戲來源名稱',
         chapter VARCHAR(255) NOT NULL COMMENT '章節名稱',
@@ -64,9 +65,10 @@ async def init_generated_sentences_log():
         llm_model VARCHAR(255) DEFAULT NULL COMMENT '最後一次生成使用的 LLM 模型名稱',
 
         -- 索引與約束
-        UNIQUE KEY uk_script_verb (script_id, verb_lemma),
+        UNIQUE KEY uk_script_verb_project (script_id, verb_lemma, project),
         INDEX idx_verb (verb_lemma),
         INDEX idx_master (master_note_id),
+        INDEX idx_project (project),
         FOREIGN KEY (script_id) REFERENCES scripts(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     """
@@ -82,6 +84,11 @@ async def init_generated_sentences_log():
             # never gains newly added columns; an idempotent column backfill
             # must run as well (S007).
             await _ensure_columns(session)
+            # 既有資料表的 unique key 也可能停留在舊版 (script_id, verb_lemma)，
+            # 需冪等地遷移到含 project 的新 key。
+            # An existing table may still carry the old (script_id, verb_lemma)
+            # unique key; migrate it idempotently to the project-aware one.
+            await _ensure_unique_key(session)
     except Exception as e:
         logger.error(f"❌ 建立資料表時發生錯誤: {e}")
     finally:
@@ -125,6 +132,11 @@ async def _ensure_columns(session: AsyncSession) -> None:
             "ADD COLUMN llm_model VARCHAR(255) DEFAULT NULL "
             "COMMENT '最後一次生成使用的 LLM 模型名稱'"
         ),
+        "project": (
+            "ADD COLUMN project VARCHAR(32) NOT NULL DEFAULT 'jp_verb_pair' "
+            "COMMENT '所屬卡片專案 (jp_verb_pair / jp_core_verb)' "
+            "AFTER verb_lemma, ADD INDEX idx_project (project)"
+        ),
     }
 
     missing = {name: clause for name, clause in required.items() if name not in existing}
@@ -136,6 +148,51 @@ async def _ensure_columns(session: AsyncSession) -> None:
         await session.execute(text(f"ALTER TABLE generated_sentences_log {clause}"))
         logger.info("🔧 已補上缺少的欄位: %s", name)
     await session.commit()
+
+
+async def _ensure_unique_key(session: AsyncSession) -> None:
+    """把 unique key 從舊版 (script_id, verb_lemma) 遷移到含 project 的新版（冪等）。
+
+    Idempotently migrate the unique key from the legacy
+    (script_id, verb_lemma) to the project-aware
+    (script_id, verb_lemma, project).
+
+    順序刻意「先加新、後刪舊」：舊 key 比新 key 更嚴格，加新 key 不可能
+    因重複而失敗；反過來先刪舊 key 則會有一段沒有唯一約束的空窗。
+    The new key is added before the old one is dropped: the old key is
+    strictly tighter, so adding the new one can never fail on duplicates,
+    while dropping first would leave a window with no uniqueness at all.
+
+    Args:
+        session: 語料庫資料庫的非同步 Session。Async session for the corpus
+            database.
+    """
+    result = await session.execute(
+        text(
+            "SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS "
+            "WHERE TABLE_SCHEMA = DATABASE() "
+            "AND TABLE_NAME = 'generated_sentences_log'"
+        )
+    )
+    index_names = {row[0] for row in result.all()}
+
+    if "uk_script_verb_project" not in index_names:
+        await session.execute(text(
+            "ALTER TABLE generated_sentences_log "
+            "ADD UNIQUE KEY uk_script_verb_project (script_id, verb_lemma, project)"
+        ))
+        logger.info("🔧 已建立新 unique key: uk_script_verb_project")
+
+    if "uk_script_verb" in index_names:
+        await session.execute(text(
+            "ALTER TABLE generated_sentences_log DROP INDEX uk_script_verb"
+        ))
+        logger.info("🔧 已移除舊 unique key: uk_script_verb")
+
+    if "uk_script_verb_project" in index_names and "uk_script_verb" not in index_names:
+        logger.info("✅ unique key 檢查完成，無需遷移。")
+    else:
+        await session.commit()
 
 if __name__ == "__main__":
     if sys.platform == 'win32':

@@ -49,6 +49,7 @@ from app.infrastructure.database.elasticsearch_client import search_dialogue_by_
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.core.config import settings
 from sqlalchemy import text
+from scripts.common.database.log_repository import PROJECT_JP_VERB_PAIR
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import DedupManager
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.backend_api_client import BackendAPIClient
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.anki_media_uploader import AnkiMediaUploader
@@ -454,7 +455,8 @@ async def main() -> None:
                 avatar_dir=avatar_dir,
                 source_game=source_game,
                 context_prev=settings.JP_VERB_PAIR_CONTEXT_PREV,
-                context_next=settings.JP_VERB_PAIR_CONTEXT_NEXT
+                context_next=settings.JP_VERB_PAIR_CONTEXT_NEXT,
+                project=PROJECT_JP_VERB_PAIR,
             )
             api_client = BackendAPIClient(api_url, headers)
             uploader = AnkiMediaUploader(anki_client, voice_dir, avatar_dir, source_game)

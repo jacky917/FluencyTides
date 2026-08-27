@@ -26,7 +26,9 @@ class DedupManager:
         avatar_dir: Path,
         source_game: str,
         context_prev: int = 5,
-        context_next: int = 5
+        context_next: int = 5,
+        *,
+        project: str,
     ):
         """初始化 DedupManager。
 
@@ -39,6 +41,9 @@ class DedupManager:
             source_game: 遊戲來源代號。Source game id.
             context_prev: 上下文往前行數。Context lines before the target.
             context_next: 上下文往後行數。Context lines after the target.
+            project: generated_sentences_log 的專案識別
+                （log_repository.KNOWN_PROJECTS）。Project identifier for
+                generated_sentences_log.
         """
         self.session = session
         self.voice_dir = voice_dir
@@ -46,7 +51,8 @@ class DedupManager:
         self.source_game = source_game
         self.context_prev = context_prev
         self.context_next = context_next
-        
+        self.project = project
+
         self.repo = GeneratedLogRepository()
         self.builder = ContextBuilder()
 
@@ -65,7 +71,7 @@ class DedupManager:
             list[dict] | None: 允許生成時回傳上下文對話；重複/失敗達上限時
             回傳 ``None``。Context dialogue if allowed, else ``None``.
         """
-        record = await self.repo.get_record(self.session, script_id, verb_lemma)
+        record = await self.repo.get_record(self.session, script_id, verb_lemma, project=self.project)
         
         if record:
             if record.get("failure_count", 0) >= 1:
@@ -108,7 +114,7 @@ class DedupManager:
             master_note_id: 母卡 note id。Master note id.
             llm_model: 使用的 LLM 模型標籤。LLM model label used.
         """
-        await self.repo.increment_failure_count(self.session, script_id, verb_lemma, self.source_game, chapter, master_note_id, llm_model)
+        await self.repo.increment_failure_count(self.session, script_id, verb_lemma, self.source_game, chapter, master_note_id, llm_model, project=self.project)
         logger.warning(f"⚠️ 紀錄一次生成失敗: script_id={script_id}, verb_lemma='{verb_lemma}'")
 
     async def record_success(
@@ -146,5 +152,5 @@ class DedupManager:
             "cloze_note_id": cloze_note_id,
             "llm_model": llm_model
         }
-        await self.repo.create_or_restore_record(self.session, record_data)
+        await self.repo.create_or_restore_record(self.session, record_data, project=self.project)
         logger.info(f"✅ 成功寫入去重紀錄: script_id={script_id}, verb_lemma='{verb_lemma}'")

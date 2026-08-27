@@ -141,6 +141,23 @@ class HappyPathTests(ClaudeCodeClientTestBase):
 
         self.assertEqual(result.model_name, "(claude-code)opus@high")
 
+    def test_model_label_strips_claude_prefix(self) -> None:
+        """完整模型 id 的 ``claude-`` 前綴在標籤中去除，``--model`` 保留全名。
+
+        The ``claude-`` prefix is stripped from the label while the full
+        model id is still passed to ``--model``.
+        """
+        with mock.patch.object(settings, "LLM_MODEL_NAME", "claude-opus-5"):
+            client = ClaudeCodeLLMClient()
+            with mock.patch.object(
+                subprocess, "run", return_value=_FakeCompleted(_envelope())
+            ) as run_mock:
+                result = self._run(client)
+
+        self.assertEqual(result.model_name, "(claude-code)opus-5@high")
+        cmd = run_mock.call_args[0][0]
+        self.assertIn("claude-opus-5", cmd)  # --model 用完整 id
+
     def test_strips_markdown_fences(self) -> None:
         """result 被 ```json 圍欄包住時仍能解析。"""
         fenced = "```json\n" + json.dumps(VALID_PAYLOAD) + "\n```"

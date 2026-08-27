@@ -1,12 +1,13 @@
-"""JP_VerbPair 清除腳本（薄包裝）：刪除子卡片、清空母卡片 JSON、清理資料庫與媒體。
+"""JP_CoreVerb 清除腳本（薄包裝）：刪除子卡片、清空母卡片 JSON、清理資料庫與媒體。
 
-Cleanup script for JP_VerbPair (thin wrapper around
+Cleanup script for JP_CoreVerb (thin wrapper around
 scripts.local_anki.common.deletion.cleanup): delete all child cards, blank
-master-card JSON fields, purge project media and clear the project's rows
-in the MySQL dedup log.
+the master-card Word_Data_JSON field, purge project media and clear the
+project's rows in the MySQL dedup log.
 
-媒體前綴取自 settings（JP_VERB_PAIR_SOURCE_GAME），且只刪
-「所有已註冊專案皆未引用」的檔案——JP_CoreVerb 仍在使用的媒體不受影響。
+媒體前綴取自 settings（JP_CORE_VERB_SOURCE_GAME，預設沿用
+JP_VERB_PAIR_SOURCE_GAME），且只刪「所有已註冊專案皆未引用」的檔案——
+JP_VerbPair 仍在使用的媒體不受影響。
 
 Usage:
     # Dry Run
@@ -16,7 +17,7 @@ Usage:
     python cleanup_script.py --execute
 
     # 指定其他根牌組
-    python cleanup_script.py "日本語::自他動詞" --execute
+    python cleanup_script.py "日本語::核心動詞" --execute
 """
 
 import argparse
@@ -33,7 +34,7 @@ if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 import scripts.common.env  # noqa
 
-from scripts.common.database.log_repository import PROJECT_JP_VERB_PAIR
+from scripts.common.database.log_repository import PROJECT_JP_CORE_VERB
 from scripts.local_anki.common.deletion.cleanup import run_cleanup
 from scripts.local_anki.common.deletion.profiles import get_profile
 
@@ -50,7 +51,7 @@ async def main() -> None:
     args = parser.parse_args()
 
     await run_cleanup(
-        get_profile(PROJECT_JP_VERB_PAIR),
+        get_profile(PROJECT_JP_CORE_VERB),
         dry_run=not args.execute,
         deck_name=args.deck_name,
     )

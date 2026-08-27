@@ -181,10 +181,13 @@ async def _fetch_occupied(session, verb_lemma: str) -> list[dict]:
         list[dict]: 每項含 ``script_id / sentence / chapter / speaker``。
         Each item contains ``script_id / sentence / chapter / speaker``.
     """
-    from scripts.common.database.log_repository import GeneratedLogRepository
+    from scripts.common.database.log_repository import (
+        PROJECT_JP_CORE_VERB,
+        GeneratedLogRepository,
+    )
 
     script_ids = await GeneratedLogRepository().get_generated_script_ids(
-        session, verb_lemma
+        session, verb_lemma, project=PROJECT_JP_CORE_VERB
     )
     if not script_ids:
         return []
@@ -232,12 +235,13 @@ async def main() -> None:
                 exclude_generated: set[tuple[int, str]] | None = None
                 if args.with_occupied:
                     from scripts.common.database.log_repository import (
+                        PROJECT_JP_CORE_VERB,
                         GeneratedLogRepository,
                     )
 
                     occupied = await _fetch_occupied(session, verb_cfg.verb_lemma)
                     exclude_generated = await GeneratedLogRepository().get_logged_keys(
-                        session, verb_cfg.verb_lemma
+                        session, verb_cfg.verb_lemma, project=PROJECT_JP_CORE_VERB
                     )
                     logger.info(
                         f"♻️ --with-occupied：'{verb_cfg.verb_lemma}' 已生成 {len(occupied)} 筆計入桶佔用，"

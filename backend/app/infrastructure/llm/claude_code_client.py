@@ -91,8 +91,11 @@ class ClaudeCodeLLMClient:
         _model_name: 送給 ``--model`` 的模型名或別名。Model name/alias.
         _effort: 送給 ``--effort`` 的力度。Effort level.
         _formatted_model_name: 寫入 Anki tag 與去重紀錄的標籤，格式為
-            ``(provider)model@effort``。Label written to Anki tags and
-            dedup records.
+            ``(provider)model@effort``；model 部分去掉 ``claude-`` 前綴
+            （如 ``claude-opus-5`` → ``opus-5``），provider 已寫明是
+            claude-code，再帶 claude- 是冗餘。Label written to Anki tags
+            and dedup records; the ``claude-`` prefix is stripped from the
+            model part since the provider segment already says claude-code.
     """
 
     # 外層重試次數。CLI 內部對結構化輸出已自帶最多 5 次重試，
@@ -136,7 +139,11 @@ class ClaudeCodeLLMClient:
 
         provider = (settings.LLM_PROVIDER or "").strip().lower()
         provider_prefix = f"({provider})" if provider and provider not in ("google", "openai") else ""
-        self._formatted_model_name = f"{provider_prefix}{self._model_name}@{self._effort}"
+        # 標籤中的模型名去掉 claude- 前綴（claude-opus-5 → opus-5）：
+        # provider 段已寫明 claude-code，模型名再帶 claude- 是冗餘。
+        # --model 參數仍使用完整的 self._model_name，不受影響。
+        display_model = self._model_name.removeprefix("claude-")
+        self._formatted_model_name = f"{provider_prefix}{display_model}@{self._effort}"
 
         self._workdir = self._resolve_workdir()
         self._audit_dir = self._resolve_audit_dir()
