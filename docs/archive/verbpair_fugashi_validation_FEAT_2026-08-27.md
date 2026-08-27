@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-08-27 |
 | **性質** | 新增機能設計 + 實作工作項 |
-| **狀態** | 🚧 實作中(P0–P2 完成 2026-08-27;待人工確認同表層多讀卡的取捨後收尾) |
+| **狀態** | ✅ 完成（2026-08-27;P0–P3 全量。遺留決策與 review 後續修正項見 §6.8） |
 | **範圍** | `scripts/fastapi_client/JP_CoreVerb/pipeline_components/candidate_validator.py`(擴充)、`scripts/fastapi_client/JP_VerbPair/generate_child_cards.py`(接入)、`scripts/fastapi_client/JP_VerbPair/extra_search_keywords.json`(格式擴充)、對應單元測試 |
 | **不動** | ES 檢索本身(`elasticsearch_client.search_dialogue_by_verb`)、後端 API 與 handler、CoreVerb 管線的現有行為(驗證器擴充需回歸相容)、已生成的存量卡片(清查另案) |
-| **PR / 進度** | [#12](https://github.com/jacky917/FluencyTides/pull/12)(P0–P3 全量 + 擴展調查 + 呻吟過濾 + 完整版 UniDic,待合併) |
+| **PR / 進度** | [#12](https://github.com/jacky917/FluencyTides/pull/12)(已合併 2026-08-27) |
 | **關聯文件** | `docs/14_Core_Verb_Card_Plan.md` §6.1(CoreVerb 驗證器原始設計)、`docs/wip/child_card_deletion_toolkit_FEAT_2026-08-27.md`(刪除工具,清錯卡時配合使用) |
 
 ---
@@ -249,6 +249,19 @@ fallback(詞典未下載的環境仍可跑)。
 (tenacity——生成管線重試、aiohttp、pymysql——scripts 直接使用、
 anthropic——LLM provider 延遲 import 且環境根本未裝)、unidic(完整版,
 含下載步驟註記)與 pytest(測試段)。
+
+### 6.8 合併後 review 結果與遺留項(2026-08-27)
+
+合併後以 8 角度 code review 掃過全部 diff,回報 8 項後續修正候選(嚴重度排序):
+funnel `_build_occupancy` 以新規則重驗存量卡導致分桶低估、跨 lemma 漢字擴展
+(繋ぐ/汚れる/汚す)被驗證擋死成死設定、requirements 的 unidic fallback 宣稱
+不成立(詞典未下載時 Tagger 直接拋錯)、多段注音動詞讀音導出錯誤(潛在)、
+呻吟過濾誤殺笑聲句、設定檔壞檔靜默降級、mark_skipped 安全註記失實、
+tagger=None 死開關。另有 furigana regex 四處重複、呻吟過濾應上移共用層等
+cleanup 項。均屬改進項而非阻斷,留待後續 PR。
+
+**遺留決策(需人工)**:同表層多讀的贏者全拿(あく/やめる/けがれる 餓死卡)
+——刪卡/合併/設 ignore_reading 三選一;穢れる 卡與 汚[けが]れる 的合併問題同。
 
 ## 7. 驗收標準
 
