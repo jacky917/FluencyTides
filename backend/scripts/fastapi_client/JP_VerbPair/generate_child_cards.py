@@ -66,6 +66,33 @@ MASTER_DECK = "日本語::自他動詞::Master"
 
 # 純假名判定（讀音導出用）。Kana-only pattern for reading derivation.
 _KANA_ONLY = re.compile(r'^[ぁ-ゖー]+$')
+
+# ── 純呻吟句偵測（.env: JP_VERB_PAIR_FILTER_MOAN_SENTENCES）──
+# 兩個樣式須同時命中才判定（2026-08-27 全量體檢的分類標準，28/4196 命中，
+# 誤殺率抽驗為零——僅帶「♪」等單一記號的正常句只中 _MOAN_HINT 不中
+# _MOAN_DENSITY，會被放行）：
+# _MOAN_HINT：伏字/音符記號，或小假名・促音三連以上，或擬態音節三連以上。
+# _MOAN_DENSITY：擬態音節與感嘆符號連續 12 字以上（純呻吟串的密度特徵）。
+_MOAN_HINT = re.compile(r'[●♪]|[ぁぃぅぇぉゃゅょっ]{3,}|(?:ちゅ|じゅる|れろ|ぷち|んん|はぁ){3,}')
+_MOAN_DENSITY = re.compile(r'(?:[ぁぃぅぇぉゃゅょっんあはぅ、…！ッ]|ぢゅ|ちゅ|れろ|じゅ){12,}')
+
+REJECTION_MOAN = "呻吟句樣式"
+
+
+def _is_moan_sentence(text: str) -> bool:
+    """判定句子是否為「純呻吟句」（擬態音節密度過高的 R18 台詞）。
+
+    Detect "pure moan" sentences (R18 lines dominated by onomatopoeic
+    syllables) — the verb usage in them is usually valid but the teaching
+    value is near zero.
+
+    Args:
+        text: 已去除注音標記的句子。Sentence with furigana stripped.
+
+    Returns:
+        bool: True 表示應過濾。True when the sentence should be filtered.
+    """
+    return bool(_MOAN_HINT.search(text) and _MOAN_DENSITY.search(text))
 # base[ruby] → ruby 的替換（埋[う]まる → うまる），同 jp_core_verb_handler 的 to_pure_kana
 _FURIGANA_TO_KANA = re.compile(r'[^\s\[\]]+\[([^\]]+)\]')
 _BRACKET = re.compile(r'\[.*?\]')
@@ -174,6 +201,7 @@ async def process_verb_group(
     tagger=None,
     validation_config: dict = None,
     rejection_stats: dict[str, int] = None,
+    filter_moan: bool = True,
 ) -> int:
     """處理自動詞或他動詞欄位中的所有同義動詞。回傳本次新增的卡片數量。
 
@@ -205,6 +233,9 @@ async def process_verb_group(
             Normalized per-verb validation config.
         rejection_stats: 拒絕原因統計 accumulator（鍵為「動詞|原因」）。
             Rejection-reason accumulator keyed by "verb|reason".
+        filter_moan: 是否過濾純呻吟句（.env
+            JP_VERB_PAIR_FILTER_MOAN_SENTENCES，預設 True）。Whether to
+            filter pure-moan sentences.
 
     Returns:
         int: 本次新增的卡片數。Number of cards added this call.
@@ -329,6 +360,17 @@ async def process_verb_group(
                 if tagger is not None:
                     dialogue = row.get("dialogue", "") or ""
                     clean_sentence = _BRACKET.sub("", dialogue)
+
+                    # ── 第零關：純呻吟句過濾（.env 可關） ──
+                    if filter_moan and _is_moan_sentence(clean_sentence):
+                        stat_key = f"{kd['target_lemma']}|{REJECTION_MOAN}"
+                        rejection_stats[stat_key] = rejection_stats.get(stat_key, 0) + 1
+                        logger.info(
+                            f"   🚫 驗證拒絕 (script_id={script_id}, {REJECTION_MOAN}): "
+                            f"{clean_sentence[:40]}"
+                        )
+                        continue
+
                     v_result = validate_candidate(
                         clean_sentence,
                         kd["target_lemma"],
@@ -533,6 +575,8 @@ async def main() -> None:
     logger.info("🧠 初始化 Fugashi NLP Tagger (UniDic)...")
     tagger = fugashi.Tagger()
     validation_config = _load_validation_config()
+    filter_moan = bool(getattr(settings, "JP_VERB_PAIR_FILTER_MOAN_SENTENCES", True))
+    logger.info(f"🧹 純呻吟句過濾: {'開啟' if filter_moan else '關閉'} (JP_VERB_PAIR_FILTER_MOAN_SENTENCES)")
     if dry_run:
         logger.info("🧪 測試模式 (DRY-RUN) 已開啟：不會有任何實際寫入，僅作計數")
     if global_limit > 0:
@@ -654,6 +698,7 @@ async def main() -> None:
                         tagger=tagger,
                         validation_config=validation_config,
                         rejection_stats=rejection_stats,
+                        filter_moan=filter_moan,
                     )
                     global_total += new_cards
                     if global_limit > 0 and global_total >= global_limit:
@@ -693,6 +738,7 @@ async def main() -> None:
                         tagger=tagger,
                         validation_config=validation_config,
                         rejection_stats=rejection_stats,
+                        filter_moan=filter_moan,
                     )
                     global_total += new_cards
                     if global_limit > 0 and global_total >= global_limit:

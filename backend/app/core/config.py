@@ -199,6 +199,13 @@ class Settings(BaseSettings):
         default="サノバウィッチ",
         description="遊戲日文原名，用於 LLM 提示詞與卡片標籤",
     )
+    JP_VERB_PAIR_FILTER_MOAN_SENTENCES: bool = Field(
+        default=True,
+        description=(
+            "選句時過濾「純呻吟句」（擬態音節密度過高的 R18 台詞——動詞用法"
+            "雖正確但教學價值低）。預設開啟；設 false 可保留這類句子"
+        ),
+    )
 
     # ====================================================================
     # JP_CoreVerb 卡片專屬設定
