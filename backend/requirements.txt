@@ -23,6 +23,14 @@ openai>=1.30.0
 google-genai>=0.2.0
 jinja2>=3.1.0
 
+# ─── 日文形態素解析 (Japanese NLP) ────────────────────────────────────
+# fugashi 為 MeCab 的 Python 綁定，unidic-lite 提供隨套件安裝的 UniDic 詞典。
+# 使用點：app/infrastructure/utils/nlp.py（動詞 lemma 正規化，取 feature[7]，
+# 為 UniDic 的欄位位置）、JP_CoreVerb 選句漏斗的 token 級驗證、
+# scripts/database/MySQL/JP_VerbPair/build_nlp_index.py。
+fugashi>=1.3.0
+unidic-lite>=1.0.8
+
 # ─── Storage & External Services ─────────────────────────────────────
 minio>=7.2.0
 aiogram>=3.4.0
