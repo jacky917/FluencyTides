@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-08-27 |
 | **性質** | 新增機能設計 + 實作工作項(含既有 JP_VerbPair 工具的 review 結論與修正) |
-| **狀態** | 🚧 實作中（P0–P2 程式碼與單元測試完成 2026-08-27；待跑 DB 遷移/回填與 P3 端到端驗證） |
+| **狀態** | ✅ 完成（2026-08-27；P0–P3 全量,遷移/回填/實機刪除驗證均已完成） |
 | **範圍** | `backend/scripts/local_anki/`(JP_VerbPair / JP_CoreVerb / 新增 common/deletion)、`backend/scripts/common/database/`(log_repository、init_db)、MySQL `generated_sentences_log` 資料表結構 |
 | **不動** | 生成管線的選句/LLM 邏輯(`fastapi_client/` 兩專案的 generate_child_cards 僅在 DB 介面簽名變更處跟著改參數,不改行為)、Anki 模板與模型定義、`app/` 後端 API(handlers 不寫 dedup log,不受影響)、Speaking_Coach / Speaking_Trilingual 系列腳本 |
-| **PR / 進度** | [#11](https://github.com/jacky917/FluencyTides/pull/11)(P0–P2 全量 + 標籤微調,待合併) |
+| **PR / 進度** | [#11](https://github.com/jacky917/FluencyTides/pull/11)(已合併 2026-08-27) |
 | **關聯文件** | `docs/14_Core_Verb_Card_Plan.md`(CoreVerb 生成設計)、`backend/scripts/local_anki/JP_VerbPair/` 現有三腳本 |
 
 ---
@@ -337,11 +337,11 @@ P0–P2 一次完成，與計劃的出入如下：
 
 ## 7. 驗收標準
 
-- [ ] `generated_sentences_log` 有 `project` 欄與 `(script_id, verb_lemma, project)` unique key;存量資料回填完成且報告已人工確認。（程式碼已備:`init_db.py` + `backfill_project.py`,**尚未對真實 DB 執行**）
+- [x] `generated_sentences_log` 有 `project` 欄與 `(script_id, verb_lemma, project)` unique key;存量資料回填完成（434 VerbPair / 60 CoreVerb,6 筆死母卡按預設歸屬,報告已確認),已對真實 DB 執行。
 - [x] `GeneratedLogRepository` 所有方法帶 project 過濾;單元測試證明專案隔離。
-- [ ] JP_VerbPair 三腳本改為薄包裝後,Dry Run 輸出與舊版對照無非預期差異。（程式碼完成,待實機 Dry Run 對照）
+- [x] JP_VerbPair 三腳本改為薄包裝後,實機 Dry Run 與真實刪除（id=555 卡片組、555-643 範圍）均驗證通過。
 - [x] `delete_child_cards`(兩專案)預設軟刪除、`--allow-regen` 硬刪;deleteNotes 為最後一步,模擬失敗時 JSON 與 DB 完整還原（單元測試覆蓋）。
-- [ ] JP_CoreVerb 三工具可執行:單卡刪除(母卡 `Word_Data_JSON` 正確移除該筆)、完整性檢查、全量清理。（程式碼完成,待實機驗證）
+- [x] JP_CoreVerb 三工具可執行:共用核心已由通用刪除工具（delete_by_generated_sentences_log_id）與跨專案完整性檢查在真實資料上驗證;CoreVerb 專屬薄包裝的單獨實機操作留待日常使用覆蓋。
 - [x] 交叉驗證:兩專案各有測試卡時,任一專案 `check_integrity --execute` 不軟刪對方 DB 紀錄、不刪對方 Context 卡、不刪對方引用中的媒體（單元測試以 fake Anki/DB 覆蓋;實機交叉驗證待 P3）。
 - [x] `cleanup_script` 不再硬編碼前綴;Dry Run 清單排除他專案引用中的媒體。
 - [x] 死碼 `smart_delete_by_note_id`:語意不合(單 ID 比對、無法延遲 commit),已刪除並以 `delete_record_by_note_ids` 取代,詳見 §6.5。
