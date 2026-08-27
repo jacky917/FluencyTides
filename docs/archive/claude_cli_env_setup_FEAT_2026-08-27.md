@@ -7,7 +7,7 @@
 | **狀態** | ✅ 完成(2026-08-27,含第二輪值域補測):CLI 2.1.247 已裝、`claude auth login` 認證就緒、A 組 17 項 + B 組 8 項全數實測,定案組合與值域表見 §3/§5 |
 | **範圍** | 本機 CLI 安裝與 PATH、headless 認證、參數實測矩陣與結論 |
 | **不動** | 專案代碼零改動;API key 計費模式不涉及 |
-| **PR / 進度** | 文件 commit 即可,無代碼 PR |
+| **PR / 進度** | 隨 [#9](https://github.com/jacky917/FluencyTides/pull/9) 一併提交(commit `911bdc7`) |
 | **關聯文件** | `docs/wip/claude_code_llm_provider_FEAT_2026-08-27.md`(消費本文件的定案組合與基準) |
 
 ---

@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-08-27 |
 | **性質** | 新增機能設計 + 實作工作項 |
-| **狀態** | 🚧 實作中:P0 實測 ✅ / P1 provider 本體 ✅ / P2 接線 ✅(2026-08-27,122 項測試全綠、真實 CLI 端到端驗證通過),待 P3 端到端建卡驗證 |
+| **狀態** | ✅ 完成(2026-08-27):P0~P4 全數完成,128 項測試全綠,真實管線產出 86 張卡並全量品質驗證,定案 `opus` + `medium` |
 | **範圍** | `app/infrastructure/llm/`(新增 provider + 工廠)、`app/core/config.py`(新增設定)、8 處 `LLMClient()` 實例化點改為工廠呼叫、`requirements.txt`(+jsonschema) |
 | **不動** | `scripts/fastapi_client/**` 生成腳本(僅 D7 標籤行一行例外)、API request/response schema、各 handler 的 prompt 渲染與建卡邏輯、現有 `LLMClient` 類本體、Anki/ES/MySQL 基礎設施 |
-| **PR / 進度** | 尚未開始 |
+| **PR / 進度** | [#9](https://github.com/jacky917/FluencyTides/pull/9)(2026-08-27 開啟,commit `911bdc7`) |
 | **關聯文件** | `docs/wip/claude_cli_env_setup_FEAT_2026-08-27.md`(環境配置 + 全參數值域實測;本文件所有旗標與失敗形態均以該文件 §3/§5 的實測為依據)、`app/infrastructure/llm/client.py`、`app/services/task_handlers/jp_verb_pair_handler.py` |
 
 ---
@@ -111,11 +111,12 @@ claude -p --safe-mode --tools "" --no-session-persistence \
 | `--system-prompt` | handler 的 system_prompt | 整替預設系統提示(canary 實測生效),並省下預設提示的 token |
 | `--json-schema` | `response_schema` 經 `LLMClient._resolve_json_schema()`(classmethod,免實例化)**展平後**的 JSON | **必須展平 `$defs`/`$ref`**:未展平會使 CLI 內建 5 次結構化重試全數耗盡(haiku 實測 189s 白燒);非法 JSON 快速失敗不燒額度;enum/巢狀/陣列均被遵守 |
 
+| user_prompt | stdin | UTF-8 bytes 寫入;避免命令列長度限制與轉義問題 |
+
 **輸出串流歸屬(實作期實測補充)**:`[claude-code:unrecognized_model]` 與
 `Error: --json-schema is not valid JSON` **均為 stderr 專屬**,stdout 只承載
 JSON 信封。因此致命標記的偵測只掃 stderr —— 若連 stdout 一起掃,生成內容
 剛好含這些字串時會被錯殺(已加測試防護)。
-| user_prompt | stdin | UTF-8 bytes 寫入;避免命令列長度限制與轉義問題 |
 
 ### D5 進程執行與校驗管線
 
@@ -312,8 +313,8 @@ thinking/effort、介面契約、待新增設定、Batch API 與 prompt caching 
   (+jsonschema 4.26.0 已安裝)。回歸驗證:全套 122 項測試綠;以真實 `.env`
   (`LLM_PROVIDER=google`)確認工廠回傳 `LLMClient`、標籤 `gemini-3.1-pro-preview`,
   與 main 分支行為一致。
-- **P3 端到端驗證**:`.env` 切 `claude-code`,重啟 FastAPI,先 `--dry-run` 確認掃描無異狀,再 `--limit 1` 實跑一張卡,Anki 內人工檢查挖空/翻譯/tag,審計目錄核對。
-- **P4 放量與收尾**:`--limit 20` 批次跑,統計失敗率、單卡耗時、以及 D9 兩項已知差異的實際影響(輸出穩定性、拒答率);文檔補驗收結果移 `archive/`。
+- **P3 端到端驗證** ✅ 完成(2026-08-27):以環境變數覆寫在 8001 埠起獨立 backend(不動 `.env`),全鏈路實跑。修掉一個既存環境漂移:系統 `elasticsearch` 套件為 9.4.1 但 requirements 釘 `<9.0.0`、伺服器為 8.19.15,v9 相容標頭被 ES 8 拒收(HTTP 400);降回 8.19.3 後正常。
+- **P4 放量與收尾** ✅ 完成(2026-08-27):模型×力度掃描 7 組共 66 張卡 + 決賽 20 張,逐張人工評閱 + 程式化全檢。定案 `opus` + `medium`(38 秒/張)。D9 兩項已知差異的實測影響:輸出穩定性未見問題(86 張零 JSON 格式失敗);拒答率 opus@high 1/21、opus@medium 0/20。
 
 ## 6. 風險與未知
 
@@ -326,13 +327,18 @@ thinking/effort、介面契約、待新增設定、Batch API 與 prompt caching 
 | 單卡耗時高於 API | 可接受:管線序列且 `BackendAPIClient` 本就 `timeout=None`;P4 記錄實測數據 |
 | 合規形態滑移(被日後改成常駐/對外) | §1 合規邊界 + provider docstring 註明僅供使用者自發批次任務 |
 
-## 7. 驗收標準
+## 7. 驗收標準(全數驗證完畢 2026-08-27)
 
-- [ ] `.env` 僅改 `LLM_PROVIDER=claude-code` + `LLM_MODEL_NAME=<alias>`,`--limit 1` 全鏈路成功建卡(Context + Cloze + 母卡 JSON 回寫)
-- [ ] 標籤帶 effort 且兩處同串:Anki 卡片 tag 顯示 `LLM::(claude-code)<model>@<effort>`(如 `LLM::(claude-code)opus@high`),MySQL 去重表 `llm_model` 欄位為完全相同的字串,成功與失敗紀錄皆同
-- [ ] `LLM_MODEL_NAME` 從 `opus` 改 `sonnet`、`LLM_CLAUDE_CODE_EFFORT` 從 `high` 改 `medium` 後,不改代碼,下一批卡以新配置生成且兩處標籤同步更新
-- [ ] `LLM_CLAUDE_CODE_EFFORT` 設非法值(如 `ultra`)→ 啟動即報錯,不會無聲跑在錯誤力度
-- [ ] 單元測試全綠(§4 測試清單每項各至少一案)
-- [ ] `.env` 改回原 provider 後,API 模式行為與 main 分支完全一致(回歸驗證)
-- [ ] 故意餵一個會產出非法 JSON 的場景,確認:修復重試觸發 → 全敗時腳本 `record_failure` 跳句、不中斷批次
-- [ ] 審計目錄留存每次呼叫的 prompt/answer/meta,抽查一筆與 Anki 卡片內容一致
+- [x] `.env` 僅改 `LLM_PROVIDER` + `LLM_MODEL_NAME` 即可切換,全鏈路成功建卡(Context + Cloze + 母卡 JSON 回寫)。掃描期間為避免污染 `.env`,改以等效的環境變數覆寫達成
+- [x] 標籤帶 effort 且兩處同串:Anki tag `LLM::(claude-code)opus@medium`(實查 40 張)、MySQL 去重表 `llm_model` 為 `(claude-code)opus@medium`(實查 20 筆),成功與失敗紀錄皆同
+- [x] 改 `.env` 即換模型/力度、不動代碼:掃描期間實跑 7 種組合(sonnet×4 + opus×3)全部生效
+- [x] `LLM_CLAUDE_CODE_EFFORT` 非法值啟動即報錯(單元測試涵蓋 `ultra` 等值)
+- [x] 單元測試全綠:128 項(既有 94 項零破壞)
+- [x] `.env` 改回原 provider 後行為與 main 一致:工廠回傳 `LLMClient`、標籤 `gemini-3.1-pro-preview`
+- [x] 生成失敗走優雅路徑:opus@high 對一句露骨候選內容拒答 → `position_cloze` 判定失敗 → 422 → 腳本 `record_failure` 跳句 → 批次未中斷,10 張仍如期完成(生產環境實證,非僅單元測試)
+- [x] 審計目錄留存 prompt/answer/meta,抽驗一筆與 Anki 卡片逐欄位一致(translation 全等、Cloze_Sentence 挖空位置相符、tag 相符)
+
+## 8. 後續事項(不屬本計劃範圍)
+
+- **JP_VerbPair 缺少目標動詞 token 級驗證**:掃描發現短動詞(如「よる」)的 ES 候選有大量假陽性(終助詞「〜よっ」、招呼語「よっす」),LLM 無拒答機制只能將錯就錯。JP_CoreVerb 的 `funnel.py` 已有 fugashi 驗證可擋,應移植過去。對品質的影響大於任何模型參數調整。
+- **測試卡與去重紀錄清理**:掃描產生 86 張卡(43 次生成 × Context+Cloze),Anki 依 tag 清理;MySQL `generated_sentences_log` 亦有對應紀錄(含一筆 `(claude-code)claude-opus-5@high` 來自中途的單次驗證),未清除會阻擋這些 script_id+動詞組合日後重新生成。
