@@ -29,7 +29,7 @@ from app.services.task_handlers.shared.cloze_positioning import (
 )
 from app.infrastructure.utils.id_generator import generate_unique_card_id
 from app.core.dependencies import get_template_engine
-from app.infrastructure.llm.client import LLMClient
+from app.infrastructure.llm.factory import create_llm_client
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.services.task_handlers.shared.anki_transaction import AnkiNoteTransaction
 from app.schemas.relation import CardRelationCreate
@@ -239,7 +239,7 @@ class JPCoreVerbHandler(BaseHandler):
         )
 
         from app.schemas.llm.jp_core_verb import CoreVerbCardGenerationResult
-        llm_client = LLMClient()
+        llm_client = create_llm_client()
         try:
             schema = CoreVerbCardGenerationResult.model_json_schema()
             raw_result = await llm_client.generate_structured_data(

@@ -479,6 +479,32 @@ class Settings(BaseSettings):
         description="LLM 進行劇本批次解析時，一次抓取的台詞數量 (預設 20 句)",
     )
 
+    # --- claude-code provider 專屬設定 ---
+    # 僅在 LLM_PROVIDER=claude-code 時生效；其他 provider 完全不讀取這些值。
+    LLM_CLAUDE_CODE_CLI_PATH: str = Field(
+        default="",
+        description="claude 執行檔的絕對路徑；留空則自動探測（~/.local/bin → PATH → 桌面版路徑）",
+    )
+    LLM_CLAUDE_CODE_EFFORT: str = Field(
+        default="high",
+        description=(
+            "claude -p 的推理力度，可用 low/medium/high/xhigh/max。"
+            "注意 CLI 對非法值會靜默回退，故由 ClaudeCodeLLMClient 於初始化時白名單驗證"
+        ),
+    )
+    LLM_CLAUDE_CODE_WORKDIR: str = Field(
+        default="",
+        description="CLI 執行時的專用空工作目錄；留空則為 backend/.claude_code_workdir",
+    )
+    LLM_CLAUDE_CODE_TIMEOUT_SECONDS: float = Field(
+        default=900.0,
+        description="單次 claude -p 呼叫的超時秒數（CLI 內建結構化重試最壞情況約 190 秒）",
+    )
+    LLM_CLAUDE_CODE_AUDIT_DIR: str = Field(
+        default="logs/claude_code_audit",
+        description="每次呼叫的 prompt/answer/meta 落盤目錄；留空則關閉審計",
+    )
+
     AUDIO_API_KEY: str | None = Field(
         default=None,
         description="語音處理專用的 API 金鑰（Gemini Native 或 OpenAI 相容皆共用此金鑰）",

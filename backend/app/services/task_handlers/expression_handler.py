@@ -20,7 +20,7 @@ from app.services.task_handlers.base import BaseHandler
 from app.services.task_handlers.registry import register_handler
 from app.infrastructure.utils.id_generator import generate_unique_card_id
 from app.core.dependencies import get_template_engine
-from app.infrastructure.llm.client import LLMClient
+from app.infrastructure.llm.factory import create_llm_client
 from app.schemas.llm.expression import LLMExpressionCorrectionResult
 from app.core.config import settings
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
@@ -133,7 +133,7 @@ class ExpressionCorrectionHandler(BaseHandler):
         system_prompt = "You are a strict JSON data extractor and native language coach."
 
         # 2. 呼叫 LLM
-        llm_client = LLMClient()
+        llm_client = create_llm_client()
         schema_dict = LLMExpressionCorrectionResult.model_json_schema()
 
         result = await llm_client.generate_structured_data(

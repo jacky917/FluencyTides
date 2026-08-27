@@ -116,3 +116,11 @@ old/
 # 個人練習用的 Anki 卡片 JSON：內容因人而異、且可能含私人素材路徑，不進版控
 backend/scripts/local_anki/Speaking_Trilingual_Dark/jsons/
 backend/scripts/local_anki/Speaking_Coach_Dark/jsons/
+
+# -------------------------
+# claude-code LLM provider 執行產物 (Runtime artifacts)
+# -------------------------
+# CLI 執行用的專用空目錄、每次呼叫的 prompt/answer 審計紀錄，
+# 以及挖空定位失敗紀錄等執行期日誌（logs/ 下全為執行期產物）
+backend/.claude_code_workdir/
+backend/logs/

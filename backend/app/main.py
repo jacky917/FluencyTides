@@ -56,7 +56,7 @@ from app.infrastructure.database.database import (
     dispose_engine,
 )
 from app.infrastructure.database.corpus_database import dispose_corpus_engine
-from app.infrastructure.llm.client import LLMClient
+from app.infrastructure.llm.factory import create_llm_client
 from app.infrastructure.storage.minio_client import MinioClient
 from app.schemas.card import ErrorResponse
 
@@ -109,14 +109,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await create_db_and_tables()
     logger.info("✅ 資料庫初始化完成。")
 
-    # LLMClient 初始化可能因缺少 API Key 而失敗，
-    # 但不應阻止整個應用啟動（其他端點仍可使用）。
+    # LLM 客戶端由 create_llm_client() 依 LLM_PROVIDER 選型，初始化可能因
+    # 缺少 API Key（API 模式）或找不到 CLI／effort 設定錯誤（claude-code 模式）
+    # 而失敗，但不應阻止整個應用啟動（其他端點仍可使用）。
     try:
-        app.state.llm_client = LLMClient()
-        logger.info("✅ LLMClient Singleton 已初始化。")
+        app.state.llm_client = create_llm_client()
+        logger.info(
+            "✅ LLM 客戶端 Singleton 已初始化 (%s)。",
+            type(app.state.llm_client).__name__,
+        )
     except Exception as e:
         logger.warning(
-            "⚠️ LLMClient 初始化失敗（LLM 相關端點將不可用）: %s", e
+            "⚠️ LLM 客戶端初始化失敗（LLM 相關端點將不可用）: %s", e
         )
         app.state.llm_client = None
 

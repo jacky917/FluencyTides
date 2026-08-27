@@ -32,7 +32,7 @@ from app.core.config import settings
 from app.core.exceptions import FluencyTidesError, LLMServiceError
 from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.database.database import async_session_factory, create_db_and_tables
-from app.infrastructure.llm.client import LLMClient
+from app.infrastructure.llm.factory import create_llm_client
 from app.schemas.card import CardGenerateRequest
 from app.services.anki_model_manager import AnkiModelManager
 from app.services.card_service import CardService
@@ -111,9 +111,9 @@ async def main() -> None:
     anki_client = AnkiClient()
     
     try:
-        llm_client = LLMClient()
+        llm_client = create_llm_client()
     except LLMServiceError as e:
-        logger.error(f"LLMClient 初始化失敗，請檢查環境變數 (LLM_API_KEY): {e}")
+        logger.error(f"LLM 客戶端初始化失敗，請檢查 .env 的 LLM_* 設定: {e}")
         await anki_client.close()
         return
 

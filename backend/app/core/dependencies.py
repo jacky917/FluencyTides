@@ -39,8 +39,16 @@ from fastapi import Depends, Request
 
 from app.infrastructure.database.database import get_async_session
 
+from typing import TYPE_CHECKING
+
 from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.llm.client import LLMClient
+
+if TYPE_CHECKING:
+    # 僅供型別標註：API 模式下不應在 import 期載入 claude-code provider
+    # （連帶不需要 jsonschema 套件）。Type-only import; API mode must not
+    # load the claude-code provider at import time.
+    from app.infrastructure.llm.claude_code_client import ClaudeCodeLLMClient
 from app.infrastructure.storage.minio_client import MinioClient
 from app.services.anki_model_manager import AnkiModelManager
 from app.services.card_service import CardService
@@ -92,23 +100,25 @@ def get_anki_client(request: Request) -> AnkiClient:
     return request.app.state.anki_client
 
 
-def get_llm_client(request: Request) -> LLMClient:
-    """從 app.state 取得 LLMClient Singleton 實例。
+def get_llm_client(request: Request) -> "LLMClient | ClaudeCodeLLMClient":
+    """從 app.state 取得 LLM 客戶端 Singleton 實例。
 
-    Get the LLMClient singleton from app.state.
+    Get the LLM client singleton from app.state.
 
-    LLMClient 在 lifespan startup 時初始化並存入 app.state，
-    確保所有請求共用同一個 AsyncOpenAI 客戶端。
+    客戶端在 lifespan startup 時由 ``create_llm_client()`` 依
+    ``LLM_PROVIDER`` 建立並存入 app.state：預設為共用同一個 AsyncOpenAI
+    連線的 ``LLMClient``，``claude-code`` 模式下則為驅動本機 CLI 的
+    ``ClaudeCodeLLMClient``。兩者介面相同。
 
-    Initialized at lifespan startup so every request shares the same
-    AsyncOpenAI client.
+    Created at lifespan startup by ``create_llm_client()`` according to
+    ``LLM_PROVIDER``; both clients share the same interface.
 
     Args:
         request: FastAPI Request 物件，用於存取 app.state。
             FastAPI Request object used to access app.state.
 
     Returns:
-        LLMClient Singleton 實例。The LLMClient singleton instance.
+        LLM 客戶端 Singleton 實例。The LLM client singleton instance.
     """
     return request.app.state.llm_client
 
