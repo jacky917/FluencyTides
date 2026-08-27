@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
-from app.infrastructure.llm.client import LLMClient
+from app.infrastructure.llm.factory import create_llm_client
 
 # ==========================================
 # 結構化輸出 Schema (Pydantic V2)
@@ -217,9 +217,9 @@ async def build_llm_index(limit: int = 0):
     
     # 確保使用的模型與 API KEY 存在
     try:
-        llm_client = LLMClient()
+        llm_client = create_llm_client()
     except Exception as e:
-        print(f"初始化 LLMClient 失敗: {e}")
+        print(f"初始化 LLM 客戶端失敗: {e}")
         return
 
     print("-" * 50)

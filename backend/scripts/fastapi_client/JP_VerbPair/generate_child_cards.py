@@ -272,7 +272,11 @@ async def process_verb_group(
                 llm_model_name = settings.LLM_MODEL_NAME
                 if settings.LLM_PROVIDER and settings.LLM_PROVIDER.lower() not in ("google", "openai", ""):
                     llm_model_name = f"({settings.LLM_PROVIDER}){llm_model_name}"
-                    
+                # claude-code provider 的推理力度會影響生成品質，
+                # 需一併記錄才能事後區分同模型不同力度產出的卡片。
+                if settings.LLM_PROVIDER and settings.LLM_PROVIDER.lower() == "claude-code":
+                    llm_model_name = f"{llm_model_name}@{settings.LLM_CLAUDE_CODE_EFFORT}"
+
                 try:
                     response_json = await api_client.invoke_generation_pipeline(payload)
                     data = response_json.get("data")

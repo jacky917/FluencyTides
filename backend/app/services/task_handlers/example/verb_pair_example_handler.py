@@ -18,7 +18,7 @@ from app.services.task_handlers.base import BaseHandler
 from app.services.task_handlers.registry import register_handler
 from app.infrastructure.utils.id_generator import generate_unique_card_id
 from app.core.dependencies import get_template_engine
-from app.infrastructure.llm.client import LLMClient
+from app.infrastructure.llm.factory import create_llm_client
 from app.schemas.llm.example.verb_pair import VerbPairGenerationResult
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 
@@ -98,7 +98,7 @@ class VerbPairExampleHandler(BaseHandler):
         )
 
         system_prompt = "You are an expert Japanese language curriculum designer. Always output strict JSON."
-        llm_client = LLMClient()
+        llm_client = create_llm_client()
         schema_dict = VerbPairGenerationResult.model_json_schema()
         
         result = await llm_client.generate_structured_data(

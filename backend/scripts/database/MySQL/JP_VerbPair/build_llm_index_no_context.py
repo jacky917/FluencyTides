@@ -25,7 +25,7 @@ import aiomysql
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import settings
-from app.infrastructure.llm.client import LLMClient
+from app.infrastructure.llm.factory import create_llm_client
 
 
 logger = logging.getLogger(__name__)
@@ -367,9 +367,9 @@ async def build_llm_index(limit: int = 0):
     print("🚀 啟動 LLM 語意解析索引建置腳本 (無上下文輕量版 + 物理級 Enum 嚴格限制)...")
     
     try:
-        llm_client = LLMClient()
+        llm_client = create_llm_client()
     except Exception as e:
-        print(f"初始化 LLMClient 失敗: {e}")
+        print(f"初始化 LLM 客戶端失敗: {e}")
         return
 
     print("-" * 50)
