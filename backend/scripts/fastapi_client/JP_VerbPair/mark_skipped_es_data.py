@@ -55,6 +55,7 @@ from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.core.config import settings
 from sqlalchemy import text
 from scripts.common.database.log_repository import PROJECT_JP_VERB_PAIR
+from scripts.common.llm_label import build_llm_model_label
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import DedupManager
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.backend_api_client import BackendAPIClient
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.anki_media_uploader import AnkiMediaUploader
@@ -241,10 +242,8 @@ async def process_verb_group(
                 
                 # 若 API 發生嚴重錯誤 (例如無法連線、LLM多重失敗等)，BackendAPIClient 內部如果拋出 Exception 會中斷這層，
                 # 我們應該讓它向上拋出，以便觸發安全退出。
-                # 解析 model 標籤前綴
-                llm_model_name = settings.LLM_MODEL_NAME
-                if settings.LLM_PROVIDER and settings.LLM_PROVIDER.lower() not in ("google", "openai", ""):
-                    llm_model_name = f"({settings.LLM_PROVIDER}){llm_model_name}"
+                # 解析 model 標籤（統一規則見 scripts/common/llm_label.py）
+                llm_model_name = build_llm_model_label()
                     
                 try:
                     response_json = await api_client.invoke_generation_pipeline(payload)

@@ -50,6 +50,7 @@ from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.core.config import settings
 from sqlalchemy import text
 from scripts.common.database.log_repository import PROJECT_JP_VERB_PAIR
+from scripts.common.llm_label import build_llm_model_label
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import DedupManager
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.backend_api_client import BackendAPIClient
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.anki_media_uploader import AnkiMediaUploader
@@ -434,13 +435,7 @@ async def process_verb_group(
                     
                 logger.info(f"🚀 發送生成請求 (script_id: {script_id})...")
                 
-                llm_model_name = settings.LLM_MODEL_NAME
-                if settings.LLM_PROVIDER and settings.LLM_PROVIDER.lower() not in ("google", "openai", ""):
-                    llm_model_name = f"({settings.LLM_PROVIDER}){llm_model_name}"
-                # claude-code provider 的推理力度會影響生成品質，
-                # 需一併記錄才能事後區分同模型不同力度產出的卡片。
-                if settings.LLM_PROVIDER and settings.LLM_PROVIDER.lower() == "claude-code":
-                    llm_model_name = f"{llm_model_name}@{settings.LLM_CLAUDE_CODE_EFFORT}"
+                llm_model_name = build_llm_model_label()
 
                 try:
                     response_json = await api_client.invoke_generation_pipeline(payload)

@@ -65,6 +65,7 @@ from scripts.common.database.log_repository import (
     PROJECT_JP_CORE_VERB,
     GeneratedLogRepository,
 )
+from scripts.common.llm_label import build_llm_model_label
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.anki_media_uploader import (
     AnkiMediaUploader,
 )
@@ -345,13 +346,7 @@ async def _generate_from_report(
     Returns:
         int: 本動詞實際新增的卡片數。Number of cards actually added.
     """
-    llm_model_name = settings.LLM_MODEL_NAME
-    if settings.LLM_PROVIDER and settings.LLM_PROVIDER.lower() not in ("google", "openai", ""):
-        llm_model_name = f"({settings.LLM_PROVIDER}){llm_model_name}"
-    # claude-code provider 的推理力度會影響生成品質，
-    # 需一併記錄才能事後區分同模型不同力度產出的卡片。
-    if settings.LLM_PROVIDER and settings.LLM_PROVIDER.lower() == "claude-code":
-        llm_model_name = f"{llm_model_name}@{settings.LLM_CLAUDE_CODE_EFFORT}"
+    llm_model_name = build_llm_model_label()
 
     new_generated = 0
     for item in report.selected:
