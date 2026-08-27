@@ -1,6 +1,6 @@
-"""批量刪除 JP_VerbPair 子卡片工具（薄包裝）。
+"""批量刪除 JP_CoreVerb 子卡片工具（薄包裝）。
 
-Batch deletion tool for JP_VerbPair child cards (thin wrapper around
+Batch deletion tool for JP_CoreVerb child cards (thin wrapper around
 scripts.local_anki.common.deletion.child_deleter).
 
 支援兩種任務輸入模式：
@@ -9,6 +9,9 @@ A. JSON 模式：從 configs/delete_child_cards.json 讀取特定待刪除的子
      則視為清除該母卡片下的「所有」子卡片。
 B. 母卡模式：透過 `--master-nid` 參數指定母卡片，腳本會自動掃描並刪除
    該母卡片下的「所有」子卡片。
+
+與 JP_VerbPair 版行為一致，差異只在專案描述子：母卡 JSON 為單欄
+Word_Data_JSON、Cloze 模型為 JP_CoreVerb_Cloze_Dark。
 
 刪除流程與安全機制（母卡 JSON 移除 → DB 標記 → 最後才刪子卡、
 單筆失敗完整回滾、事後自動完整性檢查）由共用核心提供，
@@ -43,7 +46,7 @@ if str(_backend_dir) not in sys.path:
     sys.path.insert(0, str(_backend_dir))
 import scripts.common.env  # noqa
 
-from scripts.common.database.log_repository import PROJECT_JP_VERB_PAIR
+from scripts.common.database.log_repository import PROJECT_JP_CORE_VERB
 from scripts.local_anki.common.deletion.child_deleter import run_child_deletion
 from scripts.local_anki.common.deletion.profiles import get_profile
 
@@ -56,7 +59,7 @@ async def main() -> None:
     Script entry point: parse arguments and invoke the shared deletion
     core.
     """
-    parser = argparse.ArgumentParser(description="批量刪除 JP_VerbPair 子卡片工具")
+    parser = argparse.ArgumentParser(description="批量刪除 JP_CoreVerb 子卡片工具")
     parser.add_argument(
         "--execute", action="store_true",
         help="實際執行刪除操作。未加上此參數時預設為 Dry Run 模式 (不實際修改 Anki 或資料庫)"
@@ -72,7 +75,7 @@ async def main() -> None:
     args = parser.parse_args()
 
     await run_child_deletion(
-        get_profile(PROJECT_JP_VERB_PAIR),
+        get_profile(PROJECT_JP_CORE_VERB),
         dry_run=not args.execute,
         allow_regen=args.allow_regen,
         master_nid=args.master_nid,

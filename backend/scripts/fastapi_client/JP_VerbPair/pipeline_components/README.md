@@ -42,8 +42,11 @@ from pipeline_components.dedup_manager import DedupManager
 from pipeline_components.backend_api_client import BackendAPIClient
 from pipeline_components.anki_media_uploader import AnkiMediaUploader
 
-# 1. 準備資料與防重複
-dedup_manager = DedupManager(session, voice_dir, avatar_dir, "SabbatOfTheWitch")
+# 1. 準備資料與防重複（project 對應 generated_sentences_log 的專案隔離欄位）
+from scripts.common.database.log_repository import PROJECT_JP_VERB_PAIR
+dedup_manager = DedupManager(
+    session, voice_dir, avatar_dir, "SabbatOfTheWitch", project=PROJECT_JP_VERB_PAIR
+)
 context_dialogue = await dedup_manager.prepare_generation(script_id, verb, chapter)
 if not context_dialogue:
     return  # 重複，跳過

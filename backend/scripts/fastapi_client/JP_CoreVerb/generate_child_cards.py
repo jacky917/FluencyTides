@@ -61,7 +61,10 @@ from app.infrastructure.database.elasticsearch_client import (
     dispose_elasticsearch_client,
     search_dialogue_by_verb,
 )
-from scripts.common.database.log_repository import GeneratedLogRepository
+from scripts.common.database.log_repository import (
+    PROJECT_JP_CORE_VERB,
+    GeneratedLogRepository,
+)
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.anki_media_uploader import (
     AnkiMediaUploader,
 )
@@ -188,7 +191,9 @@ async def _fetch_occupied(
         list[dict]: 每項含 ``script_id / sentence / chapter / speaker``。
         Each item contains ``script_id / sentence / chapter / speaker``.
     """
-    records = await log_repo.get_generated_records(session, verb_lemma)
+    records = await log_repo.get_generated_records(
+        session, verb_lemma, project=PROJECT_JP_CORE_VERB
+    )
 
     # Anki 實存子卡 note id 集合（context / cloze 各查一次）
     anki_context_ids = set(
@@ -539,6 +544,7 @@ async def main() -> None:
                 source_game=source_game,
                 context_prev=getattr(settings, "JP_CORE_VERB_CONTEXT_PREV", 20),
                 context_next=getattr(settings, "JP_CORE_VERB_CONTEXT_NEXT", 10),
+                project=PROJECT_JP_CORE_VERB,
             )
             api_client = BackendAPIClient(api_url, headers)
             uploader = AnkiMediaUploader(anki_client, voice_dir, avatar_dir, source_game)
@@ -582,7 +588,7 @@ async def main() -> None:
 
                 # 已有生成紀錄（含軟刪除/失敗）的句子在過濾層直接篩掉
                 exclude_generated = await log_repo.get_logged_keys(
-                    session, verb_lemma, source_game
+                    session, verb_lemma, source_game, project=PROJECT_JP_CORE_VERB
                 )
 
                 report = await run_selection_funnel(
