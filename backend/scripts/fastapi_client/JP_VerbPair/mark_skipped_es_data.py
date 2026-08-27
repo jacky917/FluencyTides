@@ -4,6 +4,13 @@ Batch child-card generator for intransitive/transitive verb pairs; this
 variant additionally marks normally-deduped log rows with
 ``failure_count = 9`` so they are skipped permanently on future runs.
 
+【行為差異註記 2026-08-27】主腳本 generate_child_cards.py 已接上
+fugashi token 級驗證（lemma/讀音/複合動詞前後項/補助動詞四關，
+詳見 docs/wip/verbpair_fugashi_validation_FEAT_2026-08-27.md），
+本維運變體**刻意未接**：其 UPDATE 只影響既有 DB 紀錄、不會創造新卡，
+未驗證的 ES 誤命中在此最多是對不存在的紀錄空更新。若日後把本腳本
+當生成器使用，須先移植同款驗證。
+
 此腳本負責從 Anki 中掃描 `日本語::自他動詞::Master` 牌組，針對每張母卡片中的動詞欄位，
 向 Elasticsearch 檢索遊戲台詞，並呼叫 FastAPI 後端自動產生對應的 Context 與 Cloze 兩種類型的子卡片。
 

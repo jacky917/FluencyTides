@@ -27,8 +27,11 @@ if str(_backend_dir) not in sys.path:
 
 from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
     REJECTION_AUXILIARY,
+    REJECTION_COMPOUND_SUFFIX,
     REJECTION_COMPOUND_VERB,
     REJECTION_LEMMA_MISMATCH,
+    REJECTION_READING_MISMATCH,
+    to_katakana,
     validate_candidate,
 )
 from scripts.fastapi_client.JP_CoreVerb.pipeline_components.diversity_selector import (
@@ -55,11 +58,22 @@ class FakeToken:
         feature: 8 欄可索引序列——``feature[0]`` 詞性大類、``feature[7]`` lemma。
     """
 
-    def __init__(self, surface: str, pos1: str, lemma: str | None = None):
+    def __init__(
+        self,
+        surface: str,
+        pos1: str,
+        lemma: str | None = None,
+        reading: str | None = None,
+        orth_base: str | None = None,
+    ):
         self.surface = surface
-        feature = ["*"] * 8
+        feature = ["*"] * (11 if orth_base is not None else 8)
         feature[0] = pos1
         feature[7] = lemma if lemma is not None else surface
+        if reading is not None:
+            feature[6] = reading
+        if orth_base is not None:
+            feature[10] = orth_base
         self.feature = feature
 
     def __repr__(self) -> str:  # pragma: no cover - debug 輔助
@@ -236,6 +250,161 @@ def test_validate_candidate_rule3_verb_te_still_rejected():
     )
     assert result.accepted is False
     assert result.reason == REJECTION_AUXILIARY
+
+
+# =============================================================================
+# 驗證器擴充（VerbPair 計劃 §D2/D3：讀音關與複合動詞後項）
+# =============================================================================
+
+
+def test_reading_mismatch_rejected():
+    """規則 ①'：同表層異讀靠語彙素読み區分——めくる卡拒絕まくる句。
+    Same-surface different-reading tokens are rejected by the reading gate."""
+    sentence = "ギターを弾きまくる"
+    # UniDic 實測：まくる 的 lemma 是 捲る、lForm 是 マクル
+    tokens = [N("ギター"), P("を"), FakeToken("まくる", "動詞", "捲る", "マクル")]
+    result = validate_candidate(
+        sentence, "捲る", allow_auxiliary=False,
+        tagger=make_tagger({sentence: tokens}),
+        expected_reading="めくる",
+    )
+    assert result.accepted is False
+    assert result.reason == REJECTION_READING_MISMATCH
+
+
+def test_reading_match_accepts_hiragana_expected():
+    """規則 ①'：期待讀音給平假名也能與片假名 lForm 比對成功。
+    Hiragana expected readings match katakana lForm values."""
+    sentence = "布団をめくる"
+    tokens = [N("布団"), P("を"), FakeToken("めくる", "動詞", "捲る", "メクル")]
+    result = validate_candidate(
+        sentence, "捲る", allow_auxiliary=False,
+        tagger=make_tagger({sentence: tokens}),
+        expected_reading="めくる",
+    )
+    assert result.accepted is True
+
+
+def test_reading_gate_skipped_when_token_reading_missing():
+    """規則 ①'：token 讀音缺值（*）時放行讀音關——寧可漏擋不誤殺。
+    A missing token reading passes the gate (fail-open)."""
+    sentence = "布団をめくる"
+    tokens = [N("布団"), P("を"), V("めくる", "捲る")]  # feature[6] 維持 *
+    result = validate_candidate(
+        sentence, "捲る", allow_auxiliary=False,
+        tagger=make_tagger({sentence: tokens}),
+        expected_reading="めくる",
+    )
+    assert result.accepted is True
+
+
+def test_reading_gate_disabled_by_default():
+    """回歸保證：不傳 expected_reading 時完全不驗讀音（CoreVerb 舊呼叫端）。
+    Legacy callers without expected_reading skip the gate entirely."""
+    sentence = "ギターを弾きまくる"
+    tokens = [N("ギター"), FakeToken("まくる", "動詞", "捲る", "マクル")]
+    result = validate_candidate(
+        sentence, "捲る", allow_auxiliary=False,
+        tagger=make_tagger({sentence: tokens}),
+    )
+    assert result.accepted is True
+
+
+def test_compound_suffix_rejected():
+    """規則 ②'：連用形直接接續的後項拒絕——使い＋切れ（〜切れない）。
+    Compound-suffix usages (renyoukei + target) are rejected."""
+    sentence = "全部は使い切れない"
+    tokens = [
+        N("全部"), P("は"),
+        V("使い", "使う"), V("切れ", "切れる"), AUX("ない", "ない"),
+    ]
+    result = validate_candidate(
+        sentence, "切れる", allow_auxiliary=False,
+        tagger=make_tagger({sentence: tokens}),
+    )
+    assert result.accepted is False
+    assert result.reason == REJECTION_COMPOUND_SUFFIX
+
+
+def test_compound_suffix_allowed_by_flag():
+    """規則 ②'：per-verb 白名單 allow_compound_suffix=True 放行。
+    The per-verb allow_compound_suffix flag lifts the rejection."""
+    sentence = "全部は使い切れない"
+    tokens = [
+        N("全部"), P("は"),
+        V("使い", "使う"), V("切れ", "切れる"), AUX("ない", "ない"),
+    ]
+    result = validate_candidate(
+        sentence, "切れる", allow_auxiliary=False,
+        tagger=make_tagger({sentence: tokens}),
+        allow_compound_suffix=True,
+    )
+    assert result.accepted is True
+
+
+def test_standalone_usage_passes_all_new_gates():
+    """正例全關通過：集中力が切れた（獨立用法 + 讀音相符）。
+    A genuine standalone usage passes every gate."""
+    sentence = "集中力が切れた"
+    tokens = [
+        N("集中力"), P("が"),
+        FakeToken("切れ", "動詞", "切れる", "キレル"), AUX("た", "た"),
+    ]
+    result = validate_candidate(
+        sentence, "切れる", allow_auxiliary=False,
+        tagger=make_tagger({sentence: tokens}),
+        expected_reading="きれる",
+    )
+    assert result.accepted is True
+    assert result.candidate is not None
+
+
+def test_orth_base_rescues_unidic_lemma_unification():
+    """UniDic 字形統合（帰る lemma=返る）靠 orthBase 兜底通過。
+    orthBase rescues tokens whose lemma was unified to another spelling."""
+    sentence = "家に帰る"
+    tokens = [N("家"), P("に"), FakeToken("帰る", "動詞", "返る", "カエル", orth_base="帰る")]
+    result = validate_candidate(
+        sentence, "帰る", allow_auxiliary=False,
+        tagger=make_tagger({sentence: tokens}),
+        expected_reading="かえる",
+    )
+    assert result.accepted is True
+
+
+def test_lemma_subdivision_suffix_stripped():
+    """UniDic 語彙素細分後綴（差す-他動詞）去除後可與目標比對。
+    Lexeme subdivision suffixes (差す-他動詞) are stripped before matching."""
+    sentence = "ナイフで刺す"
+    # 實測：刺す 的 lemma 是「差す-他動詞」、orthBase 是「刺す」
+    tokens = [N("ナイフ"), P("で"), FakeToken("刺す", "動詞", "差す-他動詞", "サス", orth_base="刺す")]
+    result = validate_candidate(
+        sentence, "差す", allow_auxiliary=False,
+        tagger=make_tagger({sentence: tokens}),
+    )
+    assert result.accepted is True
+
+
+def test_niyoru_still_rejected_after_orth_base_loosening():
+    """回歸防線：による（lemma=因る、orthBase=よる）對撚る兩關皆不符 → 拒。
+    による remains rejected for target 撚る even with the orthBase fallback."""
+    sentence = "規模による"
+    tokens = [N("規模"), P("に"), FakeToken("よる", "動詞", "因る", "ヨル", orth_base="よる")]
+    result = validate_candidate(
+        sentence, "撚る", allow_auxiliary=False,
+        tagger=make_tagger({sentence: tokens}),
+        expected_reading="よる",
+    )
+    assert result.accepted is False
+    assert result.reason == REJECTION_LEMMA_MISMATCH
+
+
+def test_to_katakana_converts_hiragana_only():
+    """to_katakana：平轉片，片假名與其他字元不動。
+    Hiragana converts; katakana and other characters pass through."""
+    assert to_katakana("うまる") == "ウマル"
+    assert to_katakana("ウマル") == "ウマル"
+    assert to_katakana("埋まる") == "埋マル"
 
 
 # =============================================================================
