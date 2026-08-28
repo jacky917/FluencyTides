@@ -23,15 +23,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# 6. 複製專案原始碼
-COPY . .
-
-# 7. 安全性升級：建立並切換為非 root 使用者
+# 6. 建立非 root 使用者並安裝 Claude Code CLI
+# 【層順序】刻意放在 COPY 原始碼之前：CLI 下載安裝是重量層（數十 MB），
+# 提前可讓「只改原始碼」的重建完整吃到快取，不必每次重裝 CLI。
 # 在處理包含 API Keys 或自動化生成內容的服務時，降權執行是防止容器逃逸的標準防護
-RUN useradd -m apiuser && chown -R apiuser /app
+RUN useradd -m apiuser
 USER apiuser
 
-# 7.5 安裝 Claude Code CLI（LLM_PROVIDER=claude-code 模式的執行檔）
+# 6.5 安裝 Claude Code CLI（LLM_PROVIDER=claude-code 模式的執行檔）
 # - 以 apiuser 身分安裝到 ~/.local/bin（native installer 免 Node，自帶依賴），
 #   與非 root 設計相容；後端的 CLI 路徑探測會經 PATH 直接命中。
 # - 版本可用 build arg 釘住（建議部署時明確指定，例：--build-arg CLAUDE_CODE_VERSION=2.x.y），
@@ -43,6 +42,12 @@ USER apiuser
 ARG CLAUDE_CODE_VERSION=latest
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${CLAUDE_CODE_VERSION}
 ENV PATH="/home/apiuser/.local/bin:${PATH}"
+
+# 7. 複製專案原始碼並交付所有權，再切回非 root 執行身分
+USER root
+COPY . .
+RUN chown -R apiuser /app
+USER apiuser
 
 # 8. 宣告對外 Port
 EXPOSE 8000

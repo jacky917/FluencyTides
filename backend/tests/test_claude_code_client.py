@@ -12,6 +12,7 @@ quota is consumed.
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -633,7 +634,6 @@ class BuildEnvTests(ClaudeCodeClientTestBase):
 
     def test_desktop_mode_scrubs_all_auth_vars(self) -> None:
         """token 未設定（預設）：環境殘留的認證變數全數剔除——行為與改動前一致。"""
-        import os
         with mock.patch.object(settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", ""):
             client = ClaudeCodeLLMClient()
             with mock.patch.dict(os.environ, {
@@ -648,7 +648,6 @@ class BuildEnvTests(ClaudeCodeClientTestBase):
 
     def test_headless_mode_injects_configured_token(self) -> None:
         """token 已設定（容器）：注入設定值，並蓋掉環境殘留的舊值。"""
-        import os
         with mock.patch.object(
             settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-container"
         ):
@@ -659,7 +658,6 @@ class BuildEnvTests(ClaudeCodeClientTestBase):
 
     def test_headless_mode_still_scrubs_anthropic_vars(self) -> None:
         """headless 模式下 ANTHROPIC_* 衛生剔除不受影響。"""
-        import os
         with mock.patch.object(
             settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-container"
         ):
@@ -674,7 +672,6 @@ class BuildEnvTests(ClaudeCodeClientTestBase):
 
     def test_whitespace_token_treated_as_unset(self) -> None:
         """空白字串視同未設定：仍走桌機剔除模式。"""
-        import os
         with mock.patch.object(settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", "   "):
             client = ClaudeCodeLLMClient()
             with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "stale"}):
