@@ -511,6 +511,15 @@ class Settings(BaseSettings):
         default="logs/claude_code_audit",
         description="每次呼叫的 prompt/answer/meta 落盤目錄；留空則關閉審計",
     )
+    LLM_CLAUDE_CODE_OAUTH_TOKEN: str = Field(
+        default="",
+        description=(
+            "headless 環境（容器/伺服器）用的長效 OAuth token（由已登入機器執行 "
+            "`claude setup-token` 產生）。留空＝桌機模式：剔除環境中的 "
+            "CLAUDE_CODE_OAUTH_TOKEN、強制走落盤憑證；非空＝注入此值供 CLI 認證。"
+            "token 等同訂閱憑證，務必只放在部署主機的 .env 並限制檔案權限"
+        ),
+    )
 
     AUDIO_API_KEY: str | None = Field(
         default=None,

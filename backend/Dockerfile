@@ -31,6 +31,19 @@ COPY . .
 RUN useradd -m apiuser && chown -R apiuser /app
 USER apiuser
 
+# 7.5 安裝 Claude Code CLI（LLM_PROVIDER=claude-code 模式的執行檔）
+# - 以 apiuser 身分安裝到 ~/.local/bin（native installer 免 Node，自帶依賴），
+#   與非 root 設計相容；後端的 CLI 路徑探測會經 PATH 直接命中。
+# - 版本可用 build arg 釘住（建議部署時明確指定，例：--build-arg CLAUDE_CODE_VERSION=2.x.y），
+#   預設 latest。
+# - 認證：容器內無法互動登入，需在 .env 設 LLM_CLAUDE_CODE_OAUTH_TOKEN
+#   （由已登入機器執行 `claude setup-token` 產生），詳見
+#   docs/wip/claude_cli_in_container_FEAT_2026-08-29.md §5。
+# - 對非 claude-code 模式零影響：CLI 只是靜態檔案，google/openai 路徑不會載入它。
+ARG CLAUDE_CODE_VERSION=latest
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${CLAUDE_CODE_VERSION}
+ENV PATH="/home/apiuser/.local/bin:${PATH}"
+
 # 8. 宣告對外 Port
 EXPOSE 8000
 

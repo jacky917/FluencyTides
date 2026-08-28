@@ -624,5 +624,63 @@ class SchemaResolverReuseTests(unittest.TestCase):
         )
 
 
+class BuildEnvTests(ClaudeCodeClientTestBase):
+    """_build_env 的認證模式分流（桌機剔除 vs headless 注入）。
+
+    Credential-mode branching of _build_env: desktop scrub vs headless
+    injection (docs/wip/claude_cli_in_container_FEAT_2026-08-29.md §D2).
+    """
+
+    def test_desktop_mode_scrubs_all_auth_vars(self) -> None:
+        """token 未設定（預設）：環境殘留的認證變數全數剔除——行為與改動前一致。"""
+        import os
+        with mock.patch.object(settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", ""):
+            client = ClaudeCodeLLMClient()
+            with mock.patch.dict(os.environ, {
+                "CLAUDE_CODE_OAUTH_TOKEN": "stale-bad-token",
+                "ANTHROPIC_API_KEY": "leftover",
+                "ANTHROPIC_BASE_URL": "http://x",
+            }):
+                env = client._build_env()
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", env)
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+        self.assertNotIn("ANTHROPIC_BASE_URL", env)
+
+    def test_headless_mode_injects_configured_token(self) -> None:
+        """token 已設定（容器）：注入設定值，並蓋掉環境殘留的舊值。"""
+        import os
+        with mock.patch.object(
+            settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-container"
+        ):
+            client = ClaudeCodeLLMClient()
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "stale-bad-token"}):
+                env = client._build_env()
+        self.assertEqual(env["CLAUDE_CODE_OAUTH_TOKEN"], "sk-ant-oat-container")
+
+    def test_headless_mode_still_scrubs_anthropic_vars(self) -> None:
+        """headless 模式下 ANTHROPIC_* 衛生剔除不受影響。"""
+        import os
+        with mock.patch.object(
+            settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-container"
+        ):
+            client = ClaudeCodeLLMClient()
+            with mock.patch.dict(os.environ, {
+                "ANTHROPIC_API_KEY": "leftover",
+                "ANTHROPIC_BASE_URL": "http://x",
+            }):
+                env = client._build_env()
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+        self.assertNotIn("ANTHROPIC_BASE_URL", env)
+
+    def test_whitespace_token_treated_as_unset(self) -> None:
+        """空白字串視同未設定：仍走桌機剔除模式。"""
+        import os
+        with mock.patch.object(settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", "   "):
+            client = ClaudeCodeLLMClient()
+            with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "stale"}):
+                env = client._build_env()
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", env)
+
+
 if __name__ == "__main__":
     unittest.main()
