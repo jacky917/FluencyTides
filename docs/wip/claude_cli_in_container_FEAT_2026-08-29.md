@@ -7,7 +7,7 @@
 | **範圍** | `backend/Dockerfile`、`backend/docker-compose.yml`、`app/core/config.py`、`app/infrastructure/llm/claude_code_client.py`、`backend/.env.example`、對應單元測試 |
 | **不動** | factory 選型邏輯與桌機模式行為(token 未設定時 `_build_env` 行為一絲不變)、生成腳本、NAS 上的實際部署操作(記錄於 §5 供人工執行) |
 | **狀態** | 🚧 程式碼完成(2026-08-29);待映像重建與 NAS 部署(§5) |
-| **PR / 進度** | 尚未開始 |
+| **PR / 進度** | [#14](https://github.com/jacky917/FluencyTides/pull/14)(程式碼全量,待合併與部署) |
 | **關聯文件** | `docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md`(provider 原始設計)、`docs/archive/claude_cli_env_setup_FEAT_2026-08-27.md` |
 
 ---
