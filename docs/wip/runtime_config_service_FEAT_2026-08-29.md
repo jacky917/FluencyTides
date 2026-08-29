@@ -76,6 +76,128 @@
   與進行中請求的競態(舊 client 正在生成、中途被換掉)不在本案處理——
   singleton 替換是原子賦值,舊請求持有舊實例跑完,新請求拿新實例,可接受。
 
+## 3.5 接口定義
+
+### REST API(`app/api/config.py`,prefix `/api/v1/config`)
+
+#### `GET /api/v1/config` — 列出可改設定與當前值
+
+回應 `200`:
+
+```json
+{
+  "configs": [
+    {
+      "key": "LLM_MODEL_NAME",
+      "current_value": "claude-opus-5",
+      "options": ["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.1-pro-preview"],
+      "requires_rebuild": true
+    },
+    {
+      "key": "AUDIO_EVALUATOR_PROVIDER",
+      "current_value": "stt_llm",
+      "options": null,
+      "requires_rebuild": true
+    }
+  ]
+}
+```
+
+- `options: null` = 白名單允許但不限選項(`MODIFY_X=` 留空的情形)。
+- `requires_rebuild` = 該鍵在 rebuild 註冊表內(改值會重建 singleton),
+  純資訊性欄位,方便呼叫端提示「切換需數秒」。
+- 白名單為空時回 `{"configs": []}`,不視為錯誤。
+
+#### `GET /api/v1/config/{key}` — 讀取單一設定
+
+回應 `200`:
+
+```json
+{
+  "key": "LLM_MODEL_NAME",
+  "current_value": "claude-opus-5",
+  "options": ["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.1-pro-preview"],
+  "requires_rebuild": true
+}
+```
+
+錯誤:`404`(key 不在白名單——**白名單外一律 404,不區分「存在但不可讀」**,
+避免探測 settings 鍵名)。
+
+#### `PUT /api/v1/config/{key}` — 設置新值
+
+請求 body:
+
+```json
+{ "value": "gemini-3.5-flash" }
+```
+
+回應 `200`(成功,含新舊值與是否觸發了重建):
+
+```json
+{
+  "key": "LLM_MODEL_NAME",
+  "old_value": "claude-opus-5",
+  "new_value": "gemini-3.5-flash",
+  "rebuilt": ["llm_client"]
+}
+```
+
+錯誤(統一 `{"detail": "..."}` 形狀,沿用全站 ErrorResponse 慣例):
+
+| 狀態碼 | 情境 | detail 範例 |
+|---|---|---|
+| `404` | key 不在白名單 | `設定 'FOO' 不允許透過此介面存取` |
+| `422` | value 不在 options 內 / body 缺 value / value 非字串 | `無效的選項 'x'，可用：[...]` |
+| `500` | rebuild 失敗(settings 已回滾) | `LLM 客戶端重建失敗，設定已回滾為 'claude-opus-5'：<原因>` |
+
+語意備註:
+- 冪等:PUT 相同值直接回 200(`old_value == new_value`,`rebuilt: []`,
+  **跳過 rebuild**——避免無意義的 singleton 重建)。
+- 一次一鍵:不提供批次 PUT(TG 也是逐鍵操作;需要時另案)。
+- 所有變更為記憶體級,重啟退回 `.env` 值(回應不另標註,文件與
+  `.env.example` 說明)。
+
+### Service 層(`app/services/runtime_config_service.py`)
+
+```python
+@dataclass(frozen=True)
+class ConfigEntry:
+    key: str
+    current_value: str
+    options: list[str] | None       # None = 不限選項
+    requires_rebuild: bool
+
+@dataclass(frozen=True)
+class SetOutcome:
+    status: Literal["ok", "not_allowed", "invalid_option", "rebuild_failed"]
+    key: str
+    old_value: str | None = None    # ok / rebuild_failed 時有值
+    new_value: str | None = None    # ok 時有值
+    rebuilt: list[str] = ()         # 本次重建的 singleton 名（如 "llm_client"）
+    error: str | None = None        # rebuild_failed 時的原因摘要
+
+class RuntimeConfigService:
+    def list_configs(self) -> list[ConfigEntry]: ...
+    def get_config(self, key: str) -> ConfigEntry | None:   # None = 白名單外
+        ...
+    async def set_config(self, key: str, value: str, app: FastAPI) -> SetOutcome: ...
+```
+
+- 狀態碼對映由 API 層負責:`not_allowed→404`、`invalid_option→422`、
+  `rebuild_failed→500`;TG 層則映射為對應的 alert/edit_text 文案。
+- rebuild 註冊表(service 內部常數):
+
+```python
+REBUILD_REGISTRY: dict[str, tuple[str, Callable[[], Any]]] = {
+    # 設定鍵: (app.state 屬性名, factory)
+    "AUDIO_EVALUATOR_PROVIDER": ("audio_evaluator", create_audio_evaluator),
+    "LLM_MODEL_NAME":           ("llm_client", create_llm_client),
+    "LLM_PROVIDER":             ("llm_client", create_llm_client),
+    "LLM_CLAUDE_CODE_EFFORT":   ("llm_client", create_llm_client),
+}
+```
+
 ## 4. 改動清單
 
 | 檔案 | 改動 |
