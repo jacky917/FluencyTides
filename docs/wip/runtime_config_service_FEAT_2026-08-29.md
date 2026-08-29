@@ -107,6 +107,18 @@
 - `requires_rebuild` = 該鍵在 rebuild 註冊表內(改值會重建 singleton),
   純資訊性欄位,方便呼叫端提示「切換需數秒」。
 - 白名單為空時回 `{"configs": []}`,不視為錯誤。
+- 回應另含頂層唯讀欄位 `"llm_label"`(如 `"(claude-code)opus-5@medium"`;
+  `app.state.llm_client` 為 None 時為 `null`):取自活的 client 實例算好的
+  `_formatted_model_name`,供呼叫端**直接顯示**,不必自行以
+  provider/model/effort 重新推導。
+
+> **⚠️ current_value 不是 DB 標籤**:`current_value` 是 settings 原值
+> (`claude-opus-5`),與寫入 `generated_sentences_log.llm_model` 的標籤
+> (`(claude-code)opus-5@medium`)差了三道加工。**禁止**呼叫端拿
+> `current_value` 自行加工後寫 DB——那是 2026-08-28 錯標 190 筆的同型錯誤
+> (呼叫端自行推導標籤,規則分岔即錯標)。寫 DB 的標籤一律取
+> **生成 API 回應中的 `llm_model`**(後端 client 的單一事實來源);
+> 需要顯示用標籤則取本 API 的 `llm_label`。
 
 #### `GET /api/v1/config/{key}` — 讀取單一設定
 
@@ -208,6 +220,7 @@ REBUILD_REGISTRY: dict[str, tuple[str, Callable[[], Any]]] = {
 | `app/bot/handlers/callbacks_config.py` | value_selection 改呼叫 service;evaluator rebuild 段移除(進 service);UI/權限不動 |
 | `backend/.env.example` | 補 `MODIFY_LLM_PROVIDER` 示例註解(說明啟用後 API/TG 皆可切 provider) |
 | `backend/tests/test_runtime_config_service.py` | 新增:白名單拒絕/選項驗證/setattr 生效/rebuild 成功/rebuild 失敗回滾(fake app + fake factory)/當前值讀取 |
+| `scripts/fastapi_client/*/generate_child_cards.py` | 寫入 DB 的 `llm_model` 改取**生成 API 回應**的 `llm_model`(後端單一事實來源),不再以本機 settings 推導——2026-08-28 錯標 190 筆的根治;`scripts/common/llm_label.py` 降級為回應缺欄時的 fallback 並註記 |
 
 ## 5. 實作順序
 
@@ -233,4 +246,6 @@ REBUILD_REGISTRY: dict[str, tuple[str, Callable[[], Any]]] = {
 - [ ] `PUT /api/v1/config/LLM_MODEL_NAME`(值在選項內)後,`app.state.llm_client` 為新實例,後續生成的 Anki tag/DB 標籤反映新模型(S011 修復驗收)。
 - [ ] 選項外的值回 422;白名單外的鍵回 404;rebuild 失敗回 500 且 settings 已回滾(單元測試覆蓋)。
 - [ ] TG `/setconfig` 流程行為與現狀一致(含 evaluator 切換的回滾文案),callback 內不再含 rebuild 業務邏輯。
+- [ ] 生成腳本寫入 DB 的 `llm_model` 來自生成 API 回應;後端與腳本 env 刻意不一致時(重演 08-28 情境)DB 標籤仍正確。
+- [ ] `GET /config` 的 `llm_label` 與後續生成寫入的 DB 標籤一致。
 - [ ] 全套既有測試回歸綠燈。
