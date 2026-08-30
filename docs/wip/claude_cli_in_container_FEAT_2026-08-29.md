@@ -98,6 +98,26 @@ docker exec fluencytides-backend printenv LLM_PROVIDER
 # 後端啟動 log 應出現「LLM Provider = claude-code」與 ClaudeCodeLLMClient 初始化成功
 ```
 
+### 5.5 可行性查證(2026-08-31,官方文件逐條確認)
+
+- `claude setup-token`:官方明示用途「CI pipelines, scripts, or other
+  environments where interactive browser login isn't available」,產出
+  **一年效期** OAuth token,設 `CLAUDE_CODE_OAUTH_TOKEN` 即認證;
+  前提 Pro/Max/Team/Enterprise 訂閱(具備)。token 僅能做 model requests
+  ——本案只跑 `claude -p` 生成,恰好在能力範圍內。
+- 認證優先序(官方):`ANTHROPIC_AUTH_TOKEN`(#2)/`ANTHROPIC_API_KEY`(#3)
+  **高於** `CLAUDE_CODE_OAUTH_TOKEN`(#5)——本設計注入 token 的同時仍剔除
+  ANTHROPIC_*,正好防止殘留 API key 蓋掉 token,設計被文件反向印證。
+- 地雷排查:官方註明 **bare mode 不讀 `CLAUDE_CODE_OAUTH_TOKEN`**;
+  本後端命令用 `--safe-mode` 而非 `--bare`(`_build_command`),不受影響。
+  日後若有人為提速改用 `--bare`,認證會靜默失效——此行為已記入本節作防線。
+- 平台:Debian 10+ 為官方支援平台(python:3.13-slim 基於 Debian);
+  需額外 libgcc/libstdc++ 的是 Alpine/musl 系,不適用本映像。
+- 自動更新:native 安裝預設背景自動更新,容器內已以
+  `ENV DISABLE_AUTOUPDATER=1` 停用(版本由映像重建統一管理)。
+- **尚未實證、留待部署驗證**(§7 末兩項):slim 映像實際 build +
+  `claude --version`;容器內 token 端到端打通一次生成。
+
 ## 6. 風險與未知
 
 - **installer 在 slim 映像的依賴**:native installer 需 curl(已有)與基本 glibc;

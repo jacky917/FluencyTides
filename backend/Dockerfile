@@ -42,6 +42,9 @@ USER apiuser
 ARG CLAUDE_CODE_VERSION=latest
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${CLAUDE_CODE_VERSION}
 ENV PATH="/home/apiuser/.local/bin:${PATH}"
+# 容器內停用 CLI 背景自動更新：版本由映像重建統一管理,
+# 避免執行期版本漂移與無謂的背景下載(官方 native 安裝預設會自動更新)。
+ENV DISABLE_AUTOUPDATER=1
 
 # 7. 複製專案原始碼並交付所有權，再切回非 root 執行身分
 USER root
