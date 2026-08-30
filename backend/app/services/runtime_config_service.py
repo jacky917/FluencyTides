@@ -16,6 +16,8 @@ Framework-free: callers map results to HTTP or chat semantics themselves.
 
 from __future__ import annotations
 
+import asyncio
+import subprocess
 from dataclasses import dataclass
 from typing import Any
 
@@ -102,7 +104,7 @@ class RuntimeConfigService:
             requires_rebuild=key in REQUIRES_REBUILD_KEYS,
         )
 
-    def get_runtime_info(self, app_state: Any) -> dict[str, str | None]:
+    async def get_runtime_info(self, app_state: Any) -> dict[str, Any]:
         """取得後端 runtime 對帳資訊(計畫 §3.5 的 ``runtime`` 區塊)。
 
         Build the backend runtime reconciliation block.
@@ -114,14 +116,84 @@ class RuntimeConfigService:
         Returns:
             dict: ``llm_label``(活 client 算好的顯示標籤,client 為 None
             時為 None)、``llm_provider``、``anki_connect_url``(後端實際
-            連線的 Anki 端點,供腳本啟動對帳)。
+            連線的 Anki 端點,供腳本啟動對帳),以及 provider 為
+            claude-code 時的 ``claude_code`` 環境診斷區塊(其他 provider
+            為 None)。
         """
         llm_client = getattr(app_state, "llm_client", None)
-        # _formatted_model_name 是兩種 client 共同的標籤欄位;
-        # 通用 LLMClient 若無此欄位則退回 None(不自行推導,見計畫警告)
+        # _formatted_model_name 是三種 client 共同的標籤欄位;
+        # 取不到則退回 None(不自行推導,見計畫警告)
         llm_label = getattr(llm_client, "_formatted_model_name", None)
+        provider = (settings.LLM_PROVIDER or "").strip().lower() or None
+
+        claude_code: dict[str, Any] | None = None
+        if provider == "claude-code":
+            claude_code = await self._probe_claude_code(llm_client)
+
         return {
             "llm_label": llm_label,
-            "llm_provider": (settings.LLM_PROVIDER or "").strip().lower() or None,
+            "llm_provider": provider,
             "anki_connect_url": settings.ANKI_CONNECT_URL,
+            "claude_code": claude_code,
         }
+
+    @staticmethod
+    async def _probe_claude_code(llm_client: Any) -> dict[str, Any]:
+        """探測 claude-code 執行環境(CLI 路徑/版本/認證模式)。
+
+        Probe the claude-code runtime environment (CLI path, version,
+        credential mode).
+
+        版本探測實際執行 ``claude --version``(部署驗證的核心:證明容器內
+        binary 存在且可執行);失敗時把錯誤摘要放進 ``cli_version_error``
+        而不拋例外——診斷端點必須在環境壞掉時仍能回報「壞在哪」。
+        The version probe actually executes ``claude --version``; failures
+        are reported in-band so the endpoint stays useful when the
+        environment is broken.
+
+        Args:
+            llm_client: 活的 LLM client(取已解析的 CLI 路徑);None 表示
+                後端啟動時初始化失敗。The live client, or None when
+                startup initialization failed.
+
+        Returns:
+            dict: ``client_initialized`` / ``cli_path`` / ``cli_version``
+            (或 ``cli_version_error``)/ ``effort`` /
+            ``oauth_token_configured``(bool,不洩漏 token 值)。
+        """
+        info: dict[str, Any] = {
+            "client_initialized": llm_client is not None,
+            "cli_path": getattr(llm_client, "_cli_path", None),
+            "cli_version": None,
+            "effort": getattr(llm_client, "_effort", None),
+            # 只回報是否設定,絕不回傳 token 內容
+            "oauth_token_configured": bool(
+                (settings.LLM_CLAUDE_CODE_OAUTH_TOKEN or "").strip()
+            ),
+        }
+
+        cli_path = info["cli_path"]
+        if not cli_path:
+            info["cli_version_error"] = (
+                "LLM client 未初始化,無 CLI 路徑可探測(檢查後端啟動 log)"
+            )
+            return info
+
+        def _run_version() -> subprocess.CompletedProcess[bytes]:
+            return subprocess.run(
+                [cli_path, "--version"], capture_output=True, timeout=15
+            )
+
+        try:
+            completed = await asyncio.to_thread(_run_version)
+            output = completed.stdout.decode("utf-8", errors="replace").strip()
+            if completed.returncode == 0 and output:
+                info["cli_version"] = output
+            else:
+                stderr = completed.stderr.decode("utf-8", errors="replace").strip()
+                info["cli_version_error"] = (
+                    f"exit={completed.returncode}: {stderr or output or '(無輸出)'}"[:300]
+                )
+        except Exception as e:  # noqa: BLE001 - 診斷端點必須帶病回報
+            info["cli_version_error"] = f"{type(e).__name__}: {e}"[:300]
+        return info

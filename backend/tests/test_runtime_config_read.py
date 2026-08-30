@@ -6,6 +6,7 @@ Unit tests for the runtime config service and API (read-only slice).
 以 mock 白名單與最小 FastAPI app 測試,不觸碰真實 .env 白名單內容。
 """
 
+import asyncio
 from types import SimpleNamespace
 from unittest import mock
 
@@ -57,13 +58,61 @@ class TestServiceRead:
     def test_runtime_info_reads_live_client_label(self):
         fake_client = SimpleNamespace(_formatted_model_name="(claude-code)opus-5@medium")
         state = SimpleNamespace(llm_client=fake_client)
-        info = RuntimeConfigService().get_runtime_info(state)
+        info = asyncio.run(RuntimeConfigService().get_runtime_info(state))
         assert info["llm_label"] == "(claude-code)opus-5@medium"
         assert info["anki_connect_url"] == settings.ANKI_CONNECT_URL
 
     def test_runtime_info_none_client(self):
-        info = RuntimeConfigService().get_runtime_info(SimpleNamespace(llm_client=None))
+        info = asyncio.run(
+            RuntimeConfigService().get_runtime_info(SimpleNamespace(llm_client=None))
+        )
         assert info["llm_label"] is None
+
+    def test_claude_code_probe_reports_version(self):
+        """provider=claude-code 且 CLI 可執行 → 回報實際版本字串。"""
+        fake_client = SimpleNamespace(
+            _formatted_model_name="(claude-code)opus-5@medium",
+            _cli_path="/fake/claude",
+            _effort="medium",
+        )
+        fake_completed = SimpleNamespace(
+            returncode=0, stdout=b"2.1.211 (Claude Code)\n", stderr=b""
+        )
+        with mock.patch.object(settings, "LLM_PROVIDER", "claude-code"), \
+             mock.patch.object(settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", "sk-x"), \
+             mock.patch.object(rcs_mod.subprocess, "run", return_value=fake_completed):
+            info = asyncio.run(
+                RuntimeConfigService().get_runtime_info(
+                    SimpleNamespace(llm_client=fake_client)
+                )
+            )
+        cc = info["claude_code"]
+        assert cc["client_initialized"] is True
+        assert cc["cli_version"] == "2.1.211 (Claude Code)"
+        assert cc["oauth_token_configured"] is True
+        assert cc["effort"] == "medium"
+
+    def test_claude_code_probe_reports_error_without_client(self):
+        """client 未初始化 → 不炸,回報無 CLI 路徑可探測。"""
+        with mock.patch.object(settings, "LLM_PROVIDER", "claude-code"):
+            info = asyncio.run(
+                RuntimeConfigService().get_runtime_info(
+                    SimpleNamespace(llm_client=None)
+                )
+            )
+        cc = info["claude_code"]
+        assert cc["client_initialized"] is False
+        assert cc["cli_version"] is None
+        assert "cli_version_error" in cc
+
+    def test_non_claude_code_provider_has_no_probe_block(self):
+        with mock.patch.object(settings, "LLM_PROVIDER", "google"):
+            info = asyncio.run(
+                RuntimeConfigService().get_runtime_info(
+                    SimpleNamespace(llm_client=None)
+                )
+            )
+        assert info["claude_code"] is None
 
 
 class TestConfigApi:

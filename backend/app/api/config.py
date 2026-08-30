@@ -37,7 +37,7 @@ async def list_configs(request: Request) -> dict:
     """
     return {
         "configs": [asdict(entry) for entry in _service.list_configs()],
-        "runtime": _service.get_runtime_info(request.app.state),
+        "runtime": await _service.get_runtime_info(request.app.state),
     }
 
 

@@ -78,6 +78,25 @@ async def main() -> None:
     print(f"🔌 LLM Provider  : {runtime.get('llm_provider')}")
     print(f"🃏 後端 Anki 端點: {runtime.get('anki_connect_url')}")
 
+    # claude-code 環境診斷(provider 非 claude-code 時後端回 null)
+    cc = runtime.get("claude_code")
+    if cc is not None:
+        print("\n========== claude-code 環境診斷 ==========")
+        ok = "✅" if cc.get("client_initialized") else "❌"
+        print(f"{ok} LLM client 初始化: {cc.get('client_initialized')}")
+        print(f"📦 CLI 路徑        : {cc.get('cli_path') or '(無)'}")
+        if cc.get("cli_version"):
+            print(f"🏷️ CLI 版本        : {cc['cli_version']}  ← 實際執行 claude --version 取得")
+        else:
+            print(f"❌ CLI 版本探測失敗: {cc.get('cli_version_error') or '(未知原因)'}")
+        print(f"🎚️ Effort          : {cc.get('effort')}")
+        token_set = cc.get("oauth_token_configured")
+        mode = "已設定(headless/容器模式,注入 token 認證)" if token_set \
+            else "未設定(桌機模式,走落盤憑證)"
+        print(f"🔑 OAuth token     : {mode}")
+        if cc.get("client_initialized") and cc.get("cli_version"):
+            print("✅ claude-code 環境就緒(binary 可執行;實際認證以生成一張卡為準)")
+
     # 對帳:後端與本機的 Anki 端點必須指向同一台
     local_anki = settings.ANKI_CONNECT_URL
     backend_anki = runtime.get("anki_connect_url")

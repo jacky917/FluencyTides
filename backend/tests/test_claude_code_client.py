@@ -102,6 +102,8 @@ class ClaudeCodeClientTestBase(unittest.TestCase):
             LLM_CLAUDE_CODE_WORKDIR=str(tmp_path / "workdir"),
             LLM_CLAUDE_CODE_AUDIT_DIR="",  # 預設關閉審計，個別測試自行開啟
             LLM_CLAUDE_CODE_TIMEOUT_SECONDS=30.0,
+            # 釘為空＝桌機剔除模式:測試不得受本機 .env 是否設了真實 token 影響
+            LLM_CLAUDE_CODE_OAUTH_TOKEN="",
         )
         self._overrides.start()
         self.addCleanup(self._overrides.stop)
