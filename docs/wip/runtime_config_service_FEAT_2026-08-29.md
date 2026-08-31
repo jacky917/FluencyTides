@@ -6,7 +6,7 @@
 | **性質** | 新增機能設計 + 實作工作項 |
 | **範圍** | 新增 `app/services/runtime_config_service.py`、新增 `app/api/config.py`(REST router)、`app/bot/handlers/callbacks_config.py`(改薄)、`app/main.py`(掛 router)、對應單元測試 |
 | **不動** | `app/core/dynamic_config.py`(白名單解析,原樣共用)、`MODIFY_*` 的 .env 慣例與語意、TG 的 UI/權限模型(`TG_ADMIN_CHAT_ID`)、設定的「記憶體級、重啟還原」語意 |
-| **狀態** | 🚧 唯讀切片完成(2026-08-31:GET 兩端點 + service 讀取側 + 查詢腳本,本機實測通過);寫入側(PUT/rebuild/TG 改薄/腳本取回應值)待實作 |
+| **狀態** | 🚧 唯讀切片完成(2026-08-31:GET 兩端點 + service 讀取側 + 查詢腳本,本機實測通過);腳本取回應值已完成(2026-08-31);寫入側(PUT/rebuild/TG 改薄)待實作 |
 | **PR / 進度** | [#14](https://github.com/jacky917/FluencyTides/pull/14)(與容器 claude-code 支援同 PR,計畫書分立) |
 | **關聯文件** | `docs/wip/claude_cli_in_container_FEAT_2026-08-29.md`(同 PR 的姊妹計畫)、`docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md` |
 

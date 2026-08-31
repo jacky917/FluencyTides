@@ -346,6 +346,9 @@ async def _generate_from_report(
     Returns:
         int: 本動詞實際新增的卡片數。Number of cards actually added.
     """
+    # 本機推導的標籤只作兩用:①失敗紀錄(無回應可取)②回應缺欄時的
+    # fallback。成功紀錄一律取後端回應的 llm_model(單一事實來源),
+    # 詳見 docs/wip/runtime_config_service_FEAT_2026-08-29.md §3.5。
     llm_model_name = build_llm_model_label()
 
     new_generated = 0
@@ -396,7 +399,7 @@ async def _generate_from_report(
                 master_note_id=master_note_id,
                 context_note_id=data.get("context_note_id"),
                 cloze_note_id=data.get("cloze_note_id"),
-                llm_model=llm_model_name,
+                llm_model=data.get("llm_model") or llm_model_name,
             )
             new_generated += 1
             logger.info(

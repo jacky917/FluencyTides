@@ -10,6 +10,15 @@ generated_sentences_log.
 同一規則；改格式時兩處要一起動。
 Format: ``(provider)model@effort`` with the ``claude-`` prefix stripped
 from the model part, mirroring the backend client's label rule.
+
+【定位（2026-08-31 降級）】本函式依**本機** settings 推導，而後端與腳本的
+.env 是兩份檔案，可能不一致（2026-08-28 曾因此錯標 190 筆 DB 紀錄）。
+因此成功生成的 DB 紀錄一律改取**生成 API 回應中的 ``llm_model``**
+（後端單一事實來源）；本函式僅剩兩個正當用途：
+①失敗紀錄（生成未發生，無回應可取）②回應缺 ``llm_model`` 欄時的 fallback。
+Downgraded role: success records take ``llm_model`` from the generation
+API response; this local derivation only serves failure records and the
+missing-field fallback.
 """
 
 from app.core.config import settings
