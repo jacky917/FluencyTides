@@ -47,6 +47,36 @@ class TestSokuonGuard:
                 **COMMON_KWARGS,
             )
 
+    def test_teru_contraction_truncation_rejected(self):
+        """「〜ってる」被截斷(後接て)同樣攔下。"""
+        with pytest.raises(ClozePositioningError):
+            position_cloze(
+                "ずっと待ってるからね",
+                ["待っ"],
+                "待ってる",
+                **COMMON_KWARGS,
+            )
+
+    def test_sentence_final_emphatic_sokuon_passes(self):
+        """句尾強調促音「終わったっ」是合法日文,不得誤攔。"""
+        cloze, _ = position_cloze(
+            "やっと終わったっ",
+            ["終わったっ"],
+            "終わったっ",
+            **COMMON_KWARGS,
+        )
+        assert "____" in cloze
+
+    def test_interrupted_speech_sokuon_passes(self):
+        """中斷語「鳴っ——」忠於原文挖到促音,不得誤攔。"""
+        cloze, _ = position_cloze(
+            "チャイムが鳴っ——",
+            ["が鳴っ"],
+            "が鳴っ",
+            **COMMON_KWARGS,
+        )
+        assert "____" in cloze
+
     def test_full_contraction_blank_passes(self):
         """完整縮約形「が鳴っちゃう」 → 正常定位。"""
         cloze, full = position_cloze(
