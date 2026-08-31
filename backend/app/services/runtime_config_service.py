@@ -104,7 +104,9 @@ class RuntimeConfigService:
             requires_rebuild=key in REQUIRES_REBUILD_KEYS,
         )
 
-    async def get_runtime_info(self, app_state: Any) -> dict[str, Any]:
+    async def get_runtime_info(
+        self, app_state: Any, check_auth: bool = False
+    ) -> dict[str, Any]:
         """取得後端 runtime 對帳資訊(計畫 §3.5 的 ``runtime`` 區塊)。
 
         Build the backend runtime reconciliation block.
@@ -112,6 +114,10 @@ class RuntimeConfigService:
         Args:
             app_state: FastAPI 的 ``app.state``(取活的 llm_client 用)。
                 The FastAPI ``app.state`` carrying the live llm_client.
+            check_auth: True 時實際打一次最小 model request(haiku)驗證
+                token 認證——會消耗一次極小的訂閱請求,故由呼叫端明確
+                要求才做。When True, fire one minimal haiku request to
+                genuinely verify authentication (costs one tiny request).
 
         Returns:
             dict: ``llm_label``(活 client 算好的顯示標籤,client 為 None
@@ -128,7 +134,7 @@ class RuntimeConfigService:
 
         claude_code: dict[str, Any] | None = None
         if provider == "claude-code":
-            claude_code = await self._probe_claude_code(llm_client)
+            claude_code = await self._probe_claude_code(llm_client, check_auth)
 
         return {
             "llm_label": llm_label,
@@ -138,7 +144,9 @@ class RuntimeConfigService:
         }
 
     @staticmethod
-    async def _probe_claude_code(llm_client: Any) -> dict[str, Any]:
+    async def _probe_claude_code(
+        llm_client: Any, check_auth: bool = False
+    ) -> dict[str, Any]:
         """探測 claude-code 執行環境(CLI 路徑/版本/認證模式)。
 
         Probe the claude-code runtime environment (CLI path, version,
@@ -161,15 +169,31 @@ class RuntimeConfigService:
             (或 ``cli_version_error``)/ ``effort`` /
             ``oauth_token_configured``(bool,不洩漏 token 值)。
         """
+        token = (settings.LLM_CLAUDE_CODE_OAUTH_TOKEN or "").strip()
+        # token 格式靜態檢查(恆開,零成本):setup-token 產出應為連續字串,
+        # 內含空白 = 複製斷行事故(2026-08-31 實際造成容器整晚 401)
+        token_format_ok: bool | None = None
+        token_format_error: str | None = None
+        if token:
+            if any(ch.isspace() for ch in token):
+                token_format_ok = False
+                token_format_error = "token 內含空白字元(疑為複製 setup-token 輸出時被斷行切開)"
+            elif not token.startswith("sk-ant-"):
+                token_format_ok = False
+                token_format_error = "token 前綴非 sk-ant-(疑為貼錯內容)"
+            else:
+                token_format_ok = True
+
         info: dict[str, Any] = {
             "client_initialized": llm_client is not None,
             "cli_path": getattr(llm_client, "_cli_path", None),
             "cli_version": None,
             "effort": getattr(llm_client, "_effort", None),
-            # 只回報是否設定,絕不回傳 token 內容
-            "oauth_token_configured": bool(
-                (settings.LLM_CLAUDE_CODE_OAUTH_TOKEN or "").strip()
-            ),
+            # 只回報是否設定與格式判定,絕不回傳 token 內容
+            "oauth_token_configured": bool(token),
+            "oauth_token_format_ok": token_format_ok,
+            "oauth_token_format_error": token_format_error,
+            "auth_check": {"status": "skipped", "detail": "未要求(check_auth=false)"},
         }
 
         cli_path = info["cli_path"]
@@ -196,4 +220,44 @@ class RuntimeConfigService:
                 )
         except Exception as e:  # noqa: BLE001 - 診斷端點必須帶病回報
             info["cli_version_error"] = f"{type(e).__name__}: {e}"[:300]
+
+        # ── 真實認證探測(check_auth=true 時):打一次最小 haiku 請求 ──
+        # 版本探測只能證明 binary 可執行;token 是否真的能通過認證,
+        # 只有實際打一次 model request 才知道(2026-08-31 教訓:診斷全綠
+        # 但 token 內含空格,生成時才爆 401)。用 haiku 把成本壓到最低。
+        if check_auth:
+            if not hasattr(llm_client, "_build_env"):
+                info["auth_check"] = {
+                    "status": "failed",
+                    "detail": "client 未初始化,無法組認證環境",
+                }
+                return info
+
+            def _run_auth() -> subprocess.CompletedProcess[bytes]:
+                return subprocess.run(
+                    [cli_path, "-p", "reply with exactly: ok", "--model", "haiku"],
+                    capture_output=True,
+                    timeout=120,
+                    env=llm_client._build_env(),
+                )
+
+            try:
+                completed = await asyncio.to_thread(_run_auth)
+                if completed.returncode == 0:
+                    info["auth_check"] = {
+                        "status": "ok",
+                        "detail": "最小 haiku 請求成功,token 認證有效",
+                    }
+                else:
+                    stderr = completed.stderr.decode("utf-8", errors="replace").strip()
+                    stdout = completed.stdout.decode("utf-8", errors="replace").strip()
+                    info["auth_check"] = {
+                        "status": "failed",
+                        "detail": f"exit={completed.returncode}: {(stderr or stdout or '(無輸出)')[:300]}",
+                    }
+            except Exception as e:  # noqa: BLE001 - 帶病回報
+                info["auth_check"] = {
+                    "status": "failed",
+                    "detail": f"{type(e).__name__}: {e}"[:300],
+                }
         return info

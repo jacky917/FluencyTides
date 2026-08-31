@@ -24,20 +24,29 @@ _service = RuntimeConfigService()
 
 
 @router.get("")
-async def list_configs(request: Request) -> dict:
+async def list_configs(request: Request, check_auth: bool = False) -> dict:
     """列出全部可動態修改的設定與後端 runtime 對帳資訊。
 
     List every dynamically modifiable setting plus the backend runtime
     reconciliation block.
 
+    Args:
+        request: FastAPI 請求物件。The request object.
+        check_auth: ``?check_auth=true`` 時對 claude-code 實際打一次最小
+            haiku 請求驗證 token 認證(消耗一次極小的訂閱請求,耗時
+            數秒~數十秒)。Fire a minimal auth-verification request when
+            true.
+
     Returns:
         dict: ``configs``(白名單設定,含當前值/選項/是否觸發重建)與
-        ``runtime``(llm_label / llm_provider / anki_connect_url——
-        供腳本啟動對帳與顯示,詳見計畫 §3.5)。
+        ``runtime``(llm_label / llm_provider / anki_connect_url /
+        claude_code 診斷——供腳本啟動對帳與顯示,詳見計畫 §3.5)。
     """
     return {
         "configs": [asdict(entry) for entry in _service.list_configs()],
-        "runtime": await _service.get_runtime_info(request.app.state),
+        "runtime": await _service.get_runtime_info(
+            request.app.state, check_auth=check_auth
+        ),
     }
 
 

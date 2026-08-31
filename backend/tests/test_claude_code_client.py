@@ -672,6 +672,15 @@ class BuildEnvTests(ClaudeCodeClientTestBase):
         self.assertNotIn("ANTHROPIC_API_KEY", env)
         self.assertNotIn("ANTHROPIC_BASE_URL", env)
 
+    def test_token_with_inner_whitespace_rejected_at_init(self) -> None:
+        """token 內含空白(複製斷行事故)→ 初始化即拒絕,不讓壞 token 活到生成。"""
+        with mock.patch.object(
+            settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-abc def"
+        ):
+            with self.assertRaises(LLMServiceError) as ctx:
+                ClaudeCodeLLMClient()
+        self.assertIn("空白字元", str(ctx.exception))
+
     def test_whitespace_token_treated_as_unset(self) -> None:
         """空白字串視同未設定：仍走桌機剔除模式。"""
         with mock.patch.object(settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", "   "):

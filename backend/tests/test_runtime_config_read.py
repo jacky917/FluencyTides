@@ -105,6 +105,56 @@ class TestServiceRead:
         assert cc["cli_version"] is None
         assert "cli_version_error" in cc
 
+    def test_token_with_space_flagged_as_format_error(self):
+        """token 內含空格 → 格式檢查恆開,直接點名複製斷行事故。"""
+        with mock.patch.object(settings, "LLM_PROVIDER", "claude-code"), \
+             mock.patch.object(settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-ab cd"):
+            info = asyncio.run(
+                RuntimeConfigService().get_runtime_info(
+                    SimpleNamespace(llm_client=None)
+                )
+            )
+        cc = info["claude_code"]
+        assert cc["oauth_token_format_ok"] is False
+        assert "空白" in cc["oauth_token_format_error"]
+
+    def test_auth_check_ok_via_minimal_request(self):
+        """check_auth=True 且最小請求成功 → auth_check ok。"""
+        fake_client = SimpleNamespace(
+            _formatted_model_name="(claude-code)opus-5@medium",
+            _cli_path="/fake/claude",
+            _effort="medium",
+            _build_env=lambda: {"PATH": "/x"},
+        )
+        version_ok = SimpleNamespace(returncode=0, stdout=b"2.1.251\n", stderr=b"")
+        with mock.patch.object(settings, "LLM_PROVIDER", "claude-code"), \
+             mock.patch.object(settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-good"), \
+             mock.patch.object(rcs_mod.subprocess, "run", return_value=version_ok):
+            info = asyncio.run(
+                RuntimeConfigService().get_runtime_info(
+                    SimpleNamespace(llm_client=fake_client), check_auth=True
+                )
+            )
+        assert info["claude_code"]["auth_check"]["status"] == "ok"
+
+    def test_auth_check_failed_reports_stderr(self):
+        """check_auth=True 且 CLI 回非零 → auth_check failed 並帶原因。"""
+        fake_client = SimpleNamespace(
+            _formatted_model_name="x", _cli_path="/fake/claude", _effort="medium",
+            _build_env=lambda: {},
+        )
+        fail = SimpleNamespace(returncode=1, stdout=b"", stderr=b"authentication_error")
+        with mock.patch.object(settings, "LLM_PROVIDER", "claude-code"), \
+             mock.patch.object(rcs_mod.subprocess, "run", return_value=fail):
+            info = asyncio.run(
+                RuntimeConfigService().get_runtime_info(
+                    SimpleNamespace(llm_client=fake_client), check_auth=True
+                )
+            )
+        auth = info["claude_code"]["auth_check"]
+        assert auth["status"] == "failed"
+        assert "authentication_error" in auth["detail"]
+
     def test_non_claude_code_provider_has_no_probe_block(self):
         with mock.patch.object(settings, "LLM_PROVIDER", "google"):
             info = asyncio.run(

@@ -17,9 +17,14 @@ docs/wip/runtime_config_service_FEAT_2026-08-29.md §3.5 的唯讀切片),
 曾因此錯標 190 筆 DB 紀錄),唯一可信的是後端「執行期」的實際狀態。
 
 Usage:
+    # 預設含真實認證探測(對 claude-code 實打一次最小 haiku 請求)
     python query_backend_model.py
+
+    # 只看靜態診斷,不消耗訂閱請求
+    python query_backend_model.py --no-check-auth
 """
 
+import argparse
 import asyncio
 import sys
 from pathlib import Path
@@ -41,18 +46,27 @@ async def main() -> None:
     Script entry point: call the config API and print the backend model
     and reconciliation info.
     """
+    parser = argparse.ArgumentParser(description="查詢後端當前 LLM 模型與 claude-code 環境診斷")
+    parser.add_argument(
+        "--no-check-auth", action="store_true",
+        help="跳過真實認證探測(預設會對 claude-code 實打一次最小 haiku 請求驗證 token)"
+    )
+    args = parser.parse_args()
+    check_auth = not args.no_check_auth
+
     base_url = getattr(settings, "SCRIPTS_API_BASE_URL", "http://127.0.0.1:8000")
     url = f"{base_url.rstrip('/')}/api/v1/config"
+    params = {"check_auth": "true"} if check_auth else {}
 
     headers: dict[str, str] = {}
     if settings.CF_ACCESS_CLIENT_ID and settings.CF_ACCESS_CLIENT_SECRET:
         headers["CF-Access-Client-Id"] = settings.CF_ACCESS_CLIENT_ID
         headers["CF-Access-Client-Secret"] = settings.CF_ACCESS_CLIENT_SECRET
 
-    print(f"🔍 查詢後端: {url}")
+    print(f"🔍 查詢後端: {url}" + ("(含真實認證探測,需數秒~數十秒)" if check_auth else ""))
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url, headers=headers)
+        async with httpx.AsyncClient(timeout=180 if check_auth else 10) as client:
+            resp = await client.get(url, headers=headers, params=params)
     except httpx.HTTPError as e:
         print(f"❌ 無法連線後端: {e}")
         return
@@ -94,8 +108,23 @@ async def main() -> None:
         mode = "已設定(headless/容器模式,注入 token 認證)" if token_set \
             else "未設定(桌機模式,走落盤憑證)"
         print(f"🔑 OAuth token     : {mode}")
-        if cc.get("client_initialized") and cc.get("cli_version"):
-            print("✅ claude-code 環境就緒(binary 可執行;實際認證以生成一張卡為準)")
+        if token_set and cc.get("oauth_token_format_ok") is False:
+            print(f"🚨 token 格式異常  : {cc.get('oauth_token_format_error')}")
+            print("   → 請重新完整複製 `claude setup-token` 的輸出(應為一段連續字串)")
+
+        auth = cc.get("auth_check") or {}
+        status = auth.get("status")
+        if status == "ok":
+            print(f"✅ 認證實測        : 通過({auth.get('detail')})")
+        elif status == "failed":
+            print(f"🚨 認證實測        : 失敗——{auth.get('detail')}")
+        else:
+            print("⚪ 認證實測        : 未執行(--no-check-auth 或後端版本不支援)")
+
+        if cc.get("client_initialized") and cc.get("cli_version") and status == "ok":
+            print("✅ claude-code 環境完全就緒(binary 可執行 + 認證實測通過)")
+        elif cc.get("client_initialized") and cc.get("cli_version") and status != "failed":
+            print("🟡 binary 可執行,但認證未實測——確定要驗證請不帶 --no-check-auth 重跑")
 
     # 對帳:後端與本機的 Anki 端點必須指向同一台
     local_anki = settings.ANKI_CONNECT_URL

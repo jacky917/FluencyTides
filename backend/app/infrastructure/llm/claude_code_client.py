@@ -137,6 +137,17 @@ class ClaudeCodeLLMClient:
             )
         self._effort = effort
 
+        # token 格式防呆:setup-token 產出是連續的 base64url 字串,內含
+        # 空白幾乎必是複製時斷行(2026-08-31 實際發生:token 中段一個空格
+        # 讓容器整晚 401)。在啟動時擋下,別讓壞 token 活到生成階段。
+        token = (settings.LLM_CLAUDE_CODE_OAUTH_TOKEN or "").strip()
+        if token and any(ch.isspace() for ch in token):
+            raise LLMServiceError(
+                "LLM_CLAUDE_CODE_OAUTH_TOKEN 內含空白字元——通常是複製 "
+                "`claude setup-token` 輸出時被終端斷行切開。請重新完整複製"
+                "(token 應為一段連續字串)後重啟。"
+            )
+
         self._cli_path = self._resolve_cli_path()
         self._model_name = settings.LLM_MODEL_NAME
 
