@@ -112,7 +112,9 @@ async def main() -> None:
         for entry in configs:
             options = entry.get("options")
             options_str = " / ".join(options) if options else "(不限)"
-            rebuild_mark = "  🔁需重建" if entry.get("requires_rebuild") else ""
+            # requires_rebuild 是資訊性標記:改「值」時後端會自動重建對應
+            # 元件(LLM client 等),與容器/映像無關,呼叫端無需任何動作
+            rebuild_mark = "  🔁(改值時後端自動重建 client)" if entry.get("requires_rebuild") else ""
             print(f"  {entry['key']} = {entry['current_value']}{rebuild_mark}")
             print(f"      可選: {options_str}")
     else:
