@@ -6,7 +6,7 @@
 | **性質** | 新增機能設計 + 實作工作項 |
 | **範圍** | 新增 `app/services/runtime_config_service.py`、新增 `app/api/config.py`(REST router)、`app/bot/handlers/callbacks_config.py`(改薄)、`app/main.py`(掛 router)、對應單元測試 |
 | **不動** | `app/core/dynamic_config.py`(白名單解析,原樣共用)、`MODIFY_*` 的 .env 慣例與語意、TG 的 UI/權限模型(`TG_ADMIN_CHAT_ID`)、設定的「記憶體級、重啟還原」語意 |
-| **狀態** | 🚧 唯讀切片完成(2026-08-31:GET 兩端點 + service 讀取側 + 查詢腳本,本機實測通過);腳本取回應值已完成(2026-08-31);寫入側(PUT/rebuild/TG 改薄)待實作 |
+| **狀態** | ✅ 本次範圍完成(2026-08-31):唯讀切片(GET 兩端點 + runtime 對帳 + claude-code 診斷/認證探測)+ 查詢腳本 + 腳本取回應值根治。寫入側列為遺留另案(§8) |
 | **PR / 進度** | [#14](https://github.com/jacky917/FluencyTides/pull/14)(與容器 claude-code 支援同 PR,計畫書分立) |
 | **關聯文件** | `docs/wip/claude_cli_in_container_FEAT_2026-08-29.md`(同 PR 的姊妹計畫)、`docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md` |
 
@@ -255,11 +255,21 @@ REBUILD_REGISTRY: dict[str, tuple[str, Callable[[], Any]]] = {
 
 ## 7. 驗收標準
 
-- [ ] `GET /api/v1/config` 回傳白名單鍵、選項與當前值;白名單外的鍵不可讀不可寫。
+- [x] `GET /api/v1/config` 回傳白名單鍵、選項與當前值;白名單外的鍵一律 404(防鍵名探測);NAS 實機驗證通過。
 - [ ] `PUT /api/v1/config/LLM_MODEL_NAME`(值在選項內)後,`app.state.llm_client` 為新實例,後續生成的 Anki tag/DB 標籤反映新模型(S011 修復驗收)。
 - [ ] 選項外的值回 422;白名單外的鍵回 404;rebuild 失敗回 500 且 settings 已回滾(單元測試覆蓋)。
 - [ ] TG `/setconfig` 流程行為與現狀一致(含 evaluator 切換的回滾文案),callback 內不再含 rebuild 業務邏輯。
-- [ ] 生成腳本寫入 DB 的 `llm_model` 來自生成 API 回應;後端與腳本 env 刻意不一致時(重演 08-28 情境)DB 標籤仍正確。
+- [x] 生成腳本寫入 DB 的 `llm_model` 來自生成 API 回應;2026-08-31 百張實測 DB 標籤與 Anki tag 全數一致。
 - [ ] 兩邊 `ANKI_CONNECT_URL` 刻意不一致時,腳本啟動即中止並明示兩個值;`--skip-backend-check` 可放行。
-- [ ] `GET /config` 的 `llm_label` 與後續生成寫入的 DB 標籤一致。
-- [ ] 全套既有測試回歸綠燈。
+- [x] `GET /config` 的 `llm_label` 與後續生成寫入的 DB 標籤一致(實測 `(claude-code)opus-5@medium`)。
+- [x] 全套既有測試回歸綠燈(175 passed)。
+
+### 8. 遺留項(另案實作)
+
+本次交付唯讀側與標籤根治;以下依 §3.5 既定接口留待後續:
+- **寫入側**:`PUT /api/v1/config/{key}` + `set_config` + REBUILD_REGISTRY
+  (含 S011 修復:LLM 系列鍵變更時重建 `app.state.llm_client`)。
+- **TG callback 改薄**:改呼叫 service,evaluator rebuild 邏輯上移。
+- **腳本啟動對帳**:GET `runtime.anki_connect_url` 與本機值比對,
+  不一致中止(`--skip-backend-check` 逃生)。
+- 對應驗收項(PUT 生效/422/404/500 語意、TG 回歸、端點對帳中止)隨另案驗收。

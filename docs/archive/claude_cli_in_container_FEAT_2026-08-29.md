@@ -6,7 +6,7 @@
 | **性質** | 新增機能設計 + 實作工作項 |
 | **範圍** | `backend/Dockerfile`、`backend/docker-compose.yml`、`app/core/config.py`、`app/infrastructure/llm/claude_code_client.py`、`backend/.env.example`、對應單元測試 |
 | **不動** | factory 選型邏輯與桌機模式行為(token 未設定時 `_build_env` 行為一絲不變)、生成腳本、NAS 上的實際部署操作(記錄於 §5 供人工執行) |
-| **狀態** | 🚧 程式碼完成(2026-08-29);待映像重建與 NAS 部署(§5) |
+| **狀態** | ✅ 完成(2026-08-31;NAS 實機部署驗證通過,含 token 斷行事故的根治與診斷強化) |
 | **PR / 進度** | [#14](https://github.com/jacky917/FluencyTides/pull/14)(程式碼全量,待合併與部署) |
 | **關聯文件** | `docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md`(provider 原始設計)、`docs/archive/claude_cli_env_setup_FEAT_2026-08-27.md` |
 
@@ -131,8 +131,17 @@ docker exec fluencytides-backend printenv LLM_PROVIDER
 
 ## 7. 驗收標準
 
-- [ ] 未設定 token 時,`_build_env` 輸出與改動前完全一致(單元測試)。
-- [ ] 設定 token 時,subprocess env 含正確的 `CLAUDE_CODE_OAUTH_TOKEN` 且 ANTHROPIC_* 仍被剔除(單元測試)。
-- [ ] 映像 build 成功,容器內 `claude --version` 可執行。
-- [ ] NAS 實機:claude-code 模式下成功生成一張卡,Anki tag 為 `(claude-code)opus-5@<effort>` 系列。
-- [ ] 桌機模式(本機腳本 + 本機後端)回歸不變。
+- [x] 未設定 token 時,`_build_env` 輸出與改動前完全一致(單元測試)。
+- [x] 設定 token 時,subprocess env 含正確的 `CLAUDE_CODE_OAUTH_TOKEN` 且 ANTHROPIC_* 仍被剔除(單元測試;另補 token 內含空白即啟動拒絕的防呆)。
+- [x] 映像 build 成功,容器內 CLI 2.1.251 可執行(config API 診斷實測)。
+- [x] NAS 實機:2026-08-31 批量生成 100+ 張,Anki tag 與 DB 標籤均為 `(claude-code)opus-5@medium`,百張全量品質審查通過;吞吐平均 35 秒/張。認證實測(最小 haiku 探測)通過。
+- [x] 桌機模式(本機腳本 + 本機後端)回歸不變(本機起後端實測 + 單元測試背書)。
+
+### 8. 部署事故錄(2026-08-31)
+
+首次部署後生成連環 401,調查定位為 **token 複製斷行事故**:複製
+`claude setup-token` 輸出時終端斷行在 token 中段插入一個空格(0x20),
+本機與 NAS 兩份 .env 貼到同一壞值。實證:去除空格後以最小 haiku 請求
+認證通過。根治三層:①client 初始化即拒絕內含空白的 token;
+②診斷端點恆開 token 格式靜態檢查;③`?check_auth=true` 真實認證探測
+(查詢腳本預設開啟)。教訓:「環境就緒」的結論必須以認證實測為據。
