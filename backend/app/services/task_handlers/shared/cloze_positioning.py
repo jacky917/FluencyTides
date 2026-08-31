@@ -258,40 +258,6 @@ def position_cloze(
         ClozePositioningError: 所有定位策略均失敗，或 span 交叉驗證失敗時
             拋出。When all strategies fail or span cross-validation fails.
     """
-    # 縮約形截斷防線（提示詞規則 6 的機械執行）。
-    # 判定特徵刻意做成位置感知：不是「以促音結尾」就攔——句尾強調促音
-    # （「終わったっ」）與中斷語（「鳴っ——」）都是合法的句尾促音，
-    # 忠於原文挖入是對的。真正的截斷特徵是「っ 後面緊跟著縮約的延續假名
-    # ち/て/と」（〜っちゃう/〜ってる/〜っとく 被從中切開）。
-    # Position-aware guard: a trailing sokuon is only a truncation when the
-    # character right AFTER the blank in the sentence continues a
-    # contraction (chi/te/to); sentence-final emphatic or interrupted
-    # sokuon is legitimate and passes.
-    for blank in cloze_blanks:
-        if not blank.endswith(("っ", "ッ")):
-            continue
-        # 與定位主策略一致採 rfind 取最右出現位置
-        idx = target_sentence.rfind(blank)
-        if idx == -1:
-            continue  # 原文找不到 → 交給後續定位流程報錯
-        following = target_sentence[idx + len(blank): idx + len(blank) + 1]
-        if following in ("ち", "て", "と"):
-            error_detail = (
-                f"cloze_blank 以促音結尾（縮約形被截斷）: {blank!r}, "
-                f"blanks={cloze_blanks}, 原文={target_sentence}"
-            )
-            log_llm_failure(
-                task_name=task_name,
-                model_name=model_name,
-                prompt=prompt_text,
-                raw_response=raw_response,
-                error_detail=error_detail,
-            )
-            raise ClozePositioningError(
-                f"挖空片段 {blank!r} 以促音「っ」結尾——縮約形（ちゃう/てる等）"
-                "被從中截斷，將產出殘缺的填空形（提示詞規則 6）。"
-            )
-
     # 使用「從右往左定位」策略處理挖空。
     # 例：「彼女は私を見つけて、扉をゆっくり開けた」
     #   blanks = ["を", "開けた"]
