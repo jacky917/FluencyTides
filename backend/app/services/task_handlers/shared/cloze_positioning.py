@@ -258,6 +258,30 @@ def position_cloze(
         ClozePositioningError: 所有定位策略均失敗，或 span 交叉驗證失敗時
             拋出。When all strategies fail or span cross-validation fails.
     """
+    # 縮約形截斷防線（提示詞規則 6 的機械執行）：blank 以促音「っ/ッ」結尾
+    # 必然是把「〜っちゃう/〜ってる」等縮約形從中截斷（如「が鳴っ」漏了
+    # 「ちゃう」），產出殘缺的填空形。直接視為定位失敗，觸發既有的
+    # fail-fast 重試路徑，不讓殘形卡片落地。
+    # Mechanical enforcement of prompt rule 6: a blank ending in a sokuon
+    # must be a truncated contraction — treat it as a positioning failure.
+    for blank in cloze_blanks:
+        if blank.endswith(("っ", "ッ")):
+            error_detail = (
+                f"cloze_blank 以促音結尾（縮約形被截斷）: {blank!r}, "
+                f"blanks={cloze_blanks}, 原文={target_sentence}"
+            )
+            log_llm_failure(
+                task_name=task_name,
+                model_name=model_name,
+                prompt=prompt_text,
+                raw_response=raw_response,
+                error_detail=error_detail,
+            )
+            raise ClozePositioningError(
+                f"挖空片段 {blank!r} 以促音「っ」結尾——縮約形（ちゃう/てる等）"
+                "被從中截斷，將產出殘缺的填空形（提示詞規則 6）。"
+            )
+
     # 使用「從右往左定位」策略處理挖空。
     # 例：「彼女は私を見つけて、扉をゆっくり開けた」
     #   blanks = ["を", "開けた"]
