@@ -434,7 +434,11 @@ async def process_verb_group(
                     continue
                     
                 logger.info(f"🚀 發送生成請求 (script_id: {script_id})...")
-                
+
+                # 本機推導的標籤只作兩用:①失敗紀錄(無回應可取)②回應缺欄
+                # 時的 fallback。成功紀錄一律取後端回應的 llm_model——後端與
+                # 腳本 .env 是兩份檔案,本機推導曾造成 190 筆錯標(2026-08-28),
+                # 詳見 docs/wip/runtime_config_service_FEAT_2026-08-29.md §3.5。
                 llm_model_name = build_llm_model_label()
 
                 try:
@@ -443,10 +447,13 @@ async def process_verb_group(
                     if not data:
                         logger.warning("⚠️ API 回應中沒有 'data' 欄位，無法進行後續處理。")
                         continue
-                    
+
                     if "kept_dialog" in data:
                         await uploader.upload_media(data["kept_dialog"])
-                        
+
+                    # 單一事實來源:後端實際使用的模型標籤
+                    actual_llm_model = data.get("llm_model") or llm_model_name
+
                     await dedup_manager.record_success(
                         script_id=script_id,
                         verb_lemma=kd["keyword"],
@@ -454,7 +461,7 @@ async def process_verb_group(
                         master_note_id=master_note_id,
                         context_note_id=data.get("context_note_id"),
                         cloze_note_id=data.get("cloze_note_id"),
-                        llm_model=llm_model_name
+                        llm_model=actual_llm_model
                     )
                     success_count += 1
                     new_generated += 1

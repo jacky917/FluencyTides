@@ -19,8 +19,11 @@ Claude Code CLI (headless) 結構化輸出客戶端模組。
 - JSON Schema 送出前必須展平 ``$defs``/``$ref``：未展平會使 CLI 內建的
   結構化輸出重試全數耗盡。直接複用 ``LLMClient._resolve_json_schema``
   （classmethod，免實例化，故 claude-code 模式下無需設定 LLM_API_KEY）。
-- subprocess 環境必須剔除 ``CLAUDE_CODE_OAUTH_TOKEN``：其優先級高於
-  落盤憑證，殘留的壞值會蓋掉有效登入造成 401。
+- subprocess 環境預設剔除 ``CLAUDE_CODE_OAUTH_TOKEN``：其優先級高於
+  落盤憑證，殘留的壞值會蓋掉有效登入造成 401。例外：headless 環境
+  （容器/伺服器）設定 ``LLM_CLAUDE_CODE_OAUTH_TOKEN`` 後改為注入該值
+  ——那裡沒有落盤憑證，env token 是唯一認證途徑
+  （docs/wip/claude_cli_in_container_FEAT_2026-08-29.md §D2）。
 - ``--effort`` 非法值時 CLI 會「靜默回退」到預設力度而不報錯，故必須在
   Python 端以白名單驗證；驗證只在本類別的建構子內進行，不做成全域
   設定驗證，以免影響 API 模式的啟動。
@@ -133,6 +136,17 @@ class ClaudeCodeLLMClient:
                 "故必須在此攔截。）"
             )
         self._effort = effort
+
+        # token 格式防呆:setup-token 產出是連續的 base64url 字串,內含
+        # 空白幾乎必是複製時斷行(2026-08-31 實際發生:token 中段一個空格
+        # 讓容器整晚 401)。在啟動時擋下,別讓壞 token 活到生成階段。
+        token = (settings.LLM_CLAUDE_CODE_OAUTH_TOKEN or "").strip()
+        if token and any(ch.isspace() for ch in token):
+            raise LLMServiceError(
+                "LLM_CLAUDE_CODE_OAUTH_TOKEN 內含空白字元——通常是複製 "
+                "`claude setup-token` 輸出時被終端斷行切開。請重新完整複製"
+                "(token 應為一段連續字串)後重啟。"
+            )
 
         self._cli_path = self._resolve_cli_path()
         self._model_name = settings.LLM_MODEL_NAME
@@ -358,9 +372,20 @@ class ClaudeCodeLLMClient:
         ]
 
     def _build_env(self) -> dict[str, str]:
-        """複製當前環境並剔除會干擾認證的變數。
+        """複製當前環境並依認證模式處理 token 變數。
 
-        Copy the current environment, scrubbing auth-interfering variables.
+        Copy the current environment, handling auth variables according to
+        the configured credential mode.
+
+        兩種模式（依 ``LLM_CLAUDE_CODE_OAUTH_TOKEN`` 是否設定）：
+        - 桌機模式（未設定，預設）：剔除全部 SCRUBBED_ENV_VARS——環境殘留的
+          壞 token 優先級高於落盤憑證，會蓋掉有效登入造成 401，故強制走
+          落盤憑證。
+        - headless 模式（已設定，容器/伺服器）：沒有落盤憑證可用，改為注入
+          設定中的 token 供 CLI 認證；ANTHROPIC_* 仍剔除（衛生性防護不變）。
+        Desktop mode (token unset) scrubs every auth variable to force the
+        on-disk credential; headless mode (token set) injects the configured
+        token instead, while ANTHROPIC_* stays scrubbed.
 
         Returns:
             供 subprocess 使用的環境變數字典。The environment for the
@@ -369,6 +394,10 @@ class ClaudeCodeLLMClient:
         env = os.environ.copy()
         for name in self.SCRUBBED_ENV_VARS:
             env.pop(name, None)
+
+        configured_token = (settings.LLM_CLAUDE_CODE_OAUTH_TOKEN or "").strip()
+        if configured_token:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = configured_token
         return env
 
     async def _invoke_cli(

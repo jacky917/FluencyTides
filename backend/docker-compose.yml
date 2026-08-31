@@ -8,6 +8,12 @@ services:
       - "8000:8000"
       
     # 密鑰掛載：啟動時從 CasaOS 主機讀取機密變數
+    # 【注意】env_file 只在「容器建立」時注入——修改 .env 後必須
+    # `docker compose up -d --force-recreate`，單純 restart 不會重讀。
+    # 【claude-code 模式】該 .env 需設：LLM_PROVIDER=claude-code、
+    # LLM_MODEL_NAME、LLM_CLAUDE_CODE_EFFORT、LLM_CLAUDE_CODE_OAUTH_TOKEN
+    # （token 等同訂閱憑證，該檔請 chmod 600 並勿外流），
+    # 詳見 docs/wip/claude_cli_in_container_FEAT_2026-08-29.md §5。
     env_file:
       - /DATA/AppData/FluencyTides/backend/.env
       
