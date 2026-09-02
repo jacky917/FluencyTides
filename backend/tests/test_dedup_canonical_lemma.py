@@ -21,8 +21,7 @@ from scripts.common.database.canonicalize_verb_lemma import (
     plan_canonicalization,
 )
 from scripts.common.sentence_normalize import normalize_sentence
-from scripts.common.verb_lemma import canonical_verb_lemma
-from scripts.fastapi_client.JP_VerbPair.generate_child_cards import _all_extra_keywords
+from scripts.common.verb_lemma import canonical_verb_lemma, is_non_canonical_lemma
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import DedupManager
 from scripts.local_anki.common.deletion.profiles import get_profile
 
@@ -252,12 +251,22 @@ class TestLoadKeywordMap:
         assert load_keyword_map(tmp_path / "nope.json") == {}
 
 
-class TestAllExtraKeywords:
-    def test_collects_every_keyword_across_masters(self):
-        cfg = {
-            "100": {"捲る": {"extra_keywords": ["まくる"]}, "捲れる": {"extra_keywords": ["まくれる"]}},
-            "200": {"繋げる": {"extra_keywords": ["繋ぐ"], "allow_auxiliary": True}},
-            "300": {"止める": {"extra_keywords": []}},
-        }
-        assert _all_extra_keywords(cfg) == {"まくる", "まくれる", "繋ぐ"}
-        assert _all_extra_keywords({}) == set()
+class TestIsNonCanonicalLemma:
+    """啟動防線的判斷必須按母卡,不能用全域關鍵字集合。"""
+
+    KM = {"557": {"汚す": "穢す", "汚れる": "穢れる"}, "540": {"まくる": "捲る"}}
+
+    def test_keyword_of_own_master_is_non_canonical(self):
+        assert is_non_canonical_lemma("汚す", 557, self.KM) is True
+        assert is_non_canonical_lemma("まくる", "540", self.KM) is True
+
+    def test_same_string_is_canonical_for_another_master(self):
+        # 汚す 是母卡 921(汚[よご]す)的標準表層,不能因為它是 557 的關鍵字而誤判
+        assert is_non_canonical_lemma("汚す", 921, self.KM) is False
+
+    def test_furigana_is_always_non_canonical(self):
+        assert is_non_canonical_lemma("纏[まと]める", 999, {}) is True
+
+    def test_plain_canonical_is_fine(self):
+        assert is_non_canonical_lemma("捲る", 540, self.KM) is False
+        assert is_non_canonical_lemma("止める", 711, {}) is False

@@ -24,6 +24,8 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from scripts.common.verb_lemma import is_non_canonical_lemma
+
 logger = logging.getLogger(__name__)
 
 # generated_sentences_log.project 的合法值。
@@ -245,44 +247,41 @@ class GeneratedLogRepository:
         return [row[0] for row in result.fetchall() if row[0]]
 
     async def find_non_canonical_lemmas(
-        self, session: AsyncSession, keywords: set[str], *, project: str
-    ) -> list[tuple[str, int]]:
-        """列出仍以非正規拼寫存放的 ``verb_lemma``（帶標音、或等於任一搜尋關鍵字）。
+        self, session: AsyncSession, keyword_map: dict[str, dict[str, str]], *, project: str
+    ) -> list[tuple[str, int, int]]:
+        """列出仍以非正規拼寫存放的 ``verb_lemma``（帶標音、或是該母卡的擴展關鍵字）。
 
         List ``verb_lemma`` values still stored in a non-canonical spelling
-        (with furigana, or equal to one of the search keywords).
+        (with furigana, or equal to one of that master's search keywords).
 
         生成腳本的啟動防線：這類紀錄用正規拼寫查不到，新程式碼會把已生成
         的句子當新句重做一張。呼叫端應在有結果時中止並提示先跑
-        ``canonicalize_verb_lemma.py``。
-        Startup guard for the generators: such rows are invisible to
-        canonical lookups, so the caller must abort and ask for the
-        canonicalization script first.
+        ``canonicalize_verb_lemma.py``。判斷**按母卡**進行（見
+        ``verb_lemma.is_non_canonical_lemma``），全域關鍵字集合會誤判。
+        Startup guard for the generators; the check is per master because a
+        global keyword set misfires on cross-master homographs.
 
         Args:
             session: 非同步資料庫連線 session。Async database session.
-            keywords: 全部假名/異體擴展關鍵字（``extra_search_keywords.json``）。
-                Every kana/variant search keyword.
+            keyword_map: ``{母卡 nid: {關鍵字: 標準表層}}``。Per-master
+                keyword map.
             project: 專案識別。Project identifier.
 
         Returns:
-            list[tuple[str, int]]: ``(verb_lemma, 筆數)``，依 verb_lemma 排序；
-            全部正規時為空。Sorted ``(verb_lemma, count)`` pairs; empty when
+            list[tuple[str, int, int]]: ``(verb_lemma, master_note_id, 筆數)``，
+            依 verb_lemma 排序；全部正規時為空。Sorted triples; empty when
             everything is canonical.
         """
         _validate_project(project)
-        sql = (
-            "SELECT verb_lemma, COUNT(*) FROM generated_sentences_log "
-            "WHERE project = :project AND (verb_lemma LIKE '%[%'"
-        )
-        params: dict = {"project": project}
-        if keywords:
-            names = [f"kw{i}" for i in range(len(keywords))]
-            sql += f" OR verb_lemma IN ({', '.join(':' + n for n in names)})"
-            params.update(dict(zip(names, sorted(keywords))))
-        sql += ") GROUP BY verb_lemma ORDER BY verb_lemma"
-        result = await session.execute(text(sql), params)
-        return [(row[0], int(row[1])) for row in result.fetchall()]
+        result = await session.execute(text(
+            "SELECT verb_lemma, master_note_id, COUNT(*) FROM generated_sentences_log "
+            "WHERE project = :project GROUP BY verb_lemma, master_note_id ORDER BY verb_lemma"
+        ), {"project": project})
+        return [
+            (row[0], int(row[1]), int(row[2]))
+            for row in result.fetchall()
+            if is_non_canonical_lemma(row[0], row[1], keyword_map)
+        ]
 
     async def increment_failure_count(
         self, session: AsyncSession, script_id: int, verb_lemma: str, source: str, chapter: str,

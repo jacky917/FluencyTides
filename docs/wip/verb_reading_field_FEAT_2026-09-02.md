@@ -8,7 +8,7 @@
 | **範圍** | `generated_sentences_log` 新增 `verb_reading`、唯一鍵擴充為四欄;兩條生成管線與刪卡工具鏈的寫入點;同表層多讀動詞的候選句歸屬判定 |
 | **不動** | `verb_lemma` 的語意與既有拼寫規則(見關聯文件)、卡片內容與模板既有規則、CoreVerb 漏斗的選句演算法、非同表層動詞的既有行為 |
 | **PR / 進度** | 尚未開始 |
-| **關聯文件** | `docs/wip/verb_lemma_backfill_FIX_2026-09-02.md`(**前置**:存量拼寫修復,必須先執行)、`docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md`(去重鍵三個寫入點的教訓)、`docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md`(§6.5 讀音關與 `ignore_reading` 的由來) |
+| **關聯文件** | `docs/archive/verb_lemma_backfill_FIX_2026-09-02.md`(**前置**:存量拼寫修復,必須先執行)、`docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md`(去重鍵三個寫入點的教訓)、`docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md`(§6.5 讀音關與 `ignore_reading` 的由來) |
 
 ---
 
@@ -136,7 +136,7 @@ ES 用表層搜,搜到的句子究竟讀哪個音,只有上下文知道。fugash
 
 ## 6. 驗收
 
-- [ ] 前置:`verb_lemma` 拼寫修復已執行完畢
+- [x] 前置:`verb_lemma` 拼寫修復已執行完畢(2026-09-03)
 - [ ] `init_db.py` 重跑 → 欄位與四欄唯一鍵就位,舊鍵移除
 - [ ] 回填後 `SELECT COUNT(*) FROM generated_sentences_log WHERE verb_reading = ''` = 5(僅無母卡的孤兒紀錄)
 - [ ] §3 判讀出的「掛錯母卡」清單已依決策處理
@@ -145,6 +145,6 @@ ES 用表層搜,搜到的句子究竟讀哪個音,只有上下文知道。fugash
 
 ## 7. 後續(本計畫不做)
 
-1. **同表層同讀跨母卡**:另有 14 個表層是「同表層、同讀音、不同母卡」(如 `繋がる` 出現在兩張母卡),讀音欄位對它們無效,屬另一類的母卡設計問題,需另案盤點。
+1. **同表層同讀跨母卡**:另有 14 個表層是「同表層、同讀音、不同母卡」(如 `繋がる` 出現在兩張母卡;`穢す`(557)與 `汚[けが]す`(921)更是同詞異漢字且前者以「汚す」為關鍵字),讀音欄位對它們無效,屬母卡設計問題,需另案盤點。
 2. **孤兒紀錄**:`掛ける` 3 筆指向已刪除的母卡、`収まる` 2 筆是母卡改名前的舊紀錄,與本計畫無關但同屬 DB/Anki 不同步。
 3. **CoreVerb 桶佔用統計**:`get_generated_records` / `get_logged_keys` 這類「按動詞查全部」的方法是否也要加讀音過濾,待 CoreVerb 實際擴充到同表層動詞時再評估(目前僅 3 張母卡)。

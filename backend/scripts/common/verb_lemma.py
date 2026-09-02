@@ -24,6 +24,35 @@ import re
 _FURIGANA_PATTERN = re.compile(r"\[.*?\]")
 
 
+def is_non_canonical_lemma(
+    lemma: str, master_note_id: int | str, keyword_map: dict[str, dict[str, str]]
+) -> bool:
+    """判斷某筆紀錄的 ``verb_lemma`` 是否仍為非正規拼寫（帶標音、或是**該母卡**的擴展關鍵字）。
+
+    Whether a row's ``verb_lemma`` is still non-canonical: carries furigana,
+    or equals one of **that master card's** extra search keywords.
+
+    必須按母卡判斷，不能用全域關鍵字集合——同一個字串可以同時是 A 母卡的
+    標準表層與 B 母卡的擴展關鍵字（例：``汚す`` 是 ``汚[よご]す`` 的表層，
+    也是 ``穢す`` 的關鍵字），全域集合會把 A 的正規紀錄誤判為非正規。
+    The check must be per master: the same string can be master A's
+    canonical surface and master B's search keyword at once.
+
+    Args:
+        lemma: 紀錄的 verb_lemma。The row's verb_lemma.
+        master_note_id: 紀錄所屬母卡。The row's master note id.
+        keyword_map: ``{母卡 nid: {關鍵字: 標準表層}}``（見
+            ``canonicalize_verb_lemma.load_keyword_map``）。Per-master
+            keyword → canonical surface map.
+
+    Returns:
+        bool: True 表示非正規、需先跑存量修復。True when non-canonical.
+    """
+    if "[" in (lemma or ""):
+        return True
+    return lemma in keyword_map.get(str(master_note_id), {})
+
+
 def canonical_verb_lemma(surface: str) -> str:
     """把母卡表層轉成 DB 用的正規表記：去標音括號、去前後空白。
 
