@@ -11,6 +11,13 @@ generation records.
 The table is shared by multiple card projects (JP_VerbPair / JP_CoreVerb)
 and partitioned by the `project` column; every method requires an explicit
 project from the caller to prevent cross-project reads or deletions.
+
+``verb_lemma`` 的語意是「母卡標準表層去標音」（``scripts.common.verb_lemma
+.canonical_verb_lemma``），**不是**命中的搜尋關鍵字——關鍵字另存
+``search_keyword``。寫入不同拼寫會讓唯一鍵失效、同句重複生成
+（docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md）。
+``verb_lemma`` is the master card's furigana-stripped standard surface,
+never the matched search keyword (stored separately in ``search_keyword``).
 """
 
 import logging
@@ -203,7 +210,84 @@ class GeneratedLogRepository:
         result = await session.execute(text(sql), params)
         return {(int(row[0]), row[1] or "") for row in result.fetchall()}
 
-    async def increment_failure_count(self, session: AsyncSession, script_id: int, verb_lemma: str, source: str, chapter: str, master_note_id: int, llm_model: str, *, project: str) -> None:
+    async def get_logged_dialogues(self, session: AsyncSession, verb_lemma: str, *, project: str) -> list[str]:
+        """取得指定動詞**全部**生成紀錄對應的台詞原文（唯讀，JOIN scripts）。
+
+        Read-only raw dialogue text of ALL generation records for the given
+        verb (joined from ``scripts``).
+
+        供句子文字層去重：候選句正規化後若與這裡任一句相同，即視為同文
+        異 id 的分身而跳過。與 ``get_logged_keys`` 同理**刻意不看
+        is_deleted**——使用者軟刪除代表「這句不要」，其分身同樣不要；失敗
+        紀錄亦納入，避免撞同一句失敗。
+        Like ``get_logged_keys`` this deliberately ignores is_deleted: a
+        soft-deleted line means "not this sentence", and its text twins are
+        unwanted too.
+
+        Args:
+            session: 非同步資料庫連線 session。Async database session.
+            verb_lemma: 動詞正規表記。Canonical verb lemma.
+            project: 專案識別。Project identifier.
+
+        Returns:
+            list[str]: 台詞原文清單（未正規化，呼叫端自行處理）。Raw
+            dialogue strings; normalization is the caller's job.
+        """
+        _validate_project(project)
+        query = text("""
+            SELECT s.dialogue
+            FROM generated_sentences_log g
+            JOIN scripts s ON s.id = g.script_id
+            WHERE g.verb_lemma = :verb_lemma
+              AND g.project = :project
+        """)
+        result = await session.execute(query, {"verb_lemma": verb_lemma, "project": project})
+        return [row[0] for row in result.fetchall() if row[0]]
+
+    async def find_non_canonical_lemmas(
+        self, session: AsyncSession, keywords: set[str], *, project: str
+    ) -> list[tuple[str, int]]:
+        """列出仍以非正規拼寫存放的 ``verb_lemma``（帶標音、或等於任一搜尋關鍵字）。
+
+        List ``verb_lemma`` values still stored in a non-canonical spelling
+        (with furigana, or equal to one of the search keywords).
+
+        生成腳本的啟動防線：這類紀錄用正規拼寫查不到，新程式碼會把已生成
+        的句子當新句重做一張。呼叫端應在有結果時中止並提示先跑
+        ``canonicalize_verb_lemma.py``。
+        Startup guard for the generators: such rows are invisible to
+        canonical lookups, so the caller must abort and ask for the
+        canonicalization script first.
+
+        Args:
+            session: 非同步資料庫連線 session。Async database session.
+            keywords: 全部假名/異體擴展關鍵字（``extra_search_keywords.json``）。
+                Every kana/variant search keyword.
+            project: 專案識別。Project identifier.
+
+        Returns:
+            list[tuple[str, int]]: ``(verb_lemma, 筆數)``，依 verb_lemma 排序；
+            全部正規時為空。Sorted ``(verb_lemma, count)`` pairs; empty when
+            everything is canonical.
+        """
+        _validate_project(project)
+        sql = (
+            "SELECT verb_lemma, COUNT(*) FROM generated_sentences_log "
+            "WHERE project = :project AND (verb_lemma LIKE '%[%'"
+        )
+        params: dict = {"project": project}
+        if keywords:
+            names = [f"kw{i}" for i in range(len(keywords))]
+            sql += f" OR verb_lemma IN ({', '.join(':' + n for n in names)})"
+            params.update(dict(zip(names, sorted(keywords))))
+        sql += ") GROUP BY verb_lemma ORDER BY verb_lemma"
+        result = await session.execute(text(sql), params)
+        return [(row[0], int(row[1])) for row in result.fetchall()]
+
+    async def increment_failure_count(
+        self, session: AsyncSession, script_id: int, verb_lemma: str, source: str, chapter: str,
+        master_note_id: int, llm_model: str, *, project: str, search_keyword: str | None = None,
+    ) -> None:
         """記錄生成失敗，遞增 failure_count。若紀錄不存在則建立一筆空紀錄。
 
         Record a generation failure by incrementing failure_count; an
@@ -212,22 +296,27 @@ class GeneratedLogRepository:
         Args:
             session: 非同步資料庫連線 session。Async database session.
             script_id: 來源台詞 ID。Source script ID.
-            verb_lemma: 動詞字典形。Dictionary form of the verb.
+            verb_lemma: 動詞正規表記（母卡標準表層去標音）。Canonical
+                verb lemma.
             source: 來源遊戲名稱。Source game name.
             chapter: 章節名稱。Chapter name.
             master_note_id: 觸發生成的 Anki 母卡 ID。Triggering master
                 Anki note ID.
             llm_model: 使用的 LLM 模型名稱。LLM model name used.
             project: 專案識別。Project identifier.
+            search_keyword: 實際命中的搜尋關鍵字（與 verb_lemma 相同時可
+                省略）。The matched search keyword, if different from
+                verb_lemma.
         """
         _validate_project(project)
         query = text("""
             INSERT INTO generated_sentences_log
-            (script_id, verb_lemma, project, source, chapter, master_note_id, llm_model, failure_count)
-            VALUES (:script_id, :verb_lemma, :project, :source, :chapter, :master_note_id, :llm_model, 1)
+            (script_id, verb_lemma, project, source, chapter, master_note_id, llm_model, failure_count, search_keyword)
+            VALUES (:script_id, :verb_lemma, :project, :source, :chapter, :master_note_id, :llm_model, 1, :search_keyword)
             ON DUPLICATE KEY UPDATE
                 failure_count = failure_count + 1,
                 llm_model = VALUES(llm_model),
+                search_keyword = VALUES(search_keyword),
                 updated_at = CURRENT_TIMESTAMP
         """)
         await session.execute(query, {
@@ -237,7 +326,8 @@ class GeneratedLogRepository:
             "source": source,
             "chapter": chapter,
             "master_note_id": master_note_id,
-            "llm_model": llm_model
+            "llm_model": llm_model,
+            "search_keyword": search_keyword,
         })
         await session.commit()
 
@@ -251,22 +341,23 @@ class GeneratedLogRepository:
         Args:
             session: 非同步資料庫連線 session。Async database session.
             record_data: 紀錄欄位字典（含 script_id、verb_lemma、source、
-                chapter、note id 與 llm_model）。Dict of record fields
-                (script_id, verb_lemma, source, chapter, note ids,
-                llm_model).
+                chapter、note id、llm_model，可選 search_keyword）。Dict of
+                record fields (script_id, verb_lemma, source, chapter, note
+                ids, llm_model, optional search_keyword).
             project: 專案識別。Project identifier.
         """
         _validate_project(project)
         query = text("""
             INSERT INTO generated_sentences_log
-            (script_id, verb_lemma, project, source, chapter, master_note_id, context_note_id, cloze_note_id, llm_model, failure_count)
+            (script_id, verb_lemma, project, source, chapter, master_note_id, context_note_id, cloze_note_id, llm_model, failure_count, search_keyword)
             VALUES
-            (:script_id, :verb_lemma, :project, :source, :chapter, :master_note_id, :context_note_id, :cloze_note_id, :llm_model, 0)
+            (:script_id, :verb_lemma, :project, :source, :chapter, :master_note_id, :context_note_id, :cloze_note_id, :llm_model, 0, :search_keyword)
             ON DUPLICATE KEY UPDATE
                 context_note_id = VALUES(context_note_id),
                 cloze_note_id = VALUES(cloze_note_id),
                 master_note_id = VALUES(master_note_id),
                 llm_model = VALUES(llm_model),
+                search_keyword = VALUES(search_keyword),
                 delete_count = delete_count + 1,
                 failure_count = 0,
                 is_deleted = FALSE,
@@ -283,6 +374,7 @@ class GeneratedLogRepository:
             "context_note_id": record_data.get("context_note_id"),
             "cloze_note_id": record_data.get("cloze_note_id"),
             "llm_model": record_data["llm_model"],
+            "search_keyword": record_data.get("search_keyword"),
         }
 
         await session.execute(query, params)

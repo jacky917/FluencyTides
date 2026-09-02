@@ -44,8 +44,9 @@ async def init_generated_sentences_log():
         
         -- 核心關聯鍵 (複合 Unique 基礎)
         script_id BIGINT UNSIGNED NOT NULL COMMENT '來源台詞 ID (對應 scripts.id)',
-        verb_lemma VARCHAR(255) NOT NULL COMMENT '正規化後的動詞原型',
+        verb_lemma VARCHAR(255) NOT NULL COMMENT '動詞正規表記：母卡標準表層去標音（非搜尋關鍵字）',
         project VARCHAR(32) NOT NULL DEFAULT 'jp_verb_pair' COMMENT '所屬卡片專案 (jp_verb_pair / jp_core_verb)',
+        search_keyword VARCHAR(255) DEFAULT NULL COMMENT '實際命中的搜尋關鍵字（假名/異體擴展）；與 verb_lemma 相同時為 NULL',
 
         -- 關聯還原資訊 (方便 JOIN 與追溯)
         source VARCHAR(255) NOT NULL COMMENT '遊戲來源名稱',
@@ -136,6 +137,11 @@ async def _ensure_columns(session: AsyncSession) -> None:
             "ADD COLUMN project VARCHAR(32) NOT NULL DEFAULT 'jp_verb_pair' "
             "COMMENT '所屬卡片專案 (jp_verb_pair / jp_core_verb)' "
             "AFTER verb_lemma, ADD INDEX idx_project (project)"
+        ),
+        "search_keyword": (
+            "ADD COLUMN search_keyword VARCHAR(255) DEFAULT NULL "
+            "COMMENT '實際命中的搜尋關鍵字（假名/異體擴展）；與 verb_lemma 相同時為 NULL' "
+            "AFTER project"
         ),
     }
 
