@@ -4,11 +4,11 @@
 |---|---|
 | **創建日期** | 2026-09-02 |
 | **性質** | bug 修復(根因分析 + 修正工作項 + 存量資料修復) |
-| **狀態** | 🚧 修復中 |
+| **狀態** | 🚧 修復中(程式碼與測試完成、A 型重複卡已清;待開 PR 與存量欄位修復) |
 | **嚴重度** | 🟡 功能異常有繞路(冗餘卡各自內容正確,只是學習上重複;3,106 張活卡中 23 張冗餘,0.7%) |
-| **影響範圍** | JP_VerbPair 生成管線的去重判定、`generated_sentences_log.verb_lemma` 的語意、刪卡工具鏈的完整性修復寫入;存量資料**已被污染**(同母卡下 `verb_lemma` 拼寫漂移 126 組,其中 7 組已造成重複卡) |
-| **PR / 進度** | 尚未開始 |
-| **關聯文件** | `docs/archive/child_card_deletion_toolkit_FEAT_2026-08-27.md`(刪卡工具鏈,§2 verb_lemma 抽取掛鉤)、`docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md`(假名擴展關鍵字的來源)、2026-09-02 全庫抽查對話 |
+| **影響範圍** | JP_VerbPair 生成管線的去重判定、`generated_sentences_log.verb_lemma` 的語意、刪卡工具鏈的完整性修復寫入;存量資料**已被污染**(147 筆假名拼寫 + 3 筆帶標音,其中 7 組已造成重複卡) |
+| **PR / 進度** | 分支 `fix/dedup-key-master-note-id`(commit 21e02bb),尚未開 PR |
+| **關聯文件** | `docs/wip/verb_lemma_backfill_FIX_2026-09-02.md`(**存量修復的完整名單與等價 SQL**,分支 `docs/verb-lemma-backfill`)、`docs/archive/child_card_deletion_toolkit_FEAT_2026-08-27.md`(刪卡工具鏈,§2 verb_lemma 抽取掛鉤)、`docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md`(假名擴展關鍵字的來源)、2026-09-02 全庫抽查對話 |
 
 ---
 
@@ -56,6 +56,10 @@
 - A 型重複 7 組(id:125/555、126/556、128/560/745、139/320、140/321、155/478、157/618)
 - B 型重複 14 組(冗餘 id:330、658、1016、1431、1765、2318、2470、2723、3055、3290、3291、3292、3293、3294、3295)
 
+**A 型已於 2026-09-02 清理**:逐組比對內容後刪除品質較差的一張(較差者多為早期紀錄——翻譯較生硬、`Conjugation_Explanation` 空白、`Verb_Pair_JSON` 用純假名格式),共 8 張軟刪除:`125、126、128、745、320、321、155、157`;保留 `555、556、560、139、140、478、618`。刪除走 `run_deletion_by_log_ids`,事後完整性檢查以 report-only 包裝,未動既有的孤兒媒體等髒資料。
+
+**B 型 15 張未動**:每張內容皆正確,僅學習上冗餘,是否清理由使用者決定;新機制(§3.2)已能阻止後續再生成同類。
+
 ## 3. 修法
 
 ### 3.1 `verb_lemma` 語意收斂為「母卡標準表層去標音」(修 R1、R2)
@@ -80,6 +84,8 @@
    - 至多一筆是「活的」(未軟刪除且有子卡)→ 自動合併:保留活的那筆,硬刪另一筆,`delete_count`/`failure_count` 取兩者最大值;
    - 兩筆都活 → **不動**,列出 id 對,要求先用 `delete_by_generated_sentences_log_id.py` 刪掉冗餘卡(§1 A 型 7 組正是這種),再重跑。
 3. 執行完呼叫既有的 `reset_auto_increment`。
+
+**逐筆名單另立文件**:155 筆改寫 + 9 筆死紀錄合併的完整清單(每筆含 DB id、母卡/cloze/context note id、從→到拼寫)與不依賴分支的等價 SQL,見 `docs/wip/verb_lemma_backfill_FIX_2026-09-02.md`。本文件只定義規則,名單隨資料變動,分開才不會讓規則文件跟著過期。
 
 B 型 15 張冗餘卡不涉及 DB 修復,直接用 id 刪除工具軟刪除即可(軟刪除 → 該 script_id 永不再生成;其文字分身則靠 §3.2 擋住)。
 
@@ -116,14 +122,19 @@ B 型 15 張冗餘卡不涉及 DB 修復,直接用 id 刪除工具軟刪除即�
 ## 5. 驗證
 
 - [x] 新測試 26 項通過(2026-09-02),全套件 198 passed、無新增失敗
-- [x] `canonicalize_verb_lemma.py` dry-run(2026-09-02):單純改寫 147 筆、自動合併 1 組([156]/[479] 捲る,後者為死紀錄)、衝突 7 組——**與 §1 A 型 7 組完全一致**
+- [x] `canonicalize_verb_lemma.py` dry-run(2026-09-02,清理前):單純改寫 147 筆、自動合併 1 組([156]/[479] 捲る,後者為死紀錄)、衝突 7 組——**與 §1 A 型 7 組完全一致**,證明腳本的衝突偵測與全庫比對結果互相印證
+- [x] 同日 dry-run(A 型清理後):單純改寫 147 筆、自動合併 **8** 組、衝突 **0** 組——死紀錄合併規則按預期接手了剛軟刪除的 8 筆
 - [x] `init_db.py` 重跑 → 只補上 `search_keyword` 欄位,unique key 無變更
 - [x] 全牌組 dry-run 生成(`--limit 0 --dry-run`,1,473 張候選):log 出現 3 次「同文去重」跳過(明ける 17111、戻す 17815、伸ばす 17395),皆為已記錄台詞的同文異 id 分身;無例外
-- [ ] **存量清理(合併後由使用者執行,涉及不可逆的 Anki 刪卡)**:
-  1. 軟刪 23 張冗餘卡(A 型保留較新那張):
-     ```
-     python scripts/local_anki/delete_by_generated_sentences_log_id.py 125,126,128,560,139,140,155,157,330,658,1016,1431,1765,2318,2470,2723,3055,3290,3291,3292,3293,3294,3295 --execute
-     ```
-     dry-run 已確認 23 筆全部可解析、0 筆失敗。⚠️ CLI 的事後完整性檢查會**順帶修復** 199 個既有問題(孤兒媒體等);若要維持「不動既有髒資料」的先前決定,改走 report-only 的驅動方式(child_deleter.run_integrity_check 以 is_execute=False 包裝)。
-  2. 再跑 `python scripts/common/database/canonicalize_verb_lemma.py --execute` → 預期零衝突(軟刪後 7 組各剩一筆活紀錄,死紀錄自動合併)
-  3. 複查:`SELECT verb_lemma, COUNT(*) FROM generated_sentences_log WHERE verb_lemma LIKE '%[%' GROUP BY 1` 應為空
+- [x] **A 型重複卡清理(2026-09-02 完成)**:8 張軟刪除(§1),DB `is_deleted=1`、`delete_count=1`,Anki 子卡與母卡 JSON 同步移除;保留的 7 張逐一確認仍在
+- [ ] **存量欄位修復**:跑 `canonicalize_verb_lemma.py --execute`(或等價 SQL),驗證條目見 `verb_lemma_backfill_FIX_2026-09-02.md` §5
+- [ ] **合併後回歸**:實際生成一輪,確認 log 出現「同文去重」且不再產生同母卡同句的重複紀錄
+
+⚠️ 執行刪卡 CLI 時注意:`delete_by_generated_sentences_log_id.py` 的事後完整性檢查預設會**順帶修復** 199 個既有問題(孤兒媒體等)。要維持「不動既有髒資料」的決定,須以 report-only 包裝驅動(`child_deleter.run_integrity_check` 改呼叫 `run_integrity_check(profile, is_execute=False, client=client)`)——本次 8 張即照此執行。這個落差值得日後在 CLI 加一個 `--no-repair` 參數,列入 §6。
+
+## 6. 後續(本 PR 不做)
+
+1. **`verb_reading` 讀音欄位**:同表層異讀的動詞對已實際存在——`汚[けが]れる/汚[けが]す` 與 `汚[よご]れる/汚[よご]す` 是兩張母卡,現行鍵 `(script_id, 汚す, project)` 分不出。方案與不採 `master_note_id` 的理由見 `verb_lemma_backfill_FIX_2026-09-02.md` §6。
+2. **刪卡 CLI 的 `--no-repair`**:目前唯一能「刪卡但不順帶修復既有髒資料」的方式是自行包裝 `run_integrity_check`,不該是常態用法(見 §5 警告)。
+3. **孤兒紀錄清理**:`掛ける` 有一筆紀錄指向已不存在的母卡(1784082812991),`収まる` 有母卡改名前的舊紀錄——與本次去重無關,但同屬 DB 與 Anki 不同步,值得另案盤點。
+4. **B 型 15 張冗餘卡**:是否清理待使用者決定(§1)。
