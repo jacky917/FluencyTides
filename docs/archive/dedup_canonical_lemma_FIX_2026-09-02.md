@@ -7,7 +7,7 @@
 | **狀態** | ✅ 已修復並驗證(2026-09-02) |
 | **嚴重度** | 🟡 功能異常有繞路(冗餘卡各自內容正確,只是學習上重複;3,106 張活卡中 23 張冗餘,0.7%) |
 | **影響範圍** | JP_VerbPair 生成管線的去重判定、`generated_sentences_log.verb_lemma` 的語意、刪卡工具鏈的完整性修復寫入;存量資料**已被污染**(147 筆假名拼寫 + 3 筆帶標音,其中 7 組已造成重複卡) |
-| **PR / 進度** | 分支 `fix/dedup-key-master-note-id`(21e02bb 程式碼 + 0214053 文件),開 PR 後補號碼 |
+| **PR / 進度** | [#16](https://github.com/jacky917/FluencyTides/pull/16)(分支 `fix/dedup-key-master-note-id`,合併後補日期與 merge commit) |
 | **關聯文件** | `docs/wip/verb_lemma_backfill_FIX_2026-09-02.md`(**存量修復的完整名單與等價 SQL**,分支 `docs/verb-lemma-backfill`)、`docs/archive/child_card_deletion_toolkit_FEAT_2026-08-27.md`(刪卡工具鏈,§2 verb_lemma 抽取掛鉤)、`docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md`(假名擴展關鍵字的來源)、2026-09-02 全庫抽查對話 |
 
 ---
