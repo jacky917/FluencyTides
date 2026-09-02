@@ -2,7 +2,7 @@
 
 Data repair: canonicalize generated_sentences_log.verb_lemma.
 
-背景（docs/wip/dedup_canonical_lemma_FIX_2026-09-02.md §2）：生成管線曾把
+背景（docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md §2）：生成管線曾把
 「命中的搜尋關鍵字」（假名擴展 まとめる、異體 捲る/まくる）以及刪卡工具
 鏈曾把「帶標音表層」（纏[まと]める）寫進 ``verb_lemma``，同一句因此被同
 一動詞側重複生成。本腳本把每筆紀錄改成母卡標準表層去標音，原值移到
@@ -237,13 +237,14 @@ async def _apply(session, plan: Plan) -> None:
 
 
 def _print_plan(plan: Plan) -> None:
+    fmt_kw = lambda kw: f"'{kw}'" if kw else "NULL"
     logger.info(f"\n📝 單純改寫: {len(plan.updates)} 筆")
     for row_id, lemma, kw in plan.updates:
-        logger.info(f"   [{row_id}] verb_lemma → '{lemma}'  (search_keyword='{kw}')")
+        logger.info(f"   [{row_id}] verb_lemma → '{lemma}'  (search_keyword={fmt_kw(kw)})")
     logger.info(f"\n🔀 撞鍵合併: {len(plan.merges)} 組")
     for keep_id, lemma, kw, dc, fc, deleted in plan.merges:
         logger.info(
-            f"   保留 [{keep_id}] → '{lemma}' (search_keyword='{kw}', delete_count={dc}, "
+            f"   保留 [{keep_id}] → '{lemma}' (search_keyword={fmt_kw(kw)}, delete_count={dc}, "
             f"failure_count={fc})；硬刪 {deleted}"
         )
     logger.info(f"\n🚨 兩筆以上皆活、需先刪冗餘卡: {len(plan.conflicts)} 組")

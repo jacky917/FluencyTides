@@ -6,7 +6,7 @@ log_repository and context_builder behind a unified prepare/record API.
 負責協調 log_repository 與 context_builder，
 提供對外統一的 prepare_generation 與 record_success 介面。
 
-去重分兩層（docs/wip/dedup_canonical_lemma_FIX_2026-09-02.md §3）：
+去重分兩層（docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md §3）：
 1. **鍵層**：``(script_id, verb_lemma, project)``——``verb_lemma`` 必須是
    母卡標準表層去標音的正規表記（呼叫端傳 ``kd["target_lemma"]`` 而非
    搜尋關鍵字），否則同句會因拼寫不同被重複生成。

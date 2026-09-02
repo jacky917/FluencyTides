@@ -7,7 +7,7 @@ generated_sentences_log.verb_lemma.
 ``纏める``），**不是**命中的搜尋關鍵字（假名擴展 ``まとめる`` 等另存
 ``search_keyword``）。所有寫入 DB 的路徑（生成管線、刪卡工具鏈的完整性
 修復、存量修復腳本）都應經過這裡，否則同一句會因拼寫不同而被重複生成
-（docs/wip/dedup_canonical_lemma_FIX_2026-09-02.md §2 R1/R2）。
+（docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md §2 R1/R2）。
 
 ``verb_lemma`` means "the master card's standard surface with furigana
 stripped"; never the matched search keyword. Every DB writer must go

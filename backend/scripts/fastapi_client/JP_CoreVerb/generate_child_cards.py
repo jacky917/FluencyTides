@@ -362,7 +362,7 @@ async def _generate_from_report(
         chapter = candidate.chapter
 
         # 傳入候選句原文以啟用文字層去重（同一句台詞、不同 script_id 的
-        # 分身跳過），詳見 docs/wip/dedup_canonical_lemma_FIX_2026-09-02.md §3.2
+        # 分身跳過），詳見 docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md §3.2
         context_dialogue = await dedup_manager.prepare_generation(
             script_id=script_id,
             verb_lemma=report.verb_lemma,

@@ -1,4 +1,4 @@
-"""去重鍵漏洞修復的回歸測試（docs/wip/dedup_canonical_lemma_FIX_2026-09-02.md §4）。
+"""去重鍵漏洞修復的回歸測試（docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md §4）。
 
 Regression tests for the dedup-key fix.
 
@@ -10,6 +10,7 @@ Regression tests for the dedup-key fix.
 """
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import scripts.common.env  # noqa: F401
@@ -21,6 +22,7 @@ from scripts.common.database.canonicalize_verb_lemma import (
 )
 from scripts.common.sentence_normalize import normalize_sentence
 from scripts.common.verb_lemma import canonical_verb_lemma
+from scripts.fastapi_client.JP_VerbPair.generate_child_cards import _all_extra_keywords
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import DedupManager
 from scripts.local_anki.common.deletion.profiles import get_profile
 
@@ -235,7 +237,27 @@ class TestCanonicalizePlan:
 
 
 class TestLoadKeywordMap:
-    def test_real_config_maps_known_variants(self):
-        km = load_keyword_map()
-        assert km["1782042908540"]["まくる"] == "捲る"
-        assert km["1782042908446"]["繋ぐ"] == "繋げる"
+    def test_accepts_both_config_formats(self, tmp_path):
+        """舊格式（list）與新格式（dict 含 extra_keywords）都能映射回標準表層。"""
+        cfg = tmp_path / "kw.json"
+        cfg.write_text(json.dumps({
+            "100": {"捲[まく]る": ["まくる"], "捲れる": {"extra_keywords": ["まくれる"], "allow_auxiliary": True}},
+            "200": {"繋げる": {"allow_auxiliary": True}},
+        }), encoding="utf-8")
+        km = load_keyword_map(cfg)
+        assert km["100"] == {"まくる": "捲る", "まくれる": "捲れる"}
+        assert km["200"] == {}
+
+    def test_missing_file_is_empty(self, tmp_path):
+        assert load_keyword_map(tmp_path / "nope.json") == {}
+
+
+class TestAllExtraKeywords:
+    def test_collects_every_keyword_across_masters(self):
+        cfg = {
+            "100": {"捲る": {"extra_keywords": ["まくる"]}, "捲れる": {"extra_keywords": ["まくれる"]}},
+            "200": {"繋げる": {"extra_keywords": ["繋ぐ"], "allow_auxiliary": True}},
+            "300": {"止める": {"extra_keywords": []}},
+        }
+        assert _all_extra_keywords(cfg) == {"まくる", "まくれる", "繋ぐ"}
+        assert _all_extra_keywords({}) == set()

@@ -15,7 +15,7 @@ project from the caller to prevent cross-project reads or deletions.
 ``verb_lemma`` 的語意是「母卡標準表層去標音」（``scripts.common.verb_lemma
 .canonical_verb_lemma``），**不是**命中的搜尋關鍵字——關鍵字另存
 ``search_keyword``。寫入不同拼寫會讓唯一鍵失效、同句重複生成
-（docs/wip/dedup_canonical_lemma_FIX_2026-09-02.md）。
+（docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md）。
 ``verb_lemma`` is the master card's furigana-stripped standard surface,
 never the matched search keyword (stored separately in ``search_keyword``).
 """
@@ -243,6 +243,46 @@ class GeneratedLogRepository:
         """)
         result = await session.execute(query, {"verb_lemma": verb_lemma, "project": project})
         return [row[0] for row in result.fetchall() if row[0]]
+
+    async def find_non_canonical_lemmas(
+        self, session: AsyncSession, keywords: set[str], *, project: str
+    ) -> list[tuple[str, int]]:
+        """列出仍以非正規拼寫存放的 ``verb_lemma``（帶標音、或等於任一搜尋關鍵字）。
+
+        List ``verb_lemma`` values still stored in a non-canonical spelling
+        (with furigana, or equal to one of the search keywords).
+
+        生成腳本的啟動防線：這類紀錄用正規拼寫查不到，新程式碼會把已生成
+        的句子當新句重做一張。呼叫端應在有結果時中止並提示先跑
+        ``canonicalize_verb_lemma.py``。
+        Startup guard for the generators: such rows are invisible to
+        canonical lookups, so the caller must abort and ask for the
+        canonicalization script first.
+
+        Args:
+            session: 非同步資料庫連線 session。Async database session.
+            keywords: 全部假名/異體擴展關鍵字（``extra_search_keywords.json``）。
+                Every kana/variant search keyword.
+            project: 專案識別。Project identifier.
+
+        Returns:
+            list[tuple[str, int]]: ``(verb_lemma, 筆數)``，依 verb_lemma 排序；
+            全部正規時為空。Sorted ``(verb_lemma, count)`` pairs; empty when
+            everything is canonical.
+        """
+        _validate_project(project)
+        sql = (
+            "SELECT verb_lemma, COUNT(*) FROM generated_sentences_log "
+            "WHERE project = :project AND (verb_lemma LIKE '%[%'"
+        )
+        params: dict = {"project": project}
+        if keywords:
+            names = [f"kw{i}" for i in range(len(keywords))]
+            sql += f" OR verb_lemma IN ({', '.join(':' + n for n in names)})"
+            params.update(dict(zip(names, sorted(keywords))))
+        sql += ") GROUP BY verb_lemma ORDER BY verb_lemma"
+        result = await session.execute(text(sql), params)
+        return [(row[0], int(row[1])) for row in result.fetchall()]
 
     async def increment_failure_count(
         self, session: AsyncSession, script_id: int, verb_lemma: str, source: str, chapter: str,

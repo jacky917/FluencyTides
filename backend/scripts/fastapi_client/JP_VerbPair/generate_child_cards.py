@@ -396,7 +396,7 @@ async def process_verb_group(
                 
                 # 去重鍵一律用母卡標準表層（target_lemma），不用命中的關鍵字
                 # （假名擴展 まとめる 等）——否則同句會因拼寫不同重複生成
-                # （docs/wip/dedup_canonical_lemma_FIX_2026-09-02.md §2 R1）。
+                # （docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md §2 R1）。
                 # 關鍵字只作追溯，走 search_keyword 欄位。
                 if dry_run and (kd["target_lemma"], script_id) in dry_run_generated:
                     continue
@@ -556,6 +556,30 @@ async def process_verb_group(
 
     return new_generated
 
+
+def _all_extra_keywords(validation_config: dict) -> set[str]:
+    """彙整 extra_search_keywords.json 裡全部的假名/異體擴展關鍵字。
+
+    Collect every kana/variant search keyword from the loaded config.
+
+    供啟動防線查 DB 是否仍有以關鍵字拼寫存放的 verb_lemma
+    （docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md §2 R1）。
+
+    Args:
+        validation_config: ``_load_validation_config()`` 的結果。Loaded
+            per-verb validation config.
+
+    Returns:
+        set[str]: 關鍵字集合。The keyword set.
+    """
+    return {
+        kw
+        for verbs in validation_config.values()
+        for entry in verbs.values()
+        for kw in entry.get("extra_keywords", [])
+    }
+
+
 async def main() -> None:
     """腳本進入點：掃描母卡並逐一處理自/他動詞欄位。
 
@@ -639,6 +663,22 @@ async def main() -> None:
                 context_next=settings.JP_VERB_PAIR_CONTEXT_NEXT,
                 project=PROJECT_JP_VERB_PAIR,
             )
+
+            # 啟動防線：DB 若仍有以假名擴展關鍵字或帶標音拼寫存放的 verb_lemma，
+            # 正規拼寫查不到那些紀錄，會把已生成的句子當新句再做一張（2026-09-02
+            # dry-run 實測 37 張）。必須先跑 canonicalize_verb_lemma.py 才能生成。
+            # Startup guard: rows stored under keyword/furigana spellings are
+            # invisible to canonical lookups and would be regenerated.
+            stale = await dedup_manager.repo.find_non_canonical_lemmas(
+                session, _all_extra_keywords(validation_config), project=PROJECT_JP_VERB_PAIR,
+            )
+            if stale:
+                logger.error("🛑 generated_sentences_log 仍有非正規拼寫的 verb_lemma，繼續生成會產生重複卡：")
+                for lemma, count in stale:
+                    logger.error(f"   '{lemma}': {count} 筆")
+                logger.error("   請先執行 python scripts/common/database/canonicalize_verb_lemma.py --execute，再重跑本腳本。")
+                return
+
             api_client = BackendAPIClient(api_url, headers)
             uploader = AnkiMediaUploader(anki_client, voice_dir, avatar_dir, source_game)
             

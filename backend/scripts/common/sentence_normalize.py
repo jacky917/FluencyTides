@@ -6,7 +6,7 @@ same line under different script ids).
 VN 語料裡同一句台詞常以不同 ``script_id`` 重複出現（分支、回想、重複
 場景），只差標點或全半形。去重鍵按 ``script_id`` 看不出來，因此在
 生成前把候選句正規化後與該動詞已記錄的台詞比對
-（docs/wip/dedup_canonical_lemma_FIX_2026-09-02.md §3.2）。
+（docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md §3.2）。
 
 規則刻意保守——只抹平**書寫層**差異（標點、空白、全半形、標音、HTML
 標籤），**不**做假名／漢字等價或語意層等價，那不是資料層該猜的事。

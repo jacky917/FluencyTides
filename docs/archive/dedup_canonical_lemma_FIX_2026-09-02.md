@@ -101,11 +101,11 @@ B 型 15 張冗餘卡不涉及 DB 修復,直接用 id 刪除工具軟刪除即�
 |---|---|
 | `scripts/common/verb_lemma.py` | 新增 `canonical_verb_lemma()`(去標音、去空白) |
 | `scripts/common/sentence_normalize.py` | 新增 `normalize_sentence()` |
-| `scripts/common/database/log_repository.py` | 新增 `get_logged_dialogues()`;`increment_failure_count` / `create_or_restore_record` 接受 `search_keyword`;docstring 標明 `verb_lemma` 語意 |
+| `scripts/common/database/log_repository.py` | 新增 `get_logged_dialogues()`、`find_non_canonical_lemmas()`;`increment_failure_count` / `create_or_restore_record` 接受 `search_keyword`;docstring 標明 `verb_lemma` 語意 |
 | `scripts/common/database/init_db.py` | DDL 加 `search_keyword` 欄位與 `verb_lemma` 註解;`_ensure_columns` 補齊 |
 | `scripts/common/database/canonicalize_verb_lemma.py` | 新增存量修復腳本(dry-run 預設) |
 | `scripts/fastapi_client/JP_VerbPair/pipeline_components/dedup_manager.py` | `prepare_generation` 加 `dialogue` 文字去重;`record_*` 傳遞 `search_keyword` |
-| `scripts/fastapi_client/JP_VerbPair/generate_child_cards.py` | 去重呼叫改用 `kd["target_lemma"]`,關鍵字改走 `search_keyword`;傳入 `dialogue` |
+| `scripts/fastapi_client/JP_VerbPair/generate_child_cards.py` | 去重呼叫改用 `kd["target_lemma"]`,關鍵字改走 `search_keyword`;傳入 `dialogue`;**啟動防線**:DB 仍有非正規拼寫時中止並提示先跑修復腳本(見 §5 review 補記) |
 | `scripts/fastapi_client/JP_CoreVerb/generate_child_cards.py` | `prepare_generation` 傳入 `candidate.sentence` |
 | `scripts/local_anki/common/deletion/profiles.py` | `_verb_pair_lemma` 回傳值去標音 |
 | `tests/test_dedup_canonical_lemma.py` | 釘住 R1/R2/R3 的回歸測試 |
@@ -126,6 +126,7 @@ B 型 15 張冗餘卡不涉及 DB 修復,直接用 id 刪除工具軟刪除即�
 - [x] 同日 dry-run(A 型清理後):單純改寫 147 筆、自動合併 **8** 組、衝突 **0** 組——死紀錄合併規則按預期接手了剛軟刪除的 8 筆
 - [x] `init_db.py` 重跑 → 只補上 `search_keyword` 欄位,unique key 無變更
 - [x] 全牌組 dry-run 生成(`--limit 0 --dry-run`,1,473 張候選):log 出現 3 次「同文去重」跳過(明ける 17111、戻す 17815、伸ばす 17395),皆為已記錄台詞的同文異 id 分身;無例外
+- [x] **Review 補記(2026-09-02)**:比對全牌組 dry-run 與 DB 發現 **37 張**預計生成的句子其實已存在——只是以關鍵字拼寫(まとめる 等)存放,新程式碼用正規拼寫查不到。這是「程式碼先於存量修復部署」的順序風險,不能靠人記得;已加啟動防線 `find_non_canonical_lemmas`,存量未修復前生成腳本直接中止並列出殘留拼寫(實測 22 種、中止於處理任何母卡之前)。同輪修正:docstring 內計畫書路徑改指 archive、`load_keyword_map` 測試改用暫存設定檔不再綁真實 json 內容
 - [x] **A 型重複卡清理(2026-09-02 完成)**:8 張軟刪除(§1),DB `is_deleted=1`、`delete_count=1`,Anki 子卡與母卡 JSON 同步移除;保留的 7 張逐一確認仍在
 - [→] **存量欄位修復(155 筆改寫 + 9 筆死紀錄合併)移交** `verb_lemma_backfill_FIX_2026-09-02.md`:本計畫交付的是規則與修復腳本,執行與逐筆驗證屬該文件範圍
 - [→] **合併後回歸**:部署後實際生成一輪確認「同文去重」持續生效——見 §6
