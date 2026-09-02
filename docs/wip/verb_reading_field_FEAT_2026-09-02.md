@@ -51,11 +51,15 @@ ES 用表層搜,搜到的句子究竟讀哪個音,只有上下文知道。fugash
 
 | 項目 | 決定 | 理由 |
 |---|---|---|
-| 型別 | `VARCHAR(64) NOT NULL DEFAULT ''` | 唯一鍵內不可為 NULL——MySQL 的 NULL 互不相等,會讓去重整個失效 |
+| 型別 | `VARCHAR(32) NOT NULL DEFAULT ''` | 長度由實測推得:全牌組 522 項讀音最長 5 字(よこたわる 等)、平均 3.3,取 32 留 6 倍餘裕。`NOT NULL` 是硬性要求——唯一鍵內的 NULL 互不相等,會讓去重整個失效 |
 | 值域 | 純平假名(`ぁ-ん` + `ー`) | 全牌組實測 522/522 導出即為純平假名 |
 | 唯一鍵 | `(script_id, verb_lemma, verb_reading, project)` | 取代 `uk_script_verb_project` |
 | 取值 | 母卡標音去 base:`纏[まと]める` → `まとめる` | 管線的 `_parse_verb_field` 已在算,只是沒用 |
 | 共用 helper | `scripts/common/verb_lemma.py` 新增 `canonical_verb_reading()` | 與 `canonical_verb_lemma` 同檔,寫入點只准走這裡 |
+
+**為什麼是 32 而不是 64**:`VARCHAR` 是變長儲存,32 與 64 在磁碟上佔用相同,但欄位會進唯一索引,而索引前綴長度按宣告上限計算(utf8mb4 每字元 4 bytes:32 → 128 bytes、64 → 256 bytes)。現有鍵已有 `verb_lemma VARCHAR(255)`(1020 bytes),離 InnoDB DYNAMIC 列格式的 3072 bytes 上限尚遠,兩者皆可行,但沒有理由讓索引多佔一倍。32 對最長 5 字的實測值仍有充足餘裕,足以吸收未來的長複合動詞,以及刪卡工具鏈既有缺陷(多值配對如「極まる, 窮まる」可能回傳整串)。
+
+> `verb_lemma` 的 `VARCHAR(255)` 同樣遠超所需(最長表層 5-6 字),但那是既有欄位、改動要重建索引,屬另一件事,本計畫不夾帶。
 
 **不採 `master_note_id` 作鍵**:母卡刪除重建會換 id(存量已見 `掛ける` 一張母卡消失、留下 3 筆孤兒紀錄),讀音跟著詞走更穩定。
 
