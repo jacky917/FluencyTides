@@ -8,7 +8,7 @@
 | **嚴重度** | 🟡 功能異常有繞路(卡片內容全部正確;只有 DB 去重欄位拼寫不一致,導致日後可能重複生成) |
 | **影響範圍** | 僅 MySQL `yuzusoft.generated_sentences_log` 的 `verb_lemma` / `search_keyword` / `delete_count` 欄位與 9 筆已軟刪除的死紀錄;**0 張母卡、0 張子卡、0 個媒體檔受影響** |
 | **PR / 進度** | 尚未開始 |
-| **關聯文件** | `docs/wip/dedup_canonical_lemma_FIX_2026-09-02.md`(程式碼層修法與修復腳本,分支 `fix/dedup-key-master-note-id`)、`docs/archive/child_card_deletion_toolkit_FEAT_2026-08-27.md`、2026-09-02 全庫抽查對話 |
+| **關聯文件** | `docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md`(程式碼層修法與修復腳本,[#16](https://github.com/jacky917/FluencyTides/pull/16) 已合併 2026-09-02)、`docs/archive/child_card_deletion_toolkit_FEAT_2026-08-27.md`、2026-09-02 全庫抽查對話 |
 
 ---
 
