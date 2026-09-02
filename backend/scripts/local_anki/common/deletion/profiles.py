@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from app.core.config import settings
+from scripts.common.verb_lemma import canonical_verb_lemma
 from scripts.common.database.log_repository import (
     PROJECT_JP_CORE_VERB,
     PROJECT_JP_VERB_PAIR,
@@ -60,6 +61,13 @@ def _verb_pair_lemma(cloze_fields: dict, master_fields: dict | None) -> str:
     JP_VerbPair: read the actually-used verb lemma from the cloze card's
     Verb_Pair_JSON field.
 
+    Verb_Pair_JSON 保留母卡的標音格式（``纏[まと]める``），DB 的
+    ``verb_lemma`` 則是去標音的正規表記；回傳前一律經
+    ``canonical_verb_lemma`` 收斂，否則完整性修復會寫入第三種拼寫、
+    製造重複生成（docs/wip/dedup_canonical_lemma_FIX_2026-09-02.md §2 R2）。
+    Verb_Pair_JSON keeps furigana; the DB lemma is the canonical stripped
+    form, so the value is always canonicalized before returning.
+
     Args:
         cloze_fields: Cloze 卡 fields 原始字典。Raw cloze fields dict.
         master_fields: 母卡 fields（此專案用不到，介面統一而收）。Master
@@ -77,9 +85,9 @@ def _verb_pair_lemma(cloze_fields: dict, master_fields: dict | None) -> str:
         return ""
     used_type = vp.get("used", "")
     if used_type == "intransitive":
-        return vp.get("intransitive", "") or ""
+        return canonical_verb_lemma(vp.get("intransitive", "") or "")
     if used_type == "transitive":
-        return vp.get("transitive", "") or ""
+        return canonical_verb_lemma(vp.get("transitive", "") or "")
     return ""
 
 
