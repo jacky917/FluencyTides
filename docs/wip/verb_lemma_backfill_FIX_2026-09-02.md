@@ -285,4 +285,4 @@ ALTER TABLE generated_sentences_log AUTO_INCREMENT = 1;
 
 ## 6. 後續(本文件不做)
 
-**讀音欄位 `verb_reading`**:同表層異讀的動詞對已實際存在——`汚[けが]れる/汚[けが]す` 與 `汚[よご]れる/汚[よご]す` 是兩張母卡,現行鍵 `(script_id, 汚す, project)` 分不出。建議另開單元:新增 `verb_reading VARCHAR(64) NOT NULL DEFAULT ''`(純平假名;唯一鍵內不可為 NULL,MySQL 的 NULL 互不相等會讓去重失效),唯一鍵改為 `(script_id, verb_lemma, verb_reading, project)`,寫入來源唯一(母卡標音,管線的 `_parse_verb_field` 已在算),存量依 `master_note_id` 回填、母卡已不存在者填空字串。不採 `master_note_id` 作鍵的理由:母卡刪除重建會換 id(本次即見 掛ける 一張已不存在的母卡留下孤兒紀錄),讀音跟著詞走更穩定。
+**讀音欄位 `verb_reading`**:已另立計畫 `docs/wip/verb_reading_field_FEAT_2026-09-02.md`。2026-09-02 全牌組掃描發現同表層多讀不只 `汚す` 一組,而是 **14 個表層、8 組動詞、18 張母卡**(捲る/退く/凝る/止める/開く/温める/解く/汚す),涉及 117 筆現有紀錄;兩張母卡的配額目前正互相擋。**本文件的拼寫修復是該計畫的前置**——147 筆假名拼寫未修復前,讀音無法依母卡反查。
