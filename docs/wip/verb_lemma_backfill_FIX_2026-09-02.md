@@ -271,12 +271,14 @@ ALTER TABLE generated_sentences_log AUTO_INCREMENT = 1;
 ## 5. 驗證
 
 - [x] 修復腳本 dry-run(2026-09-02):單純改寫 147 筆、撞鍵合併 8 組、兩筆皆活衝突 **0 組**——與 §4 名單一致
+- [x] **SQL 實查驗證(2026-09-02)**:§4 表格 155 筆的「現值」逐筆與 DB 核對零不符;9 筆 DELETE 目標皆為死紀錄、無活紀錄誤刪;155 筆「新值」逐筆與各自母卡的欄位表層核對零不符(23 組母卡×新值)。§4.3 全部 SQL 在交易內實際套用後檢查——殘留非正規拼寫 0、search_keyword 非 NULL 152、死紀錄殘留 0、總筆數 3,135、唯一鍵零重複——再 ROLLBACK 還原(3,144)。
 - [ ] 執行後複查:
   ```sql
   -- 應為 0:不再有帶標音或假名擴展關鍵字的 verb_lemma
   SELECT COUNT(*) FROM generated_sentences_log WHERE verb_lemma LIKE '%[%'
      OR verb_lemma IN ('やめる','まとめる','まとまる','まくる','まくれる','なくなる','なくす','なる','かかる','みつかる','みつける','こもる','そろう','そろえる','じらす','ほぐす','どく','かぶる','ゆるむ','くるまる','こぼす','繋ぐ');
-  -- 應為 155:search_keyword 記錄了被替換掉的原值(8 組合併中 3 組原值即正規值,存 NULL)
+  -- 應為 152:147 筆改寫 + 8 組合併中 5 組保留紀錄的原值非正規([478][555][556][560][618]);
+  -- 其餘 3 組([139][140][156])保留紀錄的原值本就是正規值,存 NULL
   SELECT COUNT(*) FROM generated_sentences_log WHERE search_keyword IS NOT NULL;
   -- 9 筆死紀錄應不存在
   SELECT id FROM generated_sentences_log WHERE id IN (125,126,128,745,320,321,155,157,479);
