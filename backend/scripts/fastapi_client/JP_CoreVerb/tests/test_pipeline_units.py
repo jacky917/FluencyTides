@@ -910,10 +910,18 @@ def test_match_lemma_window_rules():
     # 末位詞性必須一致（活用發生處）
     bad_pos = [_Tok("走り", "走る", "動詞"), _Tok("出し", "出す", "名詞")]
     assert match_lemma_window(bad_pos, 0, seq) is False
-    # 非末位允許表層兜底（乗り遅れる：孤立 lemma 乗り[名詞]、句中 乗る[動詞]）
+    # 非末位比表層全等（乗り遅れる：孤立 lemma 乗り[名詞]、句中 乗る[動詞]，
+    # 表層皆為「乗り」——比 lemma 會失敗，比表層才對）
     seq2 = _seq(("乗り", "名詞", "乗り"), ("遅れる", "動詞", "遅れる"))
     tokens2 = [_Tok("乗り", "乗る", "動詞"), _Tok("遅れ", "遅れる", "動詞")]
     assert match_lemma_window(tokens2, 0, seq2) is True
+    # 非末位表層不同即拒——擋掉語意不同的同構組合（無くなる 導出 ない＋成る，
+    # 「必要なくなった」的「なく」表層 ≠ 目標的「無く」）
+    seq3 = _seq(("ない", "形容詞", "無く"), ("成る", "動詞", "なる"))
+    kana = [_Tok("なく", "ない", "形容詞"), _Tok("なっ", "成る", "動詞")]
+    kanji = [_Tok("無く", "ない", "形容詞"), _Tok("なっ", "成る", "動詞")]
+    assert match_lemma_window(kana, 0, seq3) is False
+    assert match_lemma_window(kanji, 0, seq3) is True
 
 
 def test_covered_by_compound():

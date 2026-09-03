@@ -237,13 +237,12 @@ def match_lemma_window(
     Whether the window starting at ``start`` matches the target sequence
     position by position.
 
-    每個位置沿用 :func:`lemma_matches_target`（保留 lemma／orthBase／
-    UniDic 語彙素細分後綴的容忍度），並要求**最後一個** token 的詞性與
-    導出序列一致——活用發生在最後一個 token，其詞性因動詞而異
-    （``出す`` 動詞／``せる`` 助動詞／``がる`` 接尾辞），故取自資料而非
-    硬寫清單。
-    The last token's part of speech must equal the derived one; it varies
-    by verb, so it comes from the data rather than a hardcoded list.
+    比對規則反映複合動詞的結構：**非末位比表層全等**（前項是固定的連用形／
+    語幹，不隨句子活用），**末位比 lemma 與詞性**（活用發生處；詞性因動詞而異
+    ——``出す`` 動詞／``せる`` 助動詞／``がる`` 接尾辞，故取自資料而非硬寫
+    清單）。
+    Non-final tokens match by exact surface (a compound's non-final parts do
+    not inflect); the final token matches by lemma and POS.
 
     Args:
         tokens: 整句分詞結果。Sentence tokens.
@@ -256,19 +255,26 @@ def match_lemma_window(
     end = start + len(target_seq)
     if end > len(tokens):
         return False
-    for offset, (lemma, _pos, surface) in enumerate(target_seq):
-        token = tokens[start + offset]
-        if lemma_matches_target(token, lemma):
-            continue
-        # 非末位允許表層相符兜底：分詞器對孤立表層與句中的前項判定可能不同
-        # （乗り遅れる：孤立 乗り lemma=乗り[名詞]，句中 lemma=乗る[動詞]，
-        # 表層皆為「乗り」）。末位仍嚴格比 lemma + 詞性，視窗整體才不會鬆掉。
-        # Non-final positions accept a surface match; the final token still
-        # requires lemma + POS agreement.
-        if offset < len(target_seq) - 1 and token_surface(token) == surface:
-            continue
-        return False
-    return token_pos1(tokens[end - 1]) == target_seq[-1][1]
+    # 非末位：**表層一字不差**。複合動詞的前項是固定的連用形／語幹，不隨句子
+    # 活用（走り出す 的「走り」、恥ずかしがる 的「恥ずかし」、気に入る 的
+    # 「気に」永遠是那個字面）。只比 lemma 會誤收語意不同的同構組合——
+    # ``無くなる`` 導出 ない＋成る，若只比 lemma，「もう必要なくなった」
+    # （形容詞ない＋なる）也會匹配，但那不是動詞「無くなる」。
+    # 這條同時解掉分詞器對前項判定不一致的問題（乗り遅れる：孤立
+    # 乗り lemma=乗り[名詞]、句中 lemma=乗る[動詞]，表層皆為「乗り」）。
+    # Non-final tokens must match by exact surface: a lexicalized compound's
+    # non-final parts never inflect, and lemma-only matching would accept
+    # semantically different look-alikes.
+    for offset, (_lemma, _pos, surface) in enumerate(target_seq[:-1]):
+        if token_surface(tokens[start + offset]) != surface:
+            return False
+    # 末位：活用發生處，比 lemma（含 orthBase 容忍）與詞性
+    last_lemma, last_pos, _last_surface = target_seq[-1]
+    last_token = tokens[end - 1]
+    return (
+        lemma_matches_target(last_token, last_lemma)
+        and token_pos1(last_token) == last_pos
+    )
 
 
 def covered_by_compound(
