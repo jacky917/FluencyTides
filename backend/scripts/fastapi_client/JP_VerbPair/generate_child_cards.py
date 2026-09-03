@@ -410,7 +410,7 @@ async def process_verb_group(
                 # 去重鍵一律用母卡標準表層（target_lemma），不用命中的關鍵字
                 # （假名擴展 まとめる 等）——否則同句會因拼寫不同重複生成
                 # （docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md §2 R1）。
-                # 關鍵字只作追溯，走 search_keyword 欄位。
+                # 關鍵字只用於 ES 檢索與送給 LLM 的 target_verb，不落 DB。
                 if dry_run and (kd["target_lemma"], script_id) in dry_run_generated:
                     continue
 

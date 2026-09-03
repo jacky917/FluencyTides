@@ -218,7 +218,7 @@ async def _run() -> None:
     parser.add_argument("--limit", type=int, default=200, help="每表層 ES 候選上限")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help=f"每次請求送幾句（推薦 {DEFAULT_BATCH_SIZE}，上限 {MAX_BATCH_SIZE}）")
     parser.add_argument("--model", default=None, help="覆寫後端模型（傳給後端驗證，腳本不解析）")
-    parser.add_argument("--effort", default=None, help="覆寫思考深度 low/medium/high（僅 claude-code）")
+    parser.add_argument("--effort", default=None, help="覆寫思考深度 low/medium/high/xhigh/max（僅 claude-code；合法值由後端驗證）")
     parser.add_argument("--dry-run", action="store_true", help="只列待判數量與分批計畫，不呼叫 LLM")
     parser.add_argument("--rejudge", action="store_true", help="整個表層砍掉重判（須配 --surface）")
     parser.add_argument("--rejudge-empty", action="store_true", help="只重判上次判不出來（空字串）的紀錄")

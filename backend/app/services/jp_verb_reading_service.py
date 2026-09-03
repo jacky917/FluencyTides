@@ -36,8 +36,11 @@ SYSTEM_PROMPT = (
 )
 
 
-class InvalidModelOverrideError(ValueError):
-    """模型覆寫值不在白名單內。Model override outside the whitelist."""
+class InvalidOverrideError(ValueError):
+    """模型 / effort 覆寫值不合法（呼叫端可修正的輸入問題）。
+
+    Invalid model / effort override — a caller-correctable input error.
+    """
 
 
 def validate_model_override(model: str | None) -> None:
@@ -50,13 +53,13 @@ def validate_model_override(model: str | None) -> None:
         model: 覆寫值；None 表示沿用設定。Override value, or None.
 
     Raises:
-        InvalidModelOverrideError: 值不在白名單內。When outside the whitelist.
+        InvalidOverrideError: 值不在白名單內。When outside the whitelist.
     """
     if model is None:
         return
     options = get_modifiable_configs().get("LLM_MODEL_NAME")
     if options and model not in options:
-        raise InvalidModelOverrideError(
+        raise InvalidOverrideError(
             f"model '{model}' 不在可用清單內。可選：{', '.join(options)}"
             "（清單來自後端 .env 的 MODIFY_LLM_MODEL_NAME；provider 為 claude-code 時請在其中加入 claude 模型名）"
         )
@@ -119,13 +122,22 @@ class JpVerbReadingService:
             JudgeReadingsResponse: 實際模型標籤與逐句結果。
 
         Raises:
-            InvalidModelOverrideError: 模型覆寫不在白名單。
-            LLMServiceError: client 建立失敗（如 effort 非法）或呼叫失敗。
+            InvalidOverrideError: 模型覆寫不在白名單，或 effort 覆寫非法 /
+                provider 不支援（client 建立階段被拒）。
+            LLMServiceError: 未帶覆寫時的 client 建立失敗，或 LLM 呼叫失敗。
         """
         validate_model_override(model)
         # 每次請求建立自己的 client（與生成 handler 相同的既有模式）；有覆寫
-        # 時不動 app.state.llm_client、不寫回設定。
-        llm_client = create_llm_client(model=model, effort=effort)
+        # 時不動 app.state.llm_client、不寫回設定。帶覆寫時的建立失敗
+        # （effort 不在白名單、provider 不支援 effort）是呼叫端的輸入問題，
+        # 轉成 InvalidOverrideError 讓端點回 422；未帶覆寫的失敗則是伺服器
+        # 設定問題，原樣拋出。
+        try:
+            llm_client = create_llm_client(model=model, effort=effort)
+        except LLMServiceError as e:
+            if model is not None or effort is not None:
+                raise InvalidOverrideError(str(e)) from e
+            raise
 
         prompt_text = get_template_engine().render(TEMPLATE_PATH, items=items)
         raw = await llm_client.generate_structured_data(
@@ -138,12 +150,3 @@ class JpVerbReadingService:
             llm_model=raw.model_name,
             results=normalize_results(items, parsed),
         )
-
-
-__all__ = [
-    "InvalidModelOverrideError",
-    "JpVerbReadingService",
-    "LLMServiceError",
-    "normalize_results",
-    "validate_model_override",
-]

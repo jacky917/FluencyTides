@@ -200,7 +200,7 @@ CREATE TABLE IF NOT EXISTS jp_verb_reading_judgments (
 | 檔案 | 改動 |
 |---|---|
 | `scripts/common/database/init_db.py` | 新表 `jp_verb_reading_judgments` DDL;`search_keyword` 冪等 DROP |
-| `scripts/common/database/reading_judgment_repository.py` | 新增:`get_by_surface`、`select_for_rejudge`、`upsert_many`、`delete_by_surface`、`count_by_surface` |
+| `scripts/common/database/reading_judgment_repository.py` | 新增:`get_by_surface`、`select_for_rejudge`、`upsert_many`、`delete_by_surface` |
 | `scripts/common/jp_homograph_table.py` | 新增:依 `ProjectProfile` 掃母卡建 `{表層: {讀音: 母卡id}}`(判讀腳本與兩條生卡腳本共用) |
 | `scripts/common/jp_reading_filter.py` | 新增:生卡側查表過濾(`verdict` + `ReadingFilter`),只讀判斷表、不呼叫 LLM |
 | `app/schemas/llm/jp_verb_reading.py`、`app/services/jp_verb_reading_service.py` | 新增:請求/回應/LLM 輸出 schema;服務層(渲染模板、請求範圍 client、fail-closed 正規化) |

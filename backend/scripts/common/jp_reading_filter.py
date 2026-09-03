@@ -24,7 +24,7 @@ jp_verb_reading_judgments, no LLM calls.
 
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Sequence, TypeVar
+from typing import Callable, Sequence, TypeVar
 
 from sqlalchemy.ext.asyncio import AsyncSession
 

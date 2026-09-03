@@ -207,6 +207,7 @@ async def _drop_legacy_columns(session: AsyncSession) -> None:
     ``search_keyword``：2026-09 存量拼寫修復期用來保留被改寫原值的安全網，
     修復完成並逐筆驗證後失去用途；無任何讀取方、且不在任何索引內，DROP
     零風險。
+
     Args:
         session: 語料庫資料庫的非同步 Session。Async session.
     """

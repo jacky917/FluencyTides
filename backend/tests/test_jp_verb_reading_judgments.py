@@ -177,7 +177,7 @@ class TestServiceNormalize:
             try:
                 svc_mod.validate_model_override("zzz")
                 assert False, "should raise"
-            except svc_mod.InvalidModelOverrideError as e:
+            except svc_mod.InvalidOverrideError as e:
                 assert "a, b" in str(e)
         with mock.patch.object(svc_mod, "get_modifiable_configs", return_value={}):
             svc_mod.validate_model_override("anything")  # 無白名單 → 不限
@@ -213,7 +213,7 @@ class TestEndpoint:
 
     def test_invalid_override_is_422(self):
         async def bad(self, items, *, model=None, effort=None):
-            raise svc_mod.InvalidModelOverrideError("model 'x' 不在可用清單內")
+            raise svc_mod.InvalidOverrideError("model 'x' 不在可用清單內")
 
         with mock.patch.object(svc_mod.JpVerbReadingService, "judge", bad):
             resp = TestClient(_app()).post("/api/v1/jp/verb-readings/judge",

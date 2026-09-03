@@ -8,13 +8,10 @@ Data-access layer for jp_verb_reading_judgments, the reading-judgment cache.
 所以重判必須是明確動作（計畫 §3.1）。
 """
 
-import logging
 from dataclasses import dataclass
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-
-logger = logging.getLogger(__name__)
 
 TABLE = "jp_verb_reading_judgments"
 
@@ -124,16 +121,3 @@ class ReadingJudgmentRepository:
         result = await session.execute(text(f"DELETE FROM {TABLE} WHERE verb_surface = :s"), {"s": surface})
         await session.commit()
         return result.rowcount
-
-    async def count_by_surface(self, session: AsyncSession) -> dict[str, tuple[int, int]]:
-        """各表層的判斷筆數與其中無法判定的筆數（報告用）。
-
-        Per-surface totals and undetermined counts, for reports.
-
-        Returns:
-            dict[str, tuple[int, int]]: ``{表層: (總數, 空字串數)}``。
-        """
-        result = await session.execute(text(
-            f"SELECT verb_surface, COUNT(*), SUM(reading = '') FROM {TABLE} GROUP BY verb_surface"
-        ))
-        return {r[0]: (int(r[1]), int(r[2] or 0)) for r in result.fetchall()}

@@ -11,7 +11,6 @@ Regression tests for the dedup-key fix.
 
 import asyncio
 import json
-from types import SimpleNamespace
 
 import scripts.common.env  # noqa: F401
 
