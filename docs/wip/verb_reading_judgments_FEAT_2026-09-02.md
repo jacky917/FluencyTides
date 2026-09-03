@@ -93,14 +93,30 @@ CREATE TABLE IF NOT EXISTS verb_reading_judgments (
 4. 回應寫入表(`reading` + 後端回傳的 `llm_model`)。
 5. 結尾輸出**歸屬對帳報告**:對存量已生成紀錄,比對「判定讀音」與「所屬母卡讀音」,不一致者逐筆列出(id、句子、母卡讀音、判定讀音)——交人工複核與決策(改掛/刪除重生/保留)。
 
-參數:`--surface 汚す`(只判一個表層)、`--limit N`(每表層 ES 上限)、`--dry-run`(只列待判數量,不呼叫 LLM)、`--rejudge`(刪除既有判斷重判,配 `--surface` 使用)。
+**參數**(全部可選;模型與深度不給時沿用後端 .env 的設定,回應仍帶實際使用的 `llm_model`):
+
+| 參數 | 說明 | 預設 |
+|---|---|---|
+| `--surface 汚す [止める …]` | 只處理指定表層 | 全部多讀表層 |
+| `--max-surfaces N` | 本次最多處理幾個表層(順序固定,便於分次跑) | 不限 |
+| `--limit N` | 每表層 ES 候選上限 | 200 |
+| `--batch-size N` | 每次 LLM 請求送幾句 | **20**(見下) |
+| `--model NAME` | 覆寫後端模型(claude-code:`opus-5` / `sonnet-5` / `haiku-4-5`…;傳給後端,不在腳本解析) | 後端設定 |
+| `--effort LEVEL` | 覆寫思考深度(`low` / `medium` / `high`) | 後端設定 |
+| `--dry-run` | 只列待判數量與分批計畫,不呼叫 LLM | — |
+| `--rejudge` | 刪除既有判斷重判(須配 `--surface`,避免誤清整表) | — |
+
+**`--batch-size` 的建議值寫在腳本註解裡**,理由要一起寫:每句附前後各 2 行,一批 20 句約 100 行對話、數千 token,模型仍能逐句對照;超過 40 句後逐項注意力下降、遺漏或串位的機率上升;低於 10 句則呼叫次數翻倍、省不到什麼。**推薦 20,上限硬性 40**(端點拒收 > 40)。判讀是「看上下文選讀音」的分類任務,不需要最深的思考:推薦 `--effort medium`;真的難判的句子模型應回空字串而不是硬猜,深度加大不會讓它更誠實。
+
+判讀腳本與生卡腳本**不共用**模型設定——生卡用 .env 的預設,判讀可用較便宜的模型跑大量,兩者互不影響。
 
 ### 3.2 後端端點 `POST /api/v1/verb-pair/judge-readings`
 
-- 請求:`items: [{script_id, surface, candidates: [讀音…], line, context_before: [..], context_after: [..]}]`,單次 ≤ 20 筆。
-- 回應:`{llm_model, results: [{script_id, reading}]}`,`reading` ∈ candidates 或 `""`。
+- 請求:`{items: [{script_id, surface, candidates: [讀音…], line, context_before: [..], context_after: [..]}], model?: str, effort?: str}`,`items` 單次 ≤ 40 筆(超過回 422)。
+- 回應:`{llm_model, results: [{script_id, reading}]}`,`reading` ∈ candidates 或 `""`;`llm_model` 為**實際使用**的模型標籤(含覆寫後的值),腳本寫入表時以此為準。
+- **模型/深度覆寫**:`model` / `effort` 任一有給時,後端以該組合建立**請求範圍**的 LLM client(不動 `app.state.llm_client`、不寫回設定);兩者皆缺則用既有 client。覆寫值的合法性由後端驗證(不在白名單 → 422 並列出可選值),腳本只負責傳遞。
 - 新模板 `JP_VerbReading_Judge.j2`:給上下文與候選讀音,要求逐句判定;無法確定時明確回 `""`,**不猜**。模板只做這一件事,生成模板不動。
-- 使用既有 LLM client(標籤來源與生成一致:後端回應的 `llm_model`)。
+- 為什麼不讓腳本直連 LLM:專案原則是腳本不自組 LLM client、不讀 LLM 的 .env、標籤以後端回應為準(2026-08-28 曾因腳本自行推導標籤錯標 190 筆);claude-code 的認證也只在後端/容器配置。覆寫參數走端點,既保留單一事實來源,又給了每次執行指定模型的自由。
 
 ### 3.3 生卡腳本的改動(VerbPair)
 
@@ -143,7 +159,7 @@ CREATE TABLE IF NOT EXISTS verb_reading_judgments (
 | `.../JP_VerbPair/pipeline_components/dedup_manager.py` | 移除 `search_keyword` 傳遞與 `_keyword_or_none` |
 | `.../JP_VerbPair/generate_child_cards.py` | 啟動建多讀表;候選查表過濾;結尾統計;移除 `search_keyword=` |
 | `.../JP_VerbPair/judge_verb_readings.py` | 新增獨立判讀腳本(§3.1) |
-| `app/api/verb_pair.py`(或既有路由檔) | 新端點 `judge-readings` |
+| `app/api/verb_pair.py`(或既有路由檔) | 新端點 `judge-readings`(含 `model`/`effort` 請求範圍覆寫與白名單驗證、`items` ≤ 40) |
 | `app/templates/prompts/anki/JP_VerbReading_Judge.j2` | 新模板 |
 | `scripts/common/database/canonicalize_verb_lemma.py` | 移除寫 `search_keyword` 的邏輯(腳本保留為歷史工具) |
 | `tests/test_reading_judgments.py` | 回歸測試 |
@@ -153,7 +169,8 @@ CREATE TABLE IF NOT EXISTS verb_reading_judgments (
 - 多讀表:只收讀音數 ≥ 2 的表層;同讀跨母卡(繋がる)不收;三讀(退く)正確收三個
 - 查表過濾:有判斷且相符 → 放行;不符/空字串 → 跳過且不呼叫 `prepare_generation`;**無判斷 → 放行**;非多讀表層 → 不查表
 - 判讀腳本:已判過的不重送;`--rejudge` 才重判;回應中 `reading` 不在候選內時視為空字串並警告;歸屬對帳報告正確列出不一致
-- 端點:輸入 > 20 筆拒絕;回應結構;模板渲染含上下文與候選
+- 端點:輸入 > 40 筆拒絕;`model`/`effort` 覆寫建立請求範圍 client 且不動全域 client;不合法的覆寫值 422;回應 `llm_model` 反映覆寫後的實際模型;模板渲染含上下文與候選
+- 腳本:`--batch-size` 上限 40;`--rejudge` 未配 `--surface` 時拒絕執行;`--max-surfaces` 順序穩定
 - `search_keyword` 移除後全套件仍綠
 
 ## 6. 驗收
