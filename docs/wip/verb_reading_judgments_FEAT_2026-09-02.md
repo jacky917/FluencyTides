@@ -142,7 +142,7 @@ CREATE TABLE IF NOT EXISTS jp_verb_reading_judgments (
 - 新模板 `JP_VerbReading_Judge.j2`:給上下文與候選讀音,要求逐句判定;無法確定時明確回 `""`,**不猜**。模板只做這一件事,生成模板不動。
 - 為什麼不讓腳本直連 LLM:專案原則是腳本不自組 LLM client、不讀 LLM 的 .env、標籤以後端回應為準(2026-08-28 曾因腳本自行推導標籤錯標 190 筆);claude-code 的認證也只在後端/容器配置。覆寫參數走端點,既保留單一事實來源,又給了每次執行指定模型的自由。
 
-### 3.3 生卡腳本的改動(VerbPair)
+### 3.3 生卡腳本的改動（兩條管線）
 
 只加一道**查表過濾**,位置在 ES 撈回候選之後、fugashi 驗證之前:
 
@@ -154,6 +154,15 @@ CREATE TABLE IF NOT EXISTS jp_verb_reading_judgments (
 - 表層不在多讀表內 → 完全不查,零額外成本。
 - 結尾統計:本輪「查表跳過」與「未判讀放行」各幾句,提醒使用者跑判讀腳本。
 - fugashi 讀音關與 `ignore_reading` 設定**維持不變**——它是另一道獨立的、上下文盲的機械關,本計畫不改它的行為。
+
+**兩條管線的接法不同，共用同一個 `ReadingFilter`**：
+
+| 管線 | 入口 | 位置 | 理由 |
+|---|---|---|---|
+| JP_VerbPair | `filter.apply(session, surface, reading, es_results)` | ES 撈回候選後 | 候選列在手上，可逐列過濾並統計「未判讀」 |
+| JP_CoreVerb | `filter.excluded_ids(...)` 併入 `verb_cfg.exclude_script_ids` | 漏斗執行前 | 漏斗自己抓取候選，交排除清單才不會把配額花在讀音不符的句子上 |
+
+共用面：`ReadingFilter.create(anki_client, profile)`（建表＋輸出表層清單）、`reading_for_master(surface, master_note_id)`（呼叫端不必自行解析標音）、`log_summary()`（結尾統計）。兩條管線各自只剩 5–9 行接線，判定規則、快取、統計全部在 `scripts/common/jp_reading_filter.py`。
 
 ### 3.4 命名約定:日文專用能力一律帶 `jp`
 

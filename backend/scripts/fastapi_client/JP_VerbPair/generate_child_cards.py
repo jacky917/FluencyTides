@@ -52,7 +52,6 @@ from sqlalchemy import text
 from scripts.common.database.log_repository import PROJECT_JP_VERB_PAIR
 from scripts.common.llm_label import build_llm_model_label
 from scripts.common.database.canonicalize_verb_lemma import load_keyword_map
-from scripts.common.jp_homograph_table import load_homograph_table
 from scripts.common.jp_reading_filter import ReadingFilter
 from scripts.local_anki.common.deletion.profiles import get_profile
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import DedupManager
@@ -285,10 +284,6 @@ async def process_verb_group(
         target_keywords = [normalized_verb]
         str_nid = str(master_note_id)
 
-        # 母卡讀音（供同表層多讀的查表過濾）：要在 ignore_reading 把 verb_reading
-        # 清空之前取走——那是 fugashi 讀音關的開關，與查表過濾無關。
-        master_reading = verb_reading
-
         verb_cfg = validation_config.get(str_nid, {}).get(normalized_verb, {})
         allow_auxiliary = bool(verb_cfg.get("allow_auxiliary", False))
         allow_compound_suffix = bool(verb_cfg.get("allow_compound_suffix", False))
@@ -328,6 +323,7 @@ async def process_verb_group(
             # 有判斷且不符 → 丟棄且不留紀錄；無判斷 → 放行（表空時行為與現況相同）。
             # 詳見 docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.3。
             if reading_filter is not None and kw == normalized_verb and reading_filter.is_homograph(normalized_verb):
+                master_reading = reading_filter.reading_for_master(normalized_verb, master_note_id)
                 before = len(es_results)
                 es_results = await reading_filter.apply(session, normalized_verb, master_reading, es_results)
                 logger.info(f"   🔤 讀音查表：'{kw}'（本母卡 {master_reading}）候選 {before} → {len(es_results)}")
@@ -638,13 +634,7 @@ async def main() -> None:
         # 同表層多讀表：掃母卡建構（不落設定檔），供 ES 候選的讀音查表過濾。
         # 判斷表由 JP_Common/judge_verb_readings.py 離線產生；表空時過濾為
         # no-op，生卡行為與現況相同（計畫 §3.3）。
-        homograph_table = await load_homograph_table(anki_client, get_profile(PROJECT_JP_VERB_PAIR))
-        reading_filter = ReadingFilter(homograph_table)
-        if homograph_table:
-            logger.info(
-                f"🔤 同表層多讀表層 {len(homograph_table)} 個："
-                + "、".join(f"{s}({'/'.join(e.candidates)})" for s, e in sorted(homograph_table.items()))
-            )
+        reading_filter = await ReadingFilter.create(anki_client, get_profile(PROJECT_JP_VERB_PAIR))
         
         # 準備音檔和頭像的路徑
         voice_dir = Path(settings.JP_VERB_PAIR_VOICE_DIR)
@@ -817,13 +807,7 @@ async def main() -> None:
                 for stat_key, count in sorted(rejection_stats.items(), key=lambda x: x[1], reverse=True):
                     verb_part, reason = stat_key.split("|", 1)
                     logger.info(f"   - {verb_part}（{reason}） : {count:>3} 句")
-            if reading_filter.table:
-                logger.info(
-                    f"\n   [同表層多讀查表] 讀音不符跳過 {reading_filter.stats['skipped']} 句；"
-                    f"未判讀放行 {reading_filter.stats['unjudged']} 句"
-                )
-                if reading_filter.stats["unjudged"]:
-                    logger.info("   → 未判讀的句子可能掛錯母卡，建議先跑 scripts/fastapi_client/JP_Common/judge_verb_readings.py")
+            reading_filter.log_summary()
 
     except Exception as e:
         logger.error(f"💥 發生非預期嚴重錯誤，腳本提前終止: {e}")

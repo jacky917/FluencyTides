@@ -108,7 +108,7 @@ class TestReadingFilter:
         rows = [{"script_id": 1}, {"script_id": 2}, {"script_id": 3}, {"script_id": 4}]
         kept = asyncio.run(f.apply(None, "汚す", "けがす", rows))
         assert [r["script_id"] for r in kept] == [1, 4]
-        assert f.stats == {"skipped": 2, "unjudged": 1}
+        assert f.stats == {"skipped": 2, "unjudged": 1, "excluded": 0}
         # 同表層只從 DB 載入一次
         asyncio.run(f.apply(None, "汚す", "よごす", rows))
         assert f._repo.calls == 1
@@ -116,14 +116,35 @@ class TestReadingFilter:
     def test_non_homograph_surface_is_untouched(self):
         f = _filter({})
         rows = [{"script_id": 1}]
-        assert asyncio.run(f.apply(None, "止める", "やめる", rows)) is rows
+        assert asyncio.run(f.apply(None, "止める", "やめる", rows)) == rows
         assert f._repo.calls == 0
+
+    def test_apply_accepts_custom_key(self):
+        """CoreVerb 的候選是物件不是 dict,靠 key 取 script_id。"""
+        f = _filter({"汚す": {1: "けがす", 2: "よごす"}})
+        rows = [SimpleNamespace(script_id=1), SimpleNamespace(script_id=2)]
+        kept = asyncio.run(f.apply(None, "汚す", "けがす", rows, key=lambda r: r.script_id))
+        assert [r.script_id for r in kept] == [1]
+
+    def test_excluded_ids_for_downstream_filtering(self):
+        f = _filter({"汚す": {1: "けがす", 2: "よごす", 3: ""}})
+        ids = asyncio.run(f.excluded_ids(None, "汚す", "けがす"))
+        assert ids == {2, 3}          # 他讀與「無法判定」都排除
+        assert f.stats["excluded"] == 2
+        assert asyncio.run(f.excluded_ids(None, "止める", "やめる")) == set()
+
+    def test_reading_for_master(self):
+        f = _filter({})
+        assert f.reading_for_master("汚す", 921) == "けがす"
+        assert f.reading_for_master("汚す", 341) == "よごす"
+        assert f.reading_for_master("汚す", 999) == ""     # 不屬於此表層的母卡
+        assert f.reading_for_master("止める", 711) == ""   # 非多讀表層
 
     def test_empty_table_behaves_like_today(self):
         f = _filter({})
         rows = [{"script_id": 1}, {"script_id": 2}]
         assert asyncio.run(f.apply(None, "汚す", "けがす", rows)) == rows
-        assert f.stats == {"skipped": 0, "unjudged": 2}
+        assert f.stats == {"skipped": 0, "unjudged": 2, "excluded": 0}
 
 
 # ============================================================

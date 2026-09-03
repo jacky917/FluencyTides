@@ -65,7 +65,9 @@ from scripts.common.database.log_repository import (
     PROJECT_JP_CORE_VERB,
     GeneratedLogRepository,
 )
+from scripts.common.jp_reading_filter import ReadingFilter
 from scripts.common.llm_label import build_llm_model_label
+from scripts.local_anki.common.deletion.profiles import get_profile
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.anki_media_uploader import (
     AnkiMediaUploader,
 )
@@ -536,6 +538,11 @@ async def main() -> None:
         logger.info(f"📦 總共找到 {len(note_ids)} 張母卡片。")
         note_ids.sort()
 
+        # 同表層多讀表：掃母卡建構（不落設定檔）。判斷表由
+        # JP_Common/judge_verb_readings.py 離線產生；表空或本專案沒有多讀
+        # 表層時整段為 no-op，行為與現況相同（計畫 §3.3）。
+        reading_filter = await ReadingFilter.create(anki_client, get_profile(PROJECT_JP_CORE_VERB))
+
         async with corpus_async_session_factory() as session:
             log_repo = GeneratedLogRepository()
             dedup_manager = DedupManager(
@@ -592,6 +599,18 @@ async def main() -> None:
                     session, verb_lemma, source_game, project=PROJECT_JP_CORE_VERB
                 )
 
+                # 同表層多讀（開く＝あく/ひらく）：把「已知讀作其他音」的 script_id
+                # 交給漏斗在抓取階段排除，配額才不會浪費在不屬於本母卡的句子上。
+                # 判斷表為空時集合為空 → 行為與現況完全相同（計畫 §3.3）。
+                verb_cfg.exclude_script_ids = list(
+                    set(verb_cfg.exclude_script_ids)
+                    | await reading_filter.excluded_ids(
+                        session,
+                        verb_lemma,
+                        reading_filter.reading_for_master(verb_lemma, master_note_id),
+                    )
+                )
+
                 report = await run_selection_funnel(
                     verb_cfg,
                     es_fetcher,
@@ -630,6 +649,7 @@ async def main() -> None:
             logger.info("\n==================================================")
             mode_str = "DRY-RUN 預計" if dry_run else "實際"
             logger.info(f"📊 [{mode_str}統計] 本次執行新增的子卡片總數為: {global_total} 張")
+            reading_filter.log_summary()
             if verb_stats:
                 logger.info("   [各動詞生成明細]")
                 for verb_key, count in sorted(verb_stats.items(), key=lambda x: -x[1]):
