@@ -76,6 +76,9 @@ from scripts.fastapi_client.JP_VerbPair.pipeline_components.backend_api_client i
     BackendAPIClient,
 )
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import DedupManager
+from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
+    derive_target_lemmas,
+)
 from scripts.fastapi_client.JP_CoreVerb.pipeline_components.funnel import (
     SelectionReport,
     VerbSearchConfig,
@@ -121,6 +124,7 @@ def _build_verb_cfg(
     game_name_jp: str,
     *,
     skip_narrator: bool = False,
+    compound_seqs: tuple = (),
 ) -> VerbSearchConfig:
     """由全域 settings 疊加 per-verb 覆寫組出 ``VerbSearchConfig``。
 
@@ -134,6 +138,8 @@ def _build_verb_cfg(
         overrides: ``verb_search_config.json`` 中該動詞的覆寫（可為空 dict）。
             Per-verb overrides; may be empty.
         game_name_jp: 遊戲來源名稱。Source game name.
+        compound_seqs: 本專案全部多 token 目標動詞的 lemma 序列（讓位給更長的
+            複合動詞用）。All multi-token target sequences of the project.
         skip_narrator: ``--skip-narrator`` 全域旗標；True 時強制排除旁白句，
             覆蓋 per-verb 的 ``exclude_narration``（只能加嚴、不能放寬）。
             Global flag forcing narration exclusion on top of the per-verb
@@ -161,6 +167,7 @@ def _build_verb_cfg(
             getattr(settings, "JP_CORE_VERB_MIN_SENTENCE_LENGTH", 8)
         ),
         filter_moan=bool(getattr(settings, "JP_CORE_VERB_FILTER_MOAN_SENTENCES", True)),
+        compound_seqs=compound_seqs,
         allow_auxiliary=bool(overrides.get("allow_auxiliary", False)),
         priority_collocations=list(overrides.get("priority_collocations", [])),
         page_size=500,
@@ -558,6 +565,25 @@ async def main() -> None:
         # 表層時整段為 no-op，行為與現況相同（計畫 §3.3）。
         reading_filter = await ReadingFilter.create(anki_client, get_profile(PROJECT_JP_CORE_VERB))
 
+        # 複合動詞序列清單：UniDic 把 走り出す 切成 走る＋出す、気に入る 切成
+        # 気＋に＋入る，這些多 token 目標既要能被自己命中，也必須防止較短的
+        # 單 token 母卡（走る／入る）把它們的句子收走。清單一次建好傳給漏斗。
+        # Multi-token target sequences: needed both to match compounds and to
+        # stop shorter single-token verbs from stealing their sentences.
+        all_notes = await anki_client.get_notes_info(note_ids)
+        all_lemmas = []
+        for note in all_notes:
+            field = note.fields.get("Word", {})
+            raw = field.get("value", "") if isinstance(field, dict) else getattr(field, "value", "")
+            lemma = canonical_verb_lemma(raw)
+            if lemma:
+                all_lemmas.append(lemma)
+        compound_seqs = tuple(
+            seq for seq in (derive_target_lemmas(lemma, tagger) for lemma in all_lemmas)
+            if len(seq) > 1
+        )
+        logger.info(f"🔗 多 token 複合動詞: {len(compound_seqs)} 個（單 token 母卡將讓位給它們）")
+
         async with corpus_async_session_factory() as session:
             log_repo = GeneratedLogRepository()
             dedup_manager = DedupManager(
@@ -602,6 +628,7 @@ async def main() -> None:
                 verb_cfg = _build_verb_cfg(
                     word_display, verb_lemma, search_config.get(verb_lemma, {}), game_name_jp,
                     skip_narrator=skip_narrator,
+                    compound_seqs=compound_seqs,
                 )
 
                 # §6.5 增量平衡：以 Anki 實存子卡對帳後計入桶佔用

@@ -204,7 +204,9 @@ class SelectionResult:
 # --- 維度 A：搭配桶 --------------------------------------------------------
 
 
-def classify_collocation(tokens: list, span_token_index: int) -> str:
+def classify_collocation(
+    tokens: list, span_token_index: int, span_token_start: int | None = None
+) -> str:
     """以目標 token 前方的 token 決定搭配桶鍵（維度 A，語意代理）。
 
     Derive the collocation bucket key (dimension A, a semantic proxy) from
@@ -220,24 +222,29 @@ def classify_collocation(tokens: list, span_token_index: int) -> str:
     Args:
         tokens: 整句分詞結果（驗證器復用，零額外分詞成本）。Sentence tokens
             reused from the validator.
-        span_token_index: 目標動詞 token 的索引。Index of the target verb
-            token.
+        span_token_index: 目標動詞最後一個 token 的索引。Index of the target
+            verb's last token.
+        span_token_start: 目標動詞**第一個** token 的索引；``None`` 時視為
+            與 ``span_token_index`` 相同。複合動詞（走り＋出す）的搭配詞在
+            第一個 token 之前，若沿用最後一個 token 會把動詞自己的前項
+            （走り）當成搭配詞。Index of the target verb's first token.
 
     Returns:
         str: 搭配桶鍵。The collocation bucket key.
     """
-    if span_token_index <= 0 or span_token_index >= len(tokens):
+    start = span_token_index if span_token_start is None else span_token_start
+    if start <= 0 or start >= len(tokens):
         return NO_PARTICLE_BUCKET
 
-    prev_token = tokens[span_token_index - 1]
+    prev_token = tokens[start - 1]
     prev_pos = token_pos1(prev_token)
 
     if prev_pos in ("副詞", "形容詞"):
         return token_surface(prev_token)
 
     if prev_pos == "助詞":
-        if span_token_index >= 2:
-            prev2_token = tokens[span_token_index - 2]
+        if start >= 2:
+            prev2_token = tokens[start - 2]
             # 接尾辞：如「憧子＋さん＋を」——さん 是接尾辞而非名詞，
             # 不納入會退化成裸「を」桶；桶鍵取「さんを」（人名類自然合併）。
             if token_pos1(prev2_token) in ("名詞", "代名詞", "接尾辞"):

@@ -106,6 +106,8 @@ class VerbSearchConfig:
         max_per_chapter: 同一章節最多取句數。
         min_sentence_length: 目標句最短長度（去標音後字元數）。
         filter_moan: 是否過濾純呻吟句（擬態音節密度過高的 R18 台詞）。
+        compound_seqs: 本專案全部多 token 目標動詞的 lemma 序列——單 token
+            目標命中時用來讓位給更長的複合動詞（気に入る 覆蓋 入る）。
         allow_auxiliary: 是否放行補助動詞用法（てみる／かける類）。
         priority_collocations: 優先保證 Pass 1 席位的搭配桶鍵（如「電話を」）
             ——只要有候選就必收，順序即優先序。
@@ -124,6 +126,7 @@ class VerbSearchConfig:
     max_per_chapter: int = 2
     min_sentence_length: int = 8
     filter_moan: bool = True
+    compound_seqs: tuple = ()
     allow_auxiliary: bool = False
     priority_collocations: list[str] = field(default_factory=list)
     page_size: int = 500
@@ -238,12 +241,15 @@ def _build_occupancy(
         if not sentence:
             continue
         result = validate_candidate(
-            sentence, verb_cfg.verb_lemma, verb_cfg.allow_auxiliary, tagger
+            sentence, verb_cfg.verb_lemma, verb_cfg.allow_auxiliary, tagger,
+            compound_seqs=verb_cfg.compound_seqs,
         )
         if not result.accepted or result.candidate is None:
             continue
         cand = result.candidate
-        collocations[classify_collocation(cand.tokens, cand.span_token_index)] += 1
+        collocations[
+            classify_collocation(cand.tokens, cand.span_token_index, cand.span_token_start)
+        ] += 1
         conjugations[classify_conjugation(cand.tokens, cand.span_token_index)] += 1
     return BucketOccupancy(
         collocations=dict(collocations),
@@ -353,13 +359,16 @@ async def run_selection_funnel(
     candidates: list[SelectionCandidate] = []
     for script_id, sentence, chapter, speaker in filtered:
         result = validate_candidate(
-            sentence, verb_cfg.verb_lemma, verb_cfg.allow_auxiliary, tagger
+            sentence, verb_cfg.verb_lemma, verb_cfg.allow_auxiliary, tagger,
+            compound_seqs=verb_cfg.compound_seqs,
         )
         if not result.accepted or result.candidate is None:
             rejection_reasons[result.reason or "未知"] += 1
             continue
         cand = result.candidate
-        collocation = classify_collocation(cand.tokens, cand.span_token_index)
+        collocation = classify_collocation(
+            cand.tokens, cand.span_token_index, cand.span_token_start
+        )
         conjugation = classify_conjugation(cand.tokens, cand.span_token_index)
         bucket_matrix.setdefault(collocation, {})
         bucket_matrix[collocation][conjugation] = (

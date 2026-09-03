@@ -830,3 +830,113 @@ def test_skip_narrator_forces_exclude_narration():
     assert off.exclude_narration is False
     assert on.exclude_narration is True
     assert per_verb.exclude_narration is True
+
+
+# ============================================================
+# 複合動詞：lemma 序列視窗比對（2026-09-03）
+# ============================================================
+
+def _seq(*items):
+    """建 ((lemma, pos1, surface), ...) 序列。"""
+    return tuple(items)
+
+
+class _Tok:
+    """假 token：feature 索引 0/7/10 對齊 UniDic。"""
+
+    def __init__(self, surface, lemma, pos, orth=None):
+        self.surface = surface
+        self.feature = [pos, "", "", "", "", "", "", lemma, "", "", orth or lemma]
+
+
+def _fake_tagger(mapping):
+    """依字串回傳預設 token 列的假 tagger。"""
+    def tagger(text):
+        return mapping[text]
+    return tagger
+
+
+def test_derive_target_lemmas_single_and_compound():
+    from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
+        derive_target_lemmas, _TARGET_LEMMA_CACHE)
+    _TARGET_LEMMA_CACHE.clear()
+    tagger = _fake_tagger({
+        "見る": [_Tok("見る", "見る", "動詞")],
+        "走り出す": [_Tok("走り", "走る", "動詞"), _Tok("出す", "出す", "動詞")],
+    })
+    assert derive_target_lemmas("見る", tagger) == _seq(("見る", "動詞", "見る"))
+    assert derive_target_lemmas("走り出す", tagger) == _seq(
+        ("走る", "動詞", "走り"), ("出す", "動詞", "出す"))
+    # 快取：第二次不再呼叫 tagger（傳入會 KeyError 的 tagger 仍可取得結果）
+    assert derive_target_lemmas("見る", _fake_tagger({})) == _seq(("見る", "動詞", "見る"))
+    _TARGET_LEMMA_CACHE.clear()
+
+
+def test_match_lemma_window_rules():
+    from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
+        match_lemma_window)
+    seq = _seq(("走る", "動詞", "走り"), ("出す", "動詞", "出す"))
+    tokens = [_Tok("彼", "彼", "代名詞"), _Tok("走り", "走る", "動詞"), _Tok("出し", "出す", "動詞")]
+    assert match_lemma_window(tokens, 1, seq) is True
+    assert match_lemma_window(tokens, 0, seq) is False      # 位置不對
+    assert match_lemma_window(tokens, 2, seq) is False      # 視窗超出尾端
+    # 末位詞性必須一致（活用發生處）
+    bad_pos = [_Tok("走り", "走る", "動詞"), _Tok("出し", "出す", "名詞")]
+    assert match_lemma_window(bad_pos, 0, seq) is False
+    # 非末位允許表層兜底（乗り遅れる：孤立 lemma 乗り[名詞]、句中 乗る[動詞]）
+    seq2 = _seq(("乗り", "名詞", "乗り"), ("遅れる", "動詞", "遅れる"))
+    tokens2 = [_Tok("乗り", "乗る", "動詞"), _Tok("遅れ", "遅れる", "動詞")]
+    assert match_lemma_window(tokens2, 0, seq2) is True
+
+
+def test_covered_by_compound():
+    from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
+        covered_by_compound)
+    # 気に入る = 気 + に + 入る；「入る」母卡不該收走這個 token
+    seq = _seq(("気", "名詞", "気"), ("に", "助詞", "に"), ("入る", "動詞", "入る"))
+    tokens = [_Tok("気", "気", "名詞"), _Tok("に", "に", "助詞"), _Tok("入っ", "入る", "動詞")]
+    assert covered_by_compound(tokens, 2, (seq,)) is True
+    assert covered_by_compound(tokens, 0, (seq,)) is True
+    # 無複合清單時不做檢查
+    assert covered_by_compound(tokens, 2, ()) is False
+    # 不相關的複合序列不誤判
+    other = _seq(("走る", "動詞", "走り"), ("出す", "動詞", "出す"))
+    assert covered_by_compound(tokens, 2, (other,)) is False
+
+
+def test_validate_candidate_compound_window_and_span():
+    from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
+        validate_candidate, REJECTION_COMPOUND_MEMBER, _TARGET_LEMMA_CACHE)
+    _TARGET_LEMMA_CACHE.clear()
+    sentence = "彼が走り出した"
+    tokens = [_Tok("彼", "彼", "代名詞"), _Tok("が", "が", "助詞"),
+              _Tok("走り", "走る", "動詞"), _Tok("出し", "出す", "動詞"), _Tok("た", "た", "助動詞")]
+    tagger = _fake_tagger({
+        sentence: tokens,
+        "走り出す": [_Tok("走り", "走る", "動詞"), _Tok("出す", "出す", "動詞")],
+        "走る": [_Tok("走る", "走る", "動詞")],
+    })
+    r = validate_candidate(sentence, "走り出す", False, tagger)
+    assert r.accepted
+    # span 涵蓋整個複合動詞（走り出し），不是只有後項
+    assert sentence[r.candidate.span[0]:r.candidate.span[1]] == "走り出し"
+    assert r.candidate.span_token_start == 2 and r.candidate.span_token_index == 3
+
+    # 短動詞「走る」被 compound_seqs 擋下
+    compounds = (_seq(("走る", "動詞", "走り"), ("出す", "動詞", "出す")),)
+    r2 = validate_candidate(sentence, "走る", False, tagger, compound_seqs=compounds)
+    assert not r2.accepted and r2.reason == REJECTION_COMPOUND_MEMBER
+    _TARGET_LEMMA_CACHE.clear()
+
+
+def test_classify_collocation_uses_window_start():
+    """複合動詞的搭配詞在第一個 token 之前,不是最後一個 token 之前。"""
+    from scripts.fastapi_client.JP_CoreVerb.pipeline_components.diversity_selector import (
+        NO_PARTICLE_BUCKET, classify_collocation)
+    # ケーキ を 食べ 過ぎ  → 搭配應為「ケーキを」而非「食べ」
+    tokens = [_Tok("ケーキ", "ケーキ", "名詞"), _Tok("を", "を", "助詞"),
+              _Tok("食べ", "食べる", "動詞"), _Tok("過ぎ", "過ぎる", "動詞")]
+    assert classify_collocation(tokens, 3, 2) == "ケーキを"
+    # 不傳 start 時退回舊行為：只看最後一個 token 的前一個（食べ 是動詞,
+    # 既不是助詞也不是修飾語）→ 無助詞桶,證明複合動詞非傳 start 不可
+    assert classify_collocation(tokens, 3) == NO_PARTICLE_BUCKET
