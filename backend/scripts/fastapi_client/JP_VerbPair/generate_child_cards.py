@@ -510,7 +510,7 @@ async def process_verb_group(
         # 系統會將剩餘配額平均分配（例如 17 張配額 -> 捲くる 目標 9 張，まくる 目標 8 張）。
         # 接著針對兩份獨立的 List 進行 API 請求，只有生成成功才會消耗配額。
         # =====================================================================
-        logger.info(f"   🔄 開始第一階段分配 (Pass 1)...")
+        logger.info("   🔄 開始第一階段分配 (Pass 1)...")
         stop_all = False
         for kd in keyword_data:
             if not await process_keyword_up_to_target(kd):
@@ -526,7 +526,7 @@ async def process_verb_group(
             # =====================================================================
             current_total_success = sum(kd["successes"] for kd in keyword_data)
             if current_total_success < total_needed:
-                logger.info(f"   🔄 開始第二階段互補 (Pass 2)...")
+                logger.info("   🔄 開始第二階段互補 (Pass 2)...")
                 for kd in keyword_data:
                     # 如果該關鍵字的備用名單還沒用完，代表它可以幫忙消化別人沒用完的配額
                     if kd["cursor"] < len(kd["es_results"]):
@@ -654,7 +654,7 @@ async def main() -> None:
             uploader = AnkiMediaUploader(anki_client, voice_dir, avatar_dir, source_game)
             
             for idx, master_note_id in enumerate(note_ids, 1):
-                logger.info(f"\n==================================================")
+                logger.info("\n==================================================")
                 logger.info(f"📝 處理母卡片 [{idx}/{len(note_ids)}] (ID: {master_note_id})")
                 
                 notes_info = await anki_client.get_notes_info([master_note_id])

@@ -511,9 +511,13 @@ def _cand(script_id, colloc, conj, chapter="ch1", speaker="A", length=20):
     )
 
 
-def test_select_diverse_pass1_covers_each_collocation_once():
-    """Pass 1：每個搭配桶各保底 1 句。
-    Pass 1 guarantees one pick per collocation bucket."""
+def test_select_diverse_conj_coverage_precedes_collocation_coverage():
+    """Pass 1 活用形保底先於搭配保底：配額緊時活用形（維度 B）全覆蓋優先。
+
+    Dimension B coverage wins under a tight quota: the conjugation pass runs
+    before collocation guaranteeing, so an uncovered collocation may be left
+    for the next run（其未覆蓋狀態會列入報告）。
+    """
     candidates = [
         _cand(1, "様子を", "辞書形/連体", "ch1"),
         _cand(2, "様子を", "た形", "ch1"),
@@ -522,9 +526,12 @@ def test_select_diverse_pass1_covers_each_collocation_once():
     ]
     result = select_diverse(candidates, quota=3, max_per_chapter=2)
     assert len(result.selected) == 3
-    collocations = {item.candidate.collocation for item in result.selected}
-    assert collocations == {"様子を", "夢を", "大目に"}
-    assert all(item.pass_label == "Pass1" for item in result.selected)
+    # 三個活用形桶全數覆蓋——這是活用形保底階段的職責
+    assert {item.candidate.conjugation for item in result.selected} == {
+        "辞書形/連体", "た形", "て形"}
+    assert all(item.pass_label == "Pass1-conj" for item in result.selected)
+    # 配額被活用形保底用盡，未取到的搭配桶如實列入未覆蓋清單
+    assert result.uncovered_collocations == ["夢を"]
 
 
 def test_select_diverse_zigzag_mixes_large_and_small_buckets():
@@ -561,9 +568,16 @@ def test_select_diverse_singleton_buckets_demoted():
             candidates.append(_cand(sid, bucket, "た形", chapter=f"ch{sid}"))
     result = select_diverse(candidates, quota=3, max_per_chapter=1)
     picked = [item.candidate.collocation for item in result.selected]
-    # 前兩席必屬 multi 桶（zigzag：最大 電話を → 最小 目で），第三席才輪到 singles
-    assert picked[:2] == ["電話を", "目で"]
-    assert picked[2] == "あ桶"
+    labels = [item.pass_label for item in result.selected]
+    # 兩個 multi 桶（電話を／目で）都拿到席位：一個由活用形保底帶入、
+    # 一個由搭配保底的 zigzag 取得
+    assert {"電話を", "目で"} <= set(picked)
+    # 5 個一次性桶只進得去 1 個，且是因為它獨佔一個活用形桶（辞書形/連体）
+    # ——搭配保底階段的 singles 殿後規則仍然生效
+    singles = [p for p in picked if p.endswith("桶")]
+    assert len(singles) == 1
+    assert labels[picked.index(singles[0])] == "Pass1-conj"
+    assert "Pass1" in labels  # zigzag 階段確實有取到桶
 
 
 def test_select_diverse_priority_collocations_guaranteed_seat():
@@ -571,14 +585,15 @@ def test_select_diverse_priority_collocations_guaranteed_seat():
     Priority collocations get a guaranteed seat when candidates exist."""
     candidates = []
     sid = 0
-    # 大量噪音桶把配額擠滿
+    # 大量噪音桶把配額擠滿（每桶 2 句 → multi 桶，涵蓋兩個活用形桶）
     for i in range(6):
         sid += 1
         candidates.append(_cand(sid, f"噪音{i}を", "辞書形/連体", chapter=f"ch{sid}"))
         candidates.append(_cand(sid + 100, f"噪音{i}を", "た形", chapter=f"ch{sid + 100}"))
-    # 目標桶只有 1 句（沒有優先席位時會被 multi 桶擠掉）
+    # 目標桶只有 1 句，且活用形與噪音桶重疊——活用形保底救不到它，
+    # 搭配保底階段又因 singles 殿後被擠掉，所以沒有優先席位就必然落選
     sid += 1
-    candidates.append(_cand(sid, "電話を", "て形", chapter=f"ch{sid}"))
+    candidates.append(_cand(sid, "電話を", "辞書形/連体", chapter=f"ch{sid}"))
     quota = 3
     baseline = select_diverse(candidates, quota=quota, max_per_chapter=1)
     assert "電話を" not in {i.candidate.collocation for i in baseline.selected}
@@ -596,9 +611,11 @@ def test_select_diverse_priority_collocations_guaranteed_seat():
 def test_select_diverse_priority_bucket_not_double_taken():
     """優先席位選過的桶在 zigzag 階段不再重複取。
     Priority-taken buckets are not re-taken during zigzag."""
+    # 電話を 的兩句同屬「た形」——優先席位取一句後，活用形保底不需要再回頭
+    # 取同桶的第二句，第二席應讓給尚未覆蓋的活用形（様子を 的辞書形/連体）
     candidates = [
         _cand(1, "電話を", "た形", chapter="ch1"),
-        _cand(2, "電話を", "て形", chapter="ch2"),
+        _cand(2, "電話を", "た形", chapter="ch2"),
         _cand(3, "様子を", "辞書形/連体", chapter="ch3"),
     ]
     result = select_diverse(
@@ -606,23 +623,29 @@ def test_select_diverse_priority_bucket_not_double_taken():
     )
     picked = [item.candidate.collocation for item in result.selected]
     assert picked == ["電話を", "様子を"]
+    assert result.selected[0].pass_label == "Pass1-priority"
 
 
-def test_select_diverse_pass2_fills_conjugation_holes():
-    """Pass 2：剩餘配額優先補「尚未覆蓋的活用形桶」。
-    Pass 2 fills uncovered conjugation buckets with leftover quota."""
+def test_select_diverse_pass2_uses_leftover_quota():
+    """Pass 2：活用形與搭配都已保底後，剩餘配額由 Pass 2 吃掉。
+
+    Leftover quota goes to Pass 2 once both dimensions are guaranteed; it
+    prefers the least-occupied conjugation bucket（此處僅剩 た形 有候選）。
+    """
     candidates = [
-        _cand(1, "様子を", "辞書形/連体", "ch1"),
+        _cand(1, "様子を", "た形", "ch1"),
         _cand(2, "様子を", "た形", "ch2"),
         _cand(3, "様子を", "て形", "ch3"),
     ]
-    result = select_diverse(candidates, quota=3, max_per_chapter=2)
+    result = select_diverse(candidates, quota=3, max_per_chapter=1)
     assert len(result.selected) == 3
     labels = [item.pass_label for item in result.selected]
-    assert labels.count("Pass1") == 1  # 搭配桶只有一個
-    assert labels.count("Pass2") == 2
-    conjugations = {item.candidate.conjugation for item in result.selected}
-    assert conjugations == {"辞書形/連体", "た形", "て形"}
+    # 兩個活用形桶各由保底階段取 1 句；唯一的搭配桶已被覆蓋故 zigzag 跳過；
+    # 剩下的 1 席由 Pass 2 補
+    assert labels.count("Pass1-conj") == 2
+    assert labels.count("Pass2") == 1
+    assert "Pass1" not in labels
+    assert {item.candidate.conjugation for item in result.selected} == {"た形", "て形"}
     assert result.uncovered_conjugations == []
 
 

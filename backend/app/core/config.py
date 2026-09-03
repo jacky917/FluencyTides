@@ -615,8 +615,7 @@ class Settings(BaseSettings):
         Uses a Loguru InterceptHandler to take over the standard logging
         module.
         """
-        import logging
-        import sys
+        # loguru 保持惰性 import：模組載入期不需要它
         from loguru import logger
 
         class InterceptHandler(logging.Handler):
