@@ -117,25 +117,33 @@ class ClaudeCodeLLMClient:
         "ANTHROPIC_BASE_URL",
     )
 
-    def __init__(self) -> None:
+    def __init__(self, *, model: str | None = None, effort: str | None = None) -> None:
         """驗證設定並解析 CLI 路徑。
 
         Validate settings and resolve the CLI path.
 
+        Args:
+            model: 覆寫模型名；None 沿用 ``LLM_MODEL_NAME``。Instance-scoped
+                model override.
+            effort: 覆寫思考深度；None 沿用 ``LLM_CLAUDE_CODE_EFFORT``。
+                Instance-scoped effort override.
+
         Raises:
-            LLMServiceError: 當 ``LLM_CLAUDE_CODE_EFFORT`` 非白名單值，或找不到
-                claude 執行檔時。Raised when the configured effort is not in
-                the whitelist, or the claude binary cannot be located.
+            LLMServiceError: 當 effort（設定值或覆寫值）非白名單值，或找不到
+                claude 執行檔時。Raised when the effort is not in the
+                whitelist, or the claude binary cannot be located.
         """
-        effort = (settings.LLM_CLAUDE_CODE_EFFORT or "").strip().lower()
-        if effort not in self.VALID_EFFORTS:
+        effort_source = effort if effort is not None else settings.LLM_CLAUDE_CODE_EFFORT
+        effort_origin = "effort 覆寫參數" if effort is not None else "LLM_CLAUDE_CODE_EFFORT"
+        effort_value = (effort_source or "").strip().lower()
+        if effort_value not in self.VALID_EFFORTS:
             raise LLMServiceError(
-                f"LLM_CLAUDE_CODE_EFFORT 值 '{settings.LLM_CLAUDE_CODE_EFFORT}' 無效。"
+                f"{effort_origin} 值 '{effort_source}' 無效。"
                 f"可用值：{', '.join(sorted(self.VALID_EFFORTS))}。"
                 "（注意：CLI 對非法值會靜默回退到預設力度而不報錯，"
                 "故必須在此攔截。）"
             )
-        self._effort = effort
+        self._effort = effort_value
 
         # token 格式防呆:setup-token 產出是連續的 base64url 字串,內含
         # 空白幾乎必是複製時斷行(2026-08-31 實際發生:token 中段一個空格
@@ -149,7 +157,9 @@ class ClaudeCodeLLMClient:
             )
 
         self._cli_path = self._resolve_cli_path()
-        self._model_name = settings.LLM_MODEL_NAME
+        self._model_name = (model or settings.LLM_MODEL_NAME or "").strip()
+        if not self._model_name:
+            raise LLMServiceError("模型名為空：LLM_MODEL_NAME 未設定且未提供覆寫。")
 
         provider = (settings.LLM_PROVIDER or "").strip().lower()
         provider_prefix = f"({provider})" if provider and provider not in ("google", "openai") else ""

@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-09-02 |
 | **性質** | 追加功能(獨立判斷快取表 + 獨立判讀腳本 + 生成管線的查表過濾;移除 `search_keyword`) |
-| **狀態** | 📝 設計完成(2026-09-03 改版:不加讀音欄位、不動去重鍵),待實作 |
+| **狀態** | 🚧 實作完成、本機驗證通過(2026-09-03);待部署新映像後跑判讀腳本與存量對帳 |
 | **範圍** | 新表 `jp_verb_reading_judgments`;新的**日文專用、專案無關**判讀腳本 `JP_Common/judge_verb_readings.py --project …`;後端新增 `jp/` 命名空間下的判讀端點與模板;VerbPair 生成腳本加「查表過濾」(CoreVerb 同機制,待其出現同表層動詞時接);移除 `generated_sentences_log.search_keyword` |
 | **不動** | `generated_sentences_log` 的唯一鍵與 `verb_lemma` 語意;兩層去重;**生成模板**;fugashi 四關與 `ignore_reading` 設定;CoreVerb 管線(無同表層動詞,端點日後可複用);非同表層動詞的一切行為 |
 | **PR / 進度** | 尚未開始 |
@@ -192,6 +192,10 @@ CREATE TABLE IF NOT EXISTS jp_verb_reading_judgments (
 | `scripts/common/database/init_db.py` | 新表 `jp_verb_reading_judgments` DDL;`search_keyword` 冪等 DROP |
 | `scripts/common/database/reading_judgment_repository.py` | 新增:`get_many(script_ids, surface)`、`upsert_many`、`delete_by_surface` |
 | `scripts/common/jp_homograph_table.py` | 新增:依 `ProjectProfile` 掃母卡建 `{表層: {讀音: 母卡id}}`(判讀腳本與兩條生卡腳本共用) |
+| `scripts/common/jp_reading_filter.py` | 新增:生卡側查表過濾(`verdict` + `ReadingFilter`),只讀判斷表、不呼叫 LLM |
+| `app/schemas/llm/jp_verb_reading.py`、`app/services/jp_verb_reading_service.py` | 新增:請求/回應/LLM 輸出 schema;服務層(渲染模板、請求範圍 client、fail-closed 正規化) |
+| `scripts/common/jp_reading_filter.py` | 新增:生卡側查表過濾(`verdict` + `ReadingFilter`),只讀判斷表、不呼叫 LLM |
+| `app/schemas/llm/jp_verb_reading.py`、`app/services/jp_verb_reading_service.py` | 新增:請求/回應/LLM 輸出 schema;服務層(渲染模板、請求範圍 client、fail-closed 正規化) |
 | `scripts/local_anki/common/deletion/profiles.py` | `ProjectProfile` 新增 `master_verb_fields`(專案差異收斂於此,不散落各腳本) |
 | `scripts/common/database/log_repository.py` | 移除 `search_keyword` 參數與 SQL 欄位 |
 | `.../JP_VerbPair/pipeline_components/dedup_manager.py` | 移除 `search_keyword` 傳遞與 `_keyword_or_none` |
@@ -215,12 +219,14 @@ CREATE TABLE IF NOT EXISTS jp_verb_reading_judgments (
 ## 6. 驗收
 
 - [x] 前置:`verb_lemma` 拼寫修復已執行完畢(2026-09-03)
-- [ ] `init_db.py` 重跑 → 新表就位、`search_keyword` 已移除、其餘欄位與唯一鍵不變
-- [ ] 表為空時全牌組 dry-run:預計張數與改動前一致(只多「未判讀」統計行)
+- [x] `init_db.py` 重跑(2026-09-03 本機)→ `jp_verb_reading_judgments` 就位、`search_keyword` 已移除、其餘欄位與唯一鍵 `uk_script_verb_project` 不變
+- [x] 表為空時全牌組 dry-run(2026-09-03):預計 **1,438 張,與改動前完全一致**;多讀表 14 個表層正確建出;結尾統計「讀音不符跳過 0 句;未判讀放行 415 句」並提示跑判讀腳本;零例外
 - [ ] 跑 `judge_verb_readings.py` 覆蓋 14 個表層(含存量 117 筆);對帳報告中的不一致逐筆人工複核後交決策
 - [ ] 表填好後 dry-run:同表層動詞(止める / 開く / 汚す)兩側各自只拿到讀音相符的候選;log 出現「讀音判斷…跳過」
 - [ ] 實際生成一輪,抽出新生成的同表層卡片逐張確認讀音歸屬正確
-- [ ] 全套件通過
+- [x] 全套件通過:221 passed(新增 `test_jp_verb_reading_judgments.py` 18 項;`test_dedup_canonical_lemma.py` 隨 `search_keyword` 移除同步更新)
+- [x] 判讀服務端到端實測(2026-09-03,本機 claude CLI,`effort=low` 覆寫):4 句同表層多讀全部判對——口元汚れてます→よごす、看板を汚す→けがす、ドアが開いた→あく、もう止める→やめる;標籤 `(claude-code)opus-5@low` 正確反映覆寫;4.8 秒
+- [x] 判讀腳本 dry-run(2026-09-03):14 個表層、待判 432 句、30 次呼叫;單一表層 `--surface 汚す`:ES 29 + 存量 7 → 待判 29、2 批;資源正常釋放
 
 ## 7. 後續(本計畫不做)
 

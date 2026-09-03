@@ -13,11 +13,10 @@ and partitioned by the `project` column; every method requires an explicit
 project from the caller to prevent cross-project reads or deletions.
 
 ``verb_lemma`` 的語意是「母卡標準表層去標音」（``scripts.common.verb_lemma
-.canonical_verb_lemma``），**不是**命中的搜尋關鍵字——關鍵字另存
-``search_keyword``。寫入不同拼寫會讓唯一鍵失效、同句重複生成
-（docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md）。
+.canonical_verb_lemma``），**不是**命中的搜尋關鍵字。寫入不同拼寫會讓唯一鍵
+失效、同句重複生成（docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md）。
 ``verb_lemma`` is the master card's furigana-stripped standard surface,
-never the matched search keyword (stored separately in ``search_keyword``).
+never the matched search keyword.
 """
 
 import logging
@@ -285,7 +284,7 @@ class GeneratedLogRepository:
 
     async def increment_failure_count(
         self, session: AsyncSession, script_id: int, verb_lemma: str, source: str, chapter: str,
-        master_note_id: int, llm_model: str, *, project: str, search_keyword: str | None = None,
+        master_note_id: int, llm_model: str, *, project: str,
     ) -> None:
         """記錄生成失敗，遞增 failure_count。若紀錄不存在則建立一筆空紀錄。
 
@@ -303,19 +302,15 @@ class GeneratedLogRepository:
                 Anki note ID.
             llm_model: 使用的 LLM 模型名稱。LLM model name used.
             project: 專案識別。Project identifier.
-            search_keyword: 實際命中的搜尋關鍵字（與 verb_lemma 相同時可
-                省略）。The matched search keyword, if different from
-                verb_lemma.
         """
         _validate_project(project)
         query = text("""
             INSERT INTO generated_sentences_log
-            (script_id, verb_lemma, project, source, chapter, master_note_id, llm_model, failure_count, search_keyword)
-            VALUES (:script_id, :verb_lemma, :project, :source, :chapter, :master_note_id, :llm_model, 1, :search_keyword)
+            (script_id, verb_lemma, project, source, chapter, master_note_id, llm_model, failure_count)
+            VALUES (:script_id, :verb_lemma, :project, :source, :chapter, :master_note_id, :llm_model, 1)
             ON DUPLICATE KEY UPDATE
                 failure_count = failure_count + 1,
                 llm_model = VALUES(llm_model),
-                search_keyword = VALUES(search_keyword),
                 updated_at = CURRENT_TIMESTAMP
         """)
         await session.execute(query, {
@@ -326,7 +321,6 @@ class GeneratedLogRepository:
             "chapter": chapter,
             "master_note_id": master_note_id,
             "llm_model": llm_model,
-            "search_keyword": search_keyword,
         })
         await session.commit()
 
@@ -340,23 +334,22 @@ class GeneratedLogRepository:
         Args:
             session: 非同步資料庫連線 session。Async database session.
             record_data: 紀錄欄位字典（含 script_id、verb_lemma、source、
-                chapter、note id、llm_model，可選 search_keyword）。Dict of
-                record fields (script_id, verb_lemma, source, chapter, note
-                ids, llm_model, optional search_keyword).
+                chapter、note id 與 llm_model）。Dict of record fields
+                (script_id, verb_lemma, source, chapter, note ids,
+                llm_model).
             project: 專案識別。Project identifier.
         """
         _validate_project(project)
         query = text("""
             INSERT INTO generated_sentences_log
-            (script_id, verb_lemma, project, source, chapter, master_note_id, context_note_id, cloze_note_id, llm_model, failure_count, search_keyword)
+            (script_id, verb_lemma, project, source, chapter, master_note_id, context_note_id, cloze_note_id, llm_model, failure_count)
             VALUES
-            (:script_id, :verb_lemma, :project, :source, :chapter, :master_note_id, :context_note_id, :cloze_note_id, :llm_model, 0, :search_keyword)
+            (:script_id, :verb_lemma, :project, :source, :chapter, :master_note_id, :context_note_id, :cloze_note_id, :llm_model, 0)
             ON DUPLICATE KEY UPDATE
                 context_note_id = VALUES(context_note_id),
                 cloze_note_id = VALUES(cloze_note_id),
                 master_note_id = VALUES(master_note_id),
                 llm_model = VALUES(llm_model),
-                search_keyword = VALUES(search_keyword),
                 delete_count = delete_count + 1,
                 failure_count = 0,
                 is_deleted = FALSE,
@@ -373,7 +366,6 @@ class GeneratedLogRepository:
             "context_note_id": record_data.get("context_note_id"),
             "cloze_note_id": record_data.get("cloze_note_id"),
             "llm_model": record_data["llm_model"],
-            "search_keyword": record_data.get("search_keyword"),
         }
 
         await session.execute(query, params)

@@ -31,6 +31,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from app.core.config import settings
+from app.core.exceptions.infrastructure import LLMServiceError
 from app.infrastructure.llm.client import LLMClient
 
 if TYPE_CHECKING:  # 僅供型別檢查，執行期不載入（見下方惰性 import 說明）
@@ -46,10 +47,25 @@ CLAUDE_CODE_PROVIDER = "claude-code"
 ANTHROPIC_PROVIDER = "anthropic"
 
 
-def create_llm_client() -> "LLMClient | ClaudeCodeLLMClient | AnthropicLLMClient":
-    """依設定建立對應的 LLM 客戶端。
+def create_llm_client(
+    *, model: str | None = None, effort: str | None = None,
+) -> "LLMClient | ClaudeCodeLLMClient | AnthropicLLMClient":
+    """依設定建立對應的 LLM 客戶端（可覆寫模型 / 思考深度）。
 
-    Create the LLM client matching the configured provider.
+    Create the LLM client matching the configured provider, optionally
+    overriding the model and effort for this instance only.
+
+    覆寫只作用在回傳的這個實例（請求範圍），不改 settings、不動
+    ``app.state.llm_client``。供讀音判讀端點等「每次可指定模型」的用途
+    （docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.2）。
+    Overrides are instance-scoped: settings and the app-wide client are
+    untouched.
+
+    Args:
+        model: 覆寫模型名；None 沿用 ``LLM_MODEL_NAME``。Model override.
+        effort: 覆寫思考深度；None 沿用 ``LLM_CLAUDE_CODE_EFFORT``。僅
+            claude-code 支援，其他 provider 給值即拋錯。Effort override
+            (claude-code only).
 
     Returns:
         依 ``LLM_PROVIDER`` 回傳對應的客戶端；未匹配任何專屬 provider 時
@@ -73,7 +89,7 @@ def create_llm_client() -> "LLMClient | ClaudeCodeLLMClient | AnthropicLLMClient
         from app.infrastructure.llm.claude_code_client import ClaudeCodeLLMClient
 
         logger.info("LLM Provider = %s，使用本機 Claude Code CLI。", provider)
-        return ClaudeCodeLLMClient()
+        return ClaudeCodeLLMClient(model=model, effort=effort)
 
     if provider == ANTHROPIC_PROVIDER:
         from app.infrastructure.llm.anthropic_client import AnthropicLLMClient
@@ -81,4 +97,8 @@ def create_llm_client() -> "LLMClient | ClaudeCodeLLMClient | AnthropicLLMClient
         logger.info("LLM Provider = %s，使用 Anthropic 官方 API。", provider)
         return AnthropicLLMClient()
 
-    return LLMClient()
+    if effort is not None:
+        raise LLMServiceError(
+            f"effort 覆寫僅 claude-code provider 支援（目前 LLM_PROVIDER='{provider or 'google'}'）。"
+        )
+    return LLMClient(model=model)

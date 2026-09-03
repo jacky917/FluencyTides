@@ -52,6 +52,9 @@ from sqlalchemy import text
 from scripts.common.database.log_repository import PROJECT_JP_VERB_PAIR
 from scripts.common.llm_label import build_llm_model_label
 from scripts.common.database.canonicalize_verb_lemma import load_keyword_map
+from scripts.common.jp_homograph_table import load_homograph_table
+from scripts.common.jp_reading_filter import ReadingFilter
+from scripts.local_anki.common.deletion.profiles import get_profile
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import DedupManager
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.backend_api_client import BackendAPIClient
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.anki_media_uploader import AnkiMediaUploader
@@ -202,6 +205,7 @@ async def process_verb_group(
     dry_run_generated: Set[tuple[str, int]] = None,
     tagger=None,
     validation_config: dict = None,
+    reading_filter: ReadingFilter | None = None,
     rejection_stats: dict[str, int] = None,
     filter_moan: bool = True,
 ) -> int:
@@ -281,6 +285,10 @@ async def process_verb_group(
         target_keywords = [normalized_verb]
         str_nid = str(master_note_id)
 
+        # 母卡讀音（供同表層多讀的查表過濾）：要在 ignore_reading 把 verb_reading
+        # 清空之前取走——那是 fugashi 讀音關的開關，與查表過濾無關。
+        master_reading = verb_reading
+
         verb_cfg = validation_config.get(str_nid, {}).get(normalized_verb, {})
         allow_auxiliary = bool(verb_cfg.get("allow_auxiliary", False))
         allow_compound_suffix = bool(verb_cfg.get("allow_compound_suffix", False))
@@ -315,6 +323,14 @@ async def process_verb_group(
                 limit=100,
                 last_script_id=0
             )
+            # 同表層多讀（汚す＝けがす/よごす）：只在關鍵字是漢字表層時查
+            # jp_verb_reading_judgments 過濾——假名寫法的句子讀音本身就是明的。
+            # 有判斷且不符 → 丟棄且不留紀錄；無判斷 → 放行（表空時行為與現況相同）。
+            # 詳見 docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.3。
+            if reading_filter is not None and kw == normalized_verb and reading_filter.is_homograph(normalized_verb):
+                before = len(es_results)
+                es_results = await reading_filter.apply(session, normalized_verb, master_reading, es_results)
+                logger.info(f"   🔤 讀音查表：'{kw}'（本母卡 {master_reading}）候選 {before} → {len(es_results)}")
             target = base_quota + (1 if idx < remainder else 0)
             # 驗證參數：target_lemma 固定用母卡的標準表層——句中假名寫法
             # （ほぐす）的 UniDic lemma 即為標準形（解す），假名擴展關鍵字
@@ -468,7 +484,6 @@ async def process_verb_group(
                         context_note_id=data.get("context_note_id"),
                         cloze_note_id=data.get("cloze_note_id"),
                         llm_model=actual_llm_model,
-                        search_keyword=kd["keyword"],
                     )
                     success_count += 1
                     new_generated += 1
@@ -487,7 +502,7 @@ async def process_verb_group(
 
                         if error_code == "CLOZE_POSITIONING_FAILED":
                             logger.warning(f"⚠️ 該句子挖空定位失敗被後端拒絕，自動跳過並嘗試下一句: {e.response.text}")
-                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name, search_keyword=kd["keyword"])
+                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name)
                             continue
                         
                         logger.error(f"❌ 發生預期外的業務邏輯錯誤 (HTTP 422): {e.response.text}")
@@ -501,12 +516,12 @@ async def process_verb_group(
                             
                         if "LLM API 在所有重試後仍回傳空內容" in e.response.text or "PROHIBITED_CONTENT" in e.response.text:
                             logger.warning("⚠️ 遭遇 LLM 安全審查攔截，自動跳過此句並繼續...")
-                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name, search_keyword=kd["keyword"])
+                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name)
                             continue
 
                         if e.response.status_code >= 500:
                             logger.warning(f"⚠️ 遭遇伺服器錯誤 ({e.response.status_code})，文字內容: '{e.response.text[:100]}'。將紀錄失敗並跳過...")
-                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name, search_keyword=kd["keyword"])
+                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name)
                             await asyncio.sleep(3)
                             continue
                             
@@ -619,6 +634,17 @@ async def main() -> None:
         
         # 為了保證每次執行結果的一致性，強制對 ID 進行排序
         note_ids.sort()
+
+        # 同表層多讀表：掃母卡建構（不落設定檔），供 ES 候選的讀音查表過濾。
+        # 判斷表由 JP_Common/judge_verb_readings.py 離線產生；表空時過濾為
+        # no-op，生卡行為與現況相同（計畫 §3.3）。
+        homograph_table = await load_homograph_table(anki_client, get_profile(PROJECT_JP_VERB_PAIR))
+        reading_filter = ReadingFilter(homograph_table)
+        if homograph_table:
+            logger.info(
+                f"🔤 同表層多讀表層 {len(homograph_table)} 個："
+                + "、".join(f"{s}({'/'.join(e.candidates)})" for s, e in sorted(homograph_table.items()))
+            )
         
         # 準備音檔和頭像的路徑
         voice_dir = Path(settings.JP_VERB_PAIR_VOICE_DIR)
@@ -727,6 +753,7 @@ async def main() -> None:
                         validation_config=validation_config,
                         rejection_stats=rejection_stats,
                         filter_moan=filter_moan,
+                        reading_filter=reading_filter,
                     )
                     global_total += new_cards
                     if global_limit > 0 and global_total >= global_limit:
@@ -767,6 +794,7 @@ async def main() -> None:
                         validation_config=validation_config,
                         rejection_stats=rejection_stats,
                         filter_moan=filter_moan,
+                        reading_filter=reading_filter,
                     )
                     global_total += new_cards
                     if global_limit > 0 and global_total >= global_limit:
@@ -789,6 +817,13 @@ async def main() -> None:
                 for stat_key, count in sorted(rejection_stats.items(), key=lambda x: x[1], reverse=True):
                     verb_part, reason = stat_key.split("|", 1)
                     logger.info(f"   - {verb_part}（{reason}） : {count:>3} 句")
+            if reading_filter.table:
+                logger.info(
+                    f"\n   [同表層多讀查表] 讀音不符跳過 {reading_filter.stats['skipped']} 句；"
+                    f"未判讀放行 {reading_filter.stats['unjudged']} 句"
+                )
+                if reading_filter.stats["unjudged"]:
+                    logger.info("   → 未判讀的句子可能掛錯母卡，建議先跑 scripts/fastapi_client/JP_Common/judge_verb_readings.py")
 
     except Exception as e:
         logger.error(f"💥 發生非預期嚴重錯誤，腳本提前終止: {e}")
