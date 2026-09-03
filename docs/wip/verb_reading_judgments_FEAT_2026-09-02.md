@@ -5,7 +5,7 @@
 | **創建日期** | 2026-09-02 |
 | **性質** | 追加功能(獨立判斷快取表 + 獨立判讀腳本 + 生成管線的查表過濾;移除 `search_keyword`) |
 | **狀態** | 📝 設計完成(2026-09-03 改版:不加讀音欄位、不動去重鍵),待實作 |
-| **範圍** | 新表 `verb_reading_judgments`;新腳本 `judge_verb_readings.py`;後端新增判讀端點與模板;VerbPair 生成腳本加「查表過濾」;移除 `generated_sentences_log.search_keyword` |
+| **範圍** | 新表 `verb_reading_judgments`;新的**專案無關**判讀腳本 `judge_verb_readings.py --project …`;後端新增專案無關的判讀端點與模板;VerbPair 生成腳本加「查表過濾」(CoreVerb 同機制,待其出現同表層動詞時接);移除 `generated_sentences_log.search_keyword` |
 | **不動** | `generated_sentences_log` 的唯一鍵與 `verb_lemma` 語意;兩層去重;**生成模板**;fugashi 四關與 `ignore_reading` 設定;CoreVerb 管線(無同表層動詞,端點日後可複用);非同表層動詞的一切行為 |
 | **PR / 進度** | 尚未開始 |
 | **關聯文件** | `docs/archive/verb_lemma_backfill_FIX_2026-09-02.md`(**前置**:存量拼寫修復,必須先執行)、`docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md`(去重鍵三個寫入點的教訓)、`docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md`(§6.5 讀音關與 `ignore_reading` 的由來) |
@@ -78,17 +78,19 @@ CREATE TABLE IF NOT EXISTS verb_reading_judgments (
 ```
 [獨立] judge_verb_readings.py ──寫入──▶ verb_reading_judgments ◀──只讀── generate_child_cards.py [生卡]
             │                                                                    │
-            └── POST /api/v1/verb-pair/judge-readings(後端,新模板)              └── 表空 → 行為與現況完全相同
+            └── POST /api/v1/verb-readings/judge(後端,專案無關,新模板)        └── 表空 → 行為與現況完全相同
 ```
 
 生卡流程**不呼叫 LLM 判讀音**;判斷全部由獨立腳本事先產生。兩者只靠那張表溝通,任一邊不存在都不影響另一邊。
 
-### 3.1 獨立判讀腳本 `scripts/fastapi_client/JP_VerbPair/judge_verb_readings.py`
+### 3.1 獨立判讀腳本 `scripts/fastapi_client/judge_verb_readings.py`(專案無關)
 
-1. 掃全部母卡,建同表層讀音表 `{表層: {讀音: 母卡id}}`,只保留讀音數 ≥ 2 的表層(目前 14 個;不落設定檔,母卡改動自動反映)。
+放在 `fastapi_client/` 頂層(與 `query_backend_model.py` 同級),以 `--project jp_verb_pair|jp_core_verb` 指定專案;母卡牌組、動詞欄位名等專案差異一律取自刪卡工具鏈既有的 `ProjectProfile` 註冊表(`scripts/local_anki/common/deletion/profiles.py`),該註冊表新增 `master_verb_fields`(VerbPair:`Intransitive_Word`/`Transitive_Word`;CoreVerb:`Word`)。不在腳本裡寫死任何專案。
+
+1. 依 profile 掃該專案全部母卡,建同表層讀音表 `{表層: {讀音: 母卡id}}`,只保留讀音數 ≥ 2 的表層(VerbPair 目前 14 個、CoreVerb 目前 0 個;不落設定檔,母卡改動自動反映)。
 2. 對每個表層收集待判 `script_id`:
    - ES 依表層搜尋的候選(與生卡相同的 `search_dialogue_by_verb`,`script_id` 游標分頁,`--limit` 控制上限);
-   - **加上** `generated_sentences_log` 裡該表層已生成的紀錄(存量 117 筆),讓既有卡片一併受檢。
+   - **加上** `generated_sentences_log` 裡該專案、該表層已生成的紀錄(VerbPair 存量 117 筆),讓既有卡片一併受檢。
 3. 排除表中已有判斷的;剩餘者每 20 句一批送後端端點,每句附:台詞原文、前後各 2 行(直接查 `scripts` 表,不走完整 ContextBuilder)、表層、候選讀音清單。
 4. 回應寫入表(`reading` + 後端回傳的 `llm_model`)。
 5. 結尾輸出**歸屬對帳報告**:對存量已生成紀錄,比對「判定讀音」與「所屬母卡讀音」,不一致者逐筆列出(id、句子、母卡讀音、判定讀音)——交人工複核與決策(改掛/刪除重生/保留)。
@@ -110,7 +112,9 @@ CREATE TABLE IF NOT EXISTS verb_reading_judgments (
 
 判讀腳本與生卡腳本**不共用**模型設定——生卡用 .env 的預設,判讀可用較便宜的模型跑大量,兩者互不影響。
 
-### 3.2 後端端點 `POST /api/v1/verb-pair/judge-readings`
+### 3.2 後端端點 `POST /api/v1/verb-readings/judge`(專案無關)
+
+獨立路由檔 `app/api/verb_readings.py`,不掛在 `verb_pair` 或 `core_verb` 之下——請求裡沒有任何專案概念(只有台詞、上下文、表層、候選讀音),哪個專案都能呼叫。
 
 - 請求:`{items: [{script_id, surface, candidates: [讀音…], line, context_before: [..], context_after: [..]}], model?: str, effort?: str}`,`items` 單次 ≤ 40 筆(超過回 422)。
 - 回應:`{llm_model, results: [{script_id, reading}]}`,`reading` ∈ candidates 或 `""`;`llm_model` 為**實際使用**的模型標籤(含覆寫後的值),腳本寫入表時以此為準。
@@ -122,7 +126,7 @@ CREATE TABLE IF NOT EXISTS verb_reading_judgments (
 
 只加一道**查表過濾**,位置在 ES 撈回候選之後、fugashi 驗證之前:
 
-- 啟動時建同表層讀音表(與 3.1 同一段共用程式碼,放 `scripts/common/`)。
+- 啟動時建同表層讀音表(與 3.1 同一段共用程式碼 `scripts/common/homograph_table.py`,以 profile 為參數)。
 - 候選的表層若在多讀表內,查 `verb_reading_judgments`(每表層一次批量載入):
   - 有判斷且 = 本母卡讀音 → 放行;
   - 有判斷且 ≠ 本母卡讀音(含空字串)→ 跳過,log `讀音判斷:script_id=X 判為 よごす,非本母卡 けがす,跳過`,**不寫任何紀錄**;
@@ -154,12 +158,14 @@ CREATE TABLE IF NOT EXISTS verb_reading_judgments (
 |---|---|
 | `scripts/common/database/init_db.py` | 新表 `verb_reading_judgments` DDL;`search_keyword` 冪等 DROP |
 | `scripts/common/database/reading_judgment_repository.py` | 新增:`get_many(script_ids, surface)`、`upsert_many`、`delete_by_surface` |
-| `scripts/common/homograph_table.py` | 新增:掃母卡建 `{表層: {讀音: 母卡id}}`(判讀腳本與生卡腳本共用) |
+| `scripts/common/homograph_table.py` | 新增:依 `ProjectProfile` 掃母卡建 `{表層: {讀音: 母卡id}}`(判讀腳本與兩條生卡腳本共用) |
+| `scripts/local_anki/common/deletion/profiles.py` | `ProjectProfile` 新增 `master_verb_fields`(專案差異收斂於此,不散落各腳本) |
 | `scripts/common/database/log_repository.py` | 移除 `search_keyword` 參數與 SQL 欄位 |
 | `.../JP_VerbPair/pipeline_components/dedup_manager.py` | 移除 `search_keyword` 傳遞與 `_keyword_or_none` |
 | `.../JP_VerbPair/generate_child_cards.py` | 啟動建多讀表;候選查表過濾;結尾統計;移除 `search_keyword=` |
-| `.../JP_VerbPair/judge_verb_readings.py` | 新增獨立判讀腳本(§3.1) |
-| `app/api/verb_pair.py`(或既有路由檔) | 新端點 `judge-readings`(含 `model`/`effort` 請求範圍覆寫與白名單驗證、`items` ≤ 40) |
+| `scripts/fastapi_client/judge_verb_readings.py` | 新增專案無關的獨立判讀腳本(`--project`,§3.1) |
+| `app/api/verb_readings.py` | 新增專案無關路由 `POST /verb-readings/judge`(含 `model`/`effort` 請求範圍覆寫與白名單驗證、`items` ≤ 40);`app/main.py` 掛載 |
+| `app/infrastructure/llm/factory.py`、`claude_code_client.py` | `create_llm_client(model=None, effort=None)` 與 client 建構子接受可選覆寫(缺省沿用 settings),供請求範圍 client 使用 |
 | `app/templates/prompts/anki/JP_VerbReading_Judge.j2` | 新模板 |
 | `scripts/common/database/canonicalize_verb_lemma.py` | 移除寫 `search_keyword` 的邏輯(腳本保留為歷史工具) |
 | `tests/test_reading_judgments.py` | 回歸測試 |
@@ -187,5 +193,5 @@ CREATE TABLE IF NOT EXISTS verb_reading_judgments (
 
 1. **同表層同讀跨母卡**:14 個表層是「同表層、同讀音、不同母卡」(如 `繋がる` 兩張母卡;`穢す`(557)與 `汚[けが]す`(921)更是同詞異漢字且前者以「汚す」為關鍵字),讀音判斷對它們無效,屬母卡設計問題,需另案盤點。
 2. **孤兒紀錄**:`掛ける` 3 筆指向已刪除的母卡、`収まる` 2 筆是母卡改名前的舊紀錄。
-3. **CoreVerb 接入查表過濾**:目前 3 張母卡無同表層,端點與共用模組已可直接複用,待需要時接。
+3. **CoreVerb 接入查表過濾**:端點、判讀腳本(`--project jp_core_verb`)、多讀表模組皆已專案無關,CoreVerb 出現同表層動詞時只需在其生成腳本加同一段查表過濾。
 4. **fugashi 讀音關與判斷表的關係**:兩者並存(前者機械、後者語境)。若日後判斷表覆蓋率高,可評估對多讀表層自動跳過 fugashi 讀音關;本計畫不動。
