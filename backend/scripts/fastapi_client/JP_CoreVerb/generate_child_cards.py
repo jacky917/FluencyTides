@@ -84,7 +84,6 @@ from scripts.fastapi_client.JP_CoreVerb.pipeline_components.funnel import (
     VerbSearchConfig,
     format_selection_report,
     run_selection_funnel,
-    strip_furigana,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -571,6 +570,8 @@ async def main() -> None:
         # Multi-token target sequences: needed both to match compounds and to
         # stop shorter single-token verbs from stealing their sentences.
         all_notes = await anki_client.get_notes_info(note_ids)
+        # 迴圈內直接複用這批 note，不再逐一往返 Anki（344 張少 344 次呼叫）
+        notes_by_id = {int(n.noteId): n for n in all_notes if getattr(n, "fields", None)}
         all_lemmas = []
         for note in all_notes:
             field = note.fields.get("Word", {})
@@ -604,12 +605,12 @@ async def main() -> None:
                 logger.info("\n==================================================")
                 logger.info(f"📝 處理母卡片 [{idx}/{len(note_ids)}] (ID: {master_note_id})")
 
-                notes_info = await anki_client.get_notes_info([master_note_id])
-                if not notes_info:
+                note = notes_by_id.get(int(master_note_id))
+                if note is None:
                     logger.warning(f"⚠️ 無法讀取母卡片 {master_note_id} 的資訊，跳過。")
                     continue
 
-                fields = notes_info[0].fields
+                fields = note.fields
                 word_field = fields.get("Word", {})
                 word_display = (
                     word_field.get("value", "")

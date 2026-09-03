@@ -56,7 +56,6 @@ from scripts.fastapi_client.JP_CoreVerb.pipeline_components.funnel import (
     VerbSearchConfig,
     format_selection_report,
     run_selection_funnel,
-    strip_furigana,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")

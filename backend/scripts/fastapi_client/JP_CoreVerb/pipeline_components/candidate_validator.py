@@ -42,7 +42,9 @@ REJECTION_COMPOUND_MEMBER = "屬其他複合動詞"
 
 #: ``derive_target_lemmas`` 的快取：{目標動詞: ((lemma, pos1), ...)}。
 #: 同一次執行對同一動詞會呼叫數百次，分詞結果不變故可快取。
-_TARGET_LEMMA_CACHE: dict[str, tuple[tuple[str, str, str], ...]] = {}
+#: 外層以 ``id(tagger)`` 分隔——不同分詞器對同一表層可能切得不同，
+#: 共用一個 flat 快取會互相污染（測試間尤其明顯）。
+_TARGET_LEMMA_CACHE: dict[int, dict[str, tuple[tuple[str, str, str], ...]]] = {}
 
 
 def token_surface(token: Any) -> str:
@@ -206,7 +208,8 @@ def derive_target_lemmas(
         tuple[tuple[str, str, str], ...]: ``((lemma, pos1, surface), ...)``；
         無法分詞時回傳單一元素。The derived sequence.
     """
-    cached = _TARGET_LEMMA_CACHE.get(target_verb)
+    per_tagger = _TARGET_LEMMA_CACHE.setdefault(id(tagger), {})
+    cached = per_tagger.get(target_verb)
     if cached is not None:
         return cached
     # 分詞失敗（假 tagger 未涵蓋該字串、分詞器異常）時退回單 token 序列——
@@ -222,7 +225,7 @@ def derive_target_lemmas(
         seq = ()
     if not seq:
         seq = ((target_verb, "動詞", target_verb),)
-    _TARGET_LEMMA_CACHE[target_verb] = seq
+    per_tagger[target_verb] = seq
     return seq
 
 

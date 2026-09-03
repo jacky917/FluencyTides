@@ -867,8 +867,12 @@ def test_derive_target_lemmas_single_and_compound():
     assert derive_target_lemmas("見る", tagger) == _seq(("見る", "動詞", "見る"))
     assert derive_target_lemmas("走り出す", tagger) == _seq(
         ("走る", "動詞", "走り"), ("出す", "動詞", "出す"))
-    # 快取：第二次不再呼叫 tagger（傳入會 KeyError 的 tagger 仍可取得結果）
-    assert derive_target_lemmas("見る", _fake_tagger({})) == _seq(("見る", "動詞", "見る"))
+    # 快取以 tagger 身分分隔：同一個 tagger 第二次命中快取
+    assert derive_target_lemmas("見る", tagger) == _seq(("見る", "動詞", "見る"))
+    assert len(_TARGET_LEMMA_CACHE[id(tagger)]) == 2
+    # **另一個** tagger 不吃前者的快取——它切不出來時退回單 token 序列
+    other = _fake_tagger({})
+    assert derive_target_lemmas("走り出す", other) == _seq(("走り出す", "動詞", "走り出す"))
     _TARGET_LEMMA_CACHE.clear()
 
 
