@@ -5,7 +5,7 @@
 | **創建日期** | 2026-09-02 |
 | **性質** | 追加功能(獨立判斷快取表 + 獨立判讀腳本 + 生成管線的查表過濾;移除 `search_keyword`) |
 | **狀態** | 📝 設計完成(2026-09-03 改版:不加讀音欄位、不動去重鍵),待實作 |
-| **範圍** | 新表 `verb_reading_judgments`;新的**專案無關**判讀腳本 `judge_verb_readings.py --project …`;後端新增專案無關的判讀端點與模板;VerbPair 生成腳本加「查表過濾」(CoreVerb 同機制,待其出現同表層動詞時接);移除 `generated_sentences_log.search_keyword` |
+| **範圍** | 新表 `jp_verb_reading_judgments`;新的**日文專用、專案無關**判讀腳本 `JP_Common/judge_verb_readings.py --project …`;後端新增 `jp/` 命名空間下的判讀端點與模板;VerbPair 生成腳本加「查表過濾」(CoreVerb 同機制,待其出現同表層動詞時接);移除 `generated_sentences_log.search_keyword` |
 | **不動** | `generated_sentences_log` 的唯一鍵與 `verb_lemma` 語意;兩層去重;**生成模板**;fugashi 四關與 `ignore_reading` 設定;CoreVerb 管線(無同表層動詞,端點日後可複用);非同表層動詞的一切行為 |
 | **PR / 進度** | 尚未開始 |
 | **關聯文件** | `docs/archive/verb_lemma_backfill_FIX_2026-09-02.md`(**前置**:存量拼寫修復,必須先執行)、`docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md`(去重鍵三個寫入點的教訓)、`docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md`(§6.5 讀音關與 `ignore_reading` 的由來) |
@@ -49,10 +49,10 @@ ES 用表層搜,搜到的句子究竟讀哪個音,只有上下文知道。fugash
 
 ## 2. 資料模型
 
-### 2.1 新表 `verb_reading_judgments`(判斷快取)
+### 2.1 新表 `jp_verb_reading_judgments`(判斷快取)
 
 ```sql
-CREATE TABLE IF NOT EXISTS verb_reading_judgments (
+CREATE TABLE IF NOT EXISTS jp_verb_reading_judgments (
     script_id    BIGINT UNSIGNED NOT NULL COMMENT '台詞 ID(對應 scripts.id)',
     verb_surface VARCHAR(32)     NOT NULL COMMENT '同表層多讀的表層,如 汚す',
     reading      VARCHAR(32)     NOT NULL COMMENT 'LLM 判定的讀音(平假名);無法判定為空字串',
@@ -76,16 +76,16 @@ CREATE TABLE IF NOT EXISTS verb_reading_judgments (
 ## 3. 三個元件與它們的關係
 
 ```
-[獨立] judge_verb_readings.py ──寫入──▶ verb_reading_judgments ◀──只讀── generate_child_cards.py [生卡]
+[獨立] judge_verb_readings.py ──寫入──▶ jp_verb_reading_judgments ◀──只讀── generate_child_cards.py [生卡]
             │                                                                    │
-            └── POST /api/v1/verb-readings/judge(後端,專案無關,新模板)        └── 表空 → 行為與現況完全相同
+            └── POST /api/v1/jp/verb-readings/judge(後端,專案無關,新模板)        └── 表空 → 行為與現況完全相同
 ```
 
 生卡流程**不呼叫 LLM 判讀音**;判斷全部由獨立腳本事先產生。兩者只靠那張表溝通,任一邊不存在都不影響另一邊。
 
-### 3.1 獨立判讀腳本 `scripts/fastapi_client/judge_verb_readings.py`(專案無關)
+### 3.1 獨立判讀腳本 `scripts/fastapi_client/JP_Common/judge_verb_readings.py`(日文專用、專案無關)
 
-放在 `fastapi_client/` 頂層(與 `query_backend_model.py` 同級),以 `--project jp_verb_pair|jp_core_verb` 指定專案;母卡牌組、動詞欄位名等專案差異一律取自刪卡工具鏈既有的 `ProjectProfile` 註冊表(`scripts/local_anki/common/deletion/profiles.py`),該註冊表新增 `master_verb_fields`(VerbPair:`Intransitive_Word`/`Transitive_Word`;CoreVerb:`Word`)。不在腳本裡寫死任何專案。
+放在新目錄 `fastapi_client/JP_Common/`(與 `JP_VerbPair/`、`JP_CoreVerb/` 同級,承載日文跨專案的腳本;`query_backend_model.py` 這類語言無關的工具維持在頂層),以 `--project jp_verb_pair|jp_core_verb` 指定專案;母卡牌組、動詞欄位名等專案差異一律取自刪卡工具鏈既有的 `ProjectProfile` 註冊表(`scripts/local_anki/common/deletion/profiles.py`),該註冊表新增 `master_verb_fields`(VerbPair:`Intransitive_Word`/`Transitive_Word`;CoreVerb:`Word`)。不在腳本裡寫死任何專案。
 
 1. 依 profile 掃該專案全部母卡,建同表層讀音表 `{表層: {讀音: 母卡id}}`,只保留讀音數 ≥ 2 的表層(VerbPair 目前 14 個、CoreVerb 目前 0 個;不落設定檔,母卡改動自動反映)。
 2. 對每個表層收集待判 `script_id`:
@@ -112,9 +112,9 @@ CREATE TABLE IF NOT EXISTS verb_reading_judgments (
 
 判讀腳本與生卡腳本**不共用**模型設定——生卡用 .env 的預設,判讀可用較便宜的模型跑大量,兩者互不影響。
 
-### 3.2 後端端點 `POST /api/v1/verb-readings/judge`(專案無關)
+### 3.2 後端端點 `POST /api/v1/jp/verb-readings/judge`(專案無關)
 
-獨立路由檔 `app/api/verb_readings.py`,不掛在 `verb_pair` 或 `core_verb` 之下——請求裡沒有任何專案概念(只有台詞、上下文、表層、候選讀音),哪個專案都能呼叫。
+獨立路由檔 `app/api/jp_verb_readings.py`(`APIRouter(prefix="/jp/verb-readings")`),不掛在 `verb_pair` 或 `core_verb` 之下——請求裡沒有任何專案概念(只有台詞、上下文、表層、候選讀音),日文的任何母卡驅動專案都能呼叫;路徑與檔名帶 `jp` 是因為「同表層多讀」是日文特有的問題,本服務同時承載 TOEIC/英語等其他語言的模組,不能讓語言專屬能力看起來像通用的。
 
 - 請求:`{items: [{script_id, surface, candidates: [讀音…], line, context_before: [..], context_after: [..]}], model?: str, effort?: str}`,`items` 單次 ≤ 40 筆(超過回 422)。
 - 回應:`{llm_model, results: [{script_id, reading}]}`,`reading` ∈ candidates 或 `""`;`llm_model` 為**實際使用**的模型標籤(含覆寫後的值),腳本寫入表時以此為準。
@@ -126,14 +126,28 @@ CREATE TABLE IF NOT EXISTS verb_reading_judgments (
 
 只加一道**查表過濾**,位置在 ES 撈回候選之後、fugashi 驗證之前:
 
-- 啟動時建同表層讀音表(與 3.1 同一段共用程式碼 `scripts/common/homograph_table.py`,以 profile 為參數)。
-- 候選的表層若在多讀表內,查 `verb_reading_judgments`(每表層一次批量載入):
+- 啟動時建同表層讀音表(與 3.1 同一段共用程式碼 `scripts/common/jp_homograph_table.py`,以 profile 為參數)。
+- 候選的表層若在多讀表內,查 `jp_verb_reading_judgments`(每表層一次批量載入):
   - 有判斷且 = 本母卡讀音 → 放行;
   - 有判斷且 ≠ 本母卡讀音(含空字串)→ 跳過,log `讀音判斷:script_id=X 判為 よごす,非本母卡 けがす,跳過`,**不寫任何紀錄**;
   - **無判斷 → 放行**(與現況相同),log 一行 `未判讀` 供統計。
 - 表層不在多讀表內 → 完全不查,零額外成本。
 - 結尾統計:本輪「查表跳過」與「未判讀放行」各幾句,提醒使用者跑判讀腳本。
 - fugashi 讀音關與 `ignore_reading` 設定**維持不變**——它是另一道獨立的、上下文盲的機械關,本計畫不改它的行為。
+
+### 3.4 命名約定:日文專用能力一律帶 `jp`
+
+本服務不只日文(另有 TOEIC / 英語口說等模板),而「同表層多讀」是日文特有的問題。因此本計畫新增的每個構件都在名稱上標明語言,與既有慣例對齊(腳本目錄 `JP_VerbPair`、模板 `JP_VerbPair_Child.j2`、卡片模型 `JP_*_Dark`):
+
+| 構件 | 名稱 |
+|---|---|
+| 資料表 | `jp_verb_reading_judgments` |
+| 端點 | `POST /api/v1/jp/verb-readings/judge`,路由檔 `app/api/jp_verb_readings.py` |
+| 判讀腳本 | `scripts/fastapi_client/JP_Common/judge_verb_readings.py` |
+| 共用模組 | `scripts/common/jp_homograph_table.py` |
+| 模板 | `app/templates/prompts/anki/JP_VerbReading_Judge.j2` |
+
+`generated_sentences_log`、`scripts` 等既有資料表沒有語言前綴,是歷史包袱,本計畫不回改。
 
 ## 4. 為什麼是這個切法
 
@@ -156,15 +170,15 @@ CREATE TABLE IF NOT EXISTS verb_reading_judgments (
 
 | 檔案 | 改動 |
 |---|---|
-| `scripts/common/database/init_db.py` | 新表 `verb_reading_judgments` DDL;`search_keyword` 冪等 DROP |
+| `scripts/common/database/init_db.py` | 新表 `jp_verb_reading_judgments` DDL;`search_keyword` 冪等 DROP |
 | `scripts/common/database/reading_judgment_repository.py` | 新增:`get_many(script_ids, surface)`、`upsert_many`、`delete_by_surface` |
-| `scripts/common/homograph_table.py` | 新增:依 `ProjectProfile` 掃母卡建 `{表層: {讀音: 母卡id}}`(判讀腳本與兩條生卡腳本共用) |
+| `scripts/common/jp_homograph_table.py` | 新增:依 `ProjectProfile` 掃母卡建 `{表層: {讀音: 母卡id}}`(判讀腳本與兩條生卡腳本共用) |
 | `scripts/local_anki/common/deletion/profiles.py` | `ProjectProfile` 新增 `master_verb_fields`(專案差異收斂於此,不散落各腳本) |
 | `scripts/common/database/log_repository.py` | 移除 `search_keyword` 參數與 SQL 欄位 |
 | `.../JP_VerbPair/pipeline_components/dedup_manager.py` | 移除 `search_keyword` 傳遞與 `_keyword_or_none` |
 | `.../JP_VerbPair/generate_child_cards.py` | 啟動建多讀表;候選查表過濾;結尾統計;移除 `search_keyword=` |
-| `scripts/fastapi_client/judge_verb_readings.py` | 新增專案無關的獨立判讀腳本(`--project`,§3.1) |
-| `app/api/verb_readings.py` | 新增專案無關路由 `POST /verb-readings/judge`(含 `model`/`effort` 請求範圍覆寫與白名單驗證、`items` ≤ 40);`app/main.py` 掛載 |
+| `scripts/fastapi_client/JP_Common/judge_verb_readings.py` | 新增日文專用、專案無關的獨立判讀腳本(`--project`,§3.1);`JP_Common/` 為新目錄 |
+| `app/api/jp_verb_readings.py` | 新增專案無關路由 `POST /verb-readings/judge`(含 `model`/`effort` 請求範圍覆寫與白名單驗證、`items` ≤ 40);`app/main.py` 掛載 |
 | `app/infrastructure/llm/factory.py`、`claude_code_client.py` | `create_llm_client(model=None, effort=None)` 與 client 建構子接受可選覆寫(缺省沿用 settings),供請求範圍 client 使用 |
 | `app/templates/prompts/anki/JP_VerbReading_Judge.j2` | 新模板 |
 | `scripts/common/database/canonicalize_verb_lemma.py` | 移除寫 `search_keyword` 的邏輯(腳本保留為歷史工具) |
