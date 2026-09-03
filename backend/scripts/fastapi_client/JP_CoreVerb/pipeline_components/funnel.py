@@ -29,6 +29,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable
 
+from scripts.common.jp_moan_filter import REJECTION_MOAN, is_moan_sentence
 from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
     validate_candidate,
 )
@@ -48,6 +49,8 @@ FILTER_EXCLUDE_SPEAKER = "exclude_speakers"
 FILTER_NARRATION = "exclude_narration"
 FILTER_ALREADY_GENERATED = "already_generated"
 FILTER_MIN_LENGTH = "min_sentence_length"
+# 純呻吟句（與 JP_VerbPair 共用同一套判定，見 scripts/common/jp_moan_filter.py）
+FILTER_MOAN = REJECTION_MOAN
 
 _FURIGANA_PATTERN = re.compile(r"\[.*?\]")
 
@@ -94,6 +97,7 @@ class VerbSearchConfig:
         max_cards: 該動詞的生成上限（含既有已生成張數）。
         max_per_chapter: 同一章節最多取句數。
         min_sentence_length: 目標句最短長度（去標音後字元數）。
+        filter_moan: 是否過濾純呻吟句（擬態音節密度過高的 R18 台詞）。
         allow_auxiliary: 是否放行補助動詞用法（てみる／かける類）。
         priority_collocations: 優先保證 Pass 1 席位的搭配桶鍵（如「電話を」）
             ——只要有候選就必收，順序即優先序。
@@ -111,6 +115,7 @@ class VerbSearchConfig:
     max_cards: int = 15
     max_per_chapter: int = 2
     min_sentence_length: int = 8
+    filter_moan: bool = True
     allow_auxiliary: bool = False
     priority_collocations: list[str] = field(default_factory=list)
     page_size: int = 500
@@ -327,6 +332,10 @@ async def run_selection_funnel(
         sentence = strip_furigana(dialogue)
         if len(sentence) < verb_cfg.min_sentence_length:
             filter_drops[FILTER_MIN_LENGTH] += 1
+            continue
+        # 純呻吟句：動詞用法合法但教學價值近零，字面樣式擋下
+        if verb_cfg.filter_moan and is_moan_sentence(sentence):
+            filter_drops[FILTER_MOAN] += 1
             continue
         filtered.append((script_id, sentence, chapter, speaker))
 

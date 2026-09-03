@@ -226,6 +226,13 @@ class Settings(BaseSettings):
         default=2,
         description="同一章節最多取句數（避免語料集中於單一劇情段落）",
     )
+    JP_CORE_VERB_FILTER_MOAN_SENTENCES: bool = Field(
+        default=True,
+        description=(
+            "選句時過濾「純呻吟句」（與 JP_VERB_PAIR_FILTER_MOAN_SENTENCES "
+            "同一套判定，兩專案各自開關）。預設開啟"
+        ),
+    )
     JP_CORE_VERB_MIN_SENTENCE_LENGTH: int = Field(
         default=8,
         description="目標句最短長度（字元數），過短的句子缺乏文脈價值",

@@ -117,6 +117,8 @@ def _build_verb_cfg(
     verb_lemma: str,
     overrides: dict,
     game_name_jp: str,
+    *,
+    skip_narrator: bool = False,
 ) -> VerbSearchConfig:
     """由全域 settings 疊加 per-verb 覆寫組出 ``VerbSearchConfig``。
 
@@ -130,6 +132,10 @@ def _build_verb_cfg(
         overrides: ``verb_search_config.json`` 中該動詞的覆寫（可為空 dict）。
             Per-verb overrides; may be empty.
         game_name_jp: 遊戲來源名稱。Source game name.
+        skip_narrator: ``--skip-narrator`` 全域旗標；True 時強制排除旁白句，
+            覆蓋 per-verb 的 ``exclude_narration``（只能加嚴、不能放寬）。
+            Global flag forcing narration exclusion on top of the per-verb
+            setting (tightens only).
 
     Returns:
         VerbSearchConfig: 漏斗設定。The funnel configuration.
@@ -140,7 +146,7 @@ def _build_verb_cfg(
         include_keywords=list(overrides.get("include_keywords", [])),
         exclude_keywords=list(overrides.get("exclude_keywords", [])),
         exclude_speakers=list(overrides.get("exclude_speakers", [])),
-        exclude_narration=bool(overrides.get("exclude_narration", False)),
+        exclude_narration=skip_narrator or bool(overrides.get("exclude_narration", False)),
         exclude_script_ids=[int(x) for x in overrides.get("exclude_script_ids", [])],
         max_cards=int(
             overrides.get(
@@ -152,6 +158,7 @@ def _build_verb_cfg(
         min_sentence_length=int(
             getattr(settings, "JP_CORE_VERB_MIN_SENTENCE_LENGTH", 8)
         ),
+        filter_moan=bool(getattr(settings, "JP_CORE_VERB_FILTER_MOAN_SENTENCES", True)),
         allow_auxiliary=bool(overrides.get("allow_auxiliary", False)),
         priority_collocations=list(overrides.get("priority_collocations", [])),
         page_size=500,
@@ -481,10 +488,16 @@ async def main() -> None:
         action="store_true",
         help="測試執行：跑到選句為止列印四段報告，不呼叫後端 API 且不寫入資料庫",
     )
+    parser.add_argument(
+        "--skip-narrator",
+        action="store_true",
+        help="跳過所有旁白/無角色台詞（全域，覆蓋 per-verb 的 exclude_narration）",
+    )
     args = parser.parse_args()
 
     global_limit = args.limit
     dry_run = args.dry_run
+    skip_narrator = args.skip_narrator
     global_total = 0
     verb_stats: dict[str, int] = {}
 
@@ -582,7 +595,8 @@ async def main() -> None:
 
                 logger.info(f"🎯 開始處理核心動詞: '{word_display}'（lemma: '{verb_lemma}'）")
                 verb_cfg = _build_verb_cfg(
-                    word_display, verb_lemma, search_config.get(verb_lemma, {}), game_name_jp
+                    word_display, verb_lemma, search_config.get(verb_lemma, {}), game_name_jp,
+                    skip_narrator=skip_narrator,
                 )
 
                 # §6.5 增量平衡：以 Anki 實存子卡對帳後計入桶佔用

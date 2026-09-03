@@ -792,3 +792,41 @@ class TestWithRealFugashi:
         cand = result.candidate
         assert classify_collocation(cand.tokens, cand.span_token_index) == "様子を"
         assert classify_conjugation(cand.tokens, cand.span_token_index) == "た形"
+
+
+# ============================================================
+# 過濾層：純呻吟句（與 JP_VerbPair 共用同一套判定）
+# ============================================================
+
+def test_funnel_filters_moan_sentences():
+    """純呻吟句在過濾層被擋下，並計入 FILTER_MOAN。"""
+    from scripts.fastapi_client.JP_CoreVerb.pipeline_components.funnel import FILTER_MOAN
+    from scripts.common.jp_moan_filter import is_moan_sentence
+
+    moan = "んんっ、ちゅぱちゅぱ、れろれろ、あぁぁんっ、はぁはぁ、ちゅぅぅ……"
+    normal = "「ドアが開いた音がしたので、様子を見に行った」"
+    assert is_moan_sentence(moan) is True
+    assert is_moan_sentence(normal) is False
+    assert FILTER_MOAN == "呻吟句樣式"
+
+
+def test_verb_search_config_filter_moan_defaults_on():
+    """漏斗設定預設開啟呻吟過濾；可 per-run 關閉。"""
+    from scripts.fastapi_client.JP_CoreVerb.pipeline_components.funnel import VerbSearchConfig
+
+    assert VerbSearchConfig(verb_display="見[み]る", verb_lemma="見る").filter_moan is True
+    assert VerbSearchConfig(
+        verb_display="見[み]る", verb_lemma="見る", filter_moan=False
+    ).filter_moan is False
+
+
+def test_skip_narrator_forces_exclude_narration():
+    """--skip-narrator 只能加嚴：per-verb 未設也強制排除旁白。"""
+    from scripts.fastapi_client.JP_CoreVerb.generate_child_cards import _build_verb_cfg
+
+    off = _build_verb_cfg("見[み]る", "見る", {}, "ゲーム")
+    on = _build_verb_cfg("見[み]る", "見る", {}, "ゲーム", skip_narrator=True)
+    per_verb = _build_verb_cfg("見[み]る", "見る", {"exclude_narration": True}, "ゲーム")
+    assert off.exclude_narration is False
+    assert on.exclude_narration is True
+    assert per_verb.exclude_narration is True
