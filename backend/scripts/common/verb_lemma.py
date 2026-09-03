@@ -22,6 +22,13 @@ import re
 
 # ``見[み]る`` 的標音括號。Furigana brackets as in ``見[み]る``.
 _FURIGANA_PATTERN = re.compile(r"\[.*?\]")
+# Anki 標音的分隔空白：``聞[き]き 返[かえ]す`` 的空格是讓 Anki 知道下一個
+# ruby 從哪個漢字起算的必要分隔符，去掉括號後必須連空白一起清掉——日文
+# 動詞不含內部空格，殘留空白會讓 lemma 對不上 ES 與 UniDic
+# （2026-09-03 實測：95/344 個核心動詞因此完全生不出卡）。
+# The space in Anki furigana notation is a ruby separator, not part of the
+# verb; leaving it in makes the lemma unmatchable in ES and UniDic.
+_WHITESPACE = re.compile(r"\s+")
 
 
 def is_non_canonical_lemma(
@@ -54,10 +61,14 @@ def is_non_canonical_lemma(
 
 
 def canonical_verb_lemma(surface: str) -> str:
-    """把母卡表層轉成 DB 用的正規表記：去標音括號、去前後空白。
+    """把母卡表層轉成 DB 用的正規表記：去標音括號、去全部空白。
 
     Turn a master-card surface into the canonical DB spelling: strip
-    furigana brackets and surrounding whitespace.
+    furigana brackets and all whitespace.
+
+    ``見[み]る`` → ``見る``；``聞[き]き 返[かえ]す`` → ``聞き返す``（Anki 的
+    ruby 分隔空白不屬於動詞本身，見模組頂部說明）。
+    The ruby separator space is not part of the verb.
 
     Args:
         surface: 母卡欄位或 Verb_Pair_JSON 中的表層，可含標音。Surface
@@ -68,4 +79,4 @@ def canonical_verb_lemma(surface: str) -> str:
         str: 正規表記；輸入為空時回傳空字串。Canonical spelling, or ""
         for empty input.
     """
-    return _FURIGANA_PATTERN.sub("", surface or "").strip()
+    return _WHITESPACE.sub("", _FURIGANA_PATTERN.sub("", surface or ""))

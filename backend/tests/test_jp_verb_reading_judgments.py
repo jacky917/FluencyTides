@@ -292,3 +292,39 @@ class TestJudgeScript:
         judged = {100: "けがす", 101: "けがす", 102: "", 103: "よごす"}
         out = reconcile(existing, judged, entry)
         assert out == [(11, 101, "よごす", "けがす"), (12, 102, "よごす", "")]
+
+
+# ============================================================
+# Anki ruby 分隔空白（複合動詞）
+# ============================================================
+
+class TestCompoundVerbSpacing:
+    """``聞[き]き 返[かえ]す`` 的分隔空格是 Anki 的 ruby 標記需求,不屬於動詞。
+
+    留著空白會讓 lemma 對不上 ES 與 UniDic——2026-09-03 實測 95/344 個
+    核心動詞因此完全生不出卡。
+    """
+
+    def test_lemma_drops_ruby_separator_space(self):
+        from scripts.common.verb_lemma import canonical_verb_lemma
+        assert canonical_verb_lemma("聞[き]き 返[かえ]す") == "聞き返す"
+        assert canonical_verb_lemma("飛[と]び 込[こ]む") == "飛び込む"
+        assert canonical_verb_lemma("　掛[か]ける") == "掛ける"
+        assert canonical_verb_lemma("見[み]る") == "見る"      # 單一 ruby 不受影響
+        assert canonical_verb_lemma("いじめる") == "いじめる"    # 純假名不受影響
+
+    def test_reading_keeps_okurigana_between_ruby_groups(self):
+        """base 排除空白,中間送假名不可被吃掉(ききかえす,不是 きかえす)。"""
+        from scripts.common.jp_homograph_table import reading_of
+        assert reading_of("聞[き]き 返[かえ]す") == "ききかえす"
+        assert reading_of("飛[と]び 込[こ]む") == "とびこむ"
+        assert reading_of("思[おも]い 出[だ]す") == "おもいだす"
+        assert reading_of("引[ひ]っ 越[こ]す") == "ひっこす"
+        assert reading_of("埋[う]まる") == "うまる"
+        assert reading_of("ムカつく") == ""                    # 含片假名 → 取不到
+
+    def test_sentence_stripping_keeps_whitespace(self):
+        """台詞句**不可**去空白:挖空 span 在該字串上算,去空白會與原文錯位。"""
+        from scripts.fastapi_client.JP_CoreVerb.pipeline_components.funnel import strip_furigana
+        assert strip_furigana("「ハッ！？　す、すまん」") == "「ハッ！？　す、すまん」"
+        assert strip_furigana("見[み]る と 分[わ]かる") == "見る と 分かる"

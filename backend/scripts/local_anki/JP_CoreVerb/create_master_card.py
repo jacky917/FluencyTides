@@ -39,6 +39,7 @@ if str(_backend_dir) not in sys.path:
 import scripts.common.env  # noqa
 
 from app.core.config import settings
+from scripts.common.verb_lemma import canonical_verb_lemma
 from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.utils.id_generator import generate_unique_card_id
 
@@ -67,7 +68,7 @@ def strip_furigana(word: str) -> str:
         str: 去標音、去空白後的動詞乾淨形。
             Plain verb form with furigana and whitespace removed.
     """
-    return re.sub(r'\[.+?\]', '', word).replace(' ', '').replace('　', '')
+    return canonical_verb_lemma(word)
 
 
 def load_core_verbs(json_path: Path) -> list[dict]:

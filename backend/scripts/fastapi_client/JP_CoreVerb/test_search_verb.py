@@ -51,6 +51,7 @@ from app.infrastructure.database.elasticsearch_client import (
     dispose_elasticsearch_client,
     search_dialogue_by_verb,
 )
+from scripts.common.verb_lemma import canonical_verb_lemma
 from scripts.fastapi_client.JP_CoreVerb.pipeline_components.funnel import (
     VerbSearchConfig,
     format_selection_report,
@@ -99,7 +100,7 @@ def _build_cfg(verb: str) -> VerbSearchConfig:
     overrides = TEST_CONFIG["per_verb"].get(verb, {})
     return VerbSearchConfig(
         verb_display=verb,
-        verb_lemma=strip_furigana(verb),
+        verb_lemma=canonical_verb_lemma(verb),
         include_keywords=list(overrides.get("include_keywords", [])),
         exclude_keywords=list(overrides.get("exclude_keywords", [])),
         exclude_speakers=list(overrides.get("exclude_speakers", [])),

@@ -22,9 +22,16 @@ from scripts.local_anki.common.deletion.profiles import ProjectProfile
 
 # 母卡欄位裡多個動詞的分隔符（與 generate_child_cards._parse_verb_field 一致）
 _SEPARATORS = re.compile(r"[,、/・]")
-# base[ruby] → ruby（``埋[う]まる`` → ``うまる``）
-_FURIGANA_TO_KANA = re.compile(r"([^\[\]]*?)\[([^\]]*)\]")
+# base[ruby] → ruby（``埋[う]まる`` → ``うまる``）。base 排除空白，否則
+# ``聞[き]き 返[かえ]す`` 的中間送假名「き」會被當成 base 一起吃掉，讀音變成
+# ``きかえす``（正確為 ``ききかえす``）；與 JP_VerbPair 的 _parse_verb_field
+# 使用同一條規則。
+# The base group excludes whitespace so okurigana between ruby groups is
+# preserved.
+_FURIGANA_TO_KANA = re.compile(r"[^\s\[\]]+\[([^\]]+)\]")
 _HIRAGANA_ONLY = re.compile(r"^[ぁ-んー]+$")
+# Anki 的 ruby 分隔空白（見 scripts/common/verb_lemma.py 頂部說明）
+_WHITESPACE = re.compile(r"\s+")
 
 
 def reading_of(part: str) -> str:
@@ -32,9 +39,11 @@ def reading_of(part: str) -> str:
 
     Derive the hiragana reading from a furigana-annotated surface.
 
-    ``埋[う]まる`` → ``うまる``；純假名表記原樣回傳；無標音且含漢字時回空
-    字串（讀音無從得知）。
-    Returns "" when the surface has kanji but no furigana.
+    ``埋[う]まる`` → ``うまる``、``聞[き]き 返[かえ]す`` → ``ききかえす``；
+    純假名表記原樣回傳；無標音且含漢字（或含片假名）時回空字串——讀音無從
+    得知，呼叫端據此跳過。
+    Returns "" when the reading cannot be derived (kanji without furigana,
+    or katakana surfaces).
 
     Args:
         part: 母卡欄位中的單一動詞表記。One verb entry from a master field.
@@ -44,8 +53,9 @@ def reading_of(part: str) -> str:
     """
     part = part.strip()
     if "[" in part:
-        reading = _FURIGANA_TO_KANA.sub(r"\2", part).strip()
+        reading = _WHITESPACE.sub("", _FURIGANA_TO_KANA.sub(r"\1", part))
         return reading if _HIRAGANA_ONLY.match(reading) else ""
+    part = _WHITESPACE.sub("", part)
     return part if _HIRAGANA_ONLY.match(part) else ""
 
 

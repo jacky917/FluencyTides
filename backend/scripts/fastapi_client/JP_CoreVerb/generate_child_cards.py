@@ -66,6 +66,7 @@ from scripts.common.database.log_repository import (
     GeneratedLogRepository,
 )
 from scripts.common.jp_reading_filter import ReadingFilter
+from scripts.common.verb_lemma import canonical_verb_lemma
 from scripts.common.llm_label import build_llm_model_label
 from scripts.local_anki.common.deletion.profiles import get_profile
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.anki_media_uploader import (
@@ -109,7 +110,8 @@ def _load_search_config() -> dict[str, dict]:
     except Exception as e:
         logger.warning(f"⚠️ 無法讀取 {_CONFIG_PATH.name}: {e}，全部動詞使用預設搜尋設定。")
         return {}
-    return {strip_furigana(key): value for key, value in raw.items()}
+    # 設定檔鍵以母卡表記書寫（見[み]る），正規化後才對得上 verb_lemma
+    return {canonical_verb_lemma(key): value for key, value in raw.items()}
 
 
 def _build_verb_cfg(
@@ -588,7 +590,10 @@ async def main() -> None:
                     if isinstance(word_field, dict)
                     else getattr(word_field, "value", "")
                 )
-                verb_lemma = strip_furigana(word_display)
+                # 去標音並去掉 Anki 的 ruby 分隔空白（聞[き]き 返[かえ]す →
+                # 聞き返す）——留空白會讓 ES 與 UniDic 都對不上（2026-09-03
+                # 實測 95/344 個動詞因此生不出卡）。
+                verb_lemma = canonical_verb_lemma(word_display)
                 if not verb_lemma:
                     logger.warning("⚠️ 此母卡片沒有 Word 欄位內容，跳過。")
                     continue

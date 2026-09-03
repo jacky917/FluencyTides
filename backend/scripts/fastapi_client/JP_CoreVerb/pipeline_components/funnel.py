@@ -59,18 +59,26 @@ _MAX_PAGES_PER_KEYWORD = 1000
 
 
 def strip_furigana(text: str) -> str:
-    """去除 furigana 標音括號（``見[み]る`` → ``見る``）。
+    """去除 furigana 標音括號（``見[み]る`` → ``見る``）。**僅供台詞句使用。**
 
-    Strip furigana bracket annotations (``見[み]る`` → ``見る``).
+    Strip furigana bracket annotations. **For dialogue sentences only.**
 
-    與 ``core_verbs.json`` / ``verb_search_config.json`` 的鍵表記共用同一條
-    去標音規則（計劃 §3.2）。
+    刻意只去括號、保留句內空白——台詞常含全角空格（53,190 句裡 6,359 句
+    有空白），而挖空的字元 span 是在這個字串上算的，去空白會讓 span 與後端
+    收到的原文錯位。
+    Internal whitespace is deliberately preserved: cloze character spans are
+    computed on this string, and VN dialogue commonly contains full-width
+    spaces.
+
+    動詞表層要正規化請用 ``scripts.common.verb_lemma.canonical_verb_lemma``
+    ——那裡會連 Anki 的 ruby 分隔空白一起去掉（``聞[き]き 返[かえ]す`` →
+    ``聞き返す``）。For verb surfaces use ``canonical_verb_lemma`` instead.
 
     Args:
-        text: 帶標音的原始字串。Raw string with furigana annotations.
+        text: 帶標音的台詞原文。Raw dialogue with furigana annotations.
 
     Returns:
-        str: 去標音後的字串。The furigana-stripped string.
+        str: 去標音後的句子。The furigana-stripped sentence.
     """
     return _FURIGANA_PATTERN.sub("", text or "").strip()
 
