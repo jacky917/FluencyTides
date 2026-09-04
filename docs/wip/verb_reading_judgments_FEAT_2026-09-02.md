@@ -241,5 +241,40 @@ CREATE TABLE IF NOT EXISTS jp_verb_reading_judgments (
 
 1. **同表層同讀跨母卡**:14 個表層是「同表層、同讀音、不同母卡」(如 `繋がる` 兩張母卡;`穢す`(557)與 `汚[けが]す`(921)更是同詞異漢字且前者以「汚す」為關鍵字),讀音判斷對它們無效,屬母卡設計問題,需另案盤點。
 2. **孤兒紀錄**:`掛ける` 3 筆指向已刪除的母卡、`収まる` 2 筆是母卡改名前的舊紀錄。
-3. **CoreVerb 接入查表過濾**:端點、判讀腳本(`--project jp_core_verb`)、多讀表模組皆已專案無關,CoreVerb 出現同表層動詞時只需在其生成腳本加同一段查表過濾。
+3. **CoreVerb 的多讀表層來源**:CoreVerb 已接線(§5),但 344 張母卡表層零碰撞,多讀表恆為空、查表過濾恆為 no-op。2026-09-03 實測語料裡確有同表層異讀(吐く はく/つく、抱く だく/いだく、描く かく/えがく,50 張計畫卡中 25 張讀音不符),多讀表的候選來源需擴成「母卡碰撞 ∪ UniDic 多讀表層」才抓得到;擴充前以 `_TEMP_SKIP_LEMMAS` 暫時跳過這三張母卡(§8.5)。
 4. **fugashi 讀音關與判斷表的關係**:兩者並存(前者機械、後者語境)。若日後判斷表覆蓋率高,可評估對多讀表層自動跳過 fugashi 讀音關;本計畫不動。
+
+## 8. 實作後續增補(2026-09-03 ~ 09-04,計畫定案後追加,列於此以免文件與程式脫節)
+
+### 8.1 純呻吟句過濾抽為共用、CoreVerb 支援 `--skip-narrator`
+- `scripts/common/jp_moan_filter.py`:`is_moan_sentence()` 從 JP_VerbPair 抽出,兩條管線共用(雙條件:提示詞 + 密度)。
+- CoreVerb 漏斗新增第 7 道過濾 `FILTER_MOAN`(`JP_CORE_VERB_FILTER_MOAN_SENTENCES`,預設開);`--skip-narrator` 全域旗標只能加嚴 per-verb 的 `exclude_narration`。
+- 副作用要知道:視覺描寫動詞(見上げる、見回す、眺める)的語料幾乎全在旁白,開旗標後這些動詞剩極少候選——2026-09-04 的 500 張中 32 個動詞低於計畫張數即因此。
+
+### 8.2 去標音一併移除 Anki 的 ruby 分隔空白
+- `canonical_verb_lemma()` 同時去括號與**全部空白**——`聞[き]き 返[かえ]す` 的空白是 Anki ruby 分隔符,留著會讓 ES 與 UniDic 都對不上(95/344 個核心動詞因此生不出卡)。
+- 反面:`funnel.strip_furigana()` **不可**去空白——6,359/53,190 句台詞本身含空白,挖空區間在該字串上計算。
+- `jp_homograph_table.reading_of()` 的正則改為 base 排除空白,否則中間送假名被吃掉(ききかえす → きかえす)。
+
+### 8.3 複合動詞以 lemma 序列視窗比對
+- 母卡表層 ≠ UniDic lemma 的 16 個動詞(走り出す=走る＋出す、恥ずかしがる=恥ずかしい＋がる、気に入る=気＋に＋入る、知らせる=知る＋せる)原本全數阻塞。
+- `derive_target_lemmas()` 對目標本身分詞得到序列,`match_lemma_window()` 在句中比對連續視窗:**非末位比表層全等**(前項不活用;只比 lemma 會把「もう必要なくなった」誤收為 無くなる),末位比 lemma + 詞性。
+- 單 token 路徑永遠先試(無くなる 孤立時兩 token、句中一 token);`covered_by_compound()` 讓 気に入る 擁有 入る 的命中,阻止 入る 搶走「気に入った」。
+- 關鍵陷阱:fugashi 節點指向 tagger 內部 lattice,**再次呼叫 tagger 會讓先前的 token 失效**——序列導出必須在句子分詞之前完成(否則 6 個動詞誤判)。
+- 結果:16/16 通過驗證,13 個產出卡片;CoreVerb dry-run 3,336 → 4,050(空白修復後 3,941 → 視窗比對後 4,050)。
+
+### 8.4 分詞詞典明確指定(2026-09-04 事故)
+- 事故:`fugashi.Tagger()` 不帶參數時由 fugashi 靜默在完整版 `unidic` 與 `unidic-lite` 之間自選。容器內只有 lite,開發機是完整版;容器產出的 490 張核心動詞子卡在 lite 下全通過、在完整版下 6 張不成立(分歧全在連用形名詞化:`先輩の答え` lite 判動詞、完整版判名詞,生出一張句中沒有目標動詞的卡),且所有 dry-run 基線與正式跑的環境對不上。
+- 修法:`app/infrastructure/utils/jp_tokenizer.py` 的 `create_tagger()` 以 `-d` 明確指定(與 fugashi 內部寫法 `-d "{}"` 相同;無引號會初始化失敗),解析順序:完整版(以 `sys.dic` 存在判定,不信 import)→ lite(記 **WARNING**)→ 兩者皆無則 `RuntimeError`。5 個建立點全改用它。
+- 揭露:`GET /api/v1/jp/tokenizer/dictionary`(後端行程用哪本);`scripts/fastapi_client/query_jp_tokenizer.py`(後端 + 本機並排對帳,`--local-only` 供容器內自查)。**生卡由本機分詞決定**,端點只回答後端那一本。
+- 基線:釘死後 CoreVerb 3,502(= 3,990 − 490 張已生成佔用 + 2 席重分配)、VerbPair 1,438 不變;341 個動詞中「選中 + 佔用」前後一致者 339。
+- 待辦:容器內 `python -m unidic download` 後重建映像;那批的 6 張問題卡(log 3440 明確錯卡;3547/3758/3683 為 〜方 名詞化與 願わくは,待決)與朗讀課文兩張(log 3358、3349)待刪。
+
+### 8.5 臨時跳過清單 `_TEMP_SKIP_LEMMAS`
+- `JP_CoreVerb/generate_child_cards.py` 頂部 `frozenset({"吐く", "抱く", "描く"})`,母卡迴圈內攔下並記 WARNING。原因與數字見 §7.3;擴充多讀表來源後刪除。
+
+### 8.6 帳號方案探測(順手)
+- `runtime_config_service._probe_account()`:`claude auth status --json`,只取非識別欄位。實測:落盤憑證模式回 8 欄(含 `subscriptionType: max`),注入 token 模式只回 4 欄、profile 鍵不存在——容器部署拿不到方案,`query_backend_model.py` 會註明原因。不以預設環境重探(落盤憑證可能是另一個帳號)。
+
+### 8.7 測試
+- 全套件 308 passed(含 `tests/test_jp_tokenizer_dictionary.py` 5 條、`test_runtime_config_read.py` 新增 3 條、`JP_CoreVerb/tests/test_pipeline_units.py` 視窗比對與 `select_diverse` 現行設計)。

@@ -2,7 +2,7 @@
 
 Runtime configuration API (read-only slice).
 
-對應計畫 docs/wip/runtime_config_service_FEAT_2026-08-29.md §3.5:
+對應計畫 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5:
 - ``GET  /api/v1/config``        全部白名單設定 + runtime 對帳區塊
 - ``GET  /api/v1/config/{key}``  單一設定(白名單外一律 404,防鍵名探測)
 寫入側 ``PUT /config/{key}`` 依計畫後續補上。

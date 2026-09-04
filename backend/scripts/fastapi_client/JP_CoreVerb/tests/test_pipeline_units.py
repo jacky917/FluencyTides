@@ -1,4 +1,4 @@
-"""JP_CoreVerb 選句管線的參數化單元測試（計劃 §6.1 / §6.3 / §6.4）。
+"""JP_CoreVerb 選句管線的參數化單元測試（驗證器、分桶、配額分配）。
 
 Parameterized unit tests for the JP_CoreVerb selection pipeline: a fake
 token layer runnable anywhere, plus a real-fugashi regression layer.
@@ -111,7 +111,7 @@ def AUX(surface, lemma):
 
 
 # =============================================================================
-# 驗證器（§6.1）——計劃指名的陷阱句，全部以 UniDic 短単位風格假 token 鋪設
+# 驗證器——設計時指名的陷阱句，全部以 UniDic 短単位風格假 token 鋪設
 # =============================================================================
 
 
@@ -165,7 +165,7 @@ def AUX(surface, lemma):
 def test_validate_candidate_trap_sentences(
     sentence, tokens, expected_accepted, expected_reason
 ):
-    """計劃 §6.1 指名的陷阱句逐一斷言。Assert each trap sentence from §6.1."""
+    """設計時指名的陷阱句逐一斷言。Assert each designated trap sentence."""
     tagger = make_tagger({sentence: tokens})
     result = validate_candidate(sentence, "見る", allow_auxiliary=False, tagger=tagger)
     assert result.accepted is expected_accepted
@@ -408,7 +408,7 @@ def test_to_katakana_converts_hiragana_only():
 
 
 # =============================================================================
-# 搭配桶（§6.3 維度 A）
+# 搭配桶（維度 A，classify_collocation）
 # =============================================================================
 
 
@@ -437,7 +437,7 @@ def test_classify_collocation(tokens, span_index, expected):
 
 
 # =============================================================================
-# 活用形桶（§6.3 維度 B，十四桶、順序敏感）
+# 活用形桶（維度 B，classify_conjugation：十四桶、順序敏感）
 # =============================================================================
 
 
@@ -493,7 +493,7 @@ def test_classify_conjugation_surface_fallback_long_unit():
 
 
 # =============================================================================
-# 配額分配（§6.4-6.5）
+# 配額分配（select_diverse：兩段式 + 增量平衡）
 # =============================================================================
 
 
@@ -658,7 +658,7 @@ def test_select_diverse_respects_max_per_chapter():
 
 
 def test_select_diverse_occupied_buckets_skip_and_count():
-    """§6.5 增量平衡：已生成佔用的搭配桶視為已保底，章節計數一體檢查。
+    """增量平衡：已生成佔用的搭配桶視為已保底，章節計數一體檢查。
     Occupied buckets count as covered; chapter counts are combined."""
     candidates = [
         _cand(1, "様子を", "辞書形/連体", "ch1"),
@@ -803,7 +803,7 @@ class TestWithRealFugashi:
         ],
     )
     def test_real_segmentation_traps(self, tagger, sentence, expected_accepted):
-        """計劃 §6.1 陷阱句在真實分詞下的攔截行為。
+        """設計時指名的陷阱句在真實分詞下的攔截行為。
         Trap-sentence interception under real segmentation."""
         result = validate_candidate(sentence, "見る", allow_auxiliary=False, tagger=tagger)
         assert result.accepted is expected_accepted

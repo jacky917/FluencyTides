@@ -1,6 +1,6 @@
-"""兩維度分桶與多樣性配額分配器（計劃 §6.3-6.5）。
+"""兩維度分桶與多樣性配額分配器。
 
-Two-dimension bucketing and diversity quota allocator (plan §6.3-6.5):
+Two-dimension bucketing and diversity quota allocator:
 classifies candidates by collocation and conjugation, then allocates the
 small quota to maximize coverage of the verb's usage space.
 
@@ -9,12 +9,12 @@ small quota to maximize coverage of the verb's usage space.
 
 - 維度 A（搭配桶，語意代理）：``classify_collocation``——取目標 token 前方
   token 組桶鍵（名詞＋助詞 / 副詞・形容詞修飾 / （無助詞））。
-- 維度 B（活用形桶）：``classify_conjugation``——計劃 §6.3 的 14 桶分類表，
+- 維度 B（活用形桶）：``classify_conjugation``——``ALL_CONJUGATION_BUCKETS`` 的 14 桶，
   順序敏感、先長後短。
 - 配額分配：``select_diverse``——優先搭配席位（per-verb
   ``priority_collocations`` 必收）＋ Pass 1 搭配保底（≥2 次的慣用桶
   zigzag 取桶，一次性桶降級殿後）＋ Pass 2 活用形補洞，
-  ``max_per_chapter`` 硬約束全程生效，並支援 §6.5 增量平衡
+  ``max_per_chapter`` 硬約束全程生效，並支援增量平衡
   （已生成句的桶佔用注入）。
 
 全部為純函數：不觸網、不讀設定、不依賴 fugashi（token 以鴨子型別存取，
@@ -52,7 +52,7 @@ CONJ_PURPOSE_NI = "目的の「に」"
 CONJ_DICTIONARY = "辞書形/連体"
 CONJ_OTHER = "その他"
 
-#: 全部活用形桶（計劃 §6.3 分類表順序），供報告的未覆蓋清單使用。
+#: 全部活用形桶（``classify_conjugation`` 的判定順序：先長後短），供報告的未覆蓋清單使用。
 ALL_CONJUGATION_BUCKETS = [
     CONJ_CAUSATIVE,
     CONJ_PASSIVE_POTENTIAL,
@@ -155,10 +155,9 @@ class SelectedItem:
 
 @dataclass
 class BucketOccupancy:
-    """增量平衡（§6.5）的已生成佔用統計。
+    """增量平衡的已生成佔用統計。
 
-    Bucket occupancy of already-generated cards for incremental balancing
-    (§6.5).
+    Bucket occupancy of already-generated cards for incremental balancing.
 
     腳本重跑時，先把該動詞已生成句同樣分桶後灌進此結構，
     ``select_diverse`` 會把它計入桶佔用——後續生成自動優先填補空桶。
@@ -212,7 +211,7 @@ def classify_collocation(
     Derive the collocation bucket key (dimension A, a semantic proxy) from
     the tokens preceding the target token.
 
-    規則（計劃 §6.3）：
+    規則：
         1. 前方是「助詞」且再前方是「名詞／代名詞」→ 桶鍵＝「名詞＋助詞」
            表層連接（如「様子を」「大目に」「〜から」前有名詞時的「Xから」）。
         2. 前方是「副詞」或「形容詞」（連用修飾，如「甘く」見る）→ 桶鍵＝
@@ -259,10 +258,10 @@ def classify_collocation(
 
 
 def classify_conjugation(tokens: list, span_token_index: int) -> str:
-    """判定目標動詞在句中的活用形桶（維度 B，計劃 §6.3 十四桶）。
+    """判定目標動詞在句中的活用形桶（維度 B，``ALL_CONJUGATION_BUCKETS`` 十四桶）。
 
     Classify the target verb's conjugation bucket (dimension B, the 14
-    buckets of plan §6.3), order-sensitive with longest-match-first.
+    buckets in ``ALL_CONJUGATION_BUCKETS``), order-sensitive with longest-match-first.
 
     主路徑假設 UniDic 短単位切分（助動詞／接続助詞為獨立 token），
     依「順序敏感、先長後短」原則檢查目標 token 的後續 token：
@@ -353,7 +352,7 @@ def _zigzag_order(buckets: list[str]) -> list[str]:
     Interleave head and tail of a size-descending bucket list (zigzag).
 
     最大→最小→次大→次小…輪流，讓高頻搭配與低頻高價值慣用句各佔一半，
-    避免降冪取桶把珍稀慣用句全數擠掉（計劃 §6.4 Pass 1）。
+    避免降冪取桶把珍稀慣用句全數擠掉（``select_diverse`` 的 Pass 1 用）。
 
     Args:
         buckets: 已按大小降冪排序的桶鍵清單。Bucket keys sorted descending
@@ -383,9 +382,9 @@ def select_diverse(
     occupied_buckets: BucketOccupancy | None = None,
     priority_collocations: list[str] | None = None,
 ) -> SelectionResult:
-    """兩段式多樣性配額分配（計劃 §6.4-6.5）。
+    """兩段式多樣性配額分配。
 
-    Two-pass diversity quota allocation (plan §6.4-6.5): priority seats,
+    Two-pass diversity quota allocation: priority seats,
     conjugation/collocation coverage passes, then hole-filling, with the
     per-chapter hard constraint enforced throughout.
 
@@ -417,7 +416,7 @@ def select_diverse(
             available (caller already subtracted generated count).
         max_per_chapter: 同一章節最多取句數（含已生成佔用）。Per-chapter cap
             including occupied counts.
-        occupied_buckets: §6.5 增量平衡的已生成佔用；``None`` 視為零佔用。
+        occupied_buckets: 增量平衡的已生成佔用；``None`` 視為零佔用。
             Occupancy from prior runs; ``None`` means empty.
         priority_collocations: 優先保證席位的搭配桶鍵（順序即優先序）；
             ``None`` 或空清單時跳過前置階段。Collocation buckets guaranteed

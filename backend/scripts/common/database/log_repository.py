@@ -100,7 +100,7 @@ class GeneratedLogRepository:
         Read-only list of every script_id that was successfully generated
         and not soft-deleted for the given verb.
 
-        供 JP_CoreVerb 的增量平衡（docs/14_Core_Verb_Card_Plan.md §6.5）使用：
+        供 JP_CoreVerb 的增量平衡（``funnel._compute_occupancy``）使用：
         腳本重跑時以此清單反查 MySQL 原句並分桶，把已生成句計入桶佔用，
         讓後續生成自動優先填補空桶。
 

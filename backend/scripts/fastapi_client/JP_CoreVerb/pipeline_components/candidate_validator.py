@@ -1,6 +1,6 @@
-"""候選句 token 級驗證器（計劃 §6.1）。
+"""候選句 token 級驗證器。
 
-Token-level candidate validator (plan §6.1): uses an injected fugashi
+Token-level candidate validator: uses an injected fugashi
 tagger to verify that a sentence truly contains the target verb as an
 independent lexeme, rejecting compound-verb prefixes and auxiliary usages.
 
@@ -13,10 +13,10 @@ independent lexeme, rejecting compound-verb prefixes and auxiliary usages.
    「て／で」即拒絕（per-verb 可以 ``allow_auxiliary=True`` 放行）。
 
 設計要點：
-    - tagger 由呼叫端注入（``fugashi.Tagger()`` 或測試用假 tagger），
+    - tagger 由呼叫端注入（``create_tagger()`` 或測試用假 tagger），
       本模組不 import fugashi——單元測試可用假 token 物件完整覆蓋。
     - 驗證通過的分詞結果（tokens 與 span_token_index）隨
-      ``VerifiedCandidate`` 傳遞下游，供 §6.3 分桶直接復用，零重複分詞成本。
+      ``VerifiedCandidate`` 傳遞下游，供 ``diversity_selector`` 分桶直接復用，零重複分詞成本。
     - 拒絕時回傳帶 ``reason`` 的 ``ValidationResult``，漏斗層據此統計
       拒絕原因分佈（複合動詞前項 / 補助動詞 / lemma 不符）。
 
@@ -31,7 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
-# 拒絕原因常數（漏斗層統計用，字面對齊計劃 §6.7 報告項）
+# 拒絕原因常數（漏斗層統計用；字面即 ``format_selection_report`` 報告顯示的項名）
 REJECTION_COMPOUND_VERB = "複合動詞前項"
 REJECTION_COMPOUND_SUFFIX = "複合動詞後項"
 REJECTION_AUXILIARY = "補助動詞"
@@ -367,14 +367,13 @@ class VerifiedCandidate:
         sentence: 候選句原文（已去除注音標記的乾淨字串）。
         span: 目標動詞 token 在 ``sentence`` 中的字元區間 ``(start, end)``，
             隨 payload 傳給後端做挖空交叉驗證（``target_verb_span``）。
-        tokens: 整句的分詞結果，供 §6.3 分桶復用。
+        tokens: 整句的分詞結果，供 ``diversity_selector`` 分桶復用。
         span_token_index: 目標動詞**最後一個** token 在 ``tokens`` 中的索引
             （活用發生處；單 token 動詞即該 token 本身）。分桶的維度 B
             以此為基準。
         span_token_start: 目標動詞**第一個** token 的索引——複合動詞
             （走り＋出す）的搭配詞在它的前一個 token，維度 A 以此為基準；
             單 token 動詞時等於 ``span_token_index``。
-        rejection_reason: 驗證通過時恆為 ``None``（保留欄位對齊計劃描述）。
     """
 
     sentence: str
@@ -382,7 +381,6 @@ class VerifiedCandidate:
     tokens: list = field(default_factory=list)
     span_token_index: int = -1
     span_token_start: int = -1
-    rejection_reason: str | None = None
 
 
 @dataclass
@@ -442,10 +440,10 @@ def validate_candidate(
     allow_compound_suffix: bool = False,
     compound_seqs: tuple[tuple[tuple[str, str, str], ...], ...] = (),
 ) -> ValidationResult:
-    """驗證候選句是否包含目標動詞的獨立用法（計劃 §6.1 規則 + VerbPair 擴充）。
+    """驗證候選句是否包含目標動詞的獨立用法（基本規則 + VerbPair 擴充的讀音／後項規則）。
 
     Validate that the sentence contains an independent usage of the target
-    verb (plan §6.1 rules plus the VerbPair extensions).
+    verb (base rules plus the VerbPair extensions).
 
     通過條件：句中存在一個 token 同時滿足——
         1. 詞性大類為「動詞」且 lemma 等於目標動詞（已去標音的字典形）。
@@ -469,7 +467,7 @@ def validate_candidate(
         allow_auxiliary: 是否放行補助動詞用法（per-verb 設定）。Whether to
             allow auxiliary-verb usage (per-verb setting).
         tagger: 注入的分詞器——以句子呼叫後回傳 token 可迭代物
-            （``fugashi.Tagger()`` 實例或測試假 tagger）。Injected tokenizer
+            （``create_tagger()`` 實例或測試假 tagger）。Injected tokenizer
             returning an iterable of tokens when called with a sentence.
         expected_reading: 期待的動詞讀音（平/片假名皆可，如「うまる」）；
             ``None`` 或空字串時不驗讀音——CoreVerb 既有呼叫端不傳，

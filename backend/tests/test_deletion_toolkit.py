@@ -2,7 +2,7 @@
 
 Unit tests for the child-card deletion toolkit (common/deletion).
 
-重點覆蓋（docs/wip/child_card_deletion_toolkit_FEAT_2026-08-27.md §4 測試）：
+重點覆蓋（docs/archive/child_card_deletion_toolkit_FEAT_2026-08-27.md §4 測試）：
 1. log_repository 的 project 驗證。
 2. profiles 的 verb_lemma 抽取掛鉤。
 3. media_scan 的引用蒐集與跨專案聯集保護。

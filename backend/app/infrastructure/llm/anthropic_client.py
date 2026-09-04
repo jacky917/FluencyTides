@@ -3,7 +3,7 @@ Anthropic 官方 API 結構化輸出客戶端模組（**佔位 STUB，尚未實�
 
 本模組為未來「直接呼叫 Anthropic 官方 API」預留的擴充點，目前僅保留命名與
 路由，任何實例化都會拋出 ``LLMServiceError``。實作前請先閱讀
-``docs/wip/claude_code_llm_provider_FEAT_2026-08-27.md`` §D11。
+``docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md`` §D11。
 
 三個 provider 的定位區隔：
 
@@ -127,7 +127,7 @@ _NOT_IMPLEMENTED_MESSAGE = (
     "LLM_PROVIDER='anthropic'（Anthropic 官方 API）尚未實作，目前僅為佔位。"
     "請改用 'claude-code'（本機訂閱 CLI）或既有的 OpenAI 相容 provider；"
     "若要實作，請見 app/infrastructure/llm/anthropic_client.py 的模組 docstring "
-    "與 docs/wip/claude_code_llm_provider_FEAT_2026-08-27.md §D11。"
+    "與 docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md §D11。"
 )
 
 

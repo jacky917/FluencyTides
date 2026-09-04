@@ -6,7 +6,7 @@ Read/write helpers for the card JSON identity pair (``cardId`` +
 身分是卡片在 JSON 與 Anki 之間的唯一對應依據。它**成對存在**——兩個欄位
 必須同時具備才算有效，缺一即視為損毀。存在判斷完全不看 ``Prompt``，因此
 編輯卡片內容不會再讓匯入腳本誤判成新卡（見
-``docs/wip/card_identity_writeback_FEAT_2026-08-11.md`` §3.2）。
+``docs/archive/card_identity_writeback_FEAT_2026-08-11.md`` §3.2）。
 
 The identity is the only link between a card in JSON and a note in Anki.
 It is a **pair** — both fields must be present to count as valid, and a

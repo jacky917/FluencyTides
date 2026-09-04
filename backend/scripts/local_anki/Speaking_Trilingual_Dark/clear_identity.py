@@ -3,7 +3,7 @@
 Clear the identity fields (``cardId`` / ``noteId``) from card JSON files.
 
 ``import_cards.py`` 在身分「有但與 Anki 對不上」時會停手並交還給人處理
-（見 ``docs/wip/card_identity_writeback_FEAT_2026-08-11.md`` §3.2）。
+（見 ``docs/archive/card_identity_writeback_FEAT_2026-08-11.md`` §3.2）。
 本工具是那個情況下**唯一**的復原手段：清掉身分後該卡回到「無身分」狀態，
 重跑匯入會建一張新卡，或加 ``--adopt-by-prompt`` 重新接管既有卡。
 

@@ -8,7 +8,7 @@
 | **範圍** | `backend/scripts/local_anki/`(JP_VerbPair / JP_CoreVerb / 新增 common/deletion)、`backend/scripts/common/database/`(log_repository、init_db)、MySQL `generated_sentences_log` 資料表結構 |
 | **不動** | 生成管線的選句/LLM 邏輯(`fastapi_client/` 兩專案的 generate_child_cards 僅在 DB 介面簽名變更處跟著改參數,不改行為)、Anki 模板與模型定義、`app/` 後端 API(handlers 不寫 dedup log,不受影響)、Speaking_Coach / Speaking_Trilingual 系列腳本 |
 | **PR / 進度** | [#11](https://github.com/jacky917/FluencyTides/pull/11)(已合併 2026-08-27) |
-| **關聯文件** | `docs/14_Core_Verb_Card_Plan.md`(CoreVerb 生成設計)、`backend/scripts/local_anki/JP_VerbPair/` 現有三腳本 |
+| **關聯文件** | `docs/14_Core_Verb_Card_Plan.md`（未曾進版；設計依據現寫在 `backend/scripts/fastapi_client/JP_CoreVerb/pipeline_components/` 各模組 docstring）(CoreVerb 生成設計)、`backend/scripts/local_anki/JP_VerbPair/` 現有三腳本 |
 
 ---
 

@@ -11,7 +11,7 @@ Claude Code CLI (headless) 結構化輸出客戶端模組。
     接入多用戶生產路徑。
 
 關鍵設計決策（皆有實測依據，見
-``docs/wip/claude_cli_env_setup_FEAT_2026-08-27.md``）：
+``docs/archive/claude_cli_env_setup_FEAT_2026-08-27.md``）：
 - 使用 ``asyncio.to_thread`` + 同步 ``subprocess.run``，而非
   ``asyncio.create_subprocess_exec``：後者在 Windows 的
   ``WindowsSelectorEventLoopPolicy``（本專案多數腳本採用）下會拋
@@ -23,7 +23,7 @@ Claude Code CLI (headless) 結構化輸出客戶端模組。
   落盤憑證，殘留的壞值會蓋掉有效登入造成 401。例外：headless 環境
   （容器/伺服器）設定 ``LLM_CLAUDE_CODE_OAUTH_TOKEN`` 後改為注入該值
   ——那裡沒有落盤憑證，env token 是唯一認證途徑
-  （docs/wip/claude_cli_in_container_FEAT_2026-08-29.md §D2）。
+  （docs/archive/claude_cli_in_container_FEAT_2026-08-29.md §D2）。
 - ``--effort`` 非法值時 CLI 會「靜默回退」到預設力度而不報錯，故必須在
   Python 端以白名單驗證；驗證只在本類別的建構子內進行，不做成全域
   設定驗證，以免影響 API 模式的啟動。

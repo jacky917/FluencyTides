@@ -8,7 +8,7 @@
 | **不動** | `app/core/dynamic_config.py`(白名單解析,原樣共用)、`MODIFY_*` 的 .env 慣例與語意、TG 的 UI/權限模型(`TG_ADMIN_CHAT_ID`)、設定的「記憶體級、重啟還原」語意 |
 | **狀態** | ✅ 本次範圍完成(2026-08-31):唯讀切片(GET 兩端點 + runtime 對帳 + claude-code 診斷/認證探測)+ 查詢腳本 + 腳本取回應值根治。寫入側列為遺留另案(§8) |
 | **PR / 進度** | [#14](https://github.com/jacky917/FluencyTides/pull/14)(與容器 claude-code 支援同 PR,計畫書分立) |
-| **關聯文件** | `docs/wip/claude_cli_in_container_FEAT_2026-08-29.md`(同 PR 的姊妹計畫)、`docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md` |
+| **關聯文件** | `docs/archive/claude_cli_in_container_FEAT_2026-08-29.md`(同 PR 的姊妹計畫)、`docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md` |
 
 ---
 

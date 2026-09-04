@@ -5,7 +5,7 @@ whole process is idempotent (safe to rerun): existing note_ids are
 verified via a fast path, missing cards are deduplicated by
 furigana-stripped verb form, and new note_ids are written back.
 
-行為（對應 docs/14_Core_Verb_Card_Plan.md §7.4）：
+行為：
 
 1. 讀取動詞清單 `core_verbs.json`（``--file`` 可覆寫，預設同目錄）。
 2. 快速跳過（note_id 快路徑）：條目已有 ``note_id`` → 以 ``notesInfo``

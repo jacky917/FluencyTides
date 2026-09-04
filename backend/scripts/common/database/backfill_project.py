@@ -3,7 +3,7 @@
 Backfill script that assigns existing generated_sentences_log rows to
 their owning project (jp_verb_pair / jp_core_verb).
 
-歸屬策略（docs/wip/child_card_deletion_toolkit_FEAT_2026-08-27.md §D1）：
+歸屬策略（docs/archive/child_card_deletion_toolkit_FEAT_2026-08-27.md §D1）：
 1. 以 master_note_id 反查 Anki——屬於 JP_VerbPair_Master_Dark 的歸
    jp_verb_pair，屬於 JP_CoreVerb_Master_Dark 的歸 jp_core_verb。
 2. 母卡已不存在（斷鏈）的紀錄無從反查，維持預設 jp_verb_pair
