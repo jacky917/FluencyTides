@@ -1,0 +1,38 @@
+# 任務：判定同漢字表記、多種讀音的動詞在具體台詞中的實際讀音
+
+你是精通日語語音與語用的專家。日文裡有些動詞漢字寫法相同、讀音不同、意思也不同（例：「汚す」讀「よごす」是弄髒實物，讀「けがす」是玷汙名譽或貞潔；「開く」讀「あく」是門窗自然打開，讀「ひらく」是展開、開設、打開心扉）。母卡片依讀音區分，因此每句台詞必須歸到正確的讀音。
+
+## 判定原則
+
+1. **只依語境與語意判斷**：看該動詞的受詞、主語、前後文事件，決定哪個讀音的詞義才成立。不要依據「哪個讀音比較常見」猜測。
+2. **候選之外的讀音不採用**：回答必須是該句給定的候選之一。
+3. **無法確定就回空字串**：若上下文不足以區分（例如受詞被省略、前後文沒有線索、兩種讀音的詞義在此都說得通），`reading` 填 `""`。**寧可空白，不要硬猜**——錯誤歸屬的代價遠高於缺一句。
+4. 每句獨立判斷；同一批內的句子彼此無關（它們可能來自不同場景）。
+
+## 待判台詞（共 {{ items | length }} 句）
+
+{% for item in items %}
+### 句 {{ loop.index }}　script_id: {{ item.script_id }}　表層「{{ item.surface }}」　候選讀音：{{ item.candidates | join(" / ") }}
+{% if item.context_before %}
+前文：
+{% for line in item.context_before %}
+　{{ line }}
+{% endfor %}
+{% endif %}
+【目標句】{{ item.line }}
+{% if item.context_after %}
+後文：
+{% for line in item.context_after %}
+　{{ line }}
+{% endfor %}
+{% endif %}
+
+{% endfor %}
+
+## 輸出格式
+
+嚴格輸出 JSON，`results` 陣列每句一筆、順序與上面一致、`script_id` 原樣回填：
+
+```json
+{"results": [{"script_id": 123, "reading": "よごす"}, {"script_id": 456, "reading": ""}]}
+```

@@ -14,6 +14,10 @@ log_repository and context_builder behind a unified prepare/record API.
    「同一句台詞、不同 script_id」的分身。
 Two dedup layers: the key layer (canonical verb lemma) and the text layer
 (normalized dialogue vs. every logged line of the verb).
+
+同表層多讀的讀音歸屬**不在此處**處理：那是選句階段查
+``jp_verb_reading_judgments`` 的事（生卡腳本），被擋的句子不會走到這裡、
+也不會留下任何紀錄（docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.3）。
 """
 
 import logging
@@ -166,7 +170,6 @@ class DedupManager:
 
     async def record_failure(
         self, script_id: int, verb_lemma: str, chapter: str, master_note_id: int, llm_model: str,
-        *, search_keyword: str | None = None,
     ) -> None:
         """紀錄生成失敗。
 
@@ -178,13 +181,10 @@ class DedupManager:
             chapter: 章節。Chapter.
             master_note_id: 母卡 note id。Master note id.
             llm_model: 使用的 LLM 模型標籤。LLM model label used.
-            search_keyword: 實際命中的搜尋關鍵字（與 verb_lemma 相同時
-                自動存 NULL）。Matched search keyword; stored as NULL when
-                identical to verb_lemma.
         """
         await self.repo.increment_failure_count(
             self.session, script_id, verb_lemma, self.source_game, chapter, master_note_id, llm_model,
-            project=self.project, search_keyword=_keyword_or_none(search_keyword, verb_lemma),
+            project=self.project,
         )
         logger.warning(f"⚠️ 紀錄一次生成失敗: script_id={script_id}, verb_lemma='{verb_lemma}'")
 
@@ -198,7 +198,6 @@ class DedupManager:
         cloze_note_id: int | None = None,
         *,
         llm_model: str,
-        search_keyword: str | None = None,
     ) -> None:
         """生成成功後，寫入 MySQL 紀錄（或恢復軟刪除狀態）。
 
@@ -213,9 +212,6 @@ class DedupManager:
             context_note_id: Context 子卡 note id。Context child note id.
             cloze_note_id: Cloze 子卡 note id。Cloze child note id.
             llm_model: 使用的 LLM 模型標籤。LLM model label used.
-            search_keyword: 實際命中的搜尋關鍵字（與 verb_lemma 相同時
-                自動存 NULL）。Matched search keyword; NULL when identical
-                to verb_lemma.
         """
         record_data = {
             "script_id": script_id,
@@ -226,18 +222,6 @@ class DedupManager:
             "context_note_id": context_note_id,
             "cloze_note_id": cloze_note_id,
             "llm_model": llm_model,
-            "search_keyword": _keyword_or_none(search_keyword, verb_lemma),
         }
         await self.repo.create_or_restore_record(self.session, record_data, project=self.project)
         logger.info(f"✅ 成功寫入去重紀錄: script_id={script_id}, verb_lemma='{verb_lemma}'")
-
-
-def _keyword_or_none(search_keyword: str | None, verb_lemma: str) -> str | None:
-    """關鍵字與正規表記相同時回 None（欄位只記「有差異」的命中）。
-
-    Return None when the keyword equals the lemma; the column only records
-    hits that differ from the canonical spelling.
-    """
-    if not search_keyword or search_keyword == verb_lemma:
-        return None
-    return search_keyword

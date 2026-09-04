@@ -1,12 +1,15 @@
-"""存量修復：把 generated_sentences_log.verb_lemma 收斂為正規表記。
+"""存量修復（歷史工具）：把 generated_sentences_log.verb_lemma 收斂為正規表記。
 
-Data repair: canonicalize generated_sentences_log.verb_lemma.
+Data repair (historical tool): canonicalize generated_sentences_log.verb_lemma.
+
+**已於 2026-09-03 執行完畢並逐筆驗證**（docs/archive/verb_lemma_backfill_FIX_2026-09-02.md）。
+保留本腳本供日後再次出現非正規拼寫時重跑；``load_keyword_map`` 與
+``canonical_for`` 也被生成腳本的啟動防線複用。
 
 背景（docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md §2）：生成管線曾把
 「命中的搜尋關鍵字」（假名擴展 まとめる、異體 捲る/まくる）以及刪卡工具
 鏈曾把「帶標音表層」（纏[まと]める）寫進 ``verb_lemma``，同一句因此被同
-一動詞側重複生成。本腳本把每筆紀錄改成母卡標準表層去標音，原值移到
-``search_keyword`` 保留追溯。
+一動詞側重複生成。本腳本把每筆紀錄改成母卡標準表層去標音。
 
 規則：
 1. canonical = 去標音；若值落在該母卡 ``extra_search_keywords.json`` 的
@@ -26,8 +29,6 @@ Usage:
 
     # 實際寫入
     python canonicalize_verb_lemma.py --execute
-
-前置：先跑 ``init_db.py`` 補上 ``search_keyword`` 欄位。
 """
 
 import argparse
@@ -105,7 +106,6 @@ class Row:
     has_card: bool
     delete_count: int
     failure_count: int
-    search_keyword: str | None
 
     @property
     def is_live(self) -> bool:
@@ -117,10 +117,10 @@ class Row:
 class Plan:
     """修復計畫。The repair plan."""
 
-    # (id, new_lemma, new_search_keyword)
-    updates: list[tuple[int, str, str | None]] = field(default_factory=list)
-    # (keep_id, new_lemma, new_search_keyword, delete_count, failure_count, [deleted ids])
-    merges: list[tuple[int, str, str | None, int, int, list[int]]] = field(default_factory=list)
+    # (id, new_lemma)
+    updates: list[tuple[int, str]] = field(default_factory=list)
+    # (keep_id, new_lemma, delete_count, failure_count, [deleted ids])
+    merges: list[tuple[int, str, int, int, list[int]]] = field(default_factory=list)
     # 兩筆以上都活：[(canonical, [ids])]
     conflicts: list[tuple[str, list[int]]] = field(default_factory=list)
 
@@ -139,13 +139,6 @@ def canonical_for(row: Row, keyword_map: dict[str, dict[str, str]]) -> str:
     if row.project == PROJECT_JP_VERB_PAIR:
         return keyword_map.get(str(row.master_note_id), {}).get(stripped, stripped)
     return stripped
-
-
-def _search_keyword_after(row: Row, new_lemma: str) -> str | None:
-    """改寫後 search_keyword 該存什麼：既有值優先，否則存被替換掉的原值。"""
-    if row.search_keyword:
-        return row.search_keyword
-    return row.verb_lemma if row.verb_lemma != new_lemma else None
 
 
 def plan_canonicalization(rows: list[Row], keyword_map: dict[str, dict[str, str]]) -> Plan:
@@ -170,7 +163,7 @@ def plan_canonicalization(rows: list[Row], keyword_map: dict[str, dict[str, str]
         if len(members) == 1:
             row = members[0]
             if row.verb_lemma != new_lemma:
-                plan.updates.append((row.id, new_lemma, _search_keyword_after(row, new_lemma)))
+                plan.updates.append((row.id, new_lemma))
             continue
 
         live = [m for m in members if m.is_live]
@@ -183,7 +176,6 @@ def plan_canonicalization(rows: list[Row], keyword_map: dict[str, dict[str, str]
         plan.merges.append((
             keep.id,
             new_lemma,
-            _search_keyword_after(keep, new_lemma),
             max(m.delete_count for m in members),
             max(m.failure_count for m in members),
             sorted(m.id for m in others),
@@ -195,57 +187,46 @@ async def _load_rows(session) -> list[Row]:
     result = await session.execute(text(
         "SELECT id, script_id, verb_lemma, project, master_note_id, is_deleted, "
         "       (cloze_note_id IS NOT NULL OR context_note_id IS NOT NULL) AS has_card, "
-        "       delete_count, failure_count, search_keyword "
+        "       delete_count, failure_count "
         "FROM generated_sentences_log ORDER BY id"
     ))
     return [
         Row(
             id=int(r[0]), script_id=int(r[1]), verb_lemma=r[2], project=r[3],
             master_note_id=int(r[4]), is_deleted=bool(r[5]), has_card=bool(r[6]),
-            delete_count=int(r[7] or 0), failure_count=int(r[8] or 0), search_keyword=r[9],
+            delete_count=int(r[7] or 0), failure_count=int(r[8] or 0),
         )
         for r in result.fetchall()
     ]
 
 
-async def _has_search_keyword_column(session) -> bool:
-    result = await session.execute(text(
-        "SELECT COUNT(*) FROM information_schema.COLUMNS "
-        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'generated_sentences_log' "
-        "AND COLUMN_NAME = 'search_keyword'"
-    ))
-    return int(result.scalar() or 0) > 0
-
-
 async def _apply(session, plan: Plan) -> None:
     """套用計畫：先刪後改，避免改寫途中撞唯一鍵。Delete first, then update."""
-    for keep_id, lemma, kw, dcount, fcount, deleted in plan.merges:
+    for keep_id, lemma, dcount, fcount, deleted in plan.merges:
         if deleted:
             # id 皆為 int，直接內插安全；MySQL 的 IN 綁定 tuple 在不同驅動下行為不一
             id_list = ",".join(str(int(i)) for i in deleted)
             await session.execute(text(f"DELETE FROM generated_sentences_log WHERE id IN ({id_list})"))
         await session.execute(text(
             "UPDATE generated_sentences_log "
-            "SET verb_lemma = :lemma, search_keyword = :kw, delete_count = :dc, failure_count = :fc "
+            "SET verb_lemma = :lemma, delete_count = :dc, failure_count = :fc "
             "WHERE id = :id"
-        ), {"lemma": lemma, "kw": kw, "dc": dcount, "fc": fcount, "id": keep_id})
-    for row_id, lemma, kw in plan.updates:
+        ), {"lemma": lemma, "dc": dcount, "fc": fcount, "id": keep_id})
+    for row_id, lemma in plan.updates:
         await session.execute(text(
-            "UPDATE generated_sentences_log SET verb_lemma = :lemma, search_keyword = :kw WHERE id = :id"
-        ), {"lemma": lemma, "kw": kw, "id": row_id})
+            "UPDATE generated_sentences_log SET verb_lemma = :lemma WHERE id = :id"
+        ), {"lemma": lemma, "id": row_id})
     await session.commit()
 
 
 def _print_plan(plan: Plan) -> None:
-    fmt_kw = lambda kw: f"'{kw}'" if kw else "NULL"
     logger.info(f"\n📝 單純改寫: {len(plan.updates)} 筆")
-    for row_id, lemma, kw in plan.updates:
-        logger.info(f"   [{row_id}] verb_lemma → '{lemma}'  (search_keyword={fmt_kw(kw)})")
+    for row_id, lemma in plan.updates:
+        logger.info(f"   [{row_id}] verb_lemma → '{lemma}'")
     logger.info(f"\n🔀 撞鍵合併: {len(plan.merges)} 組")
-    for keep_id, lemma, kw, dc, fc, deleted in plan.merges:
+    for keep_id, lemma, dc, fc, deleted in plan.merges:
         logger.info(
-            f"   保留 [{keep_id}] → '{lemma}' (search_keyword={fmt_kw(kw)}, delete_count={dc}, "
-            f"failure_count={fc})；硬刪 {deleted}"
+            f"   保留 [{keep_id}] → '{lemma}' (delete_count={dc}, failure_count={fc})；硬刪 {deleted}"
         )
     logger.info(f"\n🚨 兩筆以上皆活、需先刪冗餘卡: {len(plan.conflicts)} 組")
     for lemma, ids in plan.conflicts:
@@ -261,10 +242,6 @@ async def main() -> None:
     logger.info(f"🔑 已載入 {sum(len(m) for m in keyword_map.values())} 個關鍵字映射")
 
     async with corpus_async_session_factory() as session:
-        if not await _has_search_keyword_column(session):
-            logger.error("❌ 資料表缺少 search_keyword 欄位，請先執行 scripts/common/database/init_db.py")
-            await dispose_corpus_engine()
-            return
         rows = await _load_rows(session)
         plan = plan_canonicalization(rows, keyword_map)
         _print_plan(plan)

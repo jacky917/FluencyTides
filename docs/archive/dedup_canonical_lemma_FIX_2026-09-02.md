@@ -8,7 +8,7 @@
 | **嚴重度** | 🟡 功能異常有繞路(冗餘卡各自內容正確,只是學習上重複;3,106 張活卡中 23 張冗餘,0.7%) |
 | **影響範圍** | JP_VerbPair 生成管線的去重判定、`generated_sentences_log.verb_lemma` 的語意、刪卡工具鏈的完整性修復寫入;存量資料**已被污染**(147 筆假名拼寫 + 3 筆帶標音,其中 7 組已造成重複卡) |
 | **PR / 進度** | [#16](https://github.com/jacky917/FluencyTides/pull/16)(分支 `fix/dedup-key-master-note-id`,合併後補日期與 merge commit) |
-| **關聯文件** | `docs/wip/verb_lemma_backfill_FIX_2026-09-02.md`(**存量修復的完整名單與等價 SQL**,分支 `docs/verb-lemma-backfill`)、`docs/archive/child_card_deletion_toolkit_FEAT_2026-08-27.md`(刪卡工具鏈,§2 verb_lemma 抽取掛鉤)、`docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md`(假名擴展關鍵字的來源)、2026-09-02 全庫抽查對話 |
+| **關聯文件** | `docs/archive/verb_lemma_backfill_FIX_2026-09-02.md`(**存量修復的完整名單與等價 SQL**,分支 `docs/verb-lemma-backfill`)、`docs/archive/child_card_deletion_toolkit_FEAT_2026-08-27.md`(刪卡工具鏈,§2 verb_lemma 抽取掛鉤)、`docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md`(假名擴展關鍵字的來源)、2026-09-02 全庫抽查對話 |
 
 ---
 
@@ -85,7 +85,7 @@
    - 兩筆都活 → **不動**,列出 id 對,要求先用 `delete_by_generated_sentences_log_id.py` 刪掉冗餘卡(§1 A 型 7 組正是這種),再重跑。
 3. 執行完呼叫既有的 `reset_auto_increment`。
 
-**逐筆名單另立文件**:155 筆改寫 + 9 筆死紀錄合併的完整清單(每筆含 DB id、母卡/cloze/context note id、從→到拼寫)與不依賴分支的等價 SQL,見 `docs/wip/verb_lemma_backfill_FIX_2026-09-02.md`。本文件只定義規則,名單隨資料變動,分開才不會讓規則文件跟著過期。
+**逐筆名單另立文件**:155 筆改寫 + 9 筆死紀錄合併的完整清單(每筆含 DB id、母卡/cloze/context note id、從→到拼寫)與不依賴分支的等價 SQL,見 `docs/archive/verb_lemma_backfill_FIX_2026-09-02.md`。本文件只定義規則,名單隨資料變動,分開才不會讓規則文件跟著過期。
 
 B 型 15 張冗餘卡不涉及 DB 修復,直接用 id 刪除工具軟刪除即可(軟刪除 → 該 script_id 永不再生成;其文字分身則靠 §3.2 擋住)。
 

@@ -8,7 +8,7 @@
 | **範圍** | `app/infrastructure/llm/`(新增 provider + 工廠)、`app/core/config.py`(新增設定)、8 處 `LLMClient()` 實例化點改為工廠呼叫、`requirements.txt`(+jsonschema) |
 | **不動** | `scripts/fastapi_client/**` 生成腳本(僅 D7 標籤行一行例外)、API request/response schema、各 handler 的 prompt 渲染與建卡邏輯、現有 `LLMClient` 類本體、Anki/ES/MySQL 基礎設施 |
 | **PR / 進度** | [#9](https://github.com/jacky917/FluencyTides/pull/9)(2026-08-27 開啟,commit `911bdc7`) |
-| **關聯文件** | `docs/wip/claude_cli_env_setup_FEAT_2026-08-27.md`(環境配置 + 全參數值域實測;本文件所有旗標與失敗形態均以該文件 §3/§5 的實測為依據)、`app/infrastructure/llm/client.py`、`app/services/task_handlers/jp_verb_pair_handler.py` |
+| **關聯文件** | `docs/archive/claude_cli_env_setup_FEAT_2026-08-27.md`(環境配置 + 全參數值域實測;本文件所有旗標與失敗形態均以該文件 §3/§5 的實測為依據)、`app/infrastructure/llm/client.py`、`app/services/task_handlers/jp_verb_pair_handler.py` |
 
 ---
 

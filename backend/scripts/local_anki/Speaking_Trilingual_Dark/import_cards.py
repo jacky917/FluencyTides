@@ -14,7 +14,7 @@ creating cards in bulk from JSON files (native JSON arrays are serialized).
 存在判斷**只看身分**（JSON 內的 ``cardId`` + ``noteId``），完全不看
 ``Prompt``——編輯卡片內容不會再讓腳本誤判成新卡。建卡後身分會自動寫回
 JSON，成為該卡的永久識別。詳見
-``docs/wip/card_identity_writeback_FEAT_2026-08-11.md`` §3.2。
+``docs/archive/card_identity_writeback_FEAT_2026-08-11.md`` §3.2。
 
 Existence checks look **only at the identity** (``cardId`` + ``noteId`` in
 the JSON) and never at ``Prompt``, so editing card content no longer makes

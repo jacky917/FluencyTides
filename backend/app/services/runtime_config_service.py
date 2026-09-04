@@ -3,7 +3,7 @@
 Runtime configuration service (read-only slice): whitelisted settings
 listing and backend runtime reconciliation info.
 
-對應計畫 docs/wip/runtime_config_service_FEAT_2026-08-29.md §3.5。
+對應計畫 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。
 本檔目前只實作讀取側(list/get/runtime);寫入側 `set_config`(驗證 →
 setattr → rebuild 註冊表 → 失敗回滾)依計畫 P0 後續補上,介面已預留。
 Only the read side is implemented for now; the write side follows the
@@ -17,6 +17,7 @@ Framework-free: callers map results to HTTP or chat semantics themselves.
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 from dataclasses import dataclass
 from typing import Any
@@ -167,7 +168,8 @@ class RuntimeConfigService:
         Returns:
             dict: ``client_initialized`` / ``cli_path`` / ``cli_version``
             (或 ``cli_version_error``)/ ``effort`` /
-            ``oauth_token_configured``(bool,不洩漏 token 值)。
+            ``oauth_token_configured``(bool,不洩漏 token 值)/
+            ``account``(訂閱方案,見 :meth:`_probe_account`)。
         """
         token = (settings.LLM_CLAUDE_CODE_OAUTH_TOKEN or "").strip()
         # token 格式靜態檢查(恆開,零成本):setup-token 產出應為連續字串,
@@ -194,6 +196,7 @@ class RuntimeConfigService:
             "oauth_token_format_ok": token_format_ok,
             "oauth_token_format_error": token_format_error,
             "auth_check": {"status": "skipped", "detail": "未要求(check_auth=false)"},
+            "account": {"status": "unknown", "detail": "無 CLI 路徑可探測"},
         }
 
         cli_path = info["cli_path"]
@@ -220,6 +223,8 @@ class RuntimeConfigService:
                 )
         except Exception as e:  # noqa: BLE001 - 診斷端點必須帶病回報
             info["cli_version_error"] = f"{type(e).__name__}: {e}"[:300]
+
+        info["account"] = await RuntimeConfigService._probe_account(cli_path, llm_client)
 
         # ── 真實認證探測(check_auth=true 時):打一次最小 haiku 請求 ──
         # 版本探測只能證明 binary 可執行;token 是否真的能通過認證,
@@ -261,3 +266,88 @@ class RuntimeConfigService:
                     "detail": f"{type(e).__name__}: {e}"[:300],
                 }
         return info
+
+    @staticmethod
+    async def _probe_account(cli_path: str, llm_client: Any) -> dict[str, Any]:
+        """探測登入帳號的訂閱方案(``claude auth status --json``)。
+
+        Probe the signed-in account's subscription plan.
+
+        只取**非識別性**欄位:是否登入、訂閱型別、認證方式、API 供應方。
+        CLI 同時會回傳 email / orgId / orgName,那些一律丟棄——本區塊由
+        無認證的診斷端點對外回傳,方案是運維資訊,帳號識別不是。
+        Only non-identifying fields are kept; the email / org identifiers
+        the CLI also returns are dropped, because this block is exposed by
+        an unauthenticated diagnostic endpoint.
+
+        兩層限制(2026-09-04 實測):
+        1. 粒度只到 ``max`` / ``pro``,**不區分 Max 5x 與 20x**——倍率不在
+           任何非互動輸出裡。
+        2. **注入 token 認證時整個帳號 profile 都不在輸出裡**——實測欄位
+           集合:落盤憑證模式回 8 個欄位(含 email / orgId / orgName /
+           subscriptionType),注入 token 模式只回 4 個
+           (``loggedIn`` / ``authMethod`` / ``apiProvider`` /
+           ``analyticsDisabled``),profile 那組**鍵直接不存在**。合理的解釋
+           是 profile 隨桌機登入流程落盤保存,而裸 token 沒有這份紀錄、
+           ``auth status`` 也不為此發網路請求(此為由欄位集合推得,未讀 CLI
+           原始碼)。容器部署正是後者,故方案為 None——CLI 的行為,不是探測
+           失敗。另注意該模式的 ``loggedIn: true`` 只代表「token 已設定」,
+           要證明 token 真能通過認證仍得靠 ``auth_check`` 的實打請求。
+        Neither the Max multiplier nor, under injected-token auth, the
+        subscription type itself is exposed by the CLI.
+
+        不做的事:token 模式拿不到方案時**不**改用預設環境重探。落盤憑證
+        可能屬於另一個帳號,回報那個帳號的方案等於報錯資訊。
+        Deliberately does not re-probe without the injected credentials:
+        on-disk credentials may belong to a different account.
+
+        帶著 client 的認證環境跑:容器以注入 token 認證、沒有落盤憑證,
+        用預設環境會誤報未登入。
+        Runs with the client's credential environment so headless
+        token-based setups are not misreported as signed out.
+
+        Args:
+            cli_path: 已解析的 CLI 路徑。Resolved CLI path.
+            llm_client: 活的 LLM client(取認證環境)。The live client.
+
+        Returns:
+            dict: ``status`` 為 ``ok`` 時帶 ``logged_in`` /
+            ``subscription_type`` / ``auth_method`` / ``api_provider``;
+            探測不到時為 ``unknown`` 加 ``detail``。
+        """
+        env = llm_client._build_env() if hasattr(llm_client, "_build_env") else None
+
+        def _run() -> subprocess.CompletedProcess[bytes]:
+            return subprocess.run(
+                [cli_path, "auth", "status", "--json"],
+                capture_output=True, timeout=20, env=env,
+            )
+
+        try:
+            completed = await asyncio.to_thread(_run)
+        except Exception as e:  # noqa: BLE001 - 帶病回報
+            return {"status": "unknown", "detail": f"{type(e).__name__}: {e}"[:300]}
+
+        stdout = completed.stdout.decode("utf-8", errors="replace").strip()
+        if completed.returncode != 0:
+            stderr = completed.stderr.decode("utf-8", errors="replace").strip()
+            return {
+                "status": "unknown",
+                "detail": f"exit={completed.returncode}: {(stderr or stdout or '(無輸出)')[:300]}",
+            }
+        try:
+            payload = json.loads(stdout)
+        except (json.JSONDecodeError, TypeError):
+            return {
+                "status": "unknown",
+                "detail": f"輸出非 JSON(CLI 版本可能不支援 auth status --json):{stdout[:120]}",
+            }
+        if not isinstance(payload, dict):
+            return {"status": "unknown", "detail": "輸出 JSON 不是物件"}
+        return {
+            "status": "ok",
+            "logged_in": bool(payload.get("loggedIn")),
+            "subscription_type": payload.get("subscriptionType"),
+            "auth_method": payload.get("authMethod"),
+            "api_provider": payload.get("apiProvider"),
+        }

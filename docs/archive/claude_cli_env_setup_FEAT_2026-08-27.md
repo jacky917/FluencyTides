@@ -8,7 +8,7 @@
 | **範圍** | 本機 CLI 安裝與 PATH、headless 認證、參數實測矩陣與結論 |
 | **不動** | 專案代碼零改動;API key 計費模式不涉及 |
 | **PR / 進度** | 隨 [#9](https://github.com/jacky917/FluencyTides/pull/9) 一併提交(commit `911bdc7`) |
-| **關聯文件** | `docs/wip/claude_code_llm_provider_FEAT_2026-08-27.md`(消費本文件的定案組合與基準) |
+| **關聯文件** | `docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md`(消費本文件的定案組合與基準) |
 
 ---
 

@@ -1,6 +1,6 @@
-"""選句漏斗編排（計劃 §6.6，雙入口共用的單一事實來源）。
+"""選句漏斗編排（雙入口共用的單一事實來源）。
 
-Selection-funnel orchestration (plan §6.6), the single source of truth
+Selection-funnel orchestration, the single source of truth
 shared by both entry scripts: ES paging, filtering, validation, bucketing,
 and quota allocation, fully dependency-injected.
 
@@ -10,7 +10,7 @@ and quota allocation, fully dependency-injected.
 保證測試看到的分桶行為與正式生成完全一致、杜絕複製貼上分岔。
 
 漏斗流程：
-    ES 全量游標分頁（§6.1 必修項 2）→ §3.2 過濾（exclude_keywords /
+    ES 全量游標分頁（避免固定取前 N 筆的頭部偏差）→ 過濾層（exclude_keywords /
     exclude_speakers / exclude_script_ids / min_sentence_length）→
     token 級驗證（candidate_validator）→ 兩維度分桶 → zigzag 兩段配額
     （diversity_selector）→ ``SelectionReport``。
@@ -29,6 +29,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable
 
+from scripts.common.jp_moan_filter import REJECTION_MOAN, is_moan_sentence
 from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
     validate_candidate,
 )
@@ -48,6 +49,8 @@ FILTER_EXCLUDE_SPEAKER = "exclude_speakers"
 FILTER_NARRATION = "exclude_narration"
 FILTER_ALREADY_GENERATED = "already_generated"
 FILTER_MIN_LENGTH = "min_sentence_length"
+# 純呻吟句（與 JP_VerbPair 共用同一套判定，見 scripts/common/jp_moan_filter.py）
+FILTER_MOAN = REJECTION_MOAN
 
 _FURIGANA_PATTERN = re.compile(r"\[.*?\]")
 
@@ -56,28 +59,36 @@ _MAX_PAGES_PER_KEYWORD = 1000
 
 
 def strip_furigana(text: str) -> str:
-    """去除 furigana 標音括號（``見[み]る`` → ``見る``）。
+    """去除 furigana 標音括號（``見[み]る`` → ``見る``）。**僅供台詞句使用。**
 
-    Strip furigana bracket annotations (``見[み]る`` → ``見る``).
+    Strip furigana bracket annotations. **For dialogue sentences only.**
 
-    與 ``core_verbs.json`` / ``verb_search_config.json`` 的鍵表記共用同一條
-    去標音規則（計劃 §3.2）。
+    刻意只去括號、保留句內空白——台詞常含全角空格（53,190 句裡 6,359 句
+    有空白），而挖空的字元 span 是在這個字串上算的，去空白會讓 span 與後端
+    收到的原文錯位。
+    Internal whitespace is deliberately preserved: cloze character spans are
+    computed on this string, and VN dialogue commonly contains full-width
+    spaces.
+
+    動詞表層要正規化請用 ``scripts.common.verb_lemma.canonical_verb_lemma``
+    ——那裡會連 Anki 的 ruby 分隔空白一起去掉（``聞[き]き 返[かえ]す`` →
+    ``聞き返す``）。For verb surfaces use ``canonical_verb_lemma`` instead.
 
     Args:
-        text: 帶標音的原始字串。Raw string with furigana annotations.
+        text: 帶標音的台詞原文。Raw dialogue with furigana annotations.
 
     Returns:
-        str: 去標音後的字串。The furigana-stripped string.
+        str: 去標音後的句子。The furigana-stripped sentence.
     """
     return _FURIGANA_PATTERN.sub("", text or "").strip()
 
 
 @dataclass
 class VerbSearchConfig:
-    """單一動詞的選句設定（§3.2 搜尋設定檔 + §3.1 全域配額的合成結果）。
+    """單一動詞的選句設定（搜尋設定檔 + 全域配額的合成結果）。
 
-    Per-verb selection config, the merge of the §3.2 search-config file and
-    §3.1 global quotas.
+    Per-verb selection config, the merge of the search-config file and
+    global quotas.
 
     正式腳本由 settings（``JP_CORE_VERB_*``）疊加 ``verb_search_config.json``
     的 per-verb 覆寫組出本結構；測試腳本由檔內寫死的 ``TEST_CONFIG`` 組出。
@@ -94,6 +105,9 @@ class VerbSearchConfig:
         max_cards: 該動詞的生成上限（含既有已生成張數）。
         max_per_chapter: 同一章節最多取句數。
         min_sentence_length: 目標句最短長度（去標音後字元數）。
+        filter_moan: 是否過濾純呻吟句（擬態音節密度過高的 R18 台詞）。
+        compound_seqs: 本專案全部多 token 目標動詞的 lemma 序列——單 token
+            目標命中時用來讓位給更長的複合動詞（気に入る 覆蓋 入る）。
         allow_auxiliary: 是否放行補助動詞用法（てみる／かける類）。
         priority_collocations: 優先保證 Pass 1 席位的搭配桶鍵（如「電話を」）
             ——只要有候選就必收，順序即優先序。
@@ -111,6 +125,8 @@ class VerbSearchConfig:
     max_cards: int = 15
     max_per_chapter: int = 2
     min_sentence_length: int = 8
+    filter_moan: bool = True
+    compound_seqs: tuple = ()
     allow_auxiliary: bool = False
     priority_collocations: list[str] = field(default_factory=list)
     page_size: int = 500
@@ -119,10 +135,10 @@ class VerbSearchConfig:
 
 @dataclass
 class SelectionReport:
-    """``run_selection_funnel`` 的完整輸出（計劃 §6.7 四種報告的資料來源）。
+    """``run_selection_funnel`` 的完整輸出（``format_selection_report`` 四段報告的資料來源）。
 
     Complete output of ``run_selection_funnel``, the data source for the
-    four §6.7 reports.
+    four report sections.
 
     Attributes:
         verb_display: 帶標音的顯示表記。
@@ -130,7 +146,7 @@ class SelectionReport:
         selected: 選中清單（含 span/桶標籤/Pass 標記，順序即選取順序）。
         funnel_counts: 漏斗各層計數（es_hits → after_filter → validated →
             selected）。
-        filter_drops: §3.2 過濾層各原因的淘汰數。
+        filter_drops: 過濾層各原因的淘汰數。
         rejection_reasons: 驗證器拒絕原因分佈。
         bucket_matrix: 分桶矩陣 ``dict[搭配桶][活用形桶] = 候選數``。
         uncovered_collocations: 有候選但配額內未覆蓋的搭配桶。
@@ -156,10 +172,10 @@ async def _fetch_all_pages(
     verb_cfg: VerbSearchConfig,
     es_fetcher: Callable[[str, int, int], Awaitable[list[dict]]],
 ) -> dict[int, str]:
-    """對全部關鍵字做全量游標分頁抓取，合併去重（§6.1 必修項 2）。
+    """對全部關鍵字做全量游標分頁抓取，合併去重（避免固定取前 N 筆的頭部偏差）。
 
     Full cursor-paged fetch across all keywords, merged and deduplicated
-    (§6.1 mandatory item 2).
+    (avoids the head bias of a fixed top-N fetch).
 
     每個關鍵字以 ``script_id > last_script_id`` 游標推進，每頁
     ``page_size`` 筆直到空頁——徹底避免 Fetch-100 的頭部偏差。
@@ -196,10 +212,10 @@ def _build_occupancy(
     verb_cfg: VerbSearchConfig,
     tagger: Callable[[str], Iterable[Any]],
 ) -> BucketOccupancy:
-    """把已生成句同樣走驗證＋分桶，換算成桶佔用（§6.5 增量平衡）。
+    """把已生成句同樣走驗證＋分桶，換算成桶佔用（增量平衡）。
 
     Run already-generated sentences through validation and bucketing to
-    compute bucket occupancy (§6.5 incremental balancing).
+    compute bucket occupancy (incremental balancing).
 
     已生成句即使驗證失敗（例如當年規則較鬆），其章節計數仍照算——
     ``max_per_chapter`` 是硬約束，必須含歷史佔用一體檢查。
@@ -225,12 +241,15 @@ def _build_occupancy(
         if not sentence:
             continue
         result = validate_candidate(
-            sentence, verb_cfg.verb_lemma, verb_cfg.allow_auxiliary, tagger
+            sentence, verb_cfg.verb_lemma, verb_cfg.allow_auxiliary, tagger,
+            compound_seqs=verb_cfg.compound_seqs,
         )
         if not result.accepted or result.candidate is None:
             continue
         cand = result.candidate
-        collocations[classify_collocation(cand.tokens, cand.span_token_index)] += 1
+        collocations[
+            classify_collocation(cand.tokens, cand.span_token_index, cand.span_token_start)
+        ] += 1
         conjugations[classify_conjugation(cand.tokens, cand.span_token_index)] += 1
     return BucketOccupancy(
         collocations=dict(collocations),
@@ -249,9 +268,9 @@ async def run_selection_funnel(
     metadata_fetcher: Callable[[list[int]], Awaitable[dict[int, dict]]] | None = None,
     exclude_generated: set[tuple[int, str]] | None = None,
 ) -> SelectionReport:
-    """執行整條選句漏斗（計劃 §6.6，雙入口唯一呼叫點）。
+    """執行整條選句漏斗（雙入口唯一呼叫點）。
 
-    Run the entire selection funnel (plan §6.6), the sole call point shared
+    Run the entire selection funnel, the sole call point shared
     by both entry scripts.
 
     Args:
@@ -260,7 +279,7 @@ async def run_selection_funnel(
         es_fetcher: ES 抓取器 ``(keyword, last_script_id, page_size) ->
             list[dict]``；漏斗內以 while 迴圈游標分頁拉全量候選。Injected ES
             fetcher used for full cursor-paged retrieval.
-        occupied: §6.5 增量平衡的已生成句清單（每項含
+        occupied: 增量平衡的已生成句清單（每項含
             ``script_id / sentence / chapter / speaker``）；``None`` 或空
             清單視為首次生成。Generated sentences for incremental balancing;
             ``None``/empty means first run.
@@ -291,7 +310,7 @@ async def run_selection_funnel(
     if metadata_fetcher is not None and rows:
         metadata = await metadata_fetcher(sorted(rows))
 
-    # --- 第 2 層：§3.2 過濾 ---
+    # --- 第 2 層：過濾（exclude_* / min_sentence_length / 純呻吟句）---
     filter_drops: Counter[str] = Counter()
     exclude_script_ids = set(verb_cfg.exclude_script_ids)
     filtered: list[tuple[int, str, str, str]] = []  # (script_id, 句, 章節, 說話者)
@@ -328,6 +347,10 @@ async def run_selection_funnel(
         if len(sentence) < verb_cfg.min_sentence_length:
             filter_drops[FILTER_MIN_LENGTH] += 1
             continue
+        # 純呻吟句：動詞用法合法但教學價值近零，字面樣式擋下
+        if verb_cfg.filter_moan and is_moan_sentence(sentence):
+            filter_drops[FILTER_MOAN] += 1
+            continue
         filtered.append((script_id, sentence, chapter, speaker))
 
     # --- 第 3 層：token 級驗證 + 第 4 層：兩維度分桶 ---
@@ -336,13 +359,16 @@ async def run_selection_funnel(
     candidates: list[SelectionCandidate] = []
     for script_id, sentence, chapter, speaker in filtered:
         result = validate_candidate(
-            sentence, verb_cfg.verb_lemma, verb_cfg.allow_auxiliary, tagger
+            sentence, verb_cfg.verb_lemma, verb_cfg.allow_auxiliary, tagger,
+            compound_seqs=verb_cfg.compound_seqs,
         )
         if not result.accepted or result.candidate is None:
             rejection_reasons[result.reason or "未知"] += 1
             continue
         cand = result.candidate
-        collocation = classify_collocation(cand.tokens, cand.span_token_index)
+        collocation = classify_collocation(
+            cand.tokens, cand.span_token_index, cand.span_token_start
+        )
         conjugation = classify_conjugation(cand.tokens, cand.span_token_index)
         bucket_matrix.setdefault(collocation, {})
         bucket_matrix[collocation][conjugation] = (
@@ -392,10 +418,10 @@ async def run_selection_funnel(
 
 
 def format_selection_report(report: SelectionReport) -> str:
-    """把 ``SelectionReport`` 格式化為計劃 §6.7 的四段人讀報告。
+    """把 ``SelectionReport`` 格式化為四段人讀報告。
 
     Format a ``SelectionReport`` into the four-section human-readable
-    report of plan §6.7.
+    report.
 
     四段內容：漏斗各層統計（含拒絕原因分佈）、搭配×活用形分桶矩陣、
     zigzag 選取軌跡（每句標注桶/章節/Pass）、未覆蓋桶清單。

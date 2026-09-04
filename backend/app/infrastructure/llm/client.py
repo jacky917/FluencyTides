@@ -80,10 +80,14 @@ class LLMClient:
     # 重試間隔秒數
     RETRY_DELAY_SECONDS = 2
 
-    def __init__(self) -> None:
+    def __init__(self, *, model: str | None = None) -> None:
         """根據 Settings 的設定初始化 AsyncOpenAI 客戶端。
 
         Initialize the AsyncOpenAI client from Settings.
+
+        Args:
+            model: 覆寫模型名；None 沿用 ``LLM_MODEL_NAME``（僅作用於此
+                實例）。Instance-scoped model override.
 
         Raises:
             LLMServiceError: 當 LLM_API_KEY 或 LLM_BASE_URL 未設定時。Raised
@@ -99,8 +103,10 @@ class LLMClient:
             base_url=settings.LLM_BASE_URL,
             timeout=120.0,  # 加入 120 秒的 Timeout，防止中轉站無回應時無限卡死
         )
-        self._model_name = settings.LLM_MODEL_NAME
-        
+        self._model_name = (model or settings.LLM_MODEL_NAME or "").strip()
+        if not self._model_name:
+            raise LLMServiceError("模型名為空：LLM_MODEL_NAME 未設定且未提供覆寫。")
+
         provider = settings.LLM_PROVIDER.lower().strip() if settings.LLM_PROVIDER else ""
         provider_prefix = f"({provider})" if provider and provider not in ("google", "openai") else ""
         self._formatted_model_name = f"{provider_prefix}{self._model_name}"

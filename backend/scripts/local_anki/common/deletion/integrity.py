@@ -9,7 +9,7 @@ Project-parameterized integrity check and auto-repair core.
 3. 母卡片 JSON 失效連結：JSON 中指向已刪除子卡片的殘留 ID
 4. 媒體資源孤兒：Anki Media 中存在但**任何專案**皆未引用的檔案
 
-跨專案安全（docs/wip/child_card_deletion_toolkit_FEAT_2026-08-27.md）：
+跨專案安全（docs/archive/child_card_deletion_toolkit_FEAT_2026-08-27.md）：
 - DB 讀寫一律以 project 欄過濾，他專案紀錄不會被判為斷鏈。
 - Context 模型共用，先以卡上的 Master_Note_ID 反查母卡歸屬分流；
   無法歸屬的 Context 只回報、不刪除。

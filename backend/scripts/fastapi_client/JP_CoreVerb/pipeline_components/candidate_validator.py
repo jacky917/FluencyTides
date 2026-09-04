@@ -1,6 +1,6 @@
-"""候選句 token 級驗證器（計劃 §6.1）。
+"""候選句 token 級驗證器。
 
-Token-level candidate validator (plan §6.1): uses an injected fugashi
+Token-level candidate validator: uses an injected fugashi
 tagger to verify that a sentence truly contains the target verb as an
 independent lexeme, rejecting compound-verb prefixes and auxiliary usages.
 
@@ -13,10 +13,10 @@ independent lexeme, rejecting compound-verb prefixes and auxiliary usages.
    「て／で」即拒絕（per-verb 可以 ``allow_auxiliary=True`` 放行）。
 
 設計要點：
-    - tagger 由呼叫端注入（``fugashi.Tagger()`` 或測試用假 tagger），
+    - tagger 由呼叫端注入（``create_tagger()`` 或測試用假 tagger），
       本模組不 import fugashi——單元測試可用假 token 物件完整覆蓋。
     - 驗證通過的分詞結果（tokens 與 span_token_index）隨
-      ``VerifiedCandidate`` 傳遞下游，供 §6.3 分桶直接復用，零重複分詞成本。
+      ``VerifiedCandidate`` 傳遞下游，供 ``diversity_selector`` 分桶直接復用，零重複分詞成本。
     - 拒絕時回傳帶 ``reason`` 的 ``ValidationResult``，漏斗層據此統計
       拒絕原因分佈（複合動詞前項 / 補助動詞 / lemma 不符）。
 
@@ -31,12 +31,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
-# 拒絕原因常數（漏斗層統計用，字面對齊計劃 §6.7 報告項）
+# 拒絕原因常數（漏斗層統計用；字面即 ``format_selection_report`` 報告顯示的項名）
 REJECTION_COMPOUND_VERB = "複合動詞前項"
 REJECTION_COMPOUND_SUFFIX = "複合動詞後項"
 REJECTION_AUXILIARY = "補助動詞"
 REJECTION_LEMMA_MISMATCH = "lemma 不符"
 REJECTION_READING_MISMATCH = "讀音不符"
+REJECTION_COMPOUND_MEMBER = "屬其他複合動詞"
+
+
+#: ``derive_target_lemmas`` 的快取：{目標動詞: ((lemma, pos1), ...)}。
+#: 同一次執行對同一動詞會呼叫數百次，分詞結果不變故可快取。
+#: 外層以 ``id(tagger)`` 分隔——不同分詞器對同一表層可能切得不同，
+#: 共用一個 flat 快取會互相污染（測試間尤其明顯）。
+_TARGET_LEMMA_CACHE: dict[int, dict[str, tuple[tuple[str, str, str], ...]]] = {}
 
 
 def token_surface(token: Any) -> str:
@@ -163,6 +171,145 @@ def lemma_matches_target(token: Any, target_verb: str) -> bool:
     return bool(orth_base) and orth_base == target_verb
 
 
+def derive_target_lemmas(
+    target_verb: str, tagger: Callable[[str], Iterable[Any]]
+) -> tuple[tuple[str, str, str], ...]:
+    """把目標動詞本身丟給同一個分詞器，導出 ``((lemma, pos1), ...)`` 序列。
+
+    Tokenize the target verb itself with the same tagger to derive its
+    ``((lemma, pos1), ...)`` sequence.
+
+    UniDic 把複合動詞與接尾辭派生切成多個 token，句中沒有任何**單一** token
+    的 lemma 會等於「走り出す」，因此單 token 比對必然全滅（2026-09-03 實測
+    16 個核心動詞如此）。孤立表層與句中活用形切出的 lemma 序列一致——
+    ``走り出す`` → ``走る／出す``，句中 ``走り出した`` 亦為 ``走る／出す``——
+    故可自動推導，無需人工設定：
+
+    ==================  ==========================
+    母卡表層            導出序列
+    ==================  ==========================
+    ``見る``            ``見る``（單 token，行為不變）
+    ``走り出す``        ``走る`` → ``出す``
+    ``恥ずかしがる``    ``恥ずかしい`` → ``がる``
+    ``気に入る``        ``気`` → ``に`` → ``入る``
+    ``知らせる``        ``知る`` → ``せる``
+    ==================  ==========================
+
+    結果按 ``target_verb`` 快取——同一次執行會對同一動詞呼叫數百次。
+    Results are cached per target verb.
+
+    Args:
+        target_verb: 目標動詞字典形（去標音、去 ruby 分隔空白）。Target verb
+            in canonical dictionary form.
+        tagger: 與驗證候選句時同一個分詞器。The same tagger used for
+            candidate sentences.
+
+    Returns:
+        tuple[tuple[str, str, str], ...]: ``((lemma, pos1, surface), ...)``；
+        無法分詞時回傳單一元素。The derived sequence.
+    """
+    per_tagger = _TARGET_LEMMA_CACHE.setdefault(id(tagger), {})
+    cached = per_tagger.get(target_verb)
+    if cached is not None:
+        return cached
+    # 分詞失敗（假 tagger 未涵蓋該字串、分詞器異常）時退回單 token 序列——
+    # 等同本擴充前的行為，寧可少擋也不讓整條管線中斷。
+    # Fall back to a single-token sequence on any tagger failure: identical
+    # to the pre-window behaviour, and a tagger fault must not abort the run.
+    try:
+        seq = tuple(
+            (token_lemma(tok) or token_surface(tok), token_pos1(tok), token_surface(tok))
+            for tok in tagger(target_verb)
+        )
+    except Exception:
+        seq = ()
+    if not seq:
+        seq = ((target_verb, "動詞", target_verb),)
+    per_tagger[target_verb] = seq
+    return seq
+
+
+def match_lemma_window(
+    tokens: list, start: int, target_seq: tuple[tuple[str, str, str], ...]
+) -> bool:
+    """判定 ``tokens[start:start+len(target_seq)]`` 是否逐位對應目標序列。
+
+    Whether the window starting at ``start`` matches the target sequence
+    position by position.
+
+    比對規則反映複合動詞的結構：**非末位比表層全等**（前項是固定的連用形／
+    語幹，不隨句子活用），**末位比 lemma 與詞性**（活用發生處；詞性因動詞而異
+    ——``出す`` 動詞／``せる`` 助動詞／``がる`` 接尾辞，故取自資料而非硬寫
+    清單）。
+    Non-final tokens match by exact surface (a compound's non-final parts do
+    not inflect); the final token matches by lemma and POS.
+
+    Args:
+        tokens: 整句分詞結果。Sentence tokens.
+        start: 視窗起始索引。Window start index.
+        target_seq: :func:`derive_target_lemmas` 的結果。Derived sequence.
+
+    Returns:
+        bool: 是否整段相符。Whether the whole window matches.
+    """
+    end = start + len(target_seq)
+    if end > len(tokens):
+        return False
+    # 非末位：**表層一字不差**。複合動詞的前項是固定的連用形／語幹，不隨句子
+    # 活用（走り出す 的「走り」、恥ずかしがる 的「恥ずかし」、気に入る 的
+    # 「気に」永遠是那個字面）。只比 lemma 會誤收語意不同的同構組合——
+    # ``無くなる`` 導出 ない＋成る，若只比 lemma，「もう必要なくなった」
+    # （形容詞ない＋なる）也會匹配，但那不是動詞「無くなる」。
+    # 這條同時解掉分詞器對前項判定不一致的問題（乗り遅れる：孤立
+    # 乗り lemma=乗り[名詞]、句中 lemma=乗る[動詞]，表層皆為「乗り」）。
+    # Non-final tokens must match by exact surface: a lexicalized compound's
+    # non-final parts never inflect, and lemma-only matching would accept
+    # semantically different look-alikes.
+    for offset, (_lemma, _pos, surface) in enumerate(target_seq[:-1]):
+        if token_surface(tokens[start + offset]) != surface:
+            return False
+    # 末位：活用發生處，比 lemma（含 orthBase 容忍）與詞性
+    last_lemma, last_pos, _last_surface = target_seq[-1]
+    last_token = tokens[end - 1]
+    return (
+        lemma_matches_target(last_token, last_lemma)
+        and token_pos1(last_token) == last_pos
+    )
+
+
+def covered_by_compound(
+    tokens: list, index: int, compound_seqs: tuple[tuple[tuple[str, str, str], ...], ...]
+) -> bool:
+    """判定 ``tokens[index]`` 是否落在某個已註冊複合動詞的視窗內。
+
+    Whether the token at ``index`` is part of a registered compound verb.
+
+    ``気に入る`` 的第三個 token 就是獨立動詞 ``入る``，中間的「に」是助詞而非
+    動詞，因此既有的複合動詞前／後項規則（只看緊鄰 token 的詞性）擋不住——
+    ``入る`` 母卡會把「気に入った」的句子收走，而那些句子屬於 ``気に入る``。
+    需要跨動詞的知識：本專案所有多 token 目標的序列。
+    The neighbour-POS rules cannot catch this because the intervening token
+    is a particle; cross-verb knowledge is required.
+
+    Args:
+        tokens: 整句分詞結果。Sentence tokens.
+        index: 單 token 命中的位置。The matched single-token index.
+        compound_seqs: 本專案全部多 token 目標的序列（``derive_target_lemmas``
+            的結果，僅含 ``len > 1`` 者）。All multi-token target sequences.
+
+    Returns:
+        bool: 是否應讓給複合動詞。Whether a compound verb owns this token.
+    """
+    for seq in compound_seqs:
+        width = len(seq)
+        for start in range(max(0, index - width + 1), index + 1):
+            if start + width > len(tokens):
+                continue
+            if match_lemma_window(tokens, start, seq):
+                return True
+    return False
+
+
 def token_reading(token: Any) -> str:
     """取得 token 的語彙素読み（UniDic feature[6]，片假名，如「ウマル」）。
 
@@ -220,16 +367,20 @@ class VerifiedCandidate:
         sentence: 候選句原文（已去除注音標記的乾淨字串）。
         span: 目標動詞 token 在 ``sentence`` 中的字元區間 ``(start, end)``，
             隨 payload 傳給後端做挖空交叉驗證（``target_verb_span``）。
-        tokens: 整句的分詞結果，供 §6.3 分桶復用。
-        span_token_index: 目標動詞 token 在 ``tokens`` 中的索引。
-        rejection_reason: 驗證通過時恆為 ``None``（保留欄位對齊計劃描述）。
+        tokens: 整句的分詞結果，供 ``diversity_selector`` 分桶復用。
+        span_token_index: 目標動詞**最後一個** token 在 ``tokens`` 中的索引
+            （活用發生處；單 token 動詞即該 token 本身）。分桶的維度 B
+            以此為基準。
+        span_token_start: 目標動詞**第一個** token 的索引——複合動詞
+            （走り＋出す）的搭配詞在它的前一個 token，維度 A 以此為基準；
+            單 token 動詞時等於 ``span_token_index``。
     """
 
     sentence: str
     span: tuple[int, int]
     tokens: list = field(default_factory=list)
     span_token_index: int = -1
-    rejection_reason: str | None = None
+    span_token_start: int = -1
 
 
 @dataclass
@@ -287,11 +438,12 @@ def validate_candidate(
     *,
     expected_reading: str | None = None,
     allow_compound_suffix: bool = False,
+    compound_seqs: tuple[tuple[tuple[str, str, str], ...], ...] = (),
 ) -> ValidationResult:
-    """驗證候選句是否包含目標動詞的獨立用法（計劃 §6.1 規則 + VerbPair 擴充）。
+    """驗證候選句是否包含目標動詞的獨立用法（基本規則 + VerbPair 擴充的讀音／後項規則）。
 
     Validate that the sentence contains an independent usage of the target
-    verb (plan §6.1 rules plus the VerbPair extensions).
+    verb (base rules plus the VerbPair extensions).
 
     通過條件：句中存在一個 token 同時滿足——
         1. 詞性大類為「動詞」且 lemma 等於目標動詞（已去標音的字典形）。
@@ -315,7 +467,7 @@ def validate_candidate(
         allow_auxiliary: 是否放行補助動詞用法（per-verb 設定）。Whether to
             allow auxiliary-verb usage (per-verb setting).
         tagger: 注入的分詞器——以句子呼叫後回傳 token 可迭代物
-            （``fugashi.Tagger()`` 實例或測試假 tagger）。Injected tokenizer
+            （``create_tagger()`` 實例或測試假 tagger）。Injected tokenizer
             returning an iterable of tokens when called with a sentence.
         expected_reading: 期待的動詞讀音（平/片假名皆可，如「うまる」）；
             ``None`` 或空字串時不驗讀音——CoreVerb 既有呼叫端不傳，
@@ -324,6 +476,10 @@ def validate_candidate(
             unchanged.
         allow_compound_suffix: 是否放行複合動詞後項用法（per-verb 設定）。
             Whether to allow compound-suffix usage (per-verb setting).
+        compound_seqs: 本專案全部多 token 目標動詞的序列；單 token 目標命中時，
+            若該位置落在其中任一視窗內即拒絕（``気に入る`` 的「入る」不該被
+            ``入る`` 母卡收走）。空 tuple 時不做此檢查，既有呼叫端行為不變。
+            All multi-token target sequences of the project.
 
     Returns:
         ValidationResult: ``accepted=True`` 時附帶 ``VerifiedCandidate``
@@ -332,65 +488,101 @@ def validate_candidate(
         Carries a ``VerifiedCandidate`` on acceptance, otherwise the first
         rejected token's reason.
     """
+    # 目標動詞的 lemma 序列：單 token（見る）走既有路徑，多 token
+    # （走り出す → 走る／出す）以視窗比對，詳見 derive_target_lemmas。
+    # **必須在對句子分詞之前推導**——fugashi 的 node 物件綁在 tagger 內部的
+    # lattice 上，再次呼叫 tagger 會覆寫先前 node 指向的記憶體，句子 tokens
+    # 會靜默變成目標動詞的 tokens（2026-09-03 實測：誤判 6 個動詞、誤收 2 例）。
+    # Derive before tokenizing the sentence: fugashi nodes point into the
+    # tagger's lattice, which a second call overwrites.
+    target_seq = derive_target_lemmas(target_verb, tagger)
+    width = len(target_seq)
+    is_compound = width > 1
+
     tokens = list(tagger(sentence))
     offsets = _compute_char_offsets(sentence, tokens)
 
     expected_kata = to_katakana(expected_reading) if expected_reading else ""
 
+    # 讓位檢查用的複合序列：排除「目標自己的序列」，否則以單 token 命中的
+    # 動詞會被自己的序列擋掉（無くなる 孤立切兩 token、句中卻是一個 token）。
+    other_compounds = tuple(seq for seq in compound_seqs if seq != target_seq)
+
     rejection_reasons: list[str] = []
     for index, token in enumerate(tokens):
-        if token_pos1(token) != "動詞":
-            continue
-        if not lemma_matches_target(token, target_verb):
+        matched_single = (
+            token_pos1(token) == "動詞" and lemma_matches_target(token, target_verb)
+        )
+        if matched_single:
+            # 單 token 路徑（既有行為）：分詞器把整個動詞切成一個 token 時走這裡。
+            # 即使目標孤立分詞是多 token 也要嘗試——``無くなる`` 孤立切成
+            # 無く[ない]＋なる[成る]，句中卻是單一 token（lemma 無くなる），
+            # 只走視窗會漏掉（2026-09-03 實測 VerbPair 少一張）。
+            # Always try the single-token rule: the tagger may emit the whole
+            # verb as one token even when the isolated form splits.
+            if other_compounds and covered_by_compound(tokens, index, other_compounds):
+                # 讓位給更長的複合動詞（気に入る 覆蓋 入る）——中間夾非動詞
+                # token 時，緊鄰詞性規則擋不到，需要跨動詞的序列清單。
+                rejection_reasons.append(REJECTION_COMPOUND_MEMBER)
+                continue
+            start = last = index
+        elif is_compound and match_lemma_window(tokens, index, target_seq):
+            # 視窗路徑：逐位對應導出序列；index 為視窗**起點**
+            start, last = index, index + width - 1
+        else:
             continue
 
         # 規則 ①'：讀音驗證——同表層異讀（メクル vs マクル）靠語彙素読み區分。
         # token 讀音缺值（lForm 為 * 或欄位不存在）時放行，避免誤殺。
-        if expected_kata:
+        # 視窗命中（跨多個 token）時不驗：歧義已由 lemma 序列本身消除。
+        if expected_kata and start == last:
             actual = token_reading(token)
             if actual and to_katakana(actual) != expected_kata:
                 rejection_reasons.append(REJECTION_READING_MISMATCH)
                 continue
 
-        # 規則 ②：複合動詞前項拒絕（下一 token 是動詞 → 見＋送る）
-        if index + 1 < len(tokens) and token_pos1(tokens[index + 1]) == "動詞":
+        # 規則 ②：複合動詞前項拒絕（視窗後一 token 是動詞 → 見＋送る）。
+        # 複合動詞的內部後項已在視窗內，看的是視窗**之後**那個 token。
+        if last + 1 < len(tokens) and token_pos1(tokens[last + 1]) == "動詞":
             rejection_reasons.append(REJECTION_COMPOUND_VERB)
             continue
 
-        # 規則 ②'：複合動詞後項拒絕（前一 token 是動詞 → 使い＋切れ、
+        # 規則 ②'：複合動詞後項拒絕（視窗前一 token 是動詞 → 使い＋切れ、
         # 弾き＋まくる）。連用形直接接續的後項在自他動詞教學語境下
         # 必然不是獨立用法；per-verb 可以 allow_compound_suffix 放行。
         if (
             not allow_compound_suffix
-            and index > 0
-            and token_pos1(tokens[index - 1]) == "動詞"
+            and start > 0
+            and token_pos1(tokens[start - 1]) == "動詞"
         ):
             rejection_reasons.append(REJECTION_COMPOUND_SUFFIX)
             continue
 
-        # 規則 ③：補助動詞拒絕——前一 token 是「て／で」且再前一 token 為
+        # 規則 ③：補助動詞拒絕——視窗前一 token 是「て／で」且再前一 token 為
         # 動詞或助動詞（食べ[動詞]＋て＋みる、食べ＋ない[助動詞]＋で＋みる
         # → 補助用法拒絕；あと[名詞]＋で＋見る 的「で」是格助詞 → 放行。
         # 注意：形容詞刻意不納入——「悲しくて見ていられない」的「見」是
         # 本動詞，補助動詞「みる」只接動詞て形／ないで，納入形容詞會誤殺）
         if (
             not allow_auxiliary
-            and index > 1
-            and token_surface(tokens[index - 1]) in ("て", "で")
-            and token_pos1(tokens[index - 2]) in ("動詞", "助動詞")
+            and start > 1
+            and token_surface(tokens[start - 1]) in ("て", "で")
+            and token_pos1(tokens[start - 2]) in ("動詞", "助動詞")
         ):
             rejection_reasons.append(REJECTION_AUXILIARY)
             continue
 
-        # 規則 ④：通過——記錄字元 span 與分詞結果，隨候選句傳遞下游
+        # 規則 ④：通過——span 涵蓋整個視窗（走り出し 而非只有 出し），
+        # 隨候選句傳遞下游供分桶與後端挖空交叉驗證
         return ValidationResult(
             accepted=True,
             reason=None,
             candidate=VerifiedCandidate(
                 sentence=sentence,
-                span=offsets[index],
+                span=(offsets[start][0], offsets[last][1]),
                 tokens=tokens,
-                span_token_index=index,
+                span_token_index=last,
+                span_token_start=start,
             ),
         )
 

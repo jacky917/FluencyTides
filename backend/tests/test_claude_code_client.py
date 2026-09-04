@@ -2,7 +2,7 @@
 
 Unit tests for the claude-code LLM provider.
 
-對應計劃文件 ``docs/wip/claude_code_llm_provider_FEAT_2026-08-27.md`` §4 的
+對應計劃文件 ``docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md`` §4 的
 測試清單。全部以假 subprocess 驅動，不實際呼叫 claude CLI、不消耗訂閱額度。
 
 Covers the test checklist in §4 of the plan document. Everything runs against
@@ -631,7 +631,7 @@ class BuildEnvTests(ClaudeCodeClientTestBase):
     """_build_env 的認證模式分流（桌機剔除 vs headless 注入）。
 
     Credential-mode branching of _build_env: desktop scrub vs headless
-    injection (docs/wip/claude_cli_in_container_FEAT_2026-08-29.md §D2).
+    injection (docs/archive/claude_cli_in_container_FEAT_2026-08-29.md §D2).
     """
 
     def test_desktop_mode_scrubs_all_auth_vars(self) -> None:

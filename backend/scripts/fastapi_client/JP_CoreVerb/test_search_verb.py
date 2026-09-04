@@ -1,6 +1,6 @@
-"""JP_CoreVerb 分桶驗證腳本（開發/調參專用，計劃 §6.7）。
+"""JP_CoreVerb 分桶驗證腳本（開發/調參專用）。
 
-Bucketing verification script for JP_CoreVerb (dev/tuning only, plan §6.7):
+Bucketing verification script for JP_CoreVerb (dev/tuning only):
 runs the exact production selection funnel against real ES corpus data and
 prints four diagnostic reports, with zero writes to Anki, DB, or LLM.
 
@@ -47,15 +47,19 @@ from app.infrastructure.database.corpus_database import (
     corpus_async_session_factory,
     dispose_corpus_engine,
 )
+from app.infrastructure.utils.jp_tokenizer import create_tagger
 from app.infrastructure.database.elasticsearch_client import (
     dispose_elasticsearch_client,
     search_dialogue_by_verb,
+)
+from scripts.common.verb_lemma import canonical_verb_lemma
+from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
+    derive_target_lemmas,
 )
 from scripts.fastapi_client.JP_CoreVerb.pipeline_components.funnel import (
     VerbSearchConfig,
     format_selection_report,
     run_selection_funnel,
-    strip_furigana,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -74,6 +78,7 @@ TEST_CONFIG = {
     "min_sentence_length": 8,     # 目標句最短長度
     "page_size": 500,             # ES 游標分頁每頁筆數
     "game_name_jp": "サノバウィッチ",
+    "filter_moan": True,          # 純呻吟句過濾（正式跑讀 JP_CORE_VERB_FILTER_MOAN_SENTENCES）
     # per-verb include/exclude 覆寫（省略的動詞全走預設）
     "per_verb": {
         "見せる": {
@@ -84,13 +89,18 @@ TEST_CONFIG = {
 }
 
 
-def _build_cfg(verb: str) -> VerbSearchConfig:
+def _build_cfg(verb: str, compound_seqs: tuple = ()) -> VerbSearchConfig:
     """由 ``TEST_CONFIG`` 組出單一動詞的漏斗設定。
 
     Build a single verb's funnel config from ``TEST_CONFIG``.
 
     Args:
         verb: 動詞字典形（去標音）。Dictionary form of the verb (furigana stripped).
+        compound_seqs: 複合動詞的 lemma 序列清單（``covered_by_compound`` 用）。
+            正式腳本由全部 344 張母卡導出；本腳本只由 ``TEST_CONFIG["verbs"]``
+            導出，因此「單 token 命中被其他母卡的複合動詞吸走」的跨動詞拒絕
+            只涵蓋清單內的動詞。Compound lemma sequences; production derives
+            them from every master, this script only from the configured verbs.
 
     Returns:
         VerbSearchConfig: 漏斗設定（與正式腳本注入的結構完全相同）。
@@ -99,7 +109,7 @@ def _build_cfg(verb: str) -> VerbSearchConfig:
     overrides = TEST_CONFIG["per_verb"].get(verb, {})
     return VerbSearchConfig(
         verb_display=verb,
-        verb_lemma=strip_furigana(verb),
+        verb_lemma=canonical_verb_lemma(verb),
         include_keywords=list(overrides.get("include_keywords", [])),
         exclude_keywords=list(overrides.get("exclude_keywords", [])),
         exclude_speakers=list(overrides.get("exclude_speakers", [])),
@@ -112,6 +122,8 @@ def _build_cfg(verb: str) -> VerbSearchConfig:
         priority_collocations=list(overrides.get("priority_collocations", [])),
         page_size=int(TEST_CONFIG["page_size"]),
         game_name_jp=TEST_CONFIG["game_name_jp"],
+        filter_moan=bool(TEST_CONFIG.get("filter_moan", True)),
+        compound_seqs=compound_seqs,
     )
 
 
@@ -220,17 +232,21 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
-    import fugashi
-
     logger.info("🧠 初始化 Fugashi NLP Tagger (UniDic)...")
-    tagger = fugashi.Tagger()
+    tagger = create_tagger()
+    # 與正式腳本同源：先導出複合動詞序列（會呼叫 tagger，必須在任何句子分詞之前）
+    compound_seqs = tuple(
+        seq for seq in (
+            derive_target_lemmas(canonical_verb_lemma(v), tagger) for v in TEST_CONFIG["verbs"]
+        ) if len(seq) > 1
+    )
 
     logger.info("=== JP_CoreVerb 分桶驗證腳本（零寫入，選句參數全部寫死於 TEST_CONFIG） ===")
     try:
         async with corpus_async_session_factory() as session:
             metadata_fetcher = _make_metadata_fetcher(session)
             for verb in TEST_CONFIG["verbs"]:
-                verb_cfg = _build_cfg(verb)
+                verb_cfg = _build_cfg(verb, compound_seqs)
                 occupied: list[dict] = []
                 exclude_generated: set[tuple[int, str]] | None = None
                 if args.with_occupied:

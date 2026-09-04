@@ -5,10 +5,10 @@ scans master cards, runs the full selection funnel per verb, then calls the
 FastAPI endpoint to generate context/cloze child cards.
 
 掃描 ``JP_CORE_VERB_MASTER_DECK`` 牌組中的核心動詞母卡（單欄 ``Word``），
-對每個動詞執行完整選句漏斗（docs/14_Core_Verb_Card_Plan.md §6）：
+對每個動詞執行完整選句漏斗（設計依據寫在 ``pipeline_components`` 各模組 docstring）：
 
-    ES 全量游標分頁 → §3.2 過濾 → fugashi token 級驗證 →
-    搭配×活用形分桶 → zigzag 兩段式配額（含 §6.5 增量平衡）→
+    ES 全量游標分頁 → 過濾層（exclude_* / min_sentence_length / 純呻吟句）→ fugashi token 級驗證 →
+    搭配×活用形分桶 → zigzag 兩段式配額（含增量平衡：已生成句計入桶佔用）→
     對選中句呼叫 FastAPI ``/core-verb/generate-child-cards``
     （payload 含 ``target_verb_span`` 供後端挖空交叉驗證）。
 
@@ -16,8 +16,8 @@ FastAPI endpoint to generate context/cloze child cards.
     1. 選句不再「照 script_id 順序取前 N」——改由 ``funnel.run_selection_funnel``
        在配額內最大化覆蓋搭配與活用形的變化空間。
     2. 全量游標分頁（每頁 500 直到空頁），避免 Fetch-100 的頭部偏差
-       （§6.1 必修項 2）。
-    3. per-verb 搜尋設定由同目錄的 ``verb_search_config.json`` 提供（§3.2）。
+       （固定取前 N 筆會系統性偏向章節前段）。
+    3. per-verb 搜尋設定由同目錄的 ``verb_search_config.json`` 提供（鍵見 ``_build_verb_cfg``）。
 
 Example:
     不限制本次總量（受限於每動詞配額）::
@@ -61,11 +61,15 @@ from app.infrastructure.database.elasticsearch_client import (
     dispose_elasticsearch_client,
     search_dialogue_by_verb,
 )
+from app.infrastructure.utils.jp_tokenizer import create_tagger
 from scripts.common.database.log_repository import (
     PROJECT_JP_CORE_VERB,
     GeneratedLogRepository,
 )
+from scripts.common.jp_reading_filter import ReadingFilter
+from scripts.common.verb_lemma import canonical_verb_lemma
 from scripts.common.llm_label import build_llm_model_label
+from scripts.local_anki.common.deletion.profiles import get_profile
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.anki_media_uploader import (
     AnkiMediaUploader,
 )
@@ -73,12 +77,14 @@ from scripts.fastapi_client.JP_VerbPair.pipeline_components.backend_api_client i
     BackendAPIClient,
 )
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import DedupManager
+from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
+    derive_target_lemmas,
+)
 from scripts.fastapi_client.JP_CoreVerb.pipeline_components.funnel import (
     SelectionReport,
     VerbSearchConfig,
     format_selection_report,
     run_selection_funnel,
-    strip_furigana,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -86,11 +92,35 @@ logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).resolve().parent / "verb_search_config.json"
 
+# ---------------------------------------------------------------------------
+# 【臨時】同表層多讀但多讀表抓不到的動詞，暫時整張母卡跳過。
+#
+# TEMPORARY: masters whose kanji surface carries two live readings that the
+# homograph table cannot see, skipped wholesale until the UniDic-sourced
+# candidate readings land.
+#
+# 多讀表（scripts/common/jp_homograph_table.py）的候選讀音只來自「同一表層
+# 被兩張母卡標了不同讀音」。核心動詞 344 張母卡表層零碰撞，於是這些在日文
+# 裡本來就多讀的表層完全進不了表，讀音查表過濾對它們是 no-op，語料裡另一個
+# 讀音的句子會照生。2026-09-03 dry-run 實測（50 張計畫卡中 25 張讀音不符）：
+#
+#   吐[は]く  20 張中 7 張讀 つく  （嘘/ウソ を吐く）
+#   抱[だ]く  20 張中 10 張讀 いだく（感情/不安/疑問/期待 を抱く）
+#   描[か]く  10 張中 8 張讀 えがく（円/弧/虹/夢 を描く）
+#
+# 這三個當時存量皆為 0，跳過不影響既有卡片。其餘 19 個 UniDic 判定多讀的
+# 表層逐句檢查過，語料實際命中的都是母卡讀音（另一讀音為文言或罕用），
+# 故不列入。
+#
+# 正解是把多讀表的候選來源擴成「母卡碰撞 ∪ UniDic 多讀表層」，讓 LLM 依上
+# 下文判讀；擴充完成後刪除本清單。
+_TEMP_SKIP_LEMMAS = frozenset({"吐く", "抱く", "描く"})
+
 
 def _load_search_config() -> dict[str, dict]:
-    """讀取 per-verb 搜尋設定檔（§3.2），鍵統一轉為去標音表記。
+    """讀取 per-verb 搜尋設定檔，鍵統一轉為去標音表記。
 
-    Load the per-verb search config file (§3.2), normalizing keys to
+    Load the per-verb search config file, normalizing keys to
     furigana-stripped form.
 
     Returns:
@@ -107,7 +137,8 @@ def _load_search_config() -> dict[str, dict]:
     except Exception as e:
         logger.warning(f"⚠️ 無法讀取 {_CONFIG_PATH.name}: {e}，全部動詞使用預設搜尋設定。")
         return {}
-    return {strip_furigana(key): value for key, value in raw.items()}
+    # 設定檔鍵以母卡表記書寫（見[み]る），正規化後才對得上 verb_lemma
+    return {canonical_verb_lemma(key): value for key, value in raw.items()}
 
 
 def _build_verb_cfg(
@@ -115,6 +146,9 @@ def _build_verb_cfg(
     verb_lemma: str,
     overrides: dict,
     game_name_jp: str,
+    *,
+    skip_narrator: bool = False,
+    compound_seqs: tuple = (),
 ) -> VerbSearchConfig:
     """由全域 settings 疊加 per-verb 覆寫組出 ``VerbSearchConfig``。
 
@@ -128,6 +162,12 @@ def _build_verb_cfg(
         overrides: ``verb_search_config.json`` 中該動詞的覆寫（可為空 dict）。
             Per-verb overrides; may be empty.
         game_name_jp: 遊戲來源名稱。Source game name.
+        compound_seqs: 本專案全部多 token 目標動詞的 lemma 序列（讓位給更長的
+            複合動詞用）。All multi-token target sequences of the project.
+        skip_narrator: ``--skip-narrator`` 全域旗標；True 時強制排除旁白句，
+            覆蓋 per-verb 的 ``exclude_narration``（只能加嚴、不能放寬）。
+            Global flag forcing narration exclusion on top of the per-verb
+            setting (tightens only).
 
     Returns:
         VerbSearchConfig: 漏斗設定。The funnel configuration.
@@ -138,7 +178,7 @@ def _build_verb_cfg(
         include_keywords=list(overrides.get("include_keywords", [])),
         exclude_keywords=list(overrides.get("exclude_keywords", [])),
         exclude_speakers=list(overrides.get("exclude_speakers", [])),
-        exclude_narration=bool(overrides.get("exclude_narration", False)),
+        exclude_narration=skip_narrator or bool(overrides.get("exclude_narration", False)),
         exclude_script_ids=[int(x) for x in overrides.get("exclude_script_ids", [])],
         max_cards=int(
             overrides.get(
@@ -150,6 +190,8 @@ def _build_verb_cfg(
         min_sentence_length=int(
             getattr(settings, "JP_CORE_VERB_MIN_SENTENCE_LENGTH", 8)
         ),
+        filter_moan=bool(getattr(settings, "JP_CORE_VERB_FILTER_MOAN_SENTENCES", True)),
+        compound_seqs=compound_seqs,
         allow_auxiliary=bool(overrides.get("allow_auxiliary", False)),
         priority_collocations=list(overrides.get("priority_collocations", [])),
         page_size=500,
@@ -348,7 +390,7 @@ async def _generate_from_report(
     """
     # 本機推導的標籤只作兩用:①失敗紀錄(無回應可取)②回應缺欄時的
     # fallback。成功紀錄一律取後端回應的 llm_model(單一事實來源),
-    # 詳見 docs/wip/runtime_config_service_FEAT_2026-08-29.md §3.5。
+    # 詳見 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。
     llm_model_name = build_llm_model_label()
 
     new_generated = 0
@@ -479,10 +521,16 @@ async def main() -> None:
         action="store_true",
         help="測試執行：跑到選句為止列印四段報告，不呼叫後端 API 且不寫入資料庫",
     )
+    parser.add_argument(
+        "--skip-narrator",
+        action="store_true",
+        help="跳過所有旁白/無角色台詞（全域，覆蓋 per-verb 的 exclude_narration）",
+    )
     args = parser.parse_args()
 
     global_limit = args.limit
     dry_run = args.dry_run
+    skip_narrator = args.skip_narrator
     global_total = 0
     verb_stats: dict[str, int] = {}
 
@@ -494,10 +542,8 @@ async def main() -> None:
     else:
         logger.info("⚙️ 本次執行不限制總生成卡片數。")
 
-    import fugashi  # 延後 import：--help 等場景不需分詞器
-
     logger.info("🧠 初始化 Fugashi NLP Tagger (UniDic)...")
-    tagger = fugashi.Tagger()
+    tagger = create_tagger()
 
     master_deck = getattr(settings, "JP_CORE_VERB_MASTER_DECK", "日本語::核心動詞::Master")
     deck_name = re.sub(r"::Master$", "", master_deck)
@@ -536,6 +582,32 @@ async def main() -> None:
         logger.info(f"📦 總共找到 {len(note_ids)} 張母卡片。")
         note_ids.sort()
 
+        # 同表層多讀表：掃母卡建構（不落設定檔）。判斷表由
+        # JP_Common/judge_verb_readings.py 離線產生；表空或本專案沒有多讀
+        # 表層時整段為 no-op，行為與現況相同（計畫 §3.3）。
+        reading_filter = await ReadingFilter.create(anki_client, get_profile(PROJECT_JP_CORE_VERB))
+
+        # 複合動詞序列清單：UniDic 把 走り出す 切成 走る＋出す、気に入る 切成
+        # 気＋に＋入る，這些多 token 目標既要能被自己命中，也必須防止較短的
+        # 單 token 母卡（走る／入る）把它們的句子收走。清單一次建好傳給漏斗。
+        # Multi-token target sequences: needed both to match compounds and to
+        # stop shorter single-token verbs from stealing their sentences.
+        all_notes = await anki_client.get_notes_info(note_ids)
+        # 迴圈內直接複用這批 note，不再逐一往返 Anki（344 張少 344 次呼叫）
+        notes_by_id = {int(n.noteId): n for n in all_notes if getattr(n, "fields", None)}
+        all_lemmas = []
+        for note in all_notes:
+            field = note.fields.get("Word", {})
+            raw = field.get("value", "") if isinstance(field, dict) else getattr(field, "value", "")
+            lemma = canonical_verb_lemma(raw)
+            if lemma:
+                all_lemmas.append(lemma)
+        compound_seqs = tuple(
+            seq for seq in (derive_target_lemmas(lemma, tagger) for lemma in all_lemmas)
+            if len(seq) > 1
+        )
+        logger.info(f"🔗 多 token 複合動詞: {len(compound_seqs)} 個（單 token 母卡將讓位給它們）")
+
         async with corpus_async_session_factory() as session:
             log_repo = GeneratedLogRepository()
             dedup_manager = DedupManager(
@@ -556,29 +628,41 @@ async def main() -> None:
                 logger.info("\n==================================================")
                 logger.info(f"📝 處理母卡片 [{idx}/{len(note_ids)}] (ID: {master_note_id})")
 
-                notes_info = await anki_client.get_notes_info([master_note_id])
-                if not notes_info:
+                note = notes_by_id.get(int(master_note_id))
+                if note is None:
                     logger.warning(f"⚠️ 無法讀取母卡片 {master_note_id} 的資訊，跳過。")
                     continue
 
-                fields = notes_info[0].fields
+                fields = note.fields
                 word_field = fields.get("Word", {})
                 word_display = (
                     word_field.get("value", "")
                     if isinstance(word_field, dict)
                     else getattr(word_field, "value", "")
                 )
-                verb_lemma = strip_furigana(word_display)
+                # 去標音並去掉 Anki 的 ruby 分隔空白（聞[き]き 返[かえ]す →
+                # 聞き返す）——留空白會讓 ES 與 UniDic 都對不上（2026-09-03
+                # 實測 95/344 個動詞因此生不出卡）。
+                verb_lemma = canonical_verb_lemma(word_display)
                 if not verb_lemma:
                     logger.warning("⚠️ 此母卡片沒有 Word 欄位內容，跳過。")
                     continue
 
+                if verb_lemma in _TEMP_SKIP_LEMMAS:
+                    logger.warning(
+                        f"⏭️ 【臨時跳過】'{word_display}'（lemma: '{verb_lemma}'）"
+                        "：同表層多讀且多讀表抓不到，見 _TEMP_SKIP_LEMMAS 說明。"
+                    )
+                    continue
+
                 logger.info(f"🎯 開始處理核心動詞: '{word_display}'（lemma: '{verb_lemma}'）")
                 verb_cfg = _build_verb_cfg(
-                    word_display, verb_lemma, search_config.get(verb_lemma, {}), game_name_jp
+                    word_display, verb_lemma, search_config.get(verb_lemma, {}), game_name_jp,
+                    skip_narrator=skip_narrator,
+                    compound_seqs=compound_seqs,
                 )
 
-                # §6.5 增量平衡：以 Anki 實存子卡對帳後計入桶佔用
+                # 增量平衡：以 Anki 實存子卡對帳後計入桶佔用
                 occupied = await _fetch_occupied(
                     session, log_repo, verb_lemma, anki_client, master_note_id
                 )
@@ -590,6 +674,18 @@ async def main() -> None:
                 # 已有生成紀錄（含軟刪除/失敗）的句子在過濾層直接篩掉
                 exclude_generated = await log_repo.get_logged_keys(
                     session, verb_lemma, source_game, project=PROJECT_JP_CORE_VERB
+                )
+
+                # 同表層多讀（開く＝あく/ひらく）：把「已知讀作其他音」的 script_id
+                # 交給漏斗在抓取階段排除，配額才不會浪費在不屬於本母卡的句子上。
+                # 判斷表為空時集合為空 → 行為與現況完全相同（計畫 §3.3）。
+                verb_cfg.exclude_script_ids = list(
+                    set(verb_cfg.exclude_script_ids)
+                    | await reading_filter.excluded_ids(
+                        session,
+                        verb_lemma,
+                        reading_filter.reading_for_master(verb_lemma, master_note_id),
+                    )
                 )
 
                 report = await run_selection_funnel(
@@ -630,6 +726,7 @@ async def main() -> None:
             logger.info("\n==================================================")
             mode_str = "DRY-RUN 預計" if dry_run else "實際"
             logger.info(f"📊 [{mode_str}統計] 本次執行新增的子卡片總數為: {global_total} 張")
+            reading_filter.log_summary()
             if verb_stats:
                 logger.info("   [各動詞生成明細]")
                 for verb_key, count in sorted(verb_stats.items(), key=lambda x: -x[1]):

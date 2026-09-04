@@ -2,7 +2,7 @@
 
 Tests for the card identity mechanism (``cardId`` + ``noteId``).
 
-對應計劃文件 ``docs/wip/card_identity_writeback_FEAT_2026-08-11.md`` §3.2 的
+對應計劃文件 ``docs/archive/card_identity_writeback_FEAT_2026-08-11.md`` §3.2 的
 決策表與 §3.5 的清除工具。全部以假 AnkiClient 驅動，不連 Anki。
 
 Covers the decision table in §3.2 and the clearing tool in §3.5 of the plan

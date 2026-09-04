@@ -46,7 +46,6 @@ async def init_generated_sentences_log():
         script_id BIGINT UNSIGNED NOT NULL COMMENT '來源台詞 ID (對應 scripts.id)',
         verb_lemma VARCHAR(255) NOT NULL COMMENT '動詞正規表記：母卡標準表層去標音（非搜尋關鍵字）',
         project VARCHAR(32) NOT NULL DEFAULT 'jp_verb_pair' COMMENT '所屬卡片專案 (jp_verb_pair / jp_core_verb)',
-        search_keyword VARCHAR(255) DEFAULT NULL COMMENT '實際命中的搜尋關鍵字（假名/異體擴展）；與 verb_lemma 相同時為 NULL',
 
         -- 關聯還原資訊 (方便 JOIN 與追溯)
         source VARCHAR(255) NOT NULL COMMENT '遊戲來源名稱',
@@ -90,6 +89,11 @@ async def init_generated_sentences_log():
             # An existing table may still carry the old (script_id, verb_lemma)
             # unique key; migrate it idempotently to the project-aware one.
             await _ensure_unique_key(session)
+            # 已退役的欄位：search_keyword 是 2026-09 存量拼寫修復期的安全網，
+            # 任務完成後移除（docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §2.2）。
+            await _drop_legacy_columns(session)
+            # 讀音判斷快取表（與 generated_sentences_log 無關聯，計畫 §2.1）。
+            await _ensure_reading_judgments_table(session)
     except Exception as e:
         logger.error(f"❌ 建立資料表時發生錯誤: {e}")
     finally:
@@ -137,11 +141,6 @@ async def _ensure_columns(session: AsyncSession) -> None:
             "ADD COLUMN project VARCHAR(32) NOT NULL DEFAULT 'jp_verb_pair' "
             "COMMENT '所屬卡片專案 (jp_verb_pair / jp_core_verb)' "
             "AFTER verb_lemma, ADD INDEX idx_project (project)"
-        ),
-        "search_keyword": (
-            "ADD COLUMN search_keyword VARCHAR(255) DEFAULT NULL "
-            "COMMENT '實際命中的搜尋關鍵字（假名/異體擴展）；與 verb_lemma 相同時為 NULL' "
-            "AFTER project"
         ),
     }
 
@@ -199,6 +198,57 @@ async def _ensure_unique_key(session: AsyncSession) -> None:
         logger.info("✅ unique key 檢查完成，無需遷移。")
     else:
         await session.commit()
+
+async def _drop_legacy_columns(session: AsyncSession) -> None:
+    """移除已退役的欄位（冪等：存在才刪）。
+
+    Drop retired columns idempotently (only when present).
+
+    ``search_keyword``：2026-09 存量拼寫修復期用來保留被改寫原值的安全網，
+    修復完成並逐筆驗證後失去用途；無任何讀取方、且不在任何索引內，DROP
+    零風險。
+
+    Args:
+        session: 語料庫資料庫的非同步 Session。Async session.
+    """
+    result = await session.execute(text(
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'generated_sentences_log'"
+    ))
+    existing = {row[0] for row in result.all()}
+    for column in ("search_keyword",):
+        if column in existing:
+            await session.execute(text(f"ALTER TABLE generated_sentences_log DROP COLUMN {column}"))
+            logger.info("🔧 已移除退役欄位: %s", column)
+    await session.commit()
+
+
+async def _ensure_reading_judgments_table(session: AsyncSession) -> None:
+    """建立（或確認存在）jp_verb_reading_judgments 讀音判斷快取表。
+
+    Create the jp_verb_reading_judgments table if it does not exist.
+
+    表的語意：「這句台詞裡的這個表層讀什麼」——台詞本身的屬性，與母卡無關；
+    不進任何去重鍵。由 scripts/fastapi_client/JP_Common/judge_verb_readings.py
+    寫入、生卡腳本只讀（docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §2.1）。
+
+    Args:
+        session: 語料庫資料庫的非同步 Session。Async session.
+    """
+    await session.execute(text("""
+    CREATE TABLE IF NOT EXISTS jp_verb_reading_judgments (
+        script_id    BIGINT UNSIGNED NOT NULL COMMENT '台詞 ID（對應 scripts.id）',
+        verb_surface VARCHAR(32)     NOT NULL COMMENT '同表層多讀的表層，如 汚す',
+        reading      VARCHAR(32)     NOT NULL COMMENT 'LLM 判定的讀音（平假名）；無法判定為空字串',
+        llm_model    VARCHAR(255)    DEFAULT NULL COMMENT '判讀所用模型標籤（取自後端回應）',
+        created_at   DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (script_id, verb_surface),
+        FOREIGN KEY (script_id) REFERENCES scripts(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """))
+    await session.commit()
+    logger.info("✅ jp_verb_reading_judgments 資料表建立成功 (或已存在)。")
+
 
 if __name__ == "__main__":
     if sys.platform == 'win32':

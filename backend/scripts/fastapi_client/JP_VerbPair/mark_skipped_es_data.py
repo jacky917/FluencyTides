@@ -6,7 +6,7 @@ variant additionally marks normally-deduped log rows with
 
 【行為差異註記 2026-08-27】主腳本 generate_child_cards.py 已接上
 fugashi token 級驗證（lemma/讀音/複合動詞前後項/補助動詞四關，
-詳見 docs/wip/verbpair_fugashi_validation_FEAT_2026-08-27.md），
+詳見 docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md），
 本維運變體**刻意未接**：其 UPDATE 只影響既有 DB 紀錄、不會創造新卡，
 未驗證的 ES 誤命中在此最多是對不存在的紀錄空更新。若日後把本腳本
 當生成器使用，須先移植同款驗證。
@@ -395,7 +395,7 @@ async def main() -> None:
             uploader = AnkiMediaUploader(anki_client, voice_dir, avatar_dir, source_game)
             
             for idx, master_note_id in enumerate(note_ids, 1):
-                logger.info(f"\n==================================================")
+                logger.info("\n==================================================")
                 logger.info(f"📝 處理母卡片 [{idx}/{len(note_ids)}] (ID: {master_note_id})")
                 
                 notes_info = await anki_client.get_notes_info([master_note_id])

@@ -4,7 +4,6 @@ Build the verb inverted index (dialogue_verbs_index) by tokenizing
 dialogue with Fugashi (UniDic) and extracting verb lemmas.
 """
 
-import os
 import sys
 import time
 from pathlib import Path
@@ -17,8 +16,8 @@ import scripts.common.env  # noqa
 
 import pymysql
 from pymysql.cursors import SSCursor
-import fugashi
 from app.core.config import settings
+from app.infrastructure.utils.jp_tokenizer import create_tagger
 
 def setup_database(conn):
     """建立倒排索引資料表並清除目標遊戲的舊索引。
@@ -76,7 +75,7 @@ def build_nlp_index():
     setup_database(write_conn)
     
     print("🧠 正在初始化 Fugashi NLP Tagger (UniDic)...")
-    tagger = fugashi.Tagger()
+    tagger = create_tagger()
     
     # 使用 SSCursor (Server Side Cursor) 可以一筆一筆流式讀取，不佔用本地記憶體
     # 避免 20MB 的資料一次全部載入造成 MemoryError

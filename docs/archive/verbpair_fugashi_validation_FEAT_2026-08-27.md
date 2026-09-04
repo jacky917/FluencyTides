@@ -8,7 +8,7 @@
 | **範圍** | `scripts/fastapi_client/JP_CoreVerb/pipeline_components/candidate_validator.py`(擴充)、`scripts/fastapi_client/JP_VerbPair/generate_child_cards.py`(接入)、`scripts/fastapi_client/JP_VerbPair/extra_search_keywords.json`(格式擴充)、對應單元測試 |
 | **不動** | ES 檢索本身(`elasticsearch_client.search_dialogue_by_verb`)、後端 API 與 handler、CoreVerb 管線的現有行為(驗證器擴充需回歸相容)、已生成的存量卡片(清查另案) |
 | **PR / 進度** | [#12](https://github.com/jacky917/FluencyTides/pull/12)(已合併 2026-08-27) |
-| **關聯文件** | `docs/14_Core_Verb_Card_Plan.md` §6.1(CoreVerb 驗證器原始設計)、`docs/wip/child_card_deletion_toolkit_FEAT_2026-08-27.md`(刪除工具,清錯卡時配合使用) |
+| **關聯文件** | `docs/14_Core_Verb_Card_Plan.md`（未曾進版；設計依據現寫在 `backend/scripts/fastapi_client/JP_CoreVerb/pipeline_components/` 各模組 docstring） §6.1(CoreVerb 驗證器原始設計)、`docs/archive/child_card_deletion_toolkit_FEAT_2026-08-27.md`(刪除工具,清錯卡時配合使用) |
 
 ---
 

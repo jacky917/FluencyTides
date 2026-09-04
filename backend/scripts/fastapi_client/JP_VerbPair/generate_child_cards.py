@@ -46,16 +46,21 @@ import scripts.common.env  # noqa
 from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.database.corpus_database import corpus_async_session_factory, dispose_corpus_engine
 from app.infrastructure.database.elasticsearch_client import search_dialogue_by_verb, dispose_elasticsearch_client
+from app.infrastructure.utils.jp_tokenizer import create_tagger
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.core.config import settings
 from sqlalchemy import text
 from scripts.common.database.log_repository import PROJECT_JP_VERB_PAIR
 from scripts.common.llm_label import build_llm_model_label
+from scripts.common.database.canonicalize_verb_lemma import load_keyword_map
+from scripts.common.jp_moan_filter import REJECTION_MOAN, is_moan_sentence
+from scripts.common.jp_reading_filter import ReadingFilter
+from scripts.local_anki.common.deletion.profiles import get_profile
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import DedupManager
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.backend_api_client import BackendAPIClient
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.anki_media_uploader import AnkiMediaUploader
 # token 級驗證器與 CoreVerb 共用（跨包引用已有先例：CoreVerb 引用本包的
-# DedupManager/uploader），詳見 docs/wip/verbpair_fugashi_validation_FEAT_2026-08-27.md §D1
+# DedupManager/uploader），詳見 docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md §D1
 from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
     validate_candidate,
 )
@@ -68,32 +73,6 @@ MASTER_DECK = "日本語::自他動詞::Master"
 # 純假名判定（讀音導出用）。Kana-only pattern for reading derivation.
 _KANA_ONLY = re.compile(r'^[ぁ-ゖー]+$')
 
-# ── 純呻吟句偵測（.env: JP_VERB_PAIR_FILTER_MOAN_SENTENCES）──
-# 兩個樣式須同時命中才判定（2026-08-27 全量體檢的分類標準，28/4196 命中，
-# 誤殺率抽驗為零——僅帶「♪」等單一記號的正常句只中 _MOAN_HINT 不中
-# _MOAN_DENSITY，會被放行）：
-# _MOAN_HINT：伏字/音符記號，或小假名・促音三連以上，或擬態音節三連以上。
-# _MOAN_DENSITY：擬態音節與感嘆符號連續 12 字以上（純呻吟串的密度特徵）。
-_MOAN_HINT = re.compile(r'[●♪]|[ぁぃぅぇぉゃゅょっ]{3,}|(?:ちゅ|じゅる|れろ|ぷち|んん|はぁ){3,}')
-_MOAN_DENSITY = re.compile(r'(?:[ぁぃぅぇぉゃゅょっんあはぅ、…！ッ]|ぢゅ|ちゅ|れろ|じゅ){12,}')
-
-REJECTION_MOAN = "呻吟句樣式"
-
-
-def _is_moan_sentence(text: str) -> bool:
-    """判定句子是否為「純呻吟句」（擬態音節密度過高的 R18 台詞）。
-
-    Detect "pure moan" sentences (R18 lines dominated by onomatopoeic
-    syllables) — the verb usage in them is usually valid but the teaching
-    value is near zero.
-
-    Args:
-        text: 已去除注音標記的句子。Sentence with furigana stripped.
-
-    Returns:
-        bool: True 表示應過濾。True when the sentence should be filtered.
-    """
-    return bool(_MOAN_HINT.search(text) and _MOAN_DENSITY.search(text))
 # base[ruby] → ruby 的替換（埋[う]まる → うまる），同 jp_core_verb_handler 的 to_pure_kana
 _FURIGANA_TO_KANA = re.compile(r'[^\s\[\]]+\[([^\]]+)\]')
 _BRACKET = re.compile(r'\[.*?\]')
@@ -201,6 +180,7 @@ async def process_verb_group(
     dry_run_generated: Set[tuple[str, int]] = None,
     tagger=None,
     validation_config: dict = None,
+    reading_filter: ReadingFilter | None = None,
     rejection_stats: dict[str, int] = None,
     filter_moan: bool = True,
 ) -> int:
@@ -314,6 +294,15 @@ async def process_verb_group(
                 limit=100,
                 last_script_id=0
             )
+            # 同表層多讀（汚す＝けがす/よごす）：只在關鍵字是漢字表層時查
+            # jp_verb_reading_judgments 過濾——假名寫法的句子讀音本身就是明的。
+            # 有判斷且不符 → 丟棄且不留紀錄；無判斷 → 放行（表空時行為與現況相同）。
+            # 詳見 docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.3。
+            if reading_filter is not None and kw == normalized_verb and reading_filter.is_homograph(normalized_verb):
+                master_reading = reading_filter.reading_for_master(normalized_verb, master_note_id)
+                before = len(es_results)
+                es_results = await reading_filter.apply(session, normalized_verb, master_reading, es_results)
+                logger.info(f"   🔤 讀音查表：'{kw}'（本母卡 {master_reading}）候選 {before} → {len(es_results)}")
             target = base_quota + (1 if idx < remainder else 0)
             # 驗證參數：target_lemma 固定用母卡的標準表層——句中假名寫法
             # （ほぐす）的 UniDic lemma 即為標準形（解す），假名擴展關鍵字
@@ -363,7 +352,7 @@ async def process_verb_group(
                     clean_sentence = _BRACKET.sub("", dialogue)
 
                     # ── 第零關：純呻吟句過濾（.env 可關） ──
-                    if filter_moan and _is_moan_sentence(clean_sentence):
+                    if filter_moan and is_moan_sentence(clean_sentence):
                         stat_key = f"{kd['target_lemma']}|{REJECTION_MOAN}"
                         rejection_stats[stat_key] = rejection_stats.get(stat_key, 0) + 1
                         logger.info(
@@ -397,7 +386,7 @@ async def process_verb_group(
                 # 去重鍵一律用母卡標準表層（target_lemma），不用命中的關鍵字
                 # （假名擴展 まとめる 等）——否則同句會因拼寫不同重複生成
                 # （docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md §2 R1）。
-                # 關鍵字只作追溯，走 search_keyword 欄位。
+                # 關鍵字只用於 ES 檢索與送給 LLM 的 target_verb，不落 DB。
                 if dry_run and (kd["target_lemma"], script_id) in dry_run_generated:
                     continue
 
@@ -443,7 +432,7 @@ async def process_verb_group(
                 # 本機推導的標籤只作兩用:①失敗紀錄(無回應可取)②回應缺欄
                 # 時的 fallback。成功紀錄一律取後端回應的 llm_model——後端與
                 # 腳本 .env 是兩份檔案,本機推導曾造成 190 筆錯標(2026-08-28),
-                # 詳見 docs/wip/runtime_config_service_FEAT_2026-08-29.md §3.5。
+                # 詳見 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。
                 llm_model_name = build_llm_model_label()
 
                 try:
@@ -467,7 +456,6 @@ async def process_verb_group(
                         context_note_id=data.get("context_note_id"),
                         cloze_note_id=data.get("cloze_note_id"),
                         llm_model=actual_llm_model,
-                        search_keyword=kd["keyword"],
                     )
                     success_count += 1
                     new_generated += 1
@@ -486,7 +474,7 @@ async def process_verb_group(
 
                         if error_code == "CLOZE_POSITIONING_FAILED":
                             logger.warning(f"⚠️ 該句子挖空定位失敗被後端拒絕，自動跳過並嘗試下一句: {e.response.text}")
-                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name, search_keyword=kd["keyword"])
+                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name)
                             continue
                         
                         logger.error(f"❌ 發生預期外的業務邏輯錯誤 (HTTP 422): {e.response.text}")
@@ -500,12 +488,12 @@ async def process_verb_group(
                             
                         if "LLM API 在所有重試後仍回傳空內容" in e.response.text or "PROHIBITED_CONTENT" in e.response.text:
                             logger.warning("⚠️ 遭遇 LLM 安全審查攔截，自動跳過此句並繼續...")
-                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name, search_keyword=kd["keyword"])
+                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name)
                             continue
 
                         if e.response.status_code >= 500:
                             logger.warning(f"⚠️ 遭遇伺服器錯誤 ({e.response.status_code})，文字內容: '{e.response.text[:100]}'。將紀錄失敗並跳過...")
-                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name, search_keyword=kd["keyword"])
+                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name)
                             await asyncio.sleep(3)
                             continue
                             
@@ -523,7 +511,7 @@ async def process_verb_group(
         # 系統會將剩餘配額平均分配（例如 17 張配額 -> 捲くる 目標 9 張，まくる 目標 8 張）。
         # 接著針對兩份獨立的 List 進行 API 請求，只有生成成功才會消耗配額。
         # =====================================================================
-        logger.info(f"   🔄 開始第一階段分配 (Pass 1)...")
+        logger.info("   🔄 開始第一階段分配 (Pass 1)...")
         stop_all = False
         for kd in keyword_data:
             if not await process_keyword_up_to_target(kd):
@@ -539,7 +527,7 @@ async def process_verb_group(
             # =====================================================================
             current_total_success = sum(kd["successes"] for kd in keyword_data)
             if current_total_success < total_needed:
-                logger.info(f"   🔄 開始第二階段互補 (Pass 2)...")
+                logger.info("   🔄 開始第二階段互補 (Pass 2)...")
                 for kd in keyword_data:
                     # 如果該關鍵字的備用名單還沒用完，代表它可以幫忙消化別人沒用完的配額
                     if kd["cursor"] < len(kd["es_results"]):
@@ -555,29 +543,6 @@ async def process_verb_group(
                         break
 
     return new_generated
-
-
-def _all_extra_keywords(validation_config: dict) -> set[str]:
-    """彙整 extra_search_keywords.json 裡全部的假名/異體擴展關鍵字。
-
-    Collect every kana/variant search keyword from the loaded config.
-
-    供啟動防線查 DB 是否仍有以關鍵字拼寫存放的 verb_lemma
-    （docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md §2 R1）。
-
-    Args:
-        validation_config: ``_load_validation_config()`` 的結果。Loaded
-            per-verb validation config.
-
-    Returns:
-        set[str]: 關鍵字集合。The keyword set.
-    """
-    return {
-        kw
-        for verbs in validation_config.values()
-        for entry in verbs.values()
-        for kw in entry.get("extra_keywords", [])
-    }
 
 
 async def main() -> None:
@@ -603,9 +568,8 @@ async def main() -> None:
     logger.info("=== 批量生成子卡片腳本 (ES 版) ===")
 
     # token 級驗證器的分詞器：整個執行期共用一顆（初始化約 1 秒）
-    import fugashi
     logger.info("🧠 初始化 Fugashi NLP Tagger (UniDic)...")
-    tagger = fugashi.Tagger()
+    tagger = create_tagger()
     validation_config = _load_validation_config()
     filter_moan = bool(getattr(settings, "JP_VERB_PAIR_FILTER_MOAN_SENTENCES", True))
     logger.info(f"🧹 純呻吟句過濾: {'開啟' if filter_moan else '關閉'} (JP_VERB_PAIR_FILTER_MOAN_SENTENCES)")
@@ -641,6 +605,11 @@ async def main() -> None:
         
         # 為了保證每次執行結果的一致性，強制對 ID 進行排序
         note_ids.sort()
+
+        # 同表層多讀表：掃母卡建構（不落設定檔），供 ES 候選的讀音查表過濾。
+        # 判斷表由 JP_Common/judge_verb_readings.py 離線產生；表空時過濾為
+        # no-op，生卡行為與現況相同（計畫 §3.3）。
+        reading_filter = await ReadingFilter.create(anki_client, get_profile(PROJECT_JP_VERB_PAIR))
         
         # 準備音檔和頭像的路徑
         voice_dir = Path(settings.JP_VERB_PAIR_VOICE_DIR)
@@ -667,15 +636,17 @@ async def main() -> None:
             # 啟動防線：DB 若仍有以假名擴展關鍵字或帶標音拼寫存放的 verb_lemma，
             # 正規拼寫查不到那些紀錄，會把已生成的句子當新句再做一張（2026-09-02
             # dry-run 實測 37 張）。必須先跑 canonicalize_verb_lemma.py 才能生成。
-            # Startup guard: rows stored under keyword/furigana spellings are
-            # invisible to canonical lookups and would be regenerated.
+            # 判斷按母卡進行——同一字串可同時是 A 母卡的表層與 B 母卡的關鍵字。
+            # Startup guard (per master): rows stored under keyword/furigana
+            # spellings are invisible to canonical lookups and would be
+            # regenerated.
             stale = await dedup_manager.repo.find_non_canonical_lemmas(
-                session, _all_extra_keywords(validation_config), project=PROJECT_JP_VERB_PAIR,
+                session, load_keyword_map(), project=PROJECT_JP_VERB_PAIR,
             )
             if stale:
                 logger.error("🛑 generated_sentences_log 仍有非正規拼寫的 verb_lemma，繼續生成會產生重複卡：")
-                for lemma, count in stale:
-                    logger.error(f"   '{lemma}': {count} 筆")
+                for lemma, master_nid, count in stale:
+                    logger.error(f"   '{lemma}'（母卡 {master_nid}）: {count} 筆")
                 logger.error("   請先執行 python scripts/common/database/canonicalize_verb_lemma.py --execute，再重跑本腳本。")
                 return
 
@@ -683,7 +654,7 @@ async def main() -> None:
             uploader = AnkiMediaUploader(anki_client, voice_dir, avatar_dir, source_game)
             
             for idx, master_note_id in enumerate(note_ids, 1):
-                logger.info(f"\n==================================================")
+                logger.info("\n==================================================")
                 logger.info(f"📝 處理母卡片 [{idx}/{len(note_ids)}] (ID: {master_note_id})")
                 
                 notes_info = await anki_client.get_notes_info([master_note_id])
@@ -747,6 +718,7 @@ async def main() -> None:
                         validation_config=validation_config,
                         rejection_stats=rejection_stats,
                         filter_moan=filter_moan,
+                        reading_filter=reading_filter,
                     )
                     global_total += new_cards
                     if global_limit > 0 and global_total >= global_limit:
@@ -787,6 +759,7 @@ async def main() -> None:
                         validation_config=validation_config,
                         rejection_stats=rejection_stats,
                         filter_moan=filter_moan,
+                        reading_filter=reading_filter,
                     )
                     global_total += new_cards
                     if global_limit > 0 and global_total >= global_limit:
@@ -809,6 +782,7 @@ async def main() -> None:
                 for stat_key, count in sorted(rejection_stats.items(), key=lambda x: x[1], reverse=True):
                     verb_part, reason = stat_key.split("|", 1)
                     logger.info(f"   - {verb_part}（{reason}） : {count:>3} 句")
+            reading_filter.log_summary()
 
     except Exception as e:
         logger.error(f"💥 發生非預期嚴重錯誤，腳本提前終止: {e}")

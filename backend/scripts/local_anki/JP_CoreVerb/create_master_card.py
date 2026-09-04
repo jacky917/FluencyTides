@@ -5,7 +5,7 @@ whole process is idempotent (safe to rerun): existing note_ids are
 verified via a fast path, missing cards are deduplicated by
 furigana-stripped verb form, and new note_ids are written back.
 
-行為（對應 docs/14_Core_Verb_Card_Plan.md §7.4）：
+行為：
 
 1. 讀取動詞清單 `core_verbs.json`（``--file`` 可覆寫，預設同目錄）。
 2. 快速跳過（note_id 快路徑）：條目已有 ``note_id`` → 以 ``notesInfo``
@@ -28,7 +28,6 @@ import argparse
 import asyncio
 import json
 import logging
-import re
 import sys
 from pathlib import Path
 
@@ -39,6 +38,7 @@ if str(_backend_dir) not in sys.path:
 import scripts.common.env  # noqa
 
 from app.core.config import settings
+from scripts.common.verb_lemma import canonical_verb_lemma
 from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.utils.id_generator import generate_unique_card_id
 
@@ -67,7 +67,7 @@ def strip_furigana(word: str) -> str:
         str: 去標音、去空白後的動詞乾淨形。
             Plain verb form with furigana and whitespace removed.
     """
-    return re.sub(r'\[.+?\]', '', word).replace(' ', '').replace('　', '')
+    return canonical_verb_lemma(word)
 
 
 def load_core_verbs(json_path: Path) -> list[dict]:

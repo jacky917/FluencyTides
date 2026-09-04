@@ -154,6 +154,15 @@ class ProjectProfile:
     source_game: str
     game_name_jp: str
     extract_verb_lemma: Callable[[dict, dict | None], str] = field(compare=False)
+    # 母卡上承載動詞表記（含標音）的欄位；供同表層多讀表建構
+    # （scripts/common/jp_homograph_table.py）。Master fields holding the
+    # verb surfaces (with furigana), used to build the homograph table.
+    master_verb_fields: tuple[str, ...] = ()
+
+    @property
+    def master_deck(self) -> str:
+        """母卡牌組（``root_deck::Master``）。The master subdeck."""
+        return f"{self.root_deck}::Master"
 
 
 def _core_verb_root_deck() -> str:
@@ -190,6 +199,7 @@ def build_registry() -> dict[str, ProjectProfile]:
         source_game=settings.JP_VERB_PAIR_SOURCE_GAME,
         game_name_jp=settings.JP_VERB_PAIR_GAME_NAME_JP,
         extract_verb_lemma=_verb_pair_lemma,
+        master_verb_fields=("Intransitive_Word", "Transitive_Word"),
     )
     jp_core_verb = ProjectProfile(
         project_key=PROJECT_JP_CORE_VERB,
@@ -206,6 +216,7 @@ def build_registry() -> dict[str, ProjectProfile]:
             settings, "JP_CORE_VERB_GAME_NAME_JP", settings.JP_VERB_PAIR_GAME_NAME_JP
         ),
         extract_verb_lemma=_core_verb_lemma,
+        master_verb_fields=("Word",),
     )
     return {p.project_key: p for p in (jp_verb_pair, jp_core_verb)}
 

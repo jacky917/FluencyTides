@@ -8,7 +8,7 @@ Unit tests for the pure-moan sentence filter.
 
 import scripts.common.env  # noqa: F401  # 載入 .env，供 app.core.config 使用
 
-from scripts.fastapi_client.JP_VerbPair.generate_child_cards import _is_moan_sentence
+from scripts.common.jp_moan_filter import is_moan_sentence
 
 
 class TestIsMoanSentence:
@@ -22,7 +22,7 @@ class TestIsMoanSentence:
             "「ひゃんっ……あ、あ、あぁぁぁ……ヤダぁ、止まらない、止まりませんよぉ……あ、あ、はぁぁぁぁ……っ」",
         ]
         for s in samples:
-            assert _is_moan_sentence(s), f"應攔下: {s[:25]}"
+            assert is_moan_sentence(s), f"應攔下: {s[:25]}"
 
     def test_normal_sentences_pass(self):
         """一般句（含帶 ♪ 等單一記號的）→ 放行。Normal lines pass."""
@@ -35,7 +35,7 @@ class TestIsMoanSentence:
             "私だって、気持ちがこもってます。私の心は、ちゃんとここに有りますよ。",
         ]
         for s in samples:
-            assert not _is_moan_sentence(s), f"不應攔下: {s[:25]}"
+            assert not is_moan_sentence(s), f"不應攔下: {s[:25]}"
 
     def test_empty_string_passes(self):
-        assert not _is_moan_sentence("")
+        assert not is_moan_sentence("")

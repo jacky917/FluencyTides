@@ -31,8 +31,12 @@ aiohttp>=3.9.0           # scripts/database/Elasticsearch/test_es_connection.py�
 #   - unidic（完整版，~1GB）：讀音/lemma 判定較準，fugashi 偵測到會自動優先使用。
 #     安裝後需另跑 `python -m unidic download` 下載詞典；
 #     【注意】Windows + Python 3.14 下官方下載器會因 multiprocessing fork 錯誤
-#     失敗，需手動下載（步驟見 docs/wip/verbpair_fugashi_validation_FEAT_2026-08-27.md）。
+#     失敗，需手動下載（步驟見 docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md）。
 #   - unidic-lite（隨裝即用）：完整版詞典未下載時的 fallback，保證環境開箱可跑。
+# 【選哪本】不由 fugashi 自動偵測——一律經 app/infrastructure/utils/jp_tokenizer.py
+#   的 create_tagger()，它以 -d 明確指定路徑、回退時記 WARNING，並由
+#   GET /api/v1/jp/tokenizer/dictionary 對外揭露本行程實際載入的詞典。
+#   兩本詞典對連用形名詞化等邊界判定不同，混用會讓不同環境產出不同的卡片。
 # 使用點：app/infrastructure/utils/nlp.py（動詞 lemma 正規化，取 feature[7]）、
 # JP_CoreVerb / JP_VerbPair 選句管線的 token 級驗證、
 # scripts/database/MySQL/JP_VerbPair/build_nlp_index.py。

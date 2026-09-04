@@ -1,4 +1,4 @@
-"""JP_CoreVerb 選句管線的參數化單元測試（計劃 §6.1 / §6.3 / §6.4）。
+"""JP_CoreVerb 選句管線的參數化單元測試（驗證器、分桶、配額分配）。
 
 Parameterized unit tests for the JP_CoreVerb selection pipeline: a fake
 token layer runnable anywhere, plus a real-fugashi regression layer.
@@ -111,7 +111,7 @@ def AUX(surface, lemma):
 
 
 # =============================================================================
-# 驗證器（§6.1）——計劃指名的陷阱句，全部以 UniDic 短単位風格假 token 鋪設
+# 驗證器——設計時指名的陷阱句，全部以 UniDic 短単位風格假 token 鋪設
 # =============================================================================
 
 
@@ -165,7 +165,7 @@ def AUX(surface, lemma):
 def test_validate_candidate_trap_sentences(
     sentence, tokens, expected_accepted, expected_reason
 ):
-    """計劃 §6.1 指名的陷阱句逐一斷言。Assert each trap sentence from §6.1."""
+    """設計時指名的陷阱句逐一斷言。Assert each designated trap sentence."""
     tagger = make_tagger({sentence: tokens})
     result = validate_candidate(sentence, "見る", allow_auxiliary=False, tagger=tagger)
     assert result.accepted is expected_accepted
@@ -408,7 +408,7 @@ def test_to_katakana_converts_hiragana_only():
 
 
 # =============================================================================
-# 搭配桶（§6.3 維度 A）
+# 搭配桶（維度 A，classify_collocation）
 # =============================================================================
 
 
@@ -437,7 +437,7 @@ def test_classify_collocation(tokens, span_index, expected):
 
 
 # =============================================================================
-# 活用形桶（§6.3 維度 B，十四桶、順序敏感）
+# 活用形桶（維度 B，classify_conjugation：十四桶、順序敏感）
 # =============================================================================
 
 
@@ -493,7 +493,7 @@ def test_classify_conjugation_surface_fallback_long_unit():
 
 
 # =============================================================================
-# 配額分配（§6.4-6.5）
+# 配額分配（select_diverse：兩段式 + 增量平衡）
 # =============================================================================
 
 
@@ -511,9 +511,13 @@ def _cand(script_id, colloc, conj, chapter="ch1", speaker="A", length=20):
     )
 
 
-def test_select_diverse_pass1_covers_each_collocation_once():
-    """Pass 1：每個搭配桶各保底 1 句。
-    Pass 1 guarantees one pick per collocation bucket."""
+def test_select_diverse_conj_coverage_precedes_collocation_coverage():
+    """Pass 1 活用形保底先於搭配保底：配額緊時活用形（維度 B）全覆蓋優先。
+
+    Dimension B coverage wins under a tight quota: the conjugation pass runs
+    before collocation guaranteeing, so an uncovered collocation may be left
+    for the next run（其未覆蓋狀態會列入報告）。
+    """
     candidates = [
         _cand(1, "様子を", "辞書形/連体", "ch1"),
         _cand(2, "様子を", "た形", "ch1"),
@@ -522,9 +526,12 @@ def test_select_diverse_pass1_covers_each_collocation_once():
     ]
     result = select_diverse(candidates, quota=3, max_per_chapter=2)
     assert len(result.selected) == 3
-    collocations = {item.candidate.collocation for item in result.selected}
-    assert collocations == {"様子を", "夢を", "大目に"}
-    assert all(item.pass_label == "Pass1" for item in result.selected)
+    # 三個活用形桶全數覆蓋——這是活用形保底階段的職責
+    assert {item.candidate.conjugation for item in result.selected} == {
+        "辞書形/連体", "た形", "て形"}
+    assert all(item.pass_label == "Pass1-conj" for item in result.selected)
+    # 配額被活用形保底用盡，未取到的搭配桶如實列入未覆蓋清單
+    assert result.uncovered_collocations == ["夢を"]
 
 
 def test_select_diverse_zigzag_mixes_large_and_small_buckets():
@@ -561,9 +568,16 @@ def test_select_diverse_singleton_buckets_demoted():
             candidates.append(_cand(sid, bucket, "た形", chapter=f"ch{sid}"))
     result = select_diverse(candidates, quota=3, max_per_chapter=1)
     picked = [item.candidate.collocation for item in result.selected]
-    # 前兩席必屬 multi 桶（zigzag：最大 電話を → 最小 目で），第三席才輪到 singles
-    assert picked[:2] == ["電話を", "目で"]
-    assert picked[2] == "あ桶"
+    labels = [item.pass_label for item in result.selected]
+    # 兩個 multi 桶（電話を／目で）都拿到席位：一個由活用形保底帶入、
+    # 一個由搭配保底的 zigzag 取得
+    assert {"電話を", "目で"} <= set(picked)
+    # 5 個一次性桶只進得去 1 個，且是因為它獨佔一個活用形桶（辞書形/連体）
+    # ——搭配保底階段的 singles 殿後規則仍然生效
+    singles = [p for p in picked if p.endswith("桶")]
+    assert len(singles) == 1
+    assert labels[picked.index(singles[0])] == "Pass1-conj"
+    assert "Pass1" in labels  # zigzag 階段確實有取到桶
 
 
 def test_select_diverse_priority_collocations_guaranteed_seat():
@@ -571,14 +585,15 @@ def test_select_diverse_priority_collocations_guaranteed_seat():
     Priority collocations get a guaranteed seat when candidates exist."""
     candidates = []
     sid = 0
-    # 大量噪音桶把配額擠滿
+    # 大量噪音桶把配額擠滿（每桶 2 句 → multi 桶，涵蓋兩個活用形桶）
     for i in range(6):
         sid += 1
         candidates.append(_cand(sid, f"噪音{i}を", "辞書形/連体", chapter=f"ch{sid}"))
         candidates.append(_cand(sid + 100, f"噪音{i}を", "た形", chapter=f"ch{sid + 100}"))
-    # 目標桶只有 1 句（沒有優先席位時會被 multi 桶擠掉）
+    # 目標桶只有 1 句，且活用形與噪音桶重疊——活用形保底救不到它，
+    # 搭配保底階段又因 singles 殿後被擠掉，所以沒有優先席位就必然落選
     sid += 1
-    candidates.append(_cand(sid, "電話を", "て形", chapter=f"ch{sid}"))
+    candidates.append(_cand(sid, "電話を", "辞書形/連体", chapter=f"ch{sid}"))
     quota = 3
     baseline = select_diverse(candidates, quota=quota, max_per_chapter=1)
     assert "電話を" not in {i.candidate.collocation for i in baseline.selected}
@@ -596,9 +611,11 @@ def test_select_diverse_priority_collocations_guaranteed_seat():
 def test_select_diverse_priority_bucket_not_double_taken():
     """優先席位選過的桶在 zigzag 階段不再重複取。
     Priority-taken buckets are not re-taken during zigzag."""
+    # 電話を 的兩句同屬「た形」——優先席位取一句後，活用形保底不需要再回頭
+    # 取同桶的第二句，第二席應讓給尚未覆蓋的活用形（様子を 的辞書形/連体）
     candidates = [
         _cand(1, "電話を", "た形", chapter="ch1"),
-        _cand(2, "電話を", "て形", chapter="ch2"),
+        _cand(2, "電話を", "た形", chapter="ch2"),
         _cand(3, "様子を", "辞書形/連体", chapter="ch3"),
     ]
     result = select_diverse(
@@ -606,23 +623,29 @@ def test_select_diverse_priority_bucket_not_double_taken():
     )
     picked = [item.candidate.collocation for item in result.selected]
     assert picked == ["電話を", "様子を"]
+    assert result.selected[0].pass_label == "Pass1-priority"
 
 
-def test_select_diverse_pass2_fills_conjugation_holes():
-    """Pass 2：剩餘配額優先補「尚未覆蓋的活用形桶」。
-    Pass 2 fills uncovered conjugation buckets with leftover quota."""
+def test_select_diverse_pass2_uses_leftover_quota():
+    """Pass 2：活用形與搭配都已保底後，剩餘配額由 Pass 2 吃掉。
+
+    Leftover quota goes to Pass 2 once both dimensions are guaranteed; it
+    prefers the least-occupied conjugation bucket（此處僅剩 た形 有候選）。
+    """
     candidates = [
-        _cand(1, "様子を", "辞書形/連体", "ch1"),
+        _cand(1, "様子を", "た形", "ch1"),
         _cand(2, "様子を", "た形", "ch2"),
         _cand(3, "様子を", "て形", "ch3"),
     ]
-    result = select_diverse(candidates, quota=3, max_per_chapter=2)
+    result = select_diverse(candidates, quota=3, max_per_chapter=1)
     assert len(result.selected) == 3
     labels = [item.pass_label for item in result.selected]
-    assert labels.count("Pass1") == 1  # 搭配桶只有一個
-    assert labels.count("Pass2") == 2
-    conjugations = {item.candidate.conjugation for item in result.selected}
-    assert conjugations == {"辞書形/連体", "た形", "て形"}
+    # 兩個活用形桶各由保底階段取 1 句；唯一的搭配桶已被覆蓋故 zigzag 跳過；
+    # 剩下的 1 席由 Pass 2 補
+    assert labels.count("Pass1-conj") == 2
+    assert labels.count("Pass2") == 1
+    assert "Pass1" not in labels
+    assert {item.candidate.conjugation for item in result.selected} == {"た形", "て形"}
     assert result.uncovered_conjugations == []
 
 
@@ -635,7 +658,7 @@ def test_select_diverse_respects_max_per_chapter():
 
 
 def test_select_diverse_occupied_buckets_skip_and_count():
-    """§6.5 增量平衡：已生成佔用的搭配桶視為已保底，章節計數一體檢查。
+    """增量平衡：已生成佔用的搭配桶視為已保底，章節計數一體檢查。
     Occupied buckets count as covered; chapter counts are combined."""
     candidates = [
         _cand(1, "様子を", "辞書形/連体", "ch1"),
@@ -780,7 +803,7 @@ class TestWithRealFugashi:
         ],
     )
     def test_real_segmentation_traps(self, tagger, sentence, expected_accepted):
-        """計劃 §6.1 陷阱句在真實分詞下的攔截行為。
+        """設計時指名的陷阱句在真實分詞下的攔截行為。
         Trap-sentence interception under real segmentation."""
         result = validate_candidate(sentence, "見る", allow_auxiliary=False, tagger=tagger)
         assert result.accepted is expected_accepted
@@ -792,3 +815,163 @@ class TestWithRealFugashi:
         cand = result.candidate
         assert classify_collocation(cand.tokens, cand.span_token_index) == "様子を"
         assert classify_conjugation(cand.tokens, cand.span_token_index) == "た形"
+
+
+# ============================================================
+# 過濾層：純呻吟句（與 JP_VerbPair 共用同一套判定）
+# ============================================================
+
+def test_funnel_filters_moan_sentences():
+    """純呻吟句在過濾層被擋下，並計入 FILTER_MOAN。"""
+    from scripts.fastapi_client.JP_CoreVerb.pipeline_components.funnel import FILTER_MOAN
+    from scripts.common.jp_moan_filter import is_moan_sentence
+
+    moan = "んんっ、ちゅぱちゅぱ、れろれろ、あぁぁんっ、はぁはぁ、ちゅぅぅ……"
+    normal = "「ドアが開いた音がしたので、様子を見に行った」"
+    assert is_moan_sentence(moan) is True
+    assert is_moan_sentence(normal) is False
+    assert FILTER_MOAN == "呻吟句樣式"
+
+
+def test_verb_search_config_filter_moan_defaults_on():
+    """漏斗設定預設開啟呻吟過濾；可 per-run 關閉。"""
+    from scripts.fastapi_client.JP_CoreVerb.pipeline_components.funnel import VerbSearchConfig
+
+    assert VerbSearchConfig(verb_display="見[み]る", verb_lemma="見る").filter_moan is True
+    assert VerbSearchConfig(
+        verb_display="見[み]る", verb_lemma="見る", filter_moan=False
+    ).filter_moan is False
+
+
+def test_skip_narrator_forces_exclude_narration():
+    """--skip-narrator 只能加嚴：per-verb 未設也強制排除旁白。"""
+    from scripts.fastapi_client.JP_CoreVerb.generate_child_cards import _build_verb_cfg
+
+    off = _build_verb_cfg("見[み]る", "見る", {}, "ゲーム")
+    on = _build_verb_cfg("見[み]る", "見る", {}, "ゲーム", skip_narrator=True)
+    per_verb = _build_verb_cfg("見[み]る", "見る", {"exclude_narration": True}, "ゲーム")
+    assert off.exclude_narration is False
+    assert on.exclude_narration is True
+    assert per_verb.exclude_narration is True
+
+
+# ============================================================
+# 複合動詞：lemma 序列視窗比對（2026-09-03）
+# ============================================================
+
+def _seq(*items):
+    """建 ((lemma, pos1, surface), ...) 序列。"""
+    return tuple(items)
+
+
+class _Tok:
+    """假 token：feature 索引 0/7/10 對齊 UniDic。"""
+
+    def __init__(self, surface, lemma, pos, orth=None):
+        self.surface = surface
+        self.feature = [pos, "", "", "", "", "", "", lemma, "", "", orth or lemma]
+
+
+def _fake_tagger(mapping):
+    """依字串回傳預設 token 列的假 tagger。"""
+    def tagger(text):
+        return mapping[text]
+    return tagger
+
+
+def test_derive_target_lemmas_single_and_compound():
+    from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
+        derive_target_lemmas, _TARGET_LEMMA_CACHE)
+    _TARGET_LEMMA_CACHE.clear()
+    tagger = _fake_tagger({
+        "見る": [_Tok("見る", "見る", "動詞")],
+        "走り出す": [_Tok("走り", "走る", "動詞"), _Tok("出す", "出す", "動詞")],
+    })
+    assert derive_target_lemmas("見る", tagger) == _seq(("見る", "動詞", "見る"))
+    assert derive_target_lemmas("走り出す", tagger) == _seq(
+        ("走る", "動詞", "走り"), ("出す", "動詞", "出す"))
+    # 快取以 tagger 身分分隔：同一個 tagger 第二次命中快取
+    assert derive_target_lemmas("見る", tagger) == _seq(("見る", "動詞", "見る"))
+    assert len(_TARGET_LEMMA_CACHE[id(tagger)]) == 2
+    # **另一個** tagger 不吃前者的快取——它切不出來時退回單 token 序列
+    other = _fake_tagger({})
+    assert derive_target_lemmas("走り出す", other) == _seq(("走り出す", "動詞", "走り出す"))
+    _TARGET_LEMMA_CACHE.clear()
+
+
+def test_match_lemma_window_rules():
+    from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
+        match_lemma_window)
+    seq = _seq(("走る", "動詞", "走り"), ("出す", "動詞", "出す"))
+    tokens = [_Tok("彼", "彼", "代名詞"), _Tok("走り", "走る", "動詞"), _Tok("出し", "出す", "動詞")]
+    assert match_lemma_window(tokens, 1, seq) is True
+    assert match_lemma_window(tokens, 0, seq) is False      # 位置不對
+    assert match_lemma_window(tokens, 2, seq) is False      # 視窗超出尾端
+    # 末位詞性必須一致（活用發生處）
+    bad_pos = [_Tok("走り", "走る", "動詞"), _Tok("出し", "出す", "名詞")]
+    assert match_lemma_window(bad_pos, 0, seq) is False
+    # 非末位比表層全等（乗り遅れる：孤立 lemma 乗り[名詞]、句中 乗る[動詞]，
+    # 表層皆為「乗り」——比 lemma 會失敗，比表層才對）
+    seq2 = _seq(("乗り", "名詞", "乗り"), ("遅れる", "動詞", "遅れる"))
+    tokens2 = [_Tok("乗り", "乗る", "動詞"), _Tok("遅れ", "遅れる", "動詞")]
+    assert match_lemma_window(tokens2, 0, seq2) is True
+    # 非末位表層不同即拒——擋掉語意不同的同構組合（無くなる 導出 ない＋成る，
+    # 「必要なくなった」的「なく」表層 ≠ 目標的「無く」）
+    seq3 = _seq(("ない", "形容詞", "無く"), ("成る", "動詞", "なる"))
+    kana = [_Tok("なく", "ない", "形容詞"), _Tok("なっ", "成る", "動詞")]
+    kanji = [_Tok("無く", "ない", "形容詞"), _Tok("なっ", "成る", "動詞")]
+    assert match_lemma_window(kana, 0, seq3) is False
+    assert match_lemma_window(kanji, 0, seq3) is True
+
+
+def test_covered_by_compound():
+    from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
+        covered_by_compound)
+    # 気に入る = 気 + に + 入る；「入る」母卡不該收走這個 token
+    seq = _seq(("気", "名詞", "気"), ("に", "助詞", "に"), ("入る", "動詞", "入る"))
+    tokens = [_Tok("気", "気", "名詞"), _Tok("に", "に", "助詞"), _Tok("入っ", "入る", "動詞")]
+    assert covered_by_compound(tokens, 2, (seq,)) is True
+    assert covered_by_compound(tokens, 0, (seq,)) is True
+    # 無複合清單時不做檢查
+    assert covered_by_compound(tokens, 2, ()) is False
+    # 不相關的複合序列不誤判
+    other = _seq(("走る", "動詞", "走り"), ("出す", "動詞", "出す"))
+    assert covered_by_compound(tokens, 2, (other,)) is False
+
+
+def test_validate_candidate_compound_window_and_span():
+    from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
+        validate_candidate, REJECTION_COMPOUND_MEMBER, _TARGET_LEMMA_CACHE)
+    _TARGET_LEMMA_CACHE.clear()
+    sentence = "彼が走り出した"
+    tokens = [_Tok("彼", "彼", "代名詞"), _Tok("が", "が", "助詞"),
+              _Tok("走り", "走る", "動詞"), _Tok("出し", "出す", "動詞"), _Tok("た", "た", "助動詞")]
+    tagger = _fake_tagger({
+        sentence: tokens,
+        "走り出す": [_Tok("走り", "走る", "動詞"), _Tok("出す", "出す", "動詞")],
+        "走る": [_Tok("走る", "走る", "動詞")],
+    })
+    r = validate_candidate(sentence, "走り出す", False, tagger)
+    assert r.accepted
+    # span 涵蓋整個複合動詞（走り出し），不是只有後項
+    assert sentence[r.candidate.span[0]:r.candidate.span[1]] == "走り出し"
+    assert r.candidate.span_token_start == 2 and r.candidate.span_token_index == 3
+
+    # 短動詞「走る」被 compound_seqs 擋下
+    compounds = (_seq(("走る", "動詞", "走り"), ("出す", "動詞", "出す")),)
+    r2 = validate_candidate(sentence, "走る", False, tagger, compound_seqs=compounds)
+    assert not r2.accepted and r2.reason == REJECTION_COMPOUND_MEMBER
+    _TARGET_LEMMA_CACHE.clear()
+
+
+def test_classify_collocation_uses_window_start():
+    """複合動詞的搭配詞在第一個 token 之前,不是最後一個 token 之前。"""
+    from scripts.fastapi_client.JP_CoreVerb.pipeline_components.diversity_selector import (
+        NO_PARTICLE_BUCKET, classify_collocation)
+    # ケーキ を 食べ 過ぎ  → 搭配應為「ケーキを」而非「食べ」
+    tokens = [_Tok("ケーキ", "ケーキ", "名詞"), _Tok("を", "を", "助詞"),
+              _Tok("食べ", "食べる", "動詞"), _Tok("過ぎ", "過ぎる", "動詞")]
+    assert classify_collocation(tokens, 3, 2) == "ケーキを"
+    # 不傳 start 時退回舊行為：只看最後一個 token 的前一個（食べ 是動詞,
+    # 既不是助詞也不是修飾語）→ 無助詞桶,證明複合動詞非傳 start 不可
+    assert classify_collocation(tokens, 3) == NO_PARTICLE_BUCKET
