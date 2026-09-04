@@ -46,6 +46,7 @@ import scripts.common.env  # noqa
 from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.database.corpus_database import corpus_async_session_factory, dispose_corpus_engine
 from app.infrastructure.database.elasticsearch_client import search_dialogue_by_verb, dispose_elasticsearch_client
+from app.infrastructure.utils.jp_tokenizer import create_tagger
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.core.config import settings
 from sqlalchemy import text
@@ -59,7 +60,7 @@ from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.backend_api_client import BackendAPIClient
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.anki_media_uploader import AnkiMediaUploader
 # token 級驗證器與 CoreVerb 共用（跨包引用已有先例：CoreVerb 引用本包的
-# DedupManager/uploader），詳見 docs/wip/verbpair_fugashi_validation_FEAT_2026-08-27.md §D1
+# DedupManager/uploader），詳見 docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md §D1
 from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
     validate_candidate,
 )
@@ -431,7 +432,7 @@ async def process_verb_group(
                 # 本機推導的標籤只作兩用:①失敗紀錄(無回應可取)②回應缺欄
                 # 時的 fallback。成功紀錄一律取後端回應的 llm_model——後端與
                 # 腳本 .env 是兩份檔案,本機推導曾造成 190 筆錯標(2026-08-28),
-                # 詳見 docs/wip/runtime_config_service_FEAT_2026-08-29.md §3.5。
+                # 詳見 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。
                 llm_model_name = build_llm_model_label()
 
                 try:
@@ -567,9 +568,8 @@ async def main() -> None:
     logger.info("=== 批量生成子卡片腳本 (ES 版) ===")
 
     # token 級驗證器的分詞器：整個執行期共用一顆（初始化約 1 秒）
-    import fugashi
     logger.info("🧠 初始化 Fugashi NLP Tagger (UniDic)...")
-    tagger = fugashi.Tagger()
+    tagger = create_tagger()
     validation_config = _load_validation_config()
     filter_moan = bool(getattr(settings, "JP_VERB_PAIR_FILTER_MOAN_SENTENCES", True))
     logger.info(f"🧹 純呻吟句過濾: {'開啟' if filter_moan else '關閉'} (JP_VERB_PAIR_FILTER_MOAN_SENTENCES)")

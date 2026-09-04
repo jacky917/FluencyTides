@@ -5,10 +5,10 @@ scans master cards, runs the full selection funnel per verb, then calls the
 FastAPI endpoint to generate context/cloze child cards.
 
 掃描 ``JP_CORE_VERB_MASTER_DECK`` 牌組中的核心動詞母卡（單欄 ``Word``），
-對每個動詞執行完整選句漏斗（docs/14_Core_Verb_Card_Plan.md §6）：
+對每個動詞執行完整選句漏斗（設計依據寫在 ``pipeline_components`` 各模組 docstring）：
 
-    ES 全量游標分頁 → §3.2 過濾 → fugashi token 級驗證 →
-    搭配×活用形分桶 → zigzag 兩段式配額（含 §6.5 增量平衡）→
+    ES 全量游標分頁 → 過濾層（exclude_* / min_sentence_length / 純呻吟句）→ fugashi token 級驗證 →
+    搭配×活用形分桶 → zigzag 兩段式配額（含增量平衡：已生成句計入桶佔用）→
     對選中句呼叫 FastAPI ``/core-verb/generate-child-cards``
     （payload 含 ``target_verb_span`` 供後端挖空交叉驗證）。
 
@@ -16,8 +16,8 @@ FastAPI endpoint to generate context/cloze child cards.
     1. 選句不再「照 script_id 順序取前 N」——改由 ``funnel.run_selection_funnel``
        在配額內最大化覆蓋搭配與活用形的變化空間。
     2. 全量游標分頁（每頁 500 直到空頁），避免 Fetch-100 的頭部偏差
-       （§6.1 必修項 2）。
-    3. per-verb 搜尋設定由同目錄的 ``verb_search_config.json`` 提供（§3.2）。
+       （固定取前 N 筆會系統性偏向章節前段）。
+    3. per-verb 搜尋設定由同目錄的 ``verb_search_config.json`` 提供（鍵見 ``_build_verb_cfg``）。
 
 Example:
     不限制本次總量（受限於每動詞配額）::
@@ -61,6 +61,7 @@ from app.infrastructure.database.elasticsearch_client import (
     dispose_elasticsearch_client,
     search_dialogue_by_verb,
 )
+from app.infrastructure.utils.jp_tokenizer import create_tagger
 from scripts.common.database.log_repository import (
     PROJECT_JP_CORE_VERB,
     GeneratedLogRepository,
@@ -91,11 +92,35 @@ logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).resolve().parent / "verb_search_config.json"
 
+# ---------------------------------------------------------------------------
+# 【臨時】同表層多讀但多讀表抓不到的動詞，暫時整張母卡跳過。
+#
+# TEMPORARY: masters whose kanji surface carries two live readings that the
+# homograph table cannot see, skipped wholesale until the UniDic-sourced
+# candidate readings land.
+#
+# 多讀表（scripts/common/jp_homograph_table.py）的候選讀音只來自「同一表層
+# 被兩張母卡標了不同讀音」。核心動詞 344 張母卡表層零碰撞，於是這些在日文
+# 裡本來就多讀的表層完全進不了表，讀音查表過濾對它們是 no-op，語料裡另一個
+# 讀音的句子會照生。2026-09-03 dry-run 實測（50 張計畫卡中 25 張讀音不符）：
+#
+#   吐[は]く  20 張中 7 張讀 つく  （嘘/ウソ を吐く）
+#   抱[だ]く  20 張中 10 張讀 いだく（感情/不安/疑問/期待 を抱く）
+#   描[か]く  10 張中 8 張讀 えがく（円/弧/虹/夢 を描く）
+#
+# 這三個當時存量皆為 0，跳過不影響既有卡片。其餘 19 個 UniDic 判定多讀的
+# 表層逐句檢查過，語料實際命中的都是母卡讀音（另一讀音為文言或罕用），
+# 故不列入。
+#
+# 正解是把多讀表的候選來源擴成「母卡碰撞 ∪ UniDic 多讀表層」，讓 LLM 依上
+# 下文判讀；擴充完成後刪除本清單。
+_TEMP_SKIP_LEMMAS = frozenset({"吐く", "抱く", "描く"})
+
 
 def _load_search_config() -> dict[str, dict]:
-    """讀取 per-verb 搜尋設定檔（§3.2），鍵統一轉為去標音表記。
+    """讀取 per-verb 搜尋設定檔，鍵統一轉為去標音表記。
 
-    Load the per-verb search config file (§3.2), normalizing keys to
+    Load the per-verb search config file, normalizing keys to
     furigana-stripped form.
 
     Returns:
@@ -365,7 +390,7 @@ async def _generate_from_report(
     """
     # 本機推導的標籤只作兩用:①失敗紀錄(無回應可取)②回應缺欄時的
     # fallback。成功紀錄一律取後端回應的 llm_model(單一事實來源),
-    # 詳見 docs/wip/runtime_config_service_FEAT_2026-08-29.md §3.5。
+    # 詳見 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。
     llm_model_name = build_llm_model_label()
 
     new_generated = 0
@@ -517,10 +542,8 @@ async def main() -> None:
     else:
         logger.info("⚙️ 本次執行不限制總生成卡片數。")
 
-    import fugashi  # 延後 import：--help 等場景不需分詞器
-
     logger.info("🧠 初始化 Fugashi NLP Tagger (UniDic)...")
-    tagger = fugashi.Tagger()
+    tagger = create_tagger()
 
     master_deck = getattr(settings, "JP_CORE_VERB_MASTER_DECK", "日本語::核心動詞::Master")
     deck_name = re.sub(r"::Master$", "", master_deck)
@@ -625,6 +648,13 @@ async def main() -> None:
                     logger.warning("⚠️ 此母卡片沒有 Word 欄位內容，跳過。")
                     continue
 
+                if verb_lemma in _TEMP_SKIP_LEMMAS:
+                    logger.warning(
+                        f"⏭️ 【臨時跳過】'{word_display}'（lemma: '{verb_lemma}'）"
+                        "：同表層多讀且多讀表抓不到，見 _TEMP_SKIP_LEMMAS 說明。"
+                    )
+                    continue
+
                 logger.info(f"🎯 開始處理核心動詞: '{word_display}'（lemma: '{verb_lemma}'）")
                 verb_cfg = _build_verb_cfg(
                     word_display, verb_lemma, search_config.get(verb_lemma, {}), game_name_jp,
@@ -632,7 +662,7 @@ async def main() -> None:
                     compound_seqs=compound_seqs,
                 )
 
-                # §6.5 增量平衡：以 Anki 實存子卡對帳後計入桶佔用
+                # 增量平衡：以 Anki 實存子卡對帳後計入桶佔用
                 occupied = await _fetch_occupied(
                     session, log_repo, verb_lemma, anki_client, master_note_id
                 )

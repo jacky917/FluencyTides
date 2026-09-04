@@ -4,10 +4,12 @@ Query which LLM model the backend is currently using via the config API
 (never by reading the backend's .env).
 
 呼叫 ``GET /api/v1/config``(計畫
-docs/wip/runtime_config_service_FEAT_2026-08-29.md §3.5 的唯讀切片),
+docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5 的唯讀切片),
 顯示:
 - runtime 對帳區塊:``llm_label``(後端活 client 算好的顯示標籤,
   即生成時會寫進 Anki tag 的值)、``llm_provider``、``anki_connect_url``
+- claude-code 環境診斷:CLI 路徑/版本、effort、token 設定狀態、認證實測,
+  以及登入帳號的訂閱方案(``max`` / ``pro``;CLI 不區分 5x 與 20x)
 - 白名單設定清單(當前值/可選項/是否觸發重建)
 - 順帶對帳:後端的 anki_connect_url 與**本機** .env 的 ANKI_CONNECT_URL
   不一致時發出醒目警告(兩邊指向不同 Anki 會造成卡片與媒體分裂,
@@ -104,6 +106,21 @@ async def main() -> None:
         else:
             print(f"❌ CLI 版本探測失敗: {cc.get('cli_version_error') or '(未知原因)'}")
         print(f"🎚️ Effort          : {cc.get('effort')}")
+
+        # 訂閱方案:CLI 只回到 max / pro 這一層,不區分 Max 5x 與 20x
+        account = cc.get("account") or {}
+        if account.get("status") == "ok":
+            plan = account.get("subscription_type")
+            method = account.get("auth_method")
+            via = " / ".join(x for x in (method, account.get("api_provider")) if x)
+            state = "已登入" if account.get("logged_in") else "🚨 未登入"
+            print(f"💳 訂閱方案        : {plan or '(CLI 未回報)'}({state}{'，' + via if via else ''})")
+            if plan:
+                print("   (CLI 粒度僅到 max/pro,不含 5x/20x 倍率)")
+            elif method == "oauth_token":
+                print("   (注入 token 認證時 CLI 不回報方案;走落盤憑證的桌機模式才有)")
+        elif account:
+            print(f"⚪ 訂閱方案        : 探測不到——{account.get('detail')}")
         token_set = cc.get("oauth_token_configured")
         mode = "已設定(headless/容器模式,注入 token 認證)" if token_set \
             else "未設定(桌機模式,走落盤憑證)"

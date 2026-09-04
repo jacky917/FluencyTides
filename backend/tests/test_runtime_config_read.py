@@ -2,11 +2,12 @@
 
 Unit tests for the runtime config service and API (read-only slice).
 
-對應計畫 docs/wip/runtime_config_service_FEAT_2026-08-29.md §3.5。
+對應計畫 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。
 以 mock 白名單與最小 FastAPI app 測試,不觸碰真實 .env 白名單內容。
 """
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest import mock
 
@@ -91,6 +92,80 @@ class TestServiceRead:
         assert cc["cli_version"] == "2.1.211 (Claude Code)"
         assert cc["oauth_token_configured"] is True
         assert cc["effort"] == "medium"
+
+    def test_account_probe_reports_subscription_plan(self):
+        """auth status --json 正常 → 回報方案,且不外洩 email / org 識別。
+
+        Reports the plan and never leaks the identifying fields the CLI
+        also returns.
+        """
+        fake_client = SimpleNamespace(
+            _formatted_model_name="(claude-code)opus-5@medium",
+            _cli_path="/fake/claude",
+            _effort="medium",
+        )
+        auth_json = json.dumps({
+            "loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty",
+            "email": "someone@example.com", "orgId": "org-123",
+            "orgName": "someone's Organization", "subscriptionType": "max",
+        }).encode()
+        calls = [
+            SimpleNamespace(returncode=0, stdout=b"2.1.211 (Claude Code)", stderr=b""),
+            SimpleNamespace(returncode=0, stdout=auth_json, stderr=b""),
+        ]
+        with mock.patch.object(settings, "LLM_PROVIDER", "claude-code"), \
+             mock.patch.object(rcs_mod.subprocess, "run", side_effect=calls):
+            info = asyncio.run(
+                RuntimeConfigService().get_runtime_info(
+                    SimpleNamespace(llm_client=fake_client)
+                )
+            )
+        account = info["claude_code"]["account"]
+        assert account["status"] == "ok"
+        assert account["subscription_type"] == "max"
+        assert account["logged_in"] is True
+        assert account["auth_method"] == "claude.ai"
+        # 識別性欄位不得出現在對外區塊
+        assert "email" not in account
+        assert not any("example.com" in str(v) for v in account.values())
+        assert not any("org-123" in str(v) for v in account.values())
+
+    def test_account_probe_survives_non_json_output(self):
+        """CLI 版本太舊、輸出不是 JSON → 回 unknown 而不是炸掉。
+
+        Older CLIs without ``auth status --json`` degrade to unknown.
+        """
+        fake_client = SimpleNamespace(_cli_path="/fake/claude", _effort="medium")
+        calls = [
+            SimpleNamespace(returncode=0, stdout=b"2.1.211 (Claude Code)", stderr=b""),
+            SimpleNamespace(returncode=0, stdout=b"error: unknown command", stderr=b""),
+        ]
+        with mock.patch.object(settings, "LLM_PROVIDER", "claude-code"), \
+             mock.patch.object(rcs_mod.subprocess, "run", side_effect=calls):
+            info = asyncio.run(
+                RuntimeConfigService().get_runtime_info(
+                    SimpleNamespace(llm_client=fake_client)
+                )
+            )
+        assert info["claude_code"]["account"]["status"] == "unknown"
+
+    def test_account_probe_reports_failed_exit(self):
+        """auth status 非零退出(例:容器內未登入)→ unknown 帶 stderr 摘要。"""
+        fake_client = SimpleNamespace(_cli_path="/fake/claude", _effort="medium")
+        calls = [
+            SimpleNamespace(returncode=0, stdout=b"2.1.211 (Claude Code)", stderr=b""),
+            SimpleNamespace(returncode=1, stdout=b"", stderr=b"not logged in"),
+        ]
+        with mock.patch.object(settings, "LLM_PROVIDER", "claude-code"), \
+             mock.patch.object(rcs_mod.subprocess, "run", side_effect=calls):
+            info = asyncio.run(
+                RuntimeConfigService().get_runtime_info(
+                    SimpleNamespace(llm_client=fake_client)
+                )
+            )
+        account = info["claude_code"]["account"]
+        assert account["status"] == "unknown"
+        assert "not logged in" in account["detail"]
 
     def test_claude_code_probe_reports_error_without_client(self):
         """client 未初始化 → 不炸,回報無 CLI 路徑可探測。"""

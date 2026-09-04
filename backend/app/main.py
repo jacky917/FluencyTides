@@ -39,7 +39,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api import handlers
-from app.api.handlers import router as handlers_router
 from app.api.health import router as health_router
 from app.api.relations import router as relations_router
 from app.api.storage import router as storage_router
@@ -48,6 +47,7 @@ from app.api.core_verb import router as core_verb_router
 from app.api.example.verb_pair import router as example_verb_pair_router
 from app.api.webhook import router as webhook_router
 from app.api.config import router as config_router
+from app.api.jp_tokenizer import router as jp_tokenizer_router
 from app.api.jp_verb_readings import router as jp_verb_readings_router
 from app.bot.dispatcher import create_bot, setup_dispatcher
 from app.core.config import settings
@@ -305,7 +305,6 @@ async def fluencytides_error_handler(
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
-import asyncio
 
 @app.middleware("http")
 async def global_crash_middleware(request: Request, call_next) -> Response:
@@ -375,6 +374,7 @@ app.include_router(core_verb_router, prefix="/api/v1")
 app.include_router(example_verb_pair_router, prefix="/api/v1/example")
 app.include_router(config_router, prefix="/api/v1")
 app.include_router(jp_verb_readings_router, prefix="/api/v1")
+app.include_router(jp_tokenizer_router, prefix="/api/v1")
 
 # 註冊 Webhook Router路由 (不受 prefix 限制，完全依照 TG_WEBHOOK_PATH 設定)
 app.include_router(webhook_router)

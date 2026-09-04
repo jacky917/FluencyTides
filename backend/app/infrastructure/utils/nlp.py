@@ -6,6 +6,8 @@ Shared NLP processing utilities (Japanese lemmatization via Fugashi).
 
 import fugashi
 
+from app.infrastructure.utils.jp_tokenizer import create_tagger
+
 class NLPProcessor:
     """提供全域共用的 NLP 處理與正規化服務。
 
@@ -28,7 +30,8 @@ class NLPProcessor:
             fugashi.Tagger: 共用的 Tagger 實例。The shared Tagger instance.
         """
         if cls._tagger is None:
-            cls._tagger = fugashi.Tagger()
+            # 詞典明確指定，不讓 fugashi 自行偵測（見 jp_tokenizer 模組說明）
+            cls._tagger = create_tagger()
         return cls._tagger
 
     @classmethod
