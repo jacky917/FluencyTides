@@ -7,7 +7,7 @@
 | **狀態** | ✅ 實作完成、驗收通過(2026-09-05):核心動詞 +147 / +121、自他動詞 +12,零退步一例外(`どく` −2,已接受,§4.4);318 tests。已提交,PR 審查中 |
 | **範圍** | `elasticsearch_client.py::recreate_index()` 的 analyzer;重灌 `fluencytides_dialogue`;`candidate_validator.py` 新增「表記兄弟」拒絕規則與兩條管線的注入;`JP_CoreVerb/verb_search_config.json` 新增 54 個動詞的 `include_keywords` |
 | **不動** | `search_dialogue_by_verb()` 的查詢邏輯與簽名;分桶與配額分配;`verb_search_config.json` / `extra_search_keywords.json` 的格式;已生成的卡片與 `generated_sentences_log`;fugashi/UniDic 詞典設定 |
-| **PR / 進度** | 分支 `fix/es-sudachi-normalizedform`,PR 已開(連結見本列更新) |
+| **PR / 進度** | 分支 `fix/es-sudachi-normalizedform`,PR #19 https://github.com/jacky917/FluencyTides/pull/19(審查中) |
 | **基線** | `docs/wip/es_sudachi_normalizedform_baseline_2026-09-05/`——**本機專用、不進版控**(`.gitignore` 的 `docs/wip/*_baseline_*/`)。三個實作階段的完整逐句選句清單 + 抽取/比對工具;每份產物對應的實作狀態記在該目錄的 README 與 §4.1。改動前基線無法重做(舊 ES 索引已不存在) |
 | **關聯文件** | `docs/wip/verb_reading_judgments_FEAT_2026-09-02.md` §8.4(fugashi/UniDic 詞典釘死——那是驗證側,本計畫是檢索側,兩者獨立但見 §5.5)、§7.1(穢す 母卡以 汚す 為關鍵字的已知重疊) |
 
