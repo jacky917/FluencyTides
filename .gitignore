@@ -124,3 +124,11 @@ backend/scripts/local_anki/Speaking_Coach_Dark/jsons/
 # 以及挖空定位失敗紀錄等執行期日誌（logs/ 下全為執行期產物）
 backend/.claude_code_workdir/
 backend/logs/
+
+# -------------------------
+# dry-run 基線資料 (Dry-run baseline snapshots)
+# -------------------------
+# 選句管線改動前後的完整逐句選句清單（每份 1–2 MB JSON），供本機比對用；
+# 數字與結論已回填到對應的 docs/wip 計畫書，資料本身不進版控。
+# 目錄內的 README.md 記錄每份產物是由哪個實作狀態跑出來的。
+docs/wip/*_baseline_*/

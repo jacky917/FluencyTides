@@ -79,11 +79,14 @@ async def recreate_index():
     analyzer settings applied.
 
     此函數會定義索引的 Mapping，特別針對 `dialogue` 欄位指定 `sudachi_analyzer`，
-    以確保寫入與搜尋時皆能透過 Sudachi 將日文動詞/形容詞還原為原型，達到精準檢索。
+    以確保寫入與搜尋時皆能透過 Sudachi 將日文動詞/形容詞**還原為原型並統一
+    表記**（気づく/気付く、もらう/貰う、バレる/ばれる 收斂為同一 token），
+    達到精準檢索。mapping 只宣告 `analyzer`、不宣告 `search_analyzer`，
+    ES 預設查詢時沿用同一個 analyzer，索引端與查詢端必然一致。
 
     Defines the index mapping, assigning `sudachi_analyzer` to the
-    `dialogue` field so Japanese verbs/adjectives are reduced to their base
-    forms both at index and search time for precise retrieval.
+    `dialogue` field so Japanese verbs/adjectives are reduced to their
+    normalized dictionary forms both at index and search time.
 
     ⚠️ 警告: 此操作會先檢查並刪除同名的現有索引，這意味著該索引內的所有資料將被清空！
     僅適用於全量資料同步 (MySQL -> ES) 前的初始化操作。
@@ -105,7 +108,20 @@ async def recreate_index():
                         "type": "custom",
                         "tokenizer": "sudachi_tokenizer",
                         "filter": [
-                            "sudachi_baseform",
+                            # normalizedform 同時做「活用形還原」與「表記正規化」。
+                            # 換掉 baseform 的理由：baseform 只還原活用形，
+                            # 気づいた→気づく、気付いた→気付く 仍是兩個不同
+                            # 的 token，母卡與語料表記不同就互相搜不到
+                            # （気づく 母卡 vs 語料 気付く 244 句，ES 命中 0；
+                            # 貰う 只撈到 6/103 句；ばれる vs バレる 命中 0）。
+                            # normalizedform 一律收斂到 Sudachi 辭書的正規化
+                            # 表記，兩邊自動對齊。
+                            # 配套：正規化會合併異體字（揚げる→上げる、
+                            # 降りる→下りる），UniDic 在 lemma 層同樣合併，
+                            # 故驗證器需 sibling_surfaces 防護才不會讓規範
+                            # 表記的母卡吃掉變體表記的句子。詳見
+                            # docs/wip/es_sudachi_normalizedform_FIX_2026-09-05.md
+                            "sudachi_normalizedform",
                             "sudachi_part_of_speech"
                         ]
                     }

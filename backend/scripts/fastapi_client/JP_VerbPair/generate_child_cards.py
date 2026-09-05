@@ -55,6 +55,7 @@ from scripts.common.llm_label import build_llm_model_label
 from scripts.common.database.canonicalize_verb_lemma import load_keyword_map
 from scripts.common.jp_moan_filter import REJECTION_MOAN, is_moan_sentence
 from scripts.common.jp_reading_filter import ReadingFilter
+from scripts.common.verb_lemma import canonical_verb_lemma
 from scripts.local_anki.common.deletion.profiles import get_profile
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import DedupManager
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.backend_api_client import BackendAPIClient
@@ -183,6 +184,7 @@ async def process_verb_group(
     reading_filter: ReadingFilter | None = None,
     rejection_stats: dict[str, int] = None,
     filter_moan: bool = True,
+    sibling_surfaces: frozenset[str] = frozenset(),
 ) -> int:
     """處理自動詞或他動詞欄位中的所有同義動詞。回傳本次新增的卡片數量。
 
@@ -214,6 +216,9 @@ async def process_verb_group(
             Normalized per-verb validation config.
         rejection_stats: 拒絕原因統計 accumulator（鍵為「動詞|原因」）。
             Rejection-reason accumulator keyed by "verb|reason".
+        sibling_surfaces: 同專案全部母卡表層（表記兄弟防護用，見
+            ``candidate_validator.orth_sibling_conflict``）。All master
+            surfaces of the project.
         filter_moan: 是否過濾純呻吟句（.env
             JP_VERB_PAIR_FILTER_MOAN_SENTENCES，預設 True）。Whether to
             filter pure-moan sentences.
@@ -368,6 +373,7 @@ async def process_verb_group(
                         tagger=tagger,
                         expected_reading=kd["expected_reading"],
                         allow_compound_suffix=kd["allow_compound_suffix"],
+                        sibling_surfaces=sibling_surfaces,
                     )
                     if not v_result.accepted:
                         stat_key = f"{kd['target_lemma']}|{v_result.reason}"
@@ -610,6 +616,25 @@ async def main() -> None:
         # 判斷表由 JP_Common/judge_verb_readings.py 離線產生；表空時過濾為
         # no-op，生卡行為與現況相同（計畫 §3.3）。
         reading_filter = await ReadingFilter.create(anki_client, get_profile(PROJECT_JP_VERB_PAIR))
+
+        # 表記兄弟：UniDic 把異體字統一到同一語彙素（揚げる/挙げる → lemma
+        # 上げる、降りる → 下りる、点ける → 付ける、貯める → 溜める、
+        # 穢す → 汚す），而驗證器「lemma 或 orthBase 任一相符」會讓規範表記
+        # 的母卡吃掉變體表記的句子。以全部母卡表層為集合交驗證器擋下；集合
+        # 為空時驗證器不做此檢查，行為與現況相同。
+        _vp_profile = get_profile(PROJECT_JP_VERB_PAIR)
+        _all_master_notes = await anki_client.get_notes_info(note_ids)
+        _surfaces: set[str] = set()
+        for _note in _all_master_notes:
+            for _key in _vp_profile.master_verb_fields:
+                _f = _note.fields.get(_key, {})
+                _raw = _f.get("value", "") if isinstance(_f, dict) else (getattr(_f, "value", "") or "")
+                for _surface, _ in _parse_verb_field(_raw):
+                    _lemma = canonical_verb_lemma(_surface)
+                    if _lemma:
+                        _surfaces.add(_lemma)
+        sibling_surfaces = frozenset(_surfaces)
+        logger.info(f"🔤 表記兄弟集合: {len(sibling_surfaces)} 個母卡表層")
         
         # 準備音檔和頭像的路徑
         voice_dir = Path(settings.JP_VERB_PAIR_VOICE_DIR)
@@ -719,6 +744,7 @@ async def main() -> None:
                         rejection_stats=rejection_stats,
                         filter_moan=filter_moan,
                         reading_filter=reading_filter,
+                        sibling_surfaces=sibling_surfaces,
                     )
                     global_total += new_cards
                     if global_limit > 0 and global_total >= global_limit:
@@ -760,6 +786,7 @@ async def main() -> None:
                         rejection_stats=rejection_stats,
                         filter_moan=filter_moan,
                         reading_filter=reading_filter,
+                        sibling_surfaces=sibling_surfaces,
                     )
                     global_total += new_cards
                     if global_limit > 0 and global_total >= global_limit:

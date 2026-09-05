@@ -106,6 +106,9 @@ class VerbSearchConfig:
         max_per_chapter: 同一章節最多取句數。
         min_sentence_length: 目標句最短長度（去標音後字元數）。
         filter_moan: 是否過濾純呻吟句（擬態音節密度過高的 R18 台詞）。
+        sibling_surfaces: 同專案全部母卡表層；以 lemma 命中的 token 若書字形
+            是另一張母卡的表層即拒絕（``上げる`` 不收 ``揚げた``）。
+            All master surfaces of the project.
         compound_seqs: 本專案全部多 token 目標動詞的 lemma 序列——單 token
             目標命中時用來讓位給更長的複合動詞（気に入る 覆蓋 入る）。
         allow_auxiliary: 是否放行補助動詞用法（てみる／かける類）。
@@ -127,6 +130,7 @@ class VerbSearchConfig:
     min_sentence_length: int = 8
     filter_moan: bool = True
     compound_seqs: tuple = ()
+    sibling_surfaces: frozenset[str] = frozenset()
     allow_auxiliary: bool = False
     priority_collocations: list[str] = field(default_factory=list)
     page_size: int = 500
@@ -243,6 +247,7 @@ def _build_occupancy(
         result = validate_candidate(
             sentence, verb_cfg.verb_lemma, verb_cfg.allow_auxiliary, tagger,
             compound_seqs=verb_cfg.compound_seqs,
+            sibling_surfaces=verb_cfg.sibling_surfaces,
         )
         if not result.accepted or result.candidate is None:
             continue
@@ -361,6 +366,7 @@ async def run_selection_funnel(
         result = validate_candidate(
             sentence, verb_cfg.verb_lemma, verb_cfg.allow_auxiliary, tagger,
             compound_seqs=verb_cfg.compound_seqs,
+            sibling_surfaces=verb_cfg.sibling_surfaces,
         )
         if not result.accepted or result.candidate is None:
             rejection_reasons[result.reason or "未知"] += 1
