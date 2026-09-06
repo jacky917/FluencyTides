@@ -38,6 +38,7 @@ REJECTION_AUXILIARY = "補助動詞"
 REJECTION_LEMMA_MISMATCH = "lemma 不符"
 REJECTION_READING_MISMATCH = "讀音不符"
 REJECTION_COMPOUND_MEMBER = "屬其他複合動詞"
+REJECTION_ORTH_SIBLING = "屬其他表記母卡"
 
 
 #: ``derive_target_lemmas`` 的快取：{目標動詞: ((lemma, pos1), ...)}。
@@ -169,6 +170,50 @@ def lemma_matches_target(token: Any, target_verb: str) -> bool:
         return True
     orth_base = token_orth_base(token)
     return bool(orth_base) and orth_base == target_verb
+
+
+def orth_sibling_conflict(
+    token: Any, target_verb: str, sibling_surfaces: frozenset[str]
+) -> bool:
+    """token 雖以 lemma 命中目標，但其書字形是**另一張母卡**的表層。
+
+    Whether the token matched the target by lemma while its written form
+    belongs to a different master card.
+
+    UniDic 把異體字統一到同一個語彙素（``揚げる``/``挙げる``/``上げる`` 的
+    lemma 皆為 ``上げる``；``降りる``→``下りる``、``点ける``→``付ける``、
+    ``貯める``→``溜める``、``穢す``→``汚す``），而
+    :func:`lemma_matches_target` 是「lemma 或 orthBase 任一相符」，於是
+    「規範表記的母卡」會吃掉「變體表記的句子」——``上げる`` 母卡收走
+    ``天ぷらを揚げた``。這些不是同一個詞的寫法差異，是語意不同的動詞
+    （揚げる＝油炸／上げる＝舉起、貯める＝存錢／溜める＝積累），誤收即錯卡；
+    且去重鍵含 ``verb_lemma``，同一句可在兩張母卡下各生一張。
+
+    判定用「該書字形是否為同專案另一張母卡的表層」而非任何動詞清單：母卡
+    以外的寫法差異（``もらった`` 的 orthBase ``もらう`` 對目標 ``貰う``）
+    是同一個詞的假名書き，必須照常放行。
+    Keyed on "is this written form another master's surface", so kana
+    spellings of the same verb keep passing.
+
+    反方向天然安全：目標 ``揚げる``、句 ``上げた`` 時 lemma（上げる）與
+    orthBase（上げる）對目標皆不符，本來就被拒。
+    The reverse direction is already rejected by lemma/orthBase mismatch.
+
+    Args:
+        token: 已以 lemma 命中目標的 token。The token matched by lemma.
+        target_verb: 目標動詞字典形（去標音）。Target verb, furigana stripped.
+        sibling_surfaces: 同專案全部母卡表層（含目標自己）。All master
+            surfaces of the project, including the target's own.
+
+    Returns:
+        bool: True 表示應拒絕。True when the candidate must be rejected.
+    """
+    if not sibling_surfaces:
+        return False
+    orth_base = token_orth_base(token)
+    if not orth_base or orth_base == target_verb:
+        return False
+    return orth_base in sibling_surfaces
 
 
 def derive_target_lemmas(
@@ -439,6 +484,7 @@ def validate_candidate(
     expected_reading: str | None = None,
     allow_compound_suffix: bool = False,
     compound_seqs: tuple[tuple[tuple[str, str, str], ...], ...] = (),
+    sibling_surfaces: frozenset[str] = frozenset(),
 ) -> ValidationResult:
     """驗證候選句是否包含目標動詞的獨立用法（基本規則 + VerbPair 擴充的讀音／後項規則）。
 
@@ -458,6 +504,9 @@ def validate_candidate(
         3. 補助動詞拒絕：前一 token 為「て／で」**且再前一 token 為動詞**
            時拒絕（食べ[動詞]てみる → 拒；あと[名詞]で見る → 放行——
            格助詞「で」不構成補助動詞接續）；``allow_auxiliary=True`` 時放行。
+        4. 表記兄弟拒絕：token 以 lemma 命中，但其書字形是另一張母卡的
+           表層時拒絕（``上げる`` 母卡不收 ``揚げた``）——見
+           :func:`orth_sibling_conflict`；``sibling_surfaces`` 為空時不檢查。
 
     Args:
         sentence: 候選句（呼叫端應先去除注音標記 ``[...]``）。Candidate
@@ -480,6 +529,11 @@ def validate_candidate(
             若該位置落在其中任一視窗內即拒絕（``気に入る`` 的「入る」不該被
             ``入る`` 母卡收走）。空 tuple 時不做此檢查，既有呼叫端行為不變。
             All multi-token target sequences of the project.
+        sibling_surfaces: 同專案全部母卡表層。以 lemma 命中的 token 若書字形
+            落在此集合且不等於目標，視為「屬其他表記母卡」而拒絕（見
+            :func:`orth_sibling_conflict`）。空集合時不做此檢查，既有呼叫端
+            行為不變。All master surfaces of the project; empty disables
+            the check.
 
     Returns:
         ValidationResult: ``accepted=True`` 時附帶 ``VerifiedCandidate``
@@ -520,6 +574,12 @@ def validate_candidate(
             # 只走視窗會漏掉（2026-09-03 實測 VerbPair 少一張）。
             # Always try the single-token rule: the tagger may emit the whole
             # verb as one token even when the isolated form splits.
+            if orth_sibling_conflict(token, target_verb, sibling_surfaces):
+                # 規則 ④：書字形屬於另一張母卡（揚げる vs 上げる）。只在單
+                # token 路徑檢查——視窗路徑的非末位比表層全等，整個複合動詞
+                # 的寫法已被釘死，不存在異體字替換的空間。
+                rejection_reasons.append(REJECTION_ORTH_SIBLING)
+                continue
             if other_compounds and covered_by_compound(tokens, index, other_compounds):
                 # 讓位給更長的複合動詞（気に入る 覆蓋 入る）——中間夾非動詞
                 # token 時，緊鄰詞性規則擋不到，需要跨動詞的序列清單。
@@ -572,7 +632,7 @@ def validate_candidate(
             rejection_reasons.append(REJECTION_AUXILIARY)
             continue
 
-        # 規則 ④：通過——span 涵蓋整個視窗（走り出し 而非只有 出し），
+        # 通過——span 涵蓋整個視窗（走り出し 而非只有 出し），
         # 隨候選句傳遞下游供分桶與後端挖空交叉驗證
         return ValidationResult(
             accepted=True,

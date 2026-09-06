@@ -30,6 +30,7 @@ from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator 
     REJECTION_COMPOUND_SUFFIX,
     REJECTION_COMPOUND_VERB,
     REJECTION_LEMMA_MISMATCH,
+    REJECTION_ORTH_SIBLING,
     REJECTION_READING_MISMATCH,
     to_katakana,
     validate_candidate,
@@ -975,3 +976,78 @@ def test_classify_collocation_uses_window_start():
     # 不傳 start 時退回舊行為：只看最後一個 token 的前一個（食べ 是動詞,
     # 既不是助詞也不是修飾語）→ 無助詞桶,證明複合動詞非傳 start 不可
     assert classify_collocation(tokens, 3) == NO_PARTICLE_BUCKET
+
+
+# =============================================================================
+# 表記兄弟防護（sibling_surfaces）——ES 改用 sudachi_normalizedform 的配套
+# =============================================================================
+# UniDic 把異體字統一到同一語彙素（揚げる/挙げる → lemma 上げる），而驗證器是
+# 「lemma 或 orthBase 任一相符」，於是規範表記的母卡會吃掉變體表記的句子。
+# 詳見 docs/wip/es_sudachi_normalizedform_FIX_2026-09-05.md §2.2。
+
+class TestOrthSiblingGuard:
+    """以真實 UniDic 分詞驗證表記兄弟防護。Real-UniDic sibling guard."""
+
+    @pytest.fixture(scope="class")
+    def tagger(self):
+        fugashi = pytest.importorskip("fugashi")
+        return fugashi.Tagger()
+
+    #: 自他動詞牌組實際存在的成對表記（規範 / 變體皆為母卡）
+    MASTERS = frozenset({
+        "上げる", "揚げる", "挙げる", "下りる", "降りる",
+        "付ける", "点ける", "溜める", "貯める", "汚す", "穢す", "貰う",
+    })
+
+    @pytest.mark.parametrize("target, sentence", [
+        ("上げる", "天ぷらを揚げた"),      # 揚げる＝油炸，不是上げる＝舉起
+        ("下りる", "バスを降りた"),        # 降りる＝下車
+        ("付ける", "電気を点けた"),        # 点ける＝開燈
+        ("溜める", "お金を貯めた"),        # 貯める＝存錢
+        ("汚す", "服を穢した"),            # 穢す＝けがす，另一張母卡
+    ])
+    def test_rejects_sentence_written_as_sibling_master(self, tagger, target, sentence):
+        """書字形屬於另一張母卡 → 拒絕，且原因為表記兄弟。
+
+        The canonical-spelling master must not swallow a variant-spelling
+        sentence.
+        """
+        result = validate_candidate(
+            sentence, target, False, tagger, sibling_surfaces=self.MASTERS)
+        assert result.accepted is False
+        assert result.reason == REJECTION_ORTH_SIBLING
+        # 沒有防護時會誤收——證明這條規則確實在做事
+        assert validate_candidate(sentence, target, False, tagger).accepted is True
+
+    @pytest.mark.parametrize("target, sentence", [
+        ("貰う", "プレゼントをもらった"),  # もらう 不是母卡 → 假名書き照收
+        ("上げる", "手を上げた"),          # 書字形即目標本身
+        ("見る", "彼を見た"),              # 與表記無關的一般情形
+    ])
+    def test_accepts_when_written_form_is_not_another_master(self, tagger, target, sentence):
+        """書字形不是別張母卡（假名書き、或就是目標自己）→ 照常通過。
+
+        Kana spellings of the same verb keep passing.
+        """
+        assert validate_candidate(
+            sentence, target, False, tagger, sibling_surfaces=self.MASTERS).accepted is True
+
+    def test_reverse_direction_unchanged(self, tagger):
+        """反方向本來就被拒（lemma 與 orthBase 對目標皆不符），行為不變。
+
+        The reverse direction was already rejected; the guard changes nothing.
+        """
+        for kwargs in ({}, {"sibling_surfaces": self.MASTERS}):
+            assert validate_candidate("手を上げた", "揚げる", False, tagger, **kwargs).accepted is False
+
+    def test_empty_sibling_set_is_a_noop(self, tagger):
+        """空集合＝關閉檢查，與不傳參數完全相同（既有呼叫端行為不變）。
+
+        An empty set disables the check entirely.
+        """
+        for sentence, target in [("天ぷらを揚げた", "上げる"), ("彼を見た", "見る")]:
+            with_empty = validate_candidate(
+                sentence, target, False, tagger, sibling_surfaces=frozenset()).accepted
+            without = validate_candidate(sentence, target, False, tagger).accepted
+            assert with_empty == without
+

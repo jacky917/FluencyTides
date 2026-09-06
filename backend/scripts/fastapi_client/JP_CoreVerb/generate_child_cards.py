@@ -149,6 +149,7 @@ def _build_verb_cfg(
     *,
     skip_narrator: bool = False,
     compound_seqs: tuple = (),
+    sibling_surfaces: frozenset[str] = frozenset(),
 ) -> VerbSearchConfig:
     """由全域 settings 疊加 per-verb 覆寫組出 ``VerbSearchConfig``。
 
@@ -162,6 +163,8 @@ def _build_verb_cfg(
         overrides: ``verb_search_config.json`` 中該動詞的覆寫（可為空 dict）。
             Per-verb overrides; may be empty.
         game_name_jp: 遊戲來源名稱。Source game name.
+        sibling_surfaces: 同專案全部母卡表層（表記兄弟防護用）。All master
+            surfaces of the project.
         compound_seqs: 本專案全部多 token 目標動詞的 lemma 序列（讓位給更長的
             複合動詞用）。All multi-token target sequences of the project.
         skip_narrator: ``--skip-narrator`` 全域旗標；True 時強制排除旁白句，
@@ -192,6 +195,7 @@ def _build_verb_cfg(
         ),
         filter_moan=bool(getattr(settings, "JP_CORE_VERB_FILTER_MOAN_SENTENCES", True)),
         compound_seqs=compound_seqs,
+        sibling_surfaces=sibling_surfaces,
         allow_auxiliary=bool(overrides.get("allow_auxiliary", False)),
         priority_collocations=list(overrides.get("priority_collocations", [])),
         page_size=500,
@@ -607,6 +611,11 @@ async def main() -> None:
             if len(seq) > 1
         )
         logger.info(f"🔗 多 token 複合動詞: {len(compound_seqs)} 個（單 token 母卡將讓位給它們）")
+        # 表記兄弟：UniDic 把異體字統一到同一語彙素（揚げる/挙げる → lemma
+        # 上げる），驗證器「lemma 或 orthBase 任一相符」會讓規範表記的母卡
+        # 吃掉變體表記的句子。以全部母卡表層為集合，交驗證器擋下。
+        sibling_surfaces = frozenset(all_lemmas)
+        logger.info(f"🔤 表記兄弟集合: {len(sibling_surfaces)} 個母卡表層")
 
         async with corpus_async_session_factory() as session:
             log_repo = GeneratedLogRepository()
@@ -660,6 +669,7 @@ async def main() -> None:
                     word_display, verb_lemma, search_config.get(verb_lemma, {}), game_name_jp,
                     skip_narrator=skip_narrator,
                     compound_seqs=compound_seqs,
+                    sibling_surfaces=sibling_surfaces,
                 )
 
                 # 增量平衡：以 Anki 實存子卡對帳後計入桶佔用

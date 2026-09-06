@@ -89,7 +89,9 @@ TEST_CONFIG = {
 }
 
 
-def _build_cfg(verb: str, compound_seqs: tuple = ()) -> VerbSearchConfig:
+def _build_cfg(
+    verb: str, compound_seqs: tuple = (), sibling_surfaces: frozenset[str] = frozenset()
+) -> VerbSearchConfig:
     """由 ``TEST_CONFIG`` 組出單一動詞的漏斗設定。
 
     Build a single verb's funnel config from ``TEST_CONFIG``.
@@ -101,6 +103,10 @@ def _build_cfg(verb: str, compound_seqs: tuple = ()) -> VerbSearchConfig:
             導出，因此「單 token 命中被其他母卡的複合動詞吸走」的跨動詞拒絕
             只涵蓋清單內的動詞。Compound lemma sequences; production derives
             them from every master, this script only from the configured verbs.
+        sibling_surfaces: 同專案母卡表層集合（表記兄弟防護）。正式腳本由全部
+            母卡導出，本腳本只由 ``TEST_CONFIG["verbs"]`` 導出，故「被其他
+            表記母卡吃掉」的拒絕只涵蓋清單內的動詞。Master surfaces;
+            production derives them from every master.
 
     Returns:
         VerbSearchConfig: 漏斗設定（與正式腳本注入的結構完全相同）。
@@ -124,6 +130,7 @@ def _build_cfg(verb: str, compound_seqs: tuple = ()) -> VerbSearchConfig:
         game_name_jp=TEST_CONFIG["game_name_jp"],
         filter_moan=bool(TEST_CONFIG.get("filter_moan", True)),
         compound_seqs=compound_seqs,
+        sibling_surfaces=sibling_surfaces,
     )
 
 
@@ -240,13 +247,16 @@ async def main() -> None:
             derive_target_lemmas(canonical_verb_lemma(v), tagger) for v in TEST_CONFIG["verbs"]
         ) if len(seq) > 1
     )
+    sibling_surfaces = frozenset(
+        L for L in (canonical_verb_lemma(v) for v in TEST_CONFIG["verbs"]) if L
+    )
 
     logger.info("=== JP_CoreVerb 分桶驗證腳本（零寫入，選句參數全部寫死於 TEST_CONFIG） ===")
     try:
         async with corpus_async_session_factory() as session:
             metadata_fetcher = _make_metadata_fetcher(session)
             for verb in TEST_CONFIG["verbs"]:
-                verb_cfg = _build_cfg(verb, compound_seqs)
+                verb_cfg = _build_cfg(verb, compound_seqs, sibling_surfaces)
                 occupied: list[dict] = []
                 exclude_generated: set[tuple[int, str]] | None = None
                 if args.with_occupied:

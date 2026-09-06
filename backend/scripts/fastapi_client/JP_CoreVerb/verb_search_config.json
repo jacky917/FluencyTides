@@ -1,18 +1,28 @@
 {
   "見[み]る": {
-    "include_keywords": [],
+    "include_keywords": [
+      "みる",
+      "診る",
+      "観る"
+    ],
     "exclude_keywords": [],
-    "exclude_speakers": ["柊史"],
+    "exclude_speakers": [
+      "柊史"
+    ],
     "exclude_narration": true,
     "exclude_script_ids": [],
     "max_cards": 20,
     "allow_auxiliary": false,
-    "priority_collocations": ["大目に"]
+    "priority_collocations": [
+      "大目に"
+    ]
   },
   "見[み]える": {
     "include_keywords": [],
     "exclude_keywords": [],
-    "exclude_speakers": ["柊史"],
+    "exclude_speakers": [
+      "柊史"
+    ],
     "exclude_narration": true,
     "exclude_script_ids": [],
     "max_cards": 20,
@@ -22,11 +32,276 @@
   "見[み]せる": {
     "include_keywords": [],
     "exclude_keywords": [],
-    "exclude_speakers": ["柊史"],
+    "exclude_speakers": [
+      "柊史"
+    ],
     "exclude_narration": true,
     "exclude_script_ids": [],
     "max_cards": 20,
     "allow_auxiliary": false,
     "priority_collocations": []
+  },
+  "言う": {
+    "include_keywords": [
+      "いう",
+      "いえる"
+    ]
+  },
+  "来る": {
+    "include_keywords": [
+      "くる"
+    ]
+  },
+  "貰う": {
+    "include_keywords": [
+      "もらう"
+    ]
+  },
+  "聞く": {
+    "include_keywords": [
+      "訊く",
+      "聴く"
+    ]
+  },
+  "会う": {
+    "include_keywords": [
+      "あう",
+      "遭う"
+    ]
+  },
+  "違う": {
+    "include_keywords": [
+      "ちがう"
+    ]
+  },
+  "押さえる": {
+    "include_keywords": [
+      "抑える"
+    ]
+  },
+  "答える": {
+    "include_keywords": [
+      "応える"
+    ]
+  },
+  "使う": {
+    "include_keywords": [
+      "遣う"
+    ]
+  },
+  "探す": {
+    "include_keywords": [
+      "捜す"
+    ]
+  },
+  "飲む": {
+    "include_keywords": [
+      "呑む"
+    ]
+  },
+  "思う": {
+    "include_keywords": [
+      "想う"
+    ]
+  },
+  "飲み込む": {
+    "include_keywords": [
+      "呑み込む",
+      "呑みこむ"
+    ]
+  },
+  "構う": {
+    "include_keywords": [
+      "かまう"
+    ]
+  },
+  "頷く": {
+    "include_keywords": [
+      "うなずく"
+    ]
+  },
+  "喋る": {
+    "include_keywords": [
+      "しゃべる"
+    ]
+  },
+  "頑張る": {
+    "include_keywords": [
+      "がんばる"
+    ]
+  },
+  "打ち明ける": {
+    "include_keywords": [
+      "ぶっちゃける"
+    ]
+  },
+  "囁く": {
+    "include_keywords": [
+      "ささやく"
+    ]
+  },
+  "履く": {
+    "include_keywords": [
+      "穿く",
+      "はく"
+    ]
+  },
+  "休む": {
+    "include_keywords": [
+      "休める"
+    ]
+  },
+  "掴む": {
+    "include_keywords": [
+      "つかむ"
+    ]
+  },
+  "覗く": {
+    "include_keywords": [
+      "のぞく"
+    ]
+  },
+  "吹く": {
+    "include_keywords": [
+      "噴く"
+    ]
+  },
+  "作る": {
+    "include_keywords": [
+      "つくる",
+      "造る"
+    ]
+  },
+  "引き止める": {
+    "include_keywords": [
+      "引き留める"
+    ]
+  },
+  "思い込む": {
+    "include_keywords": [
+      "思いこむ"
+    ]
+  },
+  "押す": {
+    "include_keywords": [
+      "推す",
+      "おす"
+    ]
+  },
+  "付き合う": {
+    "include_keywords": [
+      "つき合う"
+    ]
+  },
+  "取り出す": {
+    "include_keywords": [
+      "取りだす"
+    ]
+  },
+  "受け取る": {
+    "include_keywords": [
+      "受けとる"
+    ]
+  },
+  "呆れる": {
+    "include_keywords": [
+      "あきれる"
+    ]
+  },
+  "呟く": {
+    "include_keywords": [
+      "つぶやく"
+    ]
+  },
+  "呼ぶ": {
+    "include_keywords": [
+      "よぶ"
+    ]
+  },
+  "喜ぶ": {
+    "include_keywords": [
+      "悦ぶ"
+    ]
+  },
+  "書き込む": {
+    "include_keywords": [
+      "書きこむ",
+      "かき込む"
+    ]
+  },
+  "言い切る": {
+    "include_keywords": [
+      "言いきれる"
+    ]
+  },
+  "踊る": {
+    "include_keywords": [
+      "躍る"
+    ]
+  },
+  "任せる": {
+    "include_keywords": [
+      "まかせる"
+    ]
+  },
+  "取り替える": {
+    "include_keywords": [
+      "取り換える"
+    ]
+  },
+  "尋ねる": {
+    "include_keywords": [
+      "訊ねる"
+    ]
+  },
+  "戸惑う": {
+    "include_keywords": [
+      "とまどう"
+    ]
+  },
+  "死ぬ": {
+    "include_keywords": [
+      "しぬ"
+    ]
+  },
+  "泣き止む": {
+    "include_keywords": [
+      "泣きやむ"
+    ]
+  },
+  "畳む": {
+    "include_keywords": [
+      "たたむ"
+    ]
+  },
+  "睨む": {
+    "include_keywords": [
+      "にらむ"
+    ]
+  },
+  "立ち上がる": {
+    "include_keywords": [
+      "立ちあがる"
+    ]
+  },
+  "落ち着く": {
+    "include_keywords": [
+      "落ちつく"
+    ]
+  },
+  "連れる": {
+    "include_keywords": [
+      "つれる"
+    ]
+  },
+  "飛び上がる": {
+    "include_keywords": [
+      "跳び上がる"
+    ]
+  },
+  "飛び出す": {
+    "include_keywords": [
+      "飛びだす"
+    ]
   }
 }
