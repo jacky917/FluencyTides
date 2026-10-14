@@ -61,7 +61,7 @@ def validate_model_override(model: str | None) -> None:
     if options and model not in options:
         raise InvalidOverrideError(
             f"model '{model}' 不在可用清單內。可選：{', '.join(options)}"
-            "（清單來自後端 .env 的 MODIFY_LLM_MODEL_NAME；provider 為 claude-code 時請在其中加入 claude 模型名）"
+            "（清單來自後端 .env 的 MODIFY_LLM_MODEL_NAME；provider 為 claude-code / antigravity 時請在其中加入對應模型名，antigravity 用基底名）"
         )
 
 

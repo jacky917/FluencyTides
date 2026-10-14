@@ -62,6 +62,18 @@ class LLMRefusalError(LLMServiceError):
     error_code = "LLM_REFUSAL"
 
 
+class LLMServiceUnavailableError(LLMServiceError):
+    """暫時性失敗在所有嘗試後仍未恢復（服務端不可用、CLI 中途結束）。
+
+    Raised when transient failures persist through every attempt.
+
+    與內容問題（``LLMRetryExhaustedError``）分開：訊息**刻意不含**跳句識別字串，
+    基礎設施故障不該被生成腳本記成「安全審查攔截」。腳本目前仍會把它當一般
+    5xx 記失敗；改讀 ``error_code`` 後可改為暫停（計畫 §8）。
+    """
+    error_code = "LLM_SERVICE_UNAVAILABLE"
+
+
 class AnkiServiceError(InfrastructureBaseError):
     """Anki 服務異常。
 

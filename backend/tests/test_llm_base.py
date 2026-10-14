@@ -69,13 +69,14 @@ class AbstractContractTests(BaseSettingsCase):
 
 class EffortSupportTests(BaseSettingsCase):
     def test_effort_rejected_when_unsupported(self) -> None:
-        """SUPPORTS_EFFORT=False 給 effort → 拋錯，訊息與層級化前的工廠版本逐字相同。"""
+        """SUPPORTS_EFFORT=False 給 effort → 拋錯。句型與層級化前的工廠版本相同，
+        支援清單取自註冊表中 supports_effort=True 的 provider（依註冊順序）。"""
         with self.assertRaises(LLMServiceError) as ctx:
             _Concrete(effort="high")
 
         self.assertEqual(
             str(ctx.exception),
-            "effort 覆寫僅 claude-code provider 支援（目前 LLM_PROVIDER='google'）。",
+            "effort 覆寫僅 claude-code, antigravity provider 支援（目前 LLM_PROVIDER='google'）。",
         )
 
     def test_unsupported_effort_message_does_not_import_providers(self) -> None:

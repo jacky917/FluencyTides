@@ -22,6 +22,7 @@ from app.core.exceptions import (
     LLMRefusalError,
     LLMRetryExhaustedError,
     LLMServiceError,
+    LLMServiceUnavailableError,
 )
 
 
@@ -31,6 +32,7 @@ from app.core.exceptions import (
         (LLMRetryExhaustedError, "LLM_RETRY_EXHAUSTED"),
         (LLMQuotaError, "LLM_QUOTA"),
         (LLMRefusalError, "LLM_REFUSAL"),
+        (LLMServiceUnavailableError, "LLM_SERVICE_UNAVAILABLE"),
     ],
 )
 def test_subclass_has_own_code_and_stays_a_service_error(exc_cls, code):

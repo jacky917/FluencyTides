@@ -112,7 +112,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("✅ 資料庫初始化完成。")
 
     # LLM 客戶端由 create_llm_client() 依 LLM_PROVIDER 選型，初始化可能因
-    # 缺少 API Key（API 模式）或找不到 CLI／effort 設定錯誤（claude-code 模式）
+    # 缺少 API Key（API 模式）或找不到 CLI／effort 設定錯誤（CLI 模式：claude-code / antigravity）
     # 而失敗，但不應阻止整個應用啟動（其他端點仍可使用）。
     try:
         app.state.llm_client = create_llm_client()

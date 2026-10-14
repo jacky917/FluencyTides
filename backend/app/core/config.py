@@ -489,7 +489,7 @@ class Settings(BaseSettings):
         default="google",
         description=(
             "LLM 服務商名稱：google / openai / 其他中轉名走 OpenAI 相容端點；"
-            "claude-code / gemini-native 走各自的客戶端（anthropic 目前為佔位，設定即報錯）"
+            "claude-code / antigravity / gemini-native 走各自的客戶端（anthropic 目前為佔位，設定即報錯）"
             "（非 google / openai 則會自動在產出結果冠上服務商前綴）"
         ),
     )
@@ -530,6 +530,52 @@ class Settings(BaseSettings):
             "`claude setup-token` 產生）。留空＝桌機模式：剔除環境中的 "
             "CLAUDE_CODE_OAUTH_TOKEN、強制走落盤憑證；非空＝注入此值供 CLI 認證。"
             "token 等同訂閱憑證，務必只放在部署主機的 .env 並限制檔案權限"
+        ),
+    )
+
+    # --- antigravity provider 專屬設定 ---
+    # 僅在 LLM_PROVIDER=antigravity 時生效；其他 provider 完全不讀取這些值。
+    LLM_ANTIGRAVITY_CLI_PATH: str = Field(
+        default="",
+        description=(
+            "agy 執行檔的絕對路徑；留空則自動探測"
+            "（~/.local/bin → PATH → Windows 的 %LOCALAPPDATA%\\agy\\bin）"
+        ),
+    )
+    LLM_ANTIGRAVITY_EFFORT: str = Field(
+        default="high",
+        description=(
+            "agy 的推理力度，可用 low/medium/high/xhigh/max（agy 1.3.5）。"
+            "由 AntigravityLLMClient 於初始化時白名單驗證"
+        ),
+    )
+    LLM_ANTIGRAVITY_WORKDIR: str = Field(
+        default="",
+        description=(
+            "CLI 執行時的專用空工作目錄；留空則為 backend/.antigravity_workdir。"
+            "必須與 claude-code 的分開：agy 在 workspace 內寫檔不需許可，"
+            "留下的檔案會污染共用者依賴的空 cwd"
+        ),
+    )
+    LLM_ANTIGRAVITY_TIMEOUT_SECONDS: float = Field(
+        default=900.0,
+        description=(
+            "單次 agy 呼叫的超時秒數；--print-timeout 設為此值減 30 秒，讓 CLI 先以結構化錯誤結束。"
+            "每次呼叫整體耗時實測 8–163 秒（模型本身只佔 2–4 秒），不宜調低"
+        ),
+    )
+    LLM_ANTIGRAVITY_AUDIT_DIR: str = Field(
+        default="logs/antigravity_audit",
+        description="每次呼叫的 prompt/answer/meta 落盤目錄；留空則關閉審計",
+    )
+    LLM_ANTIGRAVITY_ISOLATE_HOME: bool = Field(
+        default=True,
+        description=(
+            "是否把 agy 的 HOME / USERPROFILE 指向專用目錄（工作目錄旁的 *_home，"
+            "每次呼叫累積一個會話檔、不自動清理）。"
+            "agy 的 print 模式會讀 ~/.gemini/GEMINI.md 並把會話存在 ~/.gemini 下，"
+            "隔離可避免使用者層級規則污染生成。Windows 實測憑證在系統 keyring、"
+            "隔離後認證照常；若在其他平台隔離後無法認證，設為 false"
         ),
     )
 

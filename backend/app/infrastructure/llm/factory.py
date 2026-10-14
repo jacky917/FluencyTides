@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 # 觸發 headless CLI provider 的 LLM_PROVIDER 值
 CLAUDE_CODE_PROVIDER = "claude-code"
+ANTIGRAVITY_PROVIDER = "antigravity"
 
 # 觸發 Anthropic 官方 API provider 的 LLM_PROVIDER 值（目前為 STUB）
 ANTHROPIC_PROVIDER = "anthropic"
@@ -68,6 +69,9 @@ class _ProviderEntry:
 _REGISTRY: dict[str, _ProviderEntry] = {
     CLAUDE_CODE_PROVIDER: _ProviderEntry(
         "claude_code_client", "ClaudeCodeLLMClient", is_cli=True, supports_effort=True,
+    ),
+    ANTIGRAVITY_PROVIDER: _ProviderEntry(
+        "antigravity_client", "AntigravityLLMClient", is_cli=True, supports_effort=True,
     ),
     GEMINI_NATIVE_PROVIDER: _ProviderEntry(
         "gemini_native_client", "GeminiNativeLLMClient", is_cli=False, supports_effort=False,
