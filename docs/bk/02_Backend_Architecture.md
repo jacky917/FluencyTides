@@ -65,7 +65,7 @@ backend/
 │   │   ├── anki/                   #   client.py（組合類）+ transport.py + 6 領域 Mixin + utils.py（查詢跳脫）
 │   │   ├── audio_evaluator/        #   base(Template Method) + factory + gemini/openai_client + prompts
 │   │   ├── database/               #   database.py + models.py（CardRelation/RelationType）+ conventions.py
-│   │   ├── llm/client.py           #   AsyncOpenAI + 重試分類 + strip_markdown_fences
+│   │   ├── llm/                    #   BaseLLMClient 層級（2026-10 起，見 §5.3）：base / cli_base / 四個 provider + factory 註冊表
 │   │   ├── storage/minio_client.py #   同步 minio SDK 以 asyncio.to_thread 包裝
 │   │   ├── ffmpeg/ffmpeg_merger.py #   未接線（F042）
 │   │   └── voice/voicepeak_runner.py  # 未接線（F042）
@@ -100,7 +100,7 @@ graph TB
     end
     subgraph Infrastructure 層
         ANKI["AnkiClient<br/>(httpx, transport + 6 Mixin)"]
-        LLM["LLMClient<br/>(AsyncOpenAI)"]
+        LLM["BaseLLMClient 層級<br/>(create_llm_client 依 LLM_PROVIDER)"]
         MINIO["MinioClient<br/>(asyncio.to_thread)"]
         DB["database.py<br/>AsyncEngine + Session"]
         AE["AudioEvaluator<br/>(策略+工廠)"]
@@ -109,7 +109,7 @@ graph TB
     end
     subgraph 外部系統
         AC[(AnkiConnect)]
-        GM[(Gemini/OpenAI 相容端點)]
+        GM[(Gemini/OpenAI 相容端點<br/>Gemini 原生 SDK / 本機 CLI)]
         MO[(MinIO)]
         SQ[(SQLite)]
         TG[(Telegram API)]
@@ -485,11 +485,37 @@ graph LR
 - lifespan 初始化失敗時降級為 `None` 不阻擋啟動（`main.py:139-146`）；2026-07-09 起 `get_minio_client` 為 None 時 raise `ServiceUnavailableError`(503)（F006 統一契約），不再以裸 AttributeError 500。憑證預設由 `minioadmin` 改為 `None`，`MinioClient` 初始化加明確 None 防護（F020）。
 - 目前只服務 `/api/v1/storage`，尚未接入生卡流程。上傳端點 2026-07-09 加大小上限（`STORAGE_MAX_UPLOAD_MB`，超限 413）、副檔名/Content-Type 白名單（415）、prefix 正則（422）與客戶端檔名 `sanitize_filename()`（F024/F032）。
 
-### 5.3 LLM（OpenAI 相容 / Gemini）— `infrastructure/llm/client.py`
+### 5.3 LLM（文字生成）— `infrastructure/llm/`
 
-- `AsyncOpenAI` 指向 OpenAI 相容端點（實務上為 Gemini 相容層），`response_format=json_schema` 強制結構化輸出，回傳 `LLMGenerateResult`（含原始文字、解析結果、重試次數）。
-- 內建重試 + 模組級 `strip_markdown_fences` 圍欄清理（2026-07-08 統一，原三處重複實作收斂於此）。
-- **F041 已於 2026-07-08 修復**：僅對 `RateLimitError` / `APIConnectionError` / `APITimeoutError` / 5xx 重試且改指數退避（2/4/8 秒）；401/400 等確定性錯誤立即包裝 `LLMServiceError` 拋出，不再盲目重試。
+> 2026-10-14 依現行程式碼改寫。設計與實測紀錄見 `docs/archive/llm_provider_hierarchy_FEAT_2026-09-06.md`（計畫書）。
+
+文字 LLM 以抽象基底 + 註冊表工廠組織，**按傳輸協定分組**（不是按母公司）：
+
+```mermaid
+graph TD
+    F["create_llm_client()<br/>factory.py 註冊表<br/>依 LLM_PROVIDER 延遲匯入"] --> B["BaseLLMClient (ABC)<br/>base.py<br/>generate_structured_data() → LLMGenerateResult"]
+    B --> L["LLMClient<br/>client.py<br/>OpenAI 相容 HTTP（google / openai / 中轉站）"]
+    B --> G["GeminiNativeLLMClient<br/>gemini_native_client.py<br/>google-genai 原生 SDK"]
+    B --> A["AnthropicLLMClient<br/>anthropic_client.py<br/>（佔位 stub）"]
+    B --> H["HeadlessCliLLMClient (ABC)<br/>cli_base.py<br/>subprocess 驅動本機 CLI"]
+    H --> C["ClaudeCodeLLMClient<br/>claude -p"]
+    H --> AG["AntigravityLLMClient<br/>agy（stream-json stdin）"]
+```
+
+| `LLM_PROVIDER` | 客戶端 | 要點 |
+|---|---|---|
+| `google` / `openai` / 其他中轉名（未註冊值） | `LLMClient` | `AsyncOpenAI` + `response_format=json_schema`；`google` 走 Google 的 OpenAI 相容端點，**無法設定 `safety_settings`**（該端點收到會 400），只有第三方中轉站經 `extra_body` 帶 |
+| `gemini-native` | `GeminiNativeLLMClient` | 原生 SDK，`safety_settings` 四類 `BLOCK_NONE`、`system_instruction`、`response_json_schema` |
+| `claude-code` | `ClaudeCodeLLMClient` | 本機 Claude Code CLI，訂閱額度；`--safe-mode --tools ""` 隔離 |
+| `antigravity` | `AntigravityLLMClient` | 本機 Antigravity CLI；stdin 走 stream-json、讀 CLI 強制的 `structured_output`、HOME 隔離（避開 `~/.gemini/GEMINI.md`）、關閉自動更新 |
+| `anthropic` | `AnthropicLLMClient` | 佔位，建構即拋「尚未實作」 |
+
+- **共同契約**（`BaseLLMClient`）：唯一公開方法 `generate_structured_data(system_prompt, user_prompt, response_schema)`；`model` / `effort` 覆寫一律由工廠傳入，不支援 effort 的 provider 由基底拒絕；`model_label` 為寫入 Anki tag 的標籤（`labels.build_model_label`，格式 `(provider)model@effort`，google / openai 為裸模型名）。
+- **工廠註冊表**（`factory.py`）：每列帶靜態 `is_cli` / `supports_effort` 旗標，`is_cli_provider()` / `providers_supporting_effort()` 為純查表（診斷端點在依賴缺失時仍能運作）；載入時核對旗標與類別宣告，不一致即 `RuntimeError`。
+- **共用工具**：`schema_utils.resolve_json_schema`（展平 `$defs` / `$ref`）與 `strip_markdown_fences`（圍欄清理）——文字 LLM 的三份重複實作已收斂於此。
+- **錯誤分類**（`app/core/exceptions/infrastructure.py`）：`LLMServiceError`(502) 之下有 `LLMRetryExhaustedError`、`LLMQuotaError`、`LLMRefusalError`、`LLMServiceUnavailableError` 四個子類，各帶 `error_code`；訊息保留生成腳本分級表比對用的子字串（「LLM API 在所有重試後仍回傳空內容」→ 跳句、「429」/「Quota」→ 暫停）。
+- **重試**：`LLMClient` 對 API 例外固定間隔 2 秒、最多 3 次（2026-07 文件記載的 2/4/8 秒指數退避與現行程式碼不符，以程式碼為準）；`GeminiNativeLLMClient` 網路層用 `BaseLLMClient._retry_transient` 指數退避；CLI 型由 `HeadlessCliLLMClient` 做帶回饋的修復重試，暫時性失敗（如 agy 的 503）另有 10 / 30 秒退避。
+- **建立時機**：lifespan 建立 `app.state.llm_client` 單例供診斷與舊路徑使用；各生卡 handler 每次請求呼叫 `create_llm_client()`，所以 TG `/setconfig` 改 `LLM_MODEL_NAME` 等設定下一次生成即生效。
 
 ### 5.4 語音評分（Audio Evaluator）— `infrastructure/audio_evaluator/`
 
@@ -504,6 +530,7 @@ graph LR
 
 - lifespan 建立單例，由 Bot middleware 注入 voice handler，最終在 `SpeakingService.process_voice_evaluation` 呼叫；音檔來源為 Telegram 語音（固定 .ogg）。
 - **F043 已於 2026-07-08 修復**：逐字重複的評分 Prompt 抽至共用 `audio_evaluator/prompts.py`；圍欄清理統一使用 `llm/client.py` 的 `strip_markdown_fences`；`BaseAudioEvaluator` 改為 Template Method——`evaluate_audio` 提供統一指數退避重試，子類只實作 `_evaluate_audio_once`。
+  - **2026-10-14 對照現行程式碼**：上述語音側的收斂已不成立——`BaseAudioEvaluator` 只宣告抽象的 `evaluate_audio`，`gemini_client.py` / `openai_client.py` / `proxy_client.py` / `stt_llm_evaluator.py` 各自內嵌一份圍欄清理，Gemini 評分器自帶重試迴圈。文字 LLM 側則已收斂到 `llm/schema_utils.strip_markdown_fences`（見 §5.3）。語音側改用 `schema_utils` 與 `BaseLLMClient._retry_transient` 列為 LLM 層級化計畫 §8 的後續事項。
 - **F008 已於 2026-07-09 修復（OpenAI 音訊轉碼）**：OpenAI Chat Completions 的 `input_audio.format` 僅接受 `wav`/`mp3`，但 Telegram 語音固定 `.ogg`——原本走 OpenAI 供應商必然 400。`openai_client.py` 新增 `_transcode_to_wav()`：wav/mp3 直傳，ogg/opus 等經系統 `ffmpeg`（stdin/stdout pipe，不落地暫存）轉碼為 wav；找不到 ffmpeg、轉碼逾時（`asyncio.wait_for`）或非零退出皆轉為 `AudioEvaluationError`，不再送出非法 format。
 - **F098（low）**：`response.choices[0]` 索引移入錯誤邊界。
 - **F097 已於 2026-07-08 修復**：Gemini 改用 `response_schema=AudioEvaluationResult` + `response.parsed`（保留文字解析 fallback；因環境無法安裝 SDK 驗證，docstring 已註明）。

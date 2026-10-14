@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-09-06 |
 | **性質** | 重構(既有三類掛上抽象基底)+ 新增機能設計(兩個新 provider)+ 實作工作項 |
-| **狀態** | 🚧 實作中 —— P1 基底重構 ✅ 完成並驗收(2026-09-06 實作;2026-10-08 補 mypy、工廠覆寫測試與複查,2026-10-09 處理 code review,全套 291 項測試綠;`test_claude_code_client.py` / `test_jp_verb_reading_judgments.py` / `test_runtime_config_read.py` 三檔一行未改;google / claude-code 實跑與 TG `/setconfig` 使用者實測通過),已合併 [PR #20](https://github.com/jacky917/FluencyTides/pull/20);P2 實作完成(2026-10-14,A9 實測、兩輪 code review 修正、全套 357 項綠、真實 API 煙霧測試通過),已提交 [PR #21](https://github.com/jacky917/FluencyTides/pull/21),跑一章比對拒答率待使用者;P0 實測完成(2026-10-14,Windows,見 §D8「實測紀錄」);P3 實作完成(2026-10-14,多面向 code review 與複審修正、全套 430 項綠、真實 agy 煙霧測試通過),已提交 [PR #22](https://github.com/jacky917/FluencyTides/pull/22),待跑一章與 20 張人工評閱 |
+| **狀態** | ✅ 實作完成並歸檔(2026-10-14)—— P0 實測、P1 基底重構、P2 `GeminiNativeLLMClient`、P3 `AntigravityLLMClient`、P4 文件收尾全數完成;全套 430 項測試綠、ruff / mypy 零錯誤,gemini-native 與 antigravity 皆以真實 API / CLI 經工廠跑通。**實跑驗收待使用者**:gemini-native 與 google 的拒答率比對、antigravity 跑一章、與 claude-code 的 20 張人工評閱(移入 §8 第一項,結果出來後回填本文件 §5 對應段落) |
 | **範圍** | `app/infrastructure/llm/`(新增 `base.py`、`cli_base.py`、`schema_utils.py`、`labels.py`、`gemini_native_client.py`、`antigravity_client.py`;修改 `client.py`、`claude_code_client.py`、`anthropic_client.py`、`factory.py`)、`app/core/exceptions/infrastructure.py`(三個 `LLMServiceError` 子類)、`app/core/config.py`(`LLM_ANTIGRAVITY_*` 六欄位,含 P3 新增的 `_ISOLATE_HOME`)、`app/core/dependencies.py`、`app/services/runtime_config_service.py`、`scripts/common/llm_label.py`、`.env.example`、`.gitignore` |
 | **不動** | `generate_structured_data` 簽名與 `LLMGenerateResult`;既有 provider 的標籤字串格式;既有錯誤訊息文字(生成腳本分級表的識別字串保留;例外:effort 不支援的訊息句型不變、支援清單隨註冊表擴充,見 §7);`scripts/fastapi_client/**` 生成腳本;各 handler 的 prompt 渲染與建卡邏輯;`audio_evaluator/` 語音軸線;API request/response schema |
-| **PR / 進度** | P1:[PR #20](https://github.com/jacky917/FluencyTides/pull/20)(2026-10-14 合併,分支 `feat/llm-provider-hierarchy`);P2:[PR #21](https://github.com/jacky917/FluencyTides/pull/21)(2026-10-14 提交,分支 `feat/gemini-native-llm-client`);P3:[PR #22](https://github.com/jacky917/FluencyTides/pull/22)(2026-10-14 提交,分支 `feat/antigravity-llm-client`) |
+| **PR / 進度** | P1:[PR #20](https://github.com/jacky917/FluencyTides/pull/20)(2026-10-14 合併,分支 `feat/llm-provider-hierarchy`);P2:[PR #21](https://github.com/jacky917/FluencyTides/pull/21)(2026-10-14 提交,分支 `feat/gemini-native-llm-client`);P2 已合併;P3:[PR #22](https://github.com/jacky917/FluencyTides/pull/22)(2026-10-14 提交,分支 `feat/antigravity-llm-client`,含 P4 文件收尾) |
 | **關聯文件** | `docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md`(§D11 的 Anthropic 實作指引仍有效,本計畫只掛基底不實作本體)、`docs/bk/adr/004-audio-evaluator-strategy.md`(ABC 策略模式先例)、`docs/bk/08_Refactor_Recommendations.md` F043(fence 清理重複)、`app/infrastructure/audio_evaluator/base.py`(ABC 而非 Protocol 的原始論證)、本文件 HTML 版 `llm_provider_hierarchy_FEAT_2026-09-06.html`(含架構圖) |
 
 ---
@@ -610,6 +610,11 @@ singleton 的標籤(§1.3 圖 3 的 L1)。`runtime_config_service.py:30-36` 的 
     - 註解與文件:`cli_base` 模組說明改正(agy 不用 `-p`);`base._reject_unsupported_effort` 與 §7 不再宣稱 effort 訊息「逐字相同」;OpenAPI 欄位說明、`judge_verb_readings.py` 的 `--effort` 說明、`main.py` 註解、`jp_verb_reading_service` 的白名單提示改為涵蓋 antigravity;額度標記同樣未實測的事實寫進註解;`.env.example` 的模型清單改為「以 `agy models` 為準」、耗時改稱「整體耗時」、補 TG 白名單與 home 會累積的說明
   - **待做**:使用者以 `LLM_PROVIDER=antigravity` 跑一章;與 claude-code 做 20 張人工評閱比對(system prompt 併入 stdin 的品質影響)
 - **P4 收尾**:文件回填(本文件狀態、`docs/bk/02_Backend_Architecture.md` 的 LLM 段、`.env.example`);F043 標記「fence 清理已收斂到 `schema_utils`」;移入 `archive/`
+  **完成**(2026-10-14,併入 PR #22):
+  - `docs/bk/02_Backend_Architecture.md`:目錄樹與總覽圖的 LLM 節點改為層級化後的結構;§5.3 依現行程式碼改寫(繼承樹、provider 對照表、共同契約、註冊表、錯誤子類、各 provider 的重試方式、建立時機)
+  - `docs/bk/08_Refactor_Recommendations.md` F041 / F043:補「2026-10-14 對照現行程式碼」註記——**文字 LLM 的圍欄清理已收斂到 `schema_utils`**;但收尾時對照程式碼發現,2026-07 記為「已實施」的語音側收斂(`BaseAudioEvaluator` Template Method、四個評分器共用圍欄清理)與 F041 的 2/4/8 秒指數退避,**現行程式碼都不成立**(`BaseAudioEvaluator` 只有抽象方法、四個評分器各自內嵌圍欄清理;`LLMClient` 為固定 2 秒)。只如實標註、不回溯改寫歷史紀錄;語音側收斂與 `LLMClient` 換退避本來就在 §8
+  - `.env.example` 已於 P2 / P3 各自補齊(第 10、11-B 區)
+  - 本文件與 HTML 版移入 `docs/archive/`;實跑驗收三項移入 §8 第一項
 
 ## 6. 風險與未知
 
@@ -635,8 +640,8 @@ singleton 的標籤(§1.3 圖 3 的 L1)。`runtime_config_service.py:30-36` 的 
 - [x] `grep -rn 'provider == "claude-code"' app/` 為零(P1;分流走註冊表 + 旗標)
 - [x] `LLM_PROVIDER=google` 跑一張卡:標籤 `gemini-3.1-pro-preview`、錯誤訊息、審計行為與 main 分支逐位元一致(使用者實測;另以 MockTransport 對 `main` 離線比對 18 次一致;拒答訊息依 D5 例外)
 - [x] `LLM_PROVIDER=claude-code` 跑一張卡:標籤 `(claude-code)opus-5@medium`、審計三檔與 main 分支逐位元一致(使用者實測)
-- [ ] `LLM_PROVIDER=gemini-native` 跑一章:`safety_settings` 在請求中(mock 或 SDK debug log 證明);標籤 `(gemini-native)<model>`;`MODIFY_LLM_MODEL_NAME` 未改即可用(2026-10-14:`safety_settings` 已由 HTTP 層測試與真實 API 請求攔截證明、標籤已驗;跑一章待使用者)
-- [ ] `LLM_PROVIDER=antigravity` 跑一章:標籤 `(antigravity)<model>@<effort>`;審計三檔落盤於 `logs/antigravity_audit/`;`--print-timeout` 值等於 `LLM_ANTIGRAVITY_TIMEOUT_SECONDS`(2026-10-14:標籤、審計三檔、`--print-timeout` 同步已由測試與真實煙霧測試證明;跑一章待使用者)
+- [ ] (移入 §8)`LLM_PROVIDER=gemini-native` 跑一章:`safety_settings` 在請求中(mock 或 SDK debug log 證明);標籤 `(gemini-native)<model>`;`MODIFY_LLM_MODEL_NAME` 未改即可用(2026-10-14:`safety_settings` 已由 HTTP 層測試與真實 API 請求攔截證明、標籤已驗;跑一章待使用者)
+- [ ] (移入 §8)`LLM_PROVIDER=antigravity` 跑一章:標籤 `(antigravity)<model>@<effort>`;審計三檔落盤於 `logs/antigravity_audit/`;`--print-timeout` 值等於 `LLM_ANTIGRAVITY_TIMEOUT_SECONDS`(2026-10-14:標籤、審計三檔、`--print-timeout` 同步已由測試與真實煙霧測試證明;跑一章待使用者)
 - [x] `create_llm_client(model="x", effort="high")` 在 `LLM_PROVIDER=anthropic` 下拋「尚未實作」且訊息可見兩個覆寫值(證明參數已傳入,不再靜默丟棄)(2026-10-08 實測;`tests/test_llm_factory.py` 守護)
 - [x] `create_llm_client(effort="high")` 在 `LLM_PROVIDER=google` 下拋 `LLMServiceError`,訊息句型與層級化前相同(P1 時逐字相同:`effort 覆寫僅 claude-code provider 支援（目前 LLM_PROVIDER='google'）。`;P3 加入 antigravity 後支援清單隨註冊表變為 `claude-code, antigravity`,這正是 §1.3 第二項要的行為);gemini-native 同樣拒絕(P2 測試覆蓋)
 - [x] 三個例外子類經 API 回傳的 `error_code` 分別為 `LLM_RETRY_EXHAUSTED` / `LLM_QUOTA` / `LLM_REFUSAL`,且 `message` 含既有識別字串;`generate_child_cards.py` 未改仍正確分級(2026-10-08:離線比對各情境拋出正確子類;`test_llm_exceptions` 驗全域 handler;三支生成腳本未改,比對字串仍在訊息中)
@@ -645,6 +650,7 @@ singleton 的標籤(§1.3 圖 3 的 L1)。`runtime_config_service.py:30-36` 的 
 
 ## 8. 後續事項(不屬本計畫範圍)
 
+- **實跑驗收(使用者)**:①`LLM_PROVIDER=gemini-native` 跑 JP_VerbPair 一章,與同章 `google` 比對拒答率(兩邊拒答認定不同:原生多認 `SPII` / `JAILBREAK`、帶文字的安全中斷也算拒答);②`LLM_PROVIDER=antigravity` 跑同一章(每次呼叫 8–163 秒);③ antigravity 與 claude-code 各 20 張人工評閱,判斷 system prompt 併入 stdin 的品質影響,若明顯劣化依 §6 風險表的對策處理。跑之前先手動打一次端點確認金鑰與模型名(見下一項)。結果回填本文件 §5 P2 / P3 的「待做」段落與 §7
 - 未註冊的 `LLM_PROVIDER` 值不再靜默落到 OpenAI 相容 `LLMClient`:中轉站 provider 值目前靠這條落空路徑運作,需改為明確登記(例如註冊表加一列「OpenAI 相容」群組),再讓未知值啟動即報錯
 - mypy 加入 CI(`requirements.txt` 已於 2026-10-08 加入;不進 CI 的話型別錯誤會再次累積)
 - 生成腳本三處分級表改讀 `ErrorResponse.error_code`,之後移除訊息字串保證(D5 過渡期結束)

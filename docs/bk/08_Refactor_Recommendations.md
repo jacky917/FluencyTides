@@ -328,6 +328,11 @@ async def ensure_deck_exists(
 ### 3.4 LLM 與語音評分的韌性（F041、F043）
 
 > ✅ **已實施（2026-07-08）**：F041 按方案完成（僅瞬時錯誤重試＋指數退避 2/4/8s，401/400 立即拋 `LLMServiceError`）；F043 完成——Prompt 抽至 `audio_evaluator/prompts.py`、圍欄清理統一為 `llm/client.py` 模組級 `strip_markdown_fences`、`BaseAudioEvaluator` Template Method（子類實作 `_evaluate_audio_once`），F097 的 `response_schema` 一併採納（保留文字解析 fallback，環境無法安裝 SDK 驗證已於 docstring 註明）。詳見 [10_Implementation_Log.md](10_Implementation_Log.md) §3。
+>
+> 🔄 **2026-10-14 對照現行程式碼**（LLM 層級化計畫 `docs/archive/llm_provider_hierarchy_FEAT_2026-09-06.md`）：
+> - **文字 LLM 的圍欄清理已收斂到 `llm/schema_utils.strip_markdown_fences`**（`LLMClient` / `GeminiNativeLLMClient` / `HeadlessCliLLMClient` 共用同一份；`$ref` 展平同在 `schema_utils`）。
+> - **語音側與上述「已實施」不符**：`BaseAudioEvaluator` 目前只宣告抽象 `evaluate_audio`、沒有 Template Method；四個評分器（gemini / openai / proxy / stt_llm）各自內嵌圍欄清理；Gemini 評分器自帶重試迴圈。F043 的語音半邊應視為未完成，改用 `schema_utils` 與 `BaseLLMClient._retry_transient` 已列入該計畫 §8。
+> - **F041 亦與現行程式碼不符**：`LLMClient` 對 API 例外固定間隔 2 秒重試 3 次，不是 2/4/8 秒指數退避；換用 `_retry_transient` 同列計畫 §8（屬行為變更，需獨立驗證）。
 
 **F041 — 重試策略對所有例外一視同仁**（`backend/app/infrastructure/llm/client.py:144`）：`except Exception` 捕捉一切後固定 sleep 2 秒重試 3 次（`client.py:144-153`）。三個具體缺陷：
 
