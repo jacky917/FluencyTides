@@ -110,7 +110,7 @@ td code{white-space:nowrap}
   <dl class="meta">
     <dt>範圍</dt><dd><code>app/infrastructure/llm/</code>（六個新檔、四個改檔）、<code>app/core/exceptions/infrastructure.py</code>、<code>app/core/config.py</code>、<code>app/core/dependencies.py</code>、<code>app/services/runtime_config_service.py</code>、<code>scripts/common/llm_label.py</code>、<code>.env.example</code>、<code>.gitignore</code></dd>
     <dt>不動</dt><dd><code>generate_structured_data</code> 簽名與 <code>LLMGenerateResult</code>；既有標籤字串；既有錯誤訊息文字；<code>scripts/fastapi_client/**</code>；各 handler 的 prompt 與建卡邏輯；語音軸線；API schema</dd>
-    <dt>關聯</dt><dd><code>docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md</code>（§D11 Anthropic 指引仍有效）、ADR 004（ABC 策略模式先例）、F043（fence 清理重複）、<code>audio_evaluator/base.py</code>（ABC 而非 Protocol 的原始論證）。Markdown 原稿：<code>docs/wip/llm_provider_hierarchy_FEAT_2026-09-06.md</code></dd>
+    <dt>關聯</dt><dd><code>docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md</code>（§D11 Anthropic 指引仍有效）、ADR 004（ABC 策略模式先例）、F043（fence 清理重複）、<code>audio_evaluator/base.py</code>（ABC 而非 Protocol 的原始論證）。Markdown 原稿：<code>docs/archive/llm_provider_hierarchy_FEAT_2026-09-06.md</code></dd>
   </dl>
   <ul class="toc">
     <li><a href="#s1">1 問題與動機</a></li><li><a href="#s2">2 目標與非目標</a></li><li><a href="#s3">3 設計決策</a></li><li><a href="#s4">4 改動清單</a></li><li><a href="#s5">5 實作順序</a></li><li><a href="#s6">6 風險</a></li><li><a href="#s7">7 驗收</a></li><li><a href="#s8">8 後續</a></li>
