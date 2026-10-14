@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-09-06 |
 | **性質** | 重構(既有三類掛上抽象基底)+ 新增機能設計(兩個新 provider)+ 實作工作項 |
-| **狀態** | 🚧 實作中 —— P1 基底重構 ✅ 完成並驗收(2026-09-06 實作;2026-10-08 補 mypy、工廠覆寫測試與複查,2026-10-09 處理 code review,全套 291 項測試綠;`test_claude_code_client.py` / `test_jp_verb_reading_judgments.py` / `test_runtime_config_read.py` 三檔一行未改;google / claude-code 實跑與 TG `/setconfig` 使用者實測通過),已提交 [PR #20](https://github.com/jacky917/FluencyTides/pull/20);P0 實測待跑;P2 / P3 未開始 |
+| **狀態** | 🚧 實作中 —— P1 基底重構 ✅ 完成並驗收(2026-09-06 實作;2026-10-08 補 mypy、工廠覆寫測試與複查,2026-10-09 處理 code review,全套 291 項測試綠;`test_claude_code_client.py` / `test_jp_verb_reading_judgments.py` / `test_runtime_config_read.py` 三檔一行未改;google / claude-code 實跑與 TG `/setconfig` 使用者實測通過),已合併 [PR #20](https://github.com/jacky917/FluencyTides/pull/20);P2 實作完成(2026-10-14,A9 實測、兩輪 code review 修正、全套 357 項綠、真實 API 煙霧測試通過),已提交 [PR #21](https://github.com/jacky917/FluencyTides/pull/21),跑一章比對拒答率待使用者;P0 的 agy 實測(A1–A8)待跑;P3 未開始 |
 | **範圍** | `app/infrastructure/llm/`(新增 `base.py`、`cli_base.py`、`schema_utils.py`、`labels.py`、`gemini_native_client.py`、`antigravity_client.py`;修改 `client.py`、`claude_code_client.py`、`anthropic_client.py`、`factory.py`)、`app/core/exceptions/infrastructure.py`(三個 `LLMServiceError` 子類)、`app/core/config.py`(`LLM_ANTIGRAVITY_*` 五欄位)、`app/core/dependencies.py`、`app/services/runtime_config_service.py`、`scripts/common/llm_label.py`、`.env.example`、`.gitignore` |
 | **不動** | `generate_structured_data` 簽名與 `LLMGenerateResult`;既有 provider 的標籤字串格式;既有錯誤訊息文字(生成腳本分級表的識別字串保留);`scripts/fastapi_client/**` 生成腳本;各 handler 的 prompt 渲染與建卡邏輯;`audio_evaluator/` 語音軸線;API request/response schema |
-| **PR / 進度** | P1:[PR #20](https://github.com/jacky917/FluencyTides/pull/20)(2026-10-14 提交,分支 `feat/llm-provider-hierarchy`);P2 / P3 依 §6 於 P1 合併後各開獨立 PR |
+| **PR / 進度** | P1:[PR #20](https://github.com/jacky917/FluencyTides/pull/20)(2026-10-14 合併,分支 `feat/llm-provider-hierarchy`);P2:[PR #21](https://github.com/jacky917/FluencyTides/pull/21)(2026-10-14 提交,分支 `feat/gemini-native-llm-client`);P3 待 P0 後另開獨立 PR |
 | **關聯文件** | `docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md`(§D11 的 Anthropic 實作指引仍有效,本計畫只掛基底不實作本體)、`docs/bk/adr/004-audio-evaluator-strategy.md`(ABC 策略模式先例)、`docs/bk/08_Refactor_Recommendations.md` F043(fence 清理重複)、`app/infrastructure/audio_evaluator/base.py`(ABC 而非 Protocol 的原始論證)、本文件 HTML 版 `llm_provider_hierarchy_FEAT_2026-09-06.html`(含架構圖) |
 
 ---
@@ -246,17 +246,26 @@ app/infrastructure/llm/schema_utils.py
 | `LLM_BASE_URL` | 對此 provider 無意義,忽略(不拋錯,記一行 debug) |
 | `SUPPORTS_SAFETY_SETTINGS` | `True`;四類一律 `BLOCK_NONE`,不加開關(與現況對中轉站的行為一致) |
 | `SUPPORTS_EFFORT` | `False`(thinking budget 是另一個概念,列 §8) |
-| 呼叫 | `client.aio.models.generate_content(model, contents=[system_prompt + "\n\n" + user_prompt], config=GenerateContentConfig(temperature=0.0, response_mime_type="application/json", response_schema=<見 A9>, safety_settings=[...]))`,以 `_retry_transient()` 包裝,`asyncio.wait_for` 120 秒 |
+| 呼叫 | `client.aio.models.generate_content(model, contents=user_prompt, config=GenerateContentConfig(system_instruction=system_prompt, temperature=0.0, response_mime_type="application/json", response_json_schema=resolve_json_schema(schema), safety_settings=[...]))`,以 `_retry_transient()` 包裝(網路層:5xx 與 aiohttp / httpx 連線類例外,退避 1 秒、2 秒),`asyncio.timeout` 120 秒整體上限(**P2 實作定案**,A9 見下) |
 | system prompt | google-genai 有 `system_instruction`,用它,不併入 contents |
-| 分流 | `candidates[0].finish_reason`:`STOP` → 取文字;`SAFETY` / `PROHIBITED_CONTENT` / `BLOCKLIST` → `LLMRefusalError`;`MAX_TOKENS` → `LLMRetryExhaustedError`;`errors.APIError` 含 429 / RESOURCE_EXHAUSTED → `LLMQuotaError`;其餘 5xx 走瞬時重試 |
+| 分流 | **P2 實作定案**:先看 `prompt_feedback.block_reason`(prompt 被擋),否則看 `candidates[0].finish_reason`。`SAFETY` / `PROHIBITED_CONTENT` / `BLOCKLIST` / `SPII` / `JAILBREAK` → 拒答(即使帶完整 JSON 也不當成功);空內容、截斷、壞 JSON → 重試耗盡;內容層與 `LLMClient` 同樣 3 次、固定 2 秒,最後一次的型態決定子類。429 → `LLMQuotaError`(不重試);5xx / 連線 → 瞬時重試;400 / 401 / 403 / 404 → `LLMServiceError` 附設定提示(不重試)。訊息一律帶 `finish_reason`,API 錯誤只取 `code status: message`、不嵌回應 JSON(避免誤觸腳本子字串分級) |
 | 標籤 | `(gemini-native)gemini-3.5-pro`,走 D6 通用規則,自然與 OpenAI 相容那條(裸 `gemini-3.5-pro`)區分 |
 | 白名單 | `MODIFY_LLM_MODEL_NAME` 現值即 gemini-3.x 名稱,**免改**——唯一不用動白名單的新 provider |
-| 依賴 | `google-genai` 已在 `requirements.txt:23`;模組維持惰性 import |
+| 依賴 | `google-genai` 已在 `requirements.txt`,P2 把下限由 `>=0.2.0` 提到實測的 `>=2.10.0`(`response_json_schema` 是較新欄位);模組維持惰性 import |
 
 **A9(P0 實測項)**:`generate_structured_data` 收的是 dict schema,語音軸線是直接丟 Pydantic class。
 須確認目前安裝的 google-genai 版本收原始 dict 的方式(`response_schema` 直接吃 dict、或
 `response_json_schema`),以及是否仍需 `resolve_json_schema` 展平——該函式當初就是為
 Gemini 不吃 `$ref` 而寫,原生 SDK 可能已不需要。實測結果決定 D7 呼叫列的 `<見 A9>`。
+
+**A9 實測結果**(2026-10-14,google-genai 2.10.0、`gemini-3.1-pro-preview`、真實 `ChildCardGenerationResult` schema):
+
+| 傳法 | 原始 schema(含 `$defs` / `$ref`) | 展平後 |
+|---|---|---|
+| `response_json_schema` | ✅ 接受,輸出通過 Pydantic 驗證 | ✅ 同左 |
+| `response_schema`(dict) | ✅ 同左 | ✅ 同左 |
+
+四種組合全數可用,原生 SDK 已能吃 `$ref`。定案用 `response_json_schema` + 展平:前者是 SDK 收原始 JSON Schema 的欄位(`response_schema` 會先轉成 OpenAPI 子集),展平則讓各 provider 送出同一份 schema,排除 `$ref` 解析差異這個變因。另確認 SDK 的 tenacity 重試預設關閉(`retry_args(None)` 為只試一次),但環境裝了 aiohttp 時非同步請求一律走 aiohttp,其連線錯誤另有一次 SDK 內建重試(先等隨機 1–10 秒,無法關閉)。
 
 ### D8 `AntigravityLLMClient` 規格
 
@@ -452,6 +461,32 @@ singleton 的標籤(§1.3 圖 3 的 L1)。`runtime_config_service.py:30-36` 的 
     - 驗證:全套 291 項綠、ruff 零警告、mypy 零錯誤;`test_claude_code_client.py` 與 `main` 相同
   - 保留未動:`import shutil  # noqa` 在 `claude_code_client.py`(既有測試以 `ccc.shutil` 拼寫 patch;要拆得改測試,留給 §8)、`_formatted_model_name` alias 與 `_resolve_json_schema` shim(§8 排程移除)、`LLMRefusalError` 訊息帶兩個識別字串(D5 過渡期,§8 腳本改讀 `error_code` 後拿掉)。
 - **P2 `GeminiNativeLLMClient`**:未知數最少(SDK 先例在 repo、白名單免改、金鑰現成),且立刻拿到 `safety_settings` 的實際價值。驗收:`LLM_PROVIDER=gemini-native` 跑 JP_VerbPair 一章,與同章 `google`(OpenAI 相容)路徑比對拒答率
+  **實作完成**(2026-10-14,分支 `feat/gemini-native-llm-client`):
+  - 改動:新增 `gemini_native_client.py`、`tests/test_gemini_native_client.py`(64 項);`factory.py` 加註冊列 `gemini-native`(`is_cli=False`、`supports_effort=False`);`config.py` 的 `LLM_PROVIDER` / `LLM_API_KEY` 說明;`.env.example` 補 gemini-native 說明與 TG 切換註解;`requirements.txt` 的 `google-genai` 下限提到 `>=2.10.0`、aiohttp 註解補「gemini-native 直接依賴」;`base.py` 的 `_retry_transient` 加 `describe_error` 參數(見下方第二輪)
+  - A9 實測與定案見 §D7;D7「呼叫」「分流」兩列已改寫為實作版本
+  - 真實 API 煙霧測試:經工廠建出 `GeminiNativeLLMClient`,以真實卡片 schema 打 `gemini-3.1-pro-preview`,標籤 `(gemini-native)gemini-3.1-pro-preview`、輸出通過 Pydantic 驗證;攔截 SDK 實際送出的請求 body,含 `safetySettings`(四類 `BLOCK_NONE`)、`systemInstruction`、展平的 `responseJsonSchema`
+  - **code review 修正**(code / errors / tests / comments 四面向,全數處理或縮小範圍處理):
+    - 正式環境 SDK 走 aiohttp,連線錯誤是 `aiohttp.ClientConnectionError` 系列,初版 `_is_transient` 只認 httpx 與內建 `ConnectionError`,等於連線錯誤零重試(審查者以假位址實測確認)。改為兩種傳輸層都列,並收窄 httpx 為連線 / 讀寫 / 逾時類,代理設定錯、協定不支援等確定性錯誤不重試
+    - 非預期例外改 `logger.exception` 並在訊息帶型別名與 repr(`TimeoutError()` 的 str 是空字串);`genai.Client` 建構失敗也包成 `LLMServiceError`
+    - 移除 `.text` 外的 `except ValueError: return ""`:2.10.0 無候選時 `.text` 回 None,那段防護沒有依據,反而會把 SDK 錯誤偽裝成空內容跳句
+    - 拒答集合加 `JAILBREAK`;所有最終訊息帶 `finish_reason`;截斷改用與 `LLMClient` 一致的「非有效 JSON 格式」,不再借用跳句字串(腳本結果同樣是跳句,只是不再誤記成安全攔截)
+    - API 錯誤訊息只取 `code status: message`,不嵌回應 JSON;400 / 401 / 403 / 404 附「請檢查 LLM_API_KEY / LLM_MODEL_NAME」等提示(不另開例外子類,腳本層中止列 §8)
+    - 補測試:模型覆寫真的送進請求、安全中斷但帶完整合法 JSON 仍判拒答、單次逾時接線、`BLOCKED_REASON_UNSPECIFIED` 防護、無候選、最後一次決定子類的混合序列、拒答後遇 429、退避間隔、HTTP 層請求 body(走 SDK 真實的 wire 轉換與回應解析)
+  - **第二輪複審修正**(errors / tests 兩面向重審,確認第一輪各項已解決後的新發現):
+    - 網路層重試耗盡的訊息由基底 `_retry_transient` 產生,第一輪的修正沒涵蓋到:5xx 耗盡仍嵌整包回應 JSON、`TimeoutError()` 耗盡訊息仍是空白。基底加 `describe_error` 參數(預設「型別名: repr」),gemini-native 傳入只取 `code status: message` 的版本。基底只有這一個呼叫端,其他 provider 不受影響
+    - `aiohttp.ClientConnectionError` 底下的代理錯誤、SSL / 憑證錯誤、憑證指紋不符是確定性錯誤,改為不重試
+    - Gemini 對無效 / 過期金鑰回 400(不是 401),改從 details 的 `ErrorInfo.reason` 認出 `API_KEY_INVALID` / `API_KEY_EXPIRED`,提示指向 `LLM_API_KEY`
+    - API 錯誤說明截斷 500 字(代理回 HTML 錯誤頁時 message 是整頁)、缺欄位不印 None;429 改記 WARNING;不可用回應的 log 補 Google 附的人讀原因(`block_reason_message` / `finish_message`)
+    - 補測試:OTHER 不算拒答、aiohttp / httpx 其餘瞬時例外、aiohttp 確定性例外不重試、瞬時錯誤耗盡訊息帶型別名、5xx 耗盡不含 details、金鑰 400 提示、訊息截斷;逾時測試在回歸時 5 秒內明確失敗而非卡死;caplog 斷言限定本模組
+  - 突變驗證:拿掉 aiohttp 瞬時判斷、拒答只在空內容時判、忽略模型覆寫、拿掉 UNSPECIFIED 防護、訊息改回 `str(APIError)`、拿掉 `describe_error`、拿掉確定性例外排除、拿掉金鑰 reason 判斷、拿掉單次逾時、拿掉截斷——各自恰好被對應測試抓到
+  - 驗收指令(在 `backend/` 下):
+
+    ```bash
+    python -m pytest tests -q -p no:cacheprovider
+    ```
+
+    全套 357 項綠;ruff 零警告;`mypy app/infrastructure/llm --ignore-missing-imports` 零錯誤
+  - **待做**:使用者以 `LLM_PROVIDER=gemini-native` 跑 JP_VerbPair 一章,與同章 `google` 路徑比對拒答率。比對時注意兩邊的拒答認定不完全相同(原生多認 `SPII` / `JAILBREAK`、帶文字的安全中斷也算拒答)
 - **P3 `AntigravityLLMClient`**:依 P0 結果寫 hook 與測試。驗收:`LLM_PROVIDER=antigravity` 跑同一章;因 system prompt 併入(D8),與 claude-code 路徑做 20 張人工評閱比對
 - **P4 收尾**:文件回填(本文件狀態、`docs/bk/02_Backend_Architecture.md` 的 LLM 段、`.env.example`);F043 標記「fence 清理已收斂到 `schema_utils`」;移入 `archive/`
 
@@ -463,7 +498,7 @@ singleton 的標籤(§1.3 圖 3 的 L1)。`runtime_config_service.py:30-36` 的 
 | agy 無 `--system-prompt`,併入後生成品質下降 | P3 以 20 張人工評閱比對;若明顯劣化,`_build_stdin` 改用結構化分隔(如 `<system>…</system>` 區塊)再測;仍不行則 agy 只用於 effort 敏感度低的任務,文件明寫 |
 | agy 的 `--json-schema` 若非 harness 強制(A3),壞 JSON 率高 | `MAX_RETRIES` 提高 + 修復重試已是既有機制;P3 統計壞 JSON 率,超過 5% 則 agy 列為實驗性 provider |
 | `~/.gemini/GEMINI.md` 被 print 模式讀入(A5) | 若無旗標可關:`_build_env` 覆寫 `HOME` / `USERPROFILE` 指向 workdir 內的空 home(claude 已有空 cwd 先例,同一思路);記為 agy 專屬 hook |
-| google-genai 對 dict schema 的接受形式與預期不符(A9) | 三條路依序:`response_schema` 吃 dict → `response_json_schema` → 轉 `types.Schema`;都不行則退回「schema 塞 system_instruction + `response_mime_type=json` + 本地 `jsonschema` 複核」(與 claude 三道防線同構) |
+| google-genai 對 dict schema 的接受形式與預期不符(A9;2026-10-14 實測已排除,見 §D7) | 三條路依序:`response_schema` 吃 dict → `response_json_schema` → 轉 `types.Schema`;都不行則退回「schema 塞 system_instruction + `response_mime_type=json` + 本地 `jsonschema` 複核」(與 claude 三道防線同構) |
 | 例外換型別後某個未知讀取點靠 `type(e) is LLMServiceError` | 子類仍是 `LLMServiceError`;grep 全 repo 無 `type(...) is` 比對;風險極低 |
 | `_formatted_model_name` alias 移除時漏了讀取點 | 本計畫不移除,只加 `model_label`;移除列 §8 並附 grep 清單 |
 | 兩個新 provider 同時開發造成 P1 基底介面反覆改動 | P1 完成並合併後再開 P2 / P3;P2 與 P3 各開獨立 PR |
@@ -479,13 +514,13 @@ singleton 的標籤(§1.3 圖 3 的 L1)。`runtime_config_service.py:30-36` 的 
 - [x] `grep -rn 'provider == "claude-code"' app/` 為零(P1;分流走註冊表 + 旗標)
 - [x] `LLM_PROVIDER=google` 跑一張卡:標籤 `gemini-3.1-pro-preview`、錯誤訊息、審計行為與 main 分支逐位元一致(使用者實測;另以 MockTransport 對 `main` 離線比對 18 次一致;拒答訊息依 D5 例外)
 - [x] `LLM_PROVIDER=claude-code` 跑一張卡:標籤 `(claude-code)opus-5@medium`、審計三檔與 main 分支逐位元一致(使用者實測)
-- [ ] `LLM_PROVIDER=gemini-native` 跑一章:`safety_settings` 在請求中(mock 或 SDK debug log 證明);標籤 `(gemini-native)<model>`;`MODIFY_LLM_MODEL_NAME` 未改即可用
+- [ ] `LLM_PROVIDER=gemini-native` 跑一章:`safety_settings` 在請求中(mock 或 SDK debug log 證明);標籤 `(gemini-native)<model>`;`MODIFY_LLM_MODEL_NAME` 未改即可用(2026-10-14:`safety_settings` 已由 HTTP 層測試與真實 API 請求攔截證明、標籤已驗;跑一章待使用者)
 - [ ] `LLM_PROVIDER=antigravity` 跑一章:標籤 `(antigravity)<model>@<effort>`;審計三檔落盤於 `logs/antigravity_audit/`;`--print-timeout` 值等於 `LLM_ANTIGRAVITY_TIMEOUT_SECONDS`
 - [x] `create_llm_client(model="x", effort="high")` 在 `LLM_PROVIDER=anthropic` 下拋「尚未實作」且訊息可見兩個覆寫值(證明參數已傳入,不再靜默丟棄)(2026-10-08 實測;`tests/test_llm_factory.py` 守護)
-- [x] `create_llm_client(effort="high")` 在 `LLM_PROVIDER=google` 下拋 `LLMServiceError`,訊息與層級化前逐字相同(`effort 覆寫僅 claude-code provider 支援（目前 LLM_PROVIDER='google'）。`);gemini-native 待 P2
+- [x] `create_llm_client(effort="high")` 在 `LLM_PROVIDER=google` 下拋 `LLMServiceError`,訊息與層級化前逐字相同(`effort 覆寫僅 claude-code provider 支援（目前 LLM_PROVIDER='google'）。`);gemini-native 同樣拒絕(P2 測試覆蓋)
 - [x] 三個例外子類經 API 回傳的 `error_code` 分別為 `LLM_RETRY_EXHAUSTED` / `LLM_QUOTA` / `LLM_REFUSAL`,且 `message` 含既有識別字串;`generate_child_cards.py` 未改仍正確分級(2026-10-08:離線比對各情境拋出正確子類;`test_llm_exceptions` 驗全域 handler;三支生成腳本未改,比對字串仍在訊息中)
-- [ ] `RuntimeConfigService.get_runtime_info()` 在 claude-code 與 antigravity 下皆回 CLI 診斷區塊,在 gemini-native 下為 `None`(claude-code 部分已由 `test_runtime_config_read` 覆蓋;其餘待 P2 / P3)
-- [ ] 全套測試綠(含新增五個測試檔)(P1 的三個新測試檔 ✅,另加 `test_llm_factory`;全套 291 項綠;`test_gemini_native_client` / `test_antigravity_client` 待 P2 / P3)
+- [ ] `RuntimeConfigService.get_runtime_info()` 在 claude-code 與 antigravity 下皆回 CLI 診斷區塊,在 gemini-native 下為 `None`(claude-code 部分已由 `test_runtime_config_read` 覆蓋;gemini-native 為 `None` 已由 P2 測試覆蓋;antigravity 待 P3)
+- [ ] 全套測試綠(含新增五個測試檔)(P1 的三個新測試檔 ✅,另加 `test_llm_factory`;全套 291 項綠;P2 加 `test_gemini_native_client` 64 項,全套 357 項綠;`test_antigravity_client` 待 P3)
 
 ## 8. 後續事項(不屬本計畫範圍)
 
@@ -494,6 +529,8 @@ singleton 的標籤(§1.3 圖 3 的 L1)。`runtime_config_service.py:30-36` 的 
 - 生成腳本三處分級表改讀 `ErrorResponse.error_code`,之後移除訊息字串保證(D5 過渡期結束)
 - `LLMClient` 換用 `_retry_transient()`(指數退避取代固定 2 秒);屬行為變更,需獨立驗證
 - 移除 `_formatted_model_name` alias 與 `LLMClient` 上的兩個轉呼工具方法
+- 生成腳本遇到確定性設定錯誤(金鑰無效、模型不存在、schema 被拒)應中止,而不是逐句 `record_failure`:目前所有 `LLMServiceError` 都回 502,腳本對 ≥500 一律記失敗後跳過,設定錯誤會把整批句子累加 failure_count 直到永久跳過。P2 只在 gemini-native 的訊息裡加設定提示;`LLMClient` 有同樣問題,修法(例如設定錯誤改用 4xx 狀態碼或專屬 `error_code`)兩個客戶端與腳本一起改。在那之前,用 gemini-native 跑大批次前先手動打一次端點確認金鑰與模型名
+- `jp_verb_reading_service` 帶覆寫時,把 `create_llm_client` 拋出的**任何** `LLMServiceError` 都轉成 `InvalidOverrideError`(422);伺服器環境問題(金鑰未設、SDK Client 建立失敗)因此被歸咎成使用者的覆寫不合法。應讓覆寫驗證失敗(effort 不支援、模型名為空)拋專屬子類,service 只轉那個
 - `GeminiNativeLLMClient` 的 `thinking_config`(`LLM_GEMINI_NATIVE_THINKING_BUDGET`)——與 effort 是不同概念,先不混入 `SUPPORTS_EFFORT`
 - `AnthropicLLMClient` 本體(§D11 指引 + D5 例外)
 - 語音軸線的 `GeminiNativeAudioEvaluator` 改用 `BaseLLMClient._retry_transient()`(F043 的另一半)

@@ -471,11 +471,11 @@ class Settings(BaseSettings):
             return set()
 
     # ====================================================================
-    # LLM (OpenAI 相容) 設定
+    # LLM（文字生成）設定：OpenAI 相容端點與各 provider 共用
     # ====================================================================
     LLM_API_KEY: str | None = Field(
         default=None,
-        description="OpenAI 相容 API 金鑰（例如 Gemini API Key）",
+        description="OpenAI 相容 API 金鑰（例如 Gemini API Key）；gemini-native 也用這把",
     )
     LLM_BASE_URL: str | None = Field(
         default=None,
@@ -487,7 +487,11 @@ class Settings(BaseSettings):
     )
     LLM_PROVIDER: str = Field(
         default="google",
-        description="LLM 服務商名稱（若非 google 或 openai 則會自動在產出結果冠上服務商前綴）",
+        description=(
+            "LLM 服務商名稱：google / openai / 其他中轉名走 OpenAI 相容端點；"
+            "claude-code / gemini-native 走各自的客戶端（anthropic 目前為佔位，設定即報錯）"
+            "（非 google / openai 則會自動在產出結果冠上服務商前綴）"
+        ),
     )
     LLM_PARSE_BATCH_SIZE: int = Field(
         default=20,

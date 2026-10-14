@@ -42,6 +42,9 @@ CLAUDE_CODE_PROVIDER = "claude-code"
 # 觸發 Anthropic 官方 API provider 的 LLM_PROVIDER 值（目前為 STUB）
 ANTHROPIC_PROVIDER = "anthropic"
 
+# 觸發 Gemini 原生 SDK provider 的 LLM_PROVIDER 值
+GEMINI_NATIVE_PROVIDER = "gemini-native"
+
 
 @dataclass(frozen=True)
 class _ProviderEntry:
@@ -65,6 +68,9 @@ class _ProviderEntry:
 _REGISTRY: dict[str, _ProviderEntry] = {
     CLAUDE_CODE_PROVIDER: _ProviderEntry(
         "claude_code_client", "ClaudeCodeLLMClient", is_cli=True, supports_effort=True,
+    ),
+    GEMINI_NATIVE_PROVIDER: _ProviderEntry(
+        "gemini_native_client", "GeminiNativeLLMClient", is_cli=False, supports_effort=False,
     ),
     # 佔位 stub：實作本體時把 supports_effort 改 True（連同類別的 SUPPORTS_EFFORT）
     ANTHROPIC_PROVIDER: _ProviderEntry(

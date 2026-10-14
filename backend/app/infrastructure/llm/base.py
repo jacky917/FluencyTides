@@ -169,6 +169,7 @@ class BaseLLMClient(abc.ABC):
         max_retries: int = 3,
         base_delay: float = 1.0,
         timeout: float | None = None,
+        describe_error: Callable[[BaseException], str] | None = None,
     ) -> T:
         """對瞬時錯誤做指數退避重試，並可加絕對超時。
 
@@ -188,6 +189,11 @@ class BaseLLMClient(abc.ABC):
                 each retry.
             timeout: 單次嘗試的絕對超時秒數；None 不設。Per-attempt
                 timeout in seconds, or None.
+            describe_error: 重試耗盡時把最後一個例外寫進訊息的方式；None 用
+                「型別名: repr」（``TimeoutError()`` 這類 str 為空的例外仍可
+                辨識）。provider 可傳入自己的版本，例如不嵌整包回應 JSON——
+                訊息會到生成腳本，而腳本以子字串比對分級。How the last
+                exception is rendered into the exhaustion message.
 
         Returns:
             operation 的結果。The operation's result.
@@ -228,8 +234,13 @@ class BaseLLMClient(abc.ABC):
                         "LLM API 瞬時錯誤 (第 %d/%d 次): %s", attempt, max_retries, error
                     )
                     if attempt == max_retries:
+                        description = (
+                            describe_error(error)
+                            if describe_error is not None
+                            else f"{type(error).__name__}: {error!r}"
+                        )
                         raise LLMServiceError(
-                            f"LLM API 瞬時錯誤在 {max_retries} 次重試後仍失敗: {error}"
+                            f"LLM API 瞬時錯誤在 {max_retries} 次重試後仍失敗: {description}"
                         ) from error
             await asyncio.sleep(base_delay * (2 ** (attempt - 1)))
 

@@ -20,11 +20,11 @@ cryptography>=41.0.0
 # ─── Async Clients & AI Integration ──────────────────────────────────
 httpx>=0.24.0
 openai>=1.30.0
-google-genai>=0.2.0
+google-genai>=2.10.0     # gemini-native 用到 response_json_schema 等較新 API；2.10.0 為實測版本
 anthropic>=0.40.0        # app/infrastructure/llm/anthropic_client.py（延遲 import，缺裝時該 provider 執行期才會炸）
 jinja2>=3.1.0
 tenacity>=8.2.0          # 生成管線的重試機制（anki_media_uploader / backend_api_client）
-aiohttp>=3.9.0           # scripts/database/Elasticsearch/test_es_connection.py（先前僅靠 aiogram 間接帶入）
+aiohttp>=3.9.0           # gemini-native（google-genai 的非同步傳輸層，gemini_native_client 直接 import 以辨識連線錯誤）、scripts/database/Elasticsearch/test_es_connection.py
 
 # ─── 日文形態素解析 (Japanese NLP) ────────────────────────────────────
 # fugashi 為 MeCab 的 Python 綁定。詞典雙軌：
