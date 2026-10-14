@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-09-06 |
 | **性質** | 重構(既有三類掛上抽象基底)+ 新增機能設計(兩個新 provider)+ 實作工作項 |
-| **狀態** | 🚧 實作中 —— P1 基底重構 ✅ 完成並驗收(2026-09-06 實作;2026-10-08 補 mypy、工廠覆寫測試與複查,2026-10-09 處理 code review,全套 291 項測試綠;`test_claude_code_client.py` / `test_jp_verb_reading_judgments.py` / `test_runtime_config_read.py` 三檔一行未改;google / claude-code 實跑與 TG `/setconfig` 使用者實測通過),已合併 [PR #20](https://github.com/jacky917/FluencyTides/pull/20);P2 實作完成(2026-10-14,A9 實測、兩輪 code review 修正、全套 357 項綠、真實 API 煙霧測試通過),待使用者跑一章比對拒答率後提交 PR;P0 的 agy 實測(A1–A8)待跑;P3 未開始 |
+| **狀態** | 🚧 實作中 —— P1 基底重構 ✅ 完成並驗收(2026-09-06 實作;2026-10-08 補 mypy、工廠覆寫測試與複查,2026-10-09 處理 code review,全套 291 項測試綠;`test_claude_code_client.py` / `test_jp_verb_reading_judgments.py` / `test_runtime_config_read.py` 三檔一行未改;google / claude-code 實跑與 TG `/setconfig` 使用者實測通過),已合併 [PR #20](https://github.com/jacky917/FluencyTides/pull/20);P2 實作完成(2026-10-14,A9 實測、兩輪 code review 修正、全套 357 項綠、真實 API 煙霧測試通過),已提交 [PR #21](https://github.com/jacky917/FluencyTides/pull/21),跑一章比對拒答率待使用者;P0 的 agy 實測(A1–A8)待跑;P3 未開始 |
 | **範圍** | `app/infrastructure/llm/`(新增 `base.py`、`cli_base.py`、`schema_utils.py`、`labels.py`、`gemini_native_client.py`、`antigravity_client.py`;修改 `client.py`、`claude_code_client.py`、`anthropic_client.py`、`factory.py`)、`app/core/exceptions/infrastructure.py`(三個 `LLMServiceError` 子類)、`app/core/config.py`(`LLM_ANTIGRAVITY_*` 五欄位)、`app/core/dependencies.py`、`app/services/runtime_config_service.py`、`scripts/common/llm_label.py`、`.env.example`、`.gitignore` |
 | **不動** | `generate_structured_data` 簽名與 `LLMGenerateResult`;既有 provider 的標籤字串格式;既有錯誤訊息文字(生成腳本分級表的識別字串保留);`scripts/fastapi_client/**` 生成腳本;各 handler 的 prompt 渲染與建卡邏輯;`audio_evaluator/` 語音軸線;API request/response schema |
-| **PR / 進度** | P1:[PR #20](https://github.com/jacky917/FluencyTides/pull/20)(2026-10-14 合併,分支 `feat/llm-provider-hierarchy`);P2:分支 `feat/gemini-native-llm-client`(改動在工作區,尚未提交);P3 待 P0 後另開獨立 PR |
+| **PR / 進度** | P1:[PR #20](https://github.com/jacky917/FluencyTides/pull/20)(2026-10-14 合併,分支 `feat/llm-provider-hierarchy`);P2:[PR #21](https://github.com/jacky917/FluencyTides/pull/21)(2026-10-14 提交,分支 `feat/gemini-native-llm-client`);P3 待 P0 後另開獨立 PR |
 | **關聯文件** | `docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md`(§D11 的 Anthropic 實作指引仍有效,本計畫只掛基底不實作本體)、`docs/bk/adr/004-audio-evaluator-strategy.md`(ABC 策略模式先例)、`docs/bk/08_Refactor_Recommendations.md` F043(fence 清理重複)、`app/infrastructure/audio_evaluator/base.py`(ABC 而非 Protocol 的原始論證)、本文件 HTML 版 `llm_provider_hierarchy_FEAT_2026-09-06.html`(含架構圖) |
 
 ---
