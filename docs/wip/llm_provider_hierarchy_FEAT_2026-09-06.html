@@ -104,7 +104,7 @@ td code{white-space:nowrap}
 
 <div class="page">
 <header>
-  <div class="eyebrow"><span>FEAT</span><span>2026-09-06</span><span>FluencyTides · backend</span><span class="st">實作中 · P1 完成並驗收、PR #20 · P0 實測待跑</span></div>
+  <div class="eyebrow"><span>FEAT</span><span>2026-09-06</span><span>FluencyTides · backend</span><span class="st">實作中 · P1 已合併（PR #20） · P2 實作完成、待跑一章比對 · P0 的 agy 實測待跑</span></div>
   <h1>LLM 客戶端層級化：抽象基底、CLI 中間層，與兩個新 provider</h1>
   <p class="lede">把文字 LLM 軸線的三個裸類別掛上 <code>BaseLLMClient</code>，以 <code>HeadlessCliLLMClient</code> 承載 subprocess 共用流程，接入 Gemini 原生 SDK 與 Antigravity CLI（<code>agy -p</code>）。既有兩條路徑逐位元不變。</p>
   <dl class="meta">
@@ -355,13 +355,13 @@ llm/schema_utils.py  resolve_json_schema(schema) / strip_markdown_fences(content
 <tr><td>金鑰</td><td>沿用 <code>LLM_API_KEY</code>——Google 原生與 OpenAI 相容本就同一把 key；<code>LLM_BASE_URL</code> 忽略</td></tr>
 <tr><td><code>SUPPORTS_SAFETY_SETTINGS</code></td><td><code>True</code>；四類一律 <code>BLOCK_NONE</code>，不加開關（與現況對中轉站一致）</td></tr>
 <tr><td><code>SUPPORTS_EFFORT</code></td><td><code>False</code>（thinking budget 是另一個概念，列 §8）</td></tr>
-<tr><td>呼叫</td><td><code>client.aio.models.generate_content(model, contents=[user_prompt], config=GenerateContentConfig(system_instruction=system_prompt, temperature=0.0, response_mime_type="application/json", response_schema=&lt;A9&gt;, safety_settings=[…]))</code>，以 <code>_retry_transient()</code> 包裝，120 秒絕對超時</td></tr>
-<tr><td>分流</td><td><code>STOP</code> → 取文字；<code>SAFETY</code> / <code>PROHIBITED_CONTENT</code> / <code>BLOCKLIST</code> → <code>LLMRefusalError</code>；<code>MAX_TOKENS</code> → <code>LLMRetryExhaustedError</code>；429 / <code>RESOURCE_EXHAUSTED</code> → <code>LLMQuotaError</code>；其餘 5xx 走瞬時重試</td></tr>
+<tr><td>呼叫</td><td><code>client.aio.models.generate_content(model, contents=user_prompt, config=GenerateContentConfig(system_instruction=system_prompt, temperature=0.0, response_mime_type="application/json", response_json_schema=resolve_json_schema(schema), safety_settings=[…]))</code>，以 <code>_retry_transient()</code> 包裝（網路層：5xx 與 aiohttp / httpx 連線類例外，退避 1 秒、2 秒），120 秒整體上限（P2 實作定案）</td></tr>
+<tr><td>分流</td><td>P2 實作定案：先看 <code>prompt_feedback.block_reason</code>，否則看 <code>candidates[0].finish_reason</code>。<code>SAFETY</code> / <code>PROHIBITED_CONTENT</code> / <code>BLOCKLIST</code> / <code>SPII</code> / <code>JAILBREAK</code> → 拒答（帶完整 JSON 也不當成功）；空內容、截斷、壞 JSON → 重試耗盡；內容層與 <code>LLMClient</code> 同樣 3 次、固定 2 秒，最後一次決定子類。429 → <code>LLMQuotaError</code>（不重試）；5xx / 連線 → 瞬時重試；400 / 401 / 403 / 404 → <code>LLMServiceError</code> 附設定提示。訊息一律帶 <code>finish_reason</code>，API 錯誤不嵌回應 JSON</td></tr>
 <tr><td>標籤</td><td><code>(gemini-native)gemini-3.5-pro</code>，自然與 OpenAI 相容那條（裸 <code>gemini-3.5-pro</code>）區分</td></tr>
 <tr><td>白名單</td><td><code>MODIFY_LLM_MODEL_NAME</code> 現值即 gemini-3.x，<strong>免改</strong>——唯一不用動白名單的新 provider</td></tr>
-<tr><td>依賴</td><td><code>google-genai</code> 已在 <code>requirements.txt:23</code>；模組維持惰性 import</td></tr>
+<tr><td>依賴</td><td><code>google-genai</code> 下限由 <code>&gt;=0.2.0</code> 提到實測的 <code>&gt;=2.10.0</code>；模組維持惰性 import</td></tr>
 </table></div>
-<div class="callout"><p><strong>A9（P0 實測）</strong> <code>generate_structured_data</code> 收的是 dict schema，語音軸線是直接丟 Pydantic class。須確認目前安裝的 google-genai 收原始 dict 的方式（<code>response_schema</code> 直接吃 dict、或 <code>response_json_schema</code>），以及是否仍需 <code>resolve_json_schema</code> 展平——該函式當初就是為 Gemini 不吃 <code>$ref</code> 而寫。</p></div>
+<div class="callout"><p><strong>A9（P0 實測）</strong> <code>generate_structured_data</code> 收的是 dict schema，語音軸線是直接丟 Pydantic class。須確認目前安裝的 google-genai 收原始 dict 的方式（<code>response_schema</code> 直接吃 dict、或 <code>response_json_schema</code>），以及是否仍需 <code>resolve_json_schema</code> 展平——該函式當初就是為 Gemini 不吃 <code>$ref</code> 而寫。</p><p><strong>實測結果（2026-10-14，google-genai 2.10.0、gemini-3.1-pro-preview、真實卡片 schema）</strong>：<code>response_json_schema</code> / <code>response_schema</code> × 原始 <code>$defs</code> / 展平，四種組合全數接受、輸出通過 Pydantic 驗證。定案用 <code>response_json_schema</code> + 展平（各 provider 送同一份 schema）。SDK 的 tenacity 重試預設關閉；裝了 aiohttp 時非同步請求走 aiohttp，其連線錯誤另有一次 SDK 內建重試（隨機 1–10 秒）。</p></div>
 
 <h3><span class="d">D8</span><code>AntigravityLLMClient</code> 規格</h3>
 <div class="tbl"><table>
@@ -488,7 +488,7 @@ def create_llm_client(*, model=None, effort=None) -&gt; BaseLLMClient:
   <li><code>_probe_claude_code</code> 收 <code>provider</code>：token / auth status / haiku 三項 claude 專屬，其他 CLI provider 回 <code>unsupported</code></li>
   <li>廢棄面移除：<code>SUPPORTS_SAFETY_SETTINGS</code>、<code>registered_providers()</code>、<code>workdir</code> / <code>audit_dir</code>、<code>_strip_markdown_fences</code> shim、重複的 <code>ANTHROPIC_PROVIDER</code> 常數、兩個無用 import；<code>normalize_provider</code> 收斂到 <code>labels.py</code> 一份</li>
 </ul></div></div>
-<div class="phase"><div class="p">P2</div><div><p><strong><code>GeminiNativeLLMClient</code></strong>。未知數最少（SDK 先例在 repo、白名單免改、金鑰現成），立刻拿到 safety_settings 的實際價值。驗收：跑 JP_VerbPair 一章，與同章 <code>google</code> 路徑比對拒答率。</p></div></div>
+<div class="phase"><div class="p">P2</div><div><p><strong><code>GeminiNativeLLMClient</code></strong>。未知數最少（SDK 先例在 repo、白名單免改、金鑰現成），立刻拿到 safety_settings 的實際價值。驗收：跑 JP_VerbPair 一章，與同章 <code>google</code> 路徑比對拒答率。</p><p><strong>實作完成（2026-10-14，分支 <code>feat/gemini-native-llm-client</code>）</strong>。新增 <code>gemini_native_client.py</code> 與 64 項測試；工廠註冊 <code>gemini-native</code>；<code>google-genai</code> 下限提到 2.10.0。真實 API 經工廠跑通，攔截到的請求 body 含 <code>safetySettings</code>（四類 <code>BLOCK_NONE</code>）、<code>systemInstruction</code>、展平的 <code>responseJsonSchema</code>。四面向 code review 後修正：正式環境走 aiohttp，初版連線錯誤零重試，已補；非預期例外帶型別名與 traceback；移除無依據的空 catch；<code>JAILBREAK</code> 算拒答、訊息帶 <code>finish_reason</code>、截斷不再借用跳句字串；API 錯誤不嵌回應 JSON、4xx 附設定提示；補齊模型覆寫、帶完整 JSON 的安全中斷、逾時接線、HTTP 層請求 body 等測試，突變驗證皆能抓到。第二輪複審再修：網路層重試耗盡的訊息由基底產生、第一輪沒涵蓋（5xx 仍嵌回應 JSON、<code>TimeoutError()</code> 訊息空白），基底 <code>_retry_transient</code> 加 <code>describe_error</code> 參數；aiohttp 的代理 / SSL / 憑證指紋錯誤改不重試；無效金鑰（Gemini 回 400）從 <code>ErrorInfo.reason</code> 認出並提示 <code>LLM_API_KEY</code>；錯誤說明截斷、429 記 WARNING、log 補 Google 的人讀原因。全套 357 項綠、ruff / mypy 零錯誤。</p><div class="callout warn"><p><strong>待做</strong>：使用者以 <code>LLM_PROVIDER=gemini-native</code> 跑一章，與 <code>google</code> 路徑比對拒答率。兩邊拒答認定不完全相同（原生多認 <code>SPII</code> / <code>JAILBREAK</code>、帶文字的安全中斷也算拒答），比對時要算進去。</p></div></div></div>
 <div class="phase"><div class="p">P3</div><div><p><strong><code>AntigravityLLMClient</code></strong>。依 P0 結果寫 hook 與測試。驗收：跑同一章；因 system prompt 併入，與 claude-code 路徑做 20 張人工評閱比對。</p></div></div>
 <div class="phase"><div class="p">P4</div><div><p><strong>收尾</strong>。文件回填、F043 標記收斂、移入 <code>archive/</code>。</p></div></div>
 
@@ -499,7 +499,7 @@ def create_llm_client(*, model=None, effort=None) -&gt; BaseLLMClient:
 <tr><td>agy 無 <code>--system-prompt</code>，併入後品質下降</td><td>P3 以 20 張人工評閱比對；劣化則改結構化分隔區塊再測；仍不行則 agy 限用於 effort 敏感度低的任務</td></tr>
 <tr><td>agy 的 <code>--json-schema</code> 非 harness 強制（A3），壞 JSON 率高</td><td>提高 <code>MAX_RETRIES</code>；P3 統計壞 JSON 率，超過 5% 列為實驗性 provider</td></tr>
 <tr><td><code>~/.gemini/GEMINI.md</code> 被 print 模式讀入（A5）</td><td>若無旗標可關：<code>_build_env</code> 覆寫 <code>HOME</code> / <code>USERPROFILE</code> 指向 workdir 內的空 home</td></tr>
-<tr><td>google-genai 對 dict schema 的接受形式與預期不符（A9）</td><td>依序試 <code>response_schema</code> 吃 dict → <code>response_json_schema</code> → <code>types.Schema</code>；都不行則退回「schema 塞 system_instruction + json mime + 本地複核」</td></tr>
+<tr><td>google-genai 對 dict schema 的接受形式與預期不符（A9；2026-10-14 實測已排除）</td><td>依序試 <code>response_schema</code> 吃 dict → <code>response_json_schema</code> → <code>types.Schema</code>；都不行則退回「schema 塞 system_instruction + json mime + 本地複核」</td></tr>
 <tr><td>例外換型別後某處靠 <code>type(e) is LLMServiceError</code></td><td>子類仍是 <code>LLMServiceError</code>；grep 全 repo 無此比對；風險極低</td></tr>
 <tr><td>兩個新 provider 同時開發造成基底介面反覆</td><td>P1 合併後再開 P2 / P3；各開獨立 PR</td></tr>
 </table></div>
@@ -515,13 +515,13 @@ def create_llm_client(*, model=None, effort=None) -&gt; BaseLLMClient:
   <li><code>grep -rn 'provider == "claude-code"' app/</code> 為零</li>
   <li><code>LLM_PROVIDER=google</code> 跑一張卡：標籤、錯誤訊息、審計行為與 main 分支逐位元一致（使用者實測；MockTransport 對 main 離線比對 18 次一致；拒答訊息依 D5 例外）</li>
   <li><code>LLM_PROVIDER=claude-code</code> 跑一張卡：標籤 <code>(claude-code)opus-5@medium</code>、審計三檔逐位元一致（使用者實測）</li>
-  <li><code>LLM_PROVIDER=gemini-native</code> 跑一章：safety_settings 在請求中；標籤 <code>(gemini-native)&lt;model&gt;</code>；白名單未改即可用</li>
+  <li><code>LLM_PROVIDER=gemini-native</code> 跑一章：safety_settings 在請求中；標籤 <code>(gemini-native)&lt;model&gt;</code>；白名單未改即可用（safety_settings 與標籤已由測試與真實請求攔截證明；跑一章待使用者）</li>
   <li><code>LLM_PROVIDER=antigravity</code> 跑一章：標籤 <code>(antigravity)&lt;model&gt;@&lt;effort&gt;</code>；審計落盤於 <code>logs/antigravity_audit/</code>；<code>--print-timeout</code> 等於設定值</li>
   <li><code>create_llm_client(model="x", effort="high")</code> 在 anthropic 下拋「尚未實作」且訊息可見兩個覆寫值（2026-10-08 實測；<code>tests/test_llm_factory.py</code> 守護）</li>
-  <li><code>create_llm_client(effort="high")</code> 在 google 下拋 <code>LLMServiceError</code>，訊息與層級化前逐字相同（P1 已達成）；gemini-native 待 P2</li>
+  <li><code>create_llm_client(effort="high")</code> 在 google 下拋 <code>LLMServiceError</code>，訊息與層級化前逐字相同（P1 已達成）；gemini-native 同樣拒絕（P2 測試覆蓋）</li>
   <li>三個例外子類經 API 回傳的 <code>error_code</code> 正確，且 <code>message</code> 含既有識別字串；<code>generate_child_cards.py</code> 未改仍正確分級（P1 已達成，2026-10-08）</li>
-  <li><code>RuntimeConfigService.get_runtime_info()</code> 在 claude-code 與 antigravity 下皆回 CLI 診斷區塊，在 gemini-native 下為 <code>None</code>（claude-code 部分已有測試；其餘待 P2 / P3）</li>
-  <li>全套測試綠（含新增五個測試檔）（P1 三檔 ✅ 另加 <code>test_llm_factory</code>、291 項綠；另兩檔待 P2 / P3）</li>
+  <li><code>RuntimeConfigService.get_runtime_info()</code> 在 claude-code 與 antigravity 下皆回 CLI 診斷區塊，在 gemini-native 下為 <code>None</code>（claude-code 部分已有測試；gemini-native 為 <code>None</code> 已由 P2 測試覆蓋；antigravity 待 P3）</li>
+  <li>全套測試綠（含新增五個測試檔）（P1 三檔 ✅ 另加 <code>test_llm_factory</code>；P2 加 <code>test_gemini_native_client</code> 64 項，全套 357 項綠；<code>test_antigravity_client</code> 待 P3）</li>
 </ul>
 
 <h2 id="s8">8. 後續事項（不屬本計畫）</h2>
@@ -531,6 +531,8 @@ def create_llm_client(*, model=None, effort=None) -&gt; BaseLLMClient:
   <li>生成腳本三處分級表改讀 <code>ErrorResponse.error_code</code>，之後移除訊息字串保證</li>
   <li><code>LLMClient</code> 換用 <code>_retry_transient()</code>（指數退避取代固定 2 秒）；屬行為變更，需獨立驗證</li>
   <li>移除 <code>_formatted_model_name</code> alias 與 <code>LLMClient</code> 上的兩個轉呼工具方法</li>
+  <li>生成腳本遇到確定性設定錯誤（金鑰無效、模型不存在、schema 被拒）應中止，而不是逐句 <code>record_failure</code>：所有 <code>LLMServiceError</code> 都回 502，設定錯誤會把整批句子累加 failure_count 直到永久跳過。兩個客戶端與腳本一起改；在那之前，用 gemini-native 跑大批次前先手動確認金鑰與模型名</li>
+  <li><code>jp_verb_reading_service</code> 帶覆寫時把任何 <code>LLMServiceError</code> 都轉成 422，伺服器環境問題被歸咎成覆寫不合法；應讓覆寫驗證失敗拋專屬子類，service 只轉那個</li>
   <li><code>GeminiNativeLLMClient</code> 的 <code>thinking_config</code>——與 effort 是不同概念，先不混入 <code>SUPPORTS_EFFORT</code></li>
   <li><code>AnthropicLLMClient</code> 本體（§D11 指引 + D5 例外）</li>
   <li>語音軸線的 <code>GeminiNativeAudioEvaluator</code> 改用 <code>_retry_transient()</code>（F043 的另一半）</li>
