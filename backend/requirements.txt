@@ -52,5 +52,6 @@ minio>=7.2.0
 aiogram>=3.4.0
 elasticsearch[async]>=8.13.0,<9.0.0
 
-# ─── Test ────────────────────────────────────────────────────────────
+# ─── Test & Static Checks ────────────────────────────────────────────
 pytest>=8.0.0
+mypy>=2.4.0              # 型別檢查：`mypy app/infrastructure/llm --ignore-missing-imports` 須零錯誤（尚未進 CI）

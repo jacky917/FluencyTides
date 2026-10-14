@@ -6,7 +6,6 @@ dialogue with an LLM, using full-chapter context in the system prompt.
 
 import argparse
 import asyncio
-import os
 import sys
 import time
 import logging
@@ -19,10 +18,10 @@ if str(_backend_dir) not in sys.path:
 import scripts.common.env  # noqa
 
 import aiomysql
-from sqlalchemy.ext.asyncio import create_async_engine
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
+from app.infrastructure.llm.base import BaseLLMClient
 from app.infrastructure.llm.factory import create_llm_client
 
 # ==========================================
@@ -73,7 +72,7 @@ async def get_db_pool():
         autocommit=True
     )
 
-async def process_chapter(chapter_name: str, pool, llm_client: LLMClient, limit: int, state: dict) -> bool:
+async def process_chapter(chapter_name: str, pool, llm_client: BaseLLMClient, limit: int, state: dict) -> bool:
     """處理單一章節：讀取台詞、分批請求 LLM 解析並寫入索引。
 
     Process one chapter: fetch its dialogue lines, request LLM parsing
@@ -162,7 +161,7 @@ async def process_chapter(chapter_name: str, pool, llm_client: LLMClient, limit:
             
             # 4. 解析 JSON 並寫入 MySQL
             response_data = BatchExtractionResponse.model_validate(result.parsed_data)
-            model_name = llm_client._formatted_model_name
+            model_name = llm_client.model_label
             
             insert_data = []
             for item in response_data.results:
@@ -224,7 +223,7 @@ async def build_llm_index(limit: int = 0):
 
     print("-" * 50)
     print("📊 當前執行配置：")
-    print(f"  🔹 LLM 模型：{llm_client._formatted_model_name}")
+    print(f"  🔹 LLM 模型：{llm_client.model_label}")
     print(f"  🔹 批次大小 (Batch Size)：{settings.LLM_PARSE_BATCH_SIZE}")
     print(f"  🔹 執行上限 (Limit)：{'無限制' if limit == 0 else f'{limit} 次請求'}")
     print("-" * 50)

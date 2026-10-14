@@ -29,6 +29,39 @@ class LLMServiceError(InfrastructureBaseError):
     error_code = "LLM_SERVICE_ERROR"
 
 
+class LLMRetryExhaustedError(LLMServiceError):
+    """LLM 重試耗盡仍無合規輸出（空內容 / 壞 JSON / schema 不符）。
+
+    Raised when every retry still yields no usable structured output.
+
+    訊息須含 ``"LLM API 在所有重試後仍回傳空內容"``：生成腳本的錯誤分級表
+    以此子字串走「記錄失敗並跳過此句」路徑；``error_code`` 是同一語義的
+    機器可讀版本，供腳本日後改讀 ``ErrorResponse.error_code``。
+    """
+    error_code = "LLM_RETRY_EXHAUSTED"
+
+
+class LLMQuotaError(LLMServiceError):
+    """LLM 額度耗盡或速率限制（429 / usage limit）。
+
+    Raised on quota exhaustion or rate limiting.
+
+    訊息須含 ``"Quota"``：生成腳本據此走「暫停 60 秒」路徑。
+    """
+    error_code = "LLM_QUOTA"
+
+
+class LLMRefusalError(LLMServiceError):
+    """LLM 因安全政策拒答（Gemini SAFETY / PROHIBITED_CONTENT、Anthropic refusal）。
+
+    Raised when the model refuses on safety grounds.
+
+    訊息須同時含 ``"PROHIBITED_CONTENT"`` 與
+    ``"LLM API 在所有重試後仍回傳空內容"``，讓既有分級表視同跳句。
+    """
+    error_code = "LLM_REFUSAL"
+
+
 class AnkiServiceError(InfrastructureBaseError):
     """Anki 服務異常。
 

@@ -58,7 +58,7 @@ provider 模組採惰性載入），避免未安裝時影響其他 provider 啟�
 **兩個 schema 前處理的坑**（與 claude-code provider 相同的教訓）：
 
 - Pydantic 的 ``model_json_schema()`` 會產生 ``$defs``/``$ref``，先以
-  ``LLMClient._resolve_json_schema()``（classmethod，免實例化）展平。
+  ``schema_utils.resolve_json_schema()`` 展平。
 - Pydantic **不會**自動加上 ``additionalProperties: false``，而 json_schema
   格式要求它與 ``required`` 皆齊備；需在送出前補齊。
 
@@ -113,14 +113,13 @@ provider 的獨立設定**——這正是設定前綴採 provider 全名（而�
 """
 
 import logging
+from typing import ClassVar
 
 from app.core.exceptions import LLMServiceError
+from app.infrastructure.llm.base import BaseLLMClient
 from app.schemas.llm.base import LLMGenerateResult
 
 logger = logging.getLogger(__name__)
-
-# 觸發本 provider 的 LLM_PROVIDER 值（與工廠共用）
-ANTHROPIC_PROVIDER = "anthropic"
 
 # 未實作時的統一錯誤訊息
 _NOT_IMPLEMENTED_MESSAGE = (
@@ -131,32 +130,50 @@ _NOT_IMPLEMENTED_MESSAGE = (
 )
 
 
-class AnthropicLLMClient:
+class AnthropicLLMClient(BaseLLMClient):
     """Anthropic 官方 API 客戶端（佔位，尚未實作）。
 
     Placeholder for the first-party Anthropic API client; not implemented.
 
-    介面契約與 :class:`~app.infrastructure.llm.client.LLMClient` 及
-    :class:`~app.infrastructure.llm.claude_code_client.ClaudeCodeLLMClient`
-    完全一致，實作後上下游無須任何改動。實作步驟見模組 docstring。
+    已掛上 :class:`~app.infrastructure.llm.base.BaseLLMClient`，介面契約與
+    其他 provider 一致，實作後上下游無須任何改動。實作步驟見模組 docstring；
+    例外請用 ``LLMRetryExhaustedError`` / ``LLMQuotaError`` / ``LLMRefusalError``
+    三個子類（計畫 D5），而非只拋基類。
     """
 
-    def __init__(self) -> None:
-        """尚未實作，一律拋錯。
+    PROVIDER_NAME: ClassVar[str] = "anthropic"  # 須與工廠註冊鍵一致，載入時核對
+    # 佔位期間為 False：不能把一個建構即拋錯的 stub 列進「支援 effort 的 provider」
+    # 錯誤訊息裡誤導使用者。實作本體（output_config.effort）時改 True，並同步改工廠註冊列。
+    SUPPORTS_EFFORT: ClassVar[bool] = False
 
-        Not implemented; always raises.
+    def __init__(self, *, model: str | None = None, effort: str | None = None) -> None:
+        """尚未實作，一律拋錯；訊息回顯收到的覆寫值。
+
+        Not implemented; always raises, echoing any overrides received.
 
         刻意在建構子（而非呼叫時）拋錯：讓誤設 ``LLM_PROVIDER=anthropic``
         的情況在應用啟動或腳本開跑的當下就暴露，而不是在批次跑到一半、
-        已建立部分卡片之後才失敗。
+        已建立部分卡片之後才失敗。建構子收 ``model`` / ``effort`` 是為了
+        確保工廠傳入的覆寫不會被靜默丟棄（實作時直接可用）。
 
         Deliberately raises at construction so a misconfigured provider
-        surfaces at startup rather than midway through a batch.
+        surfaces at startup rather than midway through a batch. Accepting
+        the overrides guarantees the factory's values are never silently
+        dropped once implemented.
+
+        Args:
+            model: 覆寫模型名。Model override.
+            effort: 覆寫思考深度。Effort override.
 
         Raises:
             LLMServiceError: 一律拋出。Always.
         """
-        raise LLMServiceError(_NOT_IMPLEMENTED_MESSAGE)
+        overrides = ", ".join(
+            f"{name}={value!r}" for name, value in (("model", model), ("effort", effort))
+            if value is not None
+        )
+        suffix = f"（收到覆寫：{overrides}）" if overrides else ""
+        raise LLMServiceError(_NOT_IMPLEMENTED_MESSAGE + suffix)
 
     async def generate_structured_data(
         self,

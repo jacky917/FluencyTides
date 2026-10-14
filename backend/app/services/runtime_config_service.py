@@ -24,6 +24,8 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.dynamic_config import get_modifiable_configs
+from app.infrastructure.llm.factory import CLAUDE_CODE_PROVIDER, is_cli_provider
+from app.infrastructure.llm.labels import normalize_provider
 
 # 改值後需要重建 singleton 的設定鍵(計畫 §3.5 REBUILD_REGISTRY 的鍵集合;
 # 對應的 factory 綁定在寫入側實作時補上)。
@@ -128,14 +130,19 @@ class RuntimeConfigService:
             為 None)。
         """
         llm_client = getattr(app_state, "llm_client", None)
-        # _formatted_model_name 是三種 client 共同的標籤欄位;
-        # 取不到則退回 None(不自行推導,見計畫警告)
-        llm_label = getattr(llm_client, "_formatted_model_name", None)
-        provider = (settings.LLM_PROVIDER or "").strip().lower() or None
+        # model_label 是 BaseLLMClient 的公開標籤屬性;過渡期仍容忍只有
+        # _formatted_model_name 的物件。取不到則退回 None(不自行推導,見計畫警告)
+        llm_label = (
+            getattr(llm_client, "model_label", None)
+            or getattr(llm_client, "_formatted_model_name", None)
+        )
+        provider = normalize_provider(settings.LLM_PROVIDER) or None
 
+        # CLI 型 provider 才有環境診斷區塊;判斷交給工廠註冊表的靜態旗標——
+        # 純查表、不 import provider 模組,環境壞掉(依賴缺失)時端點仍能帶病回報
         claude_code: dict[str, Any] | None = None
-        if provider == "claude-code":
-            claude_code = await self._probe_claude_code(llm_client, check_auth)
+        if provider and is_cli_provider(provider):
+            claude_code = await self._probe_claude_code(llm_client, check_auth, provider)
 
         return {
             "llm_label": llm_label,
@@ -146,7 +153,7 @@ class RuntimeConfigService:
 
     @staticmethod
     async def _probe_claude_code(
-        llm_client: Any, check_auth: bool = False
+        llm_client: Any, check_auth: bool = False, provider: str = CLAUDE_CODE_PROVIDER
     ) -> dict[str, Any]:
         """探測 claude-code 執行環境(CLI 路徑/版本/認證模式)。
 
@@ -171,7 +178,11 @@ class RuntimeConfigService:
             ``oauth_token_configured``(bool,不洩漏 token 值)/
             ``account``(訂閱方案,見 :meth:`_probe_account`)。
         """
-        token = (settings.LLM_CLAUDE_CODE_OAUTH_TOKEN or "").strip()
+        # 通用部分(CLI 路徑 / 版本 / effort)適用任何 CLI provider;token 格式、
+        # `auth status --json`、haiku 實打三項是 claude 專屬,其他 CLI provider
+        # 回 unsupported,等各自的認證模型實測後再做成 hook(計畫 P3)。
+        is_claude = provider == CLAUDE_CODE_PROVIDER
+        token = (settings.LLM_CLAUDE_CODE_OAUTH_TOKEN or "").strip() if is_claude else ""
         # token 格式靜態檢查(恆開,零成本):setup-token 產出應為連續字串,
         # 內含空白 = 複製斷行事故(2026-08-31 實際造成容器整晚 401)
         token_format_ok: bool | None = None
@@ -188,9 +199,10 @@ class RuntimeConfigService:
 
         info: dict[str, Any] = {
             "client_initialized": llm_client is not None,
-            "cli_path": getattr(llm_client, "_cli_path", None),
+            # 公開屬性優先,過渡期仍容忍只有私有屬性的物件
+            "cli_path": getattr(llm_client, "cli_path", None) or getattr(llm_client, "_cli_path", None),
             "cli_version": None,
-            "effort": getattr(llm_client, "_effort", None),
+            "effort": getattr(llm_client, "effort", None) or getattr(llm_client, "_effort", None),
             # 只回報是否設定與格式判定,絕不回傳 token 內容
             "oauth_token_configured": bool(token),
             "oauth_token_format_ok": token_format_ok,
@@ -223,6 +235,13 @@ class RuntimeConfigService:
                 )
         except Exception as e:  # noqa: BLE001 - 診斷端點必須帶病回報
             info["cli_version_error"] = f"{type(e).__name__}: {e}"[:300]
+
+        if not is_claude:
+            unsupported = {"status": "unsupported", "detail": f"{provider} 尚未實作帳號 / 認證探測"}
+            info["account"] = dict(unsupported)
+            if check_auth:
+                info["auth_check"] = dict(unsupported)
+            return info
 
         info["account"] = await RuntimeConfigService._probe_account(cli_path, llm_client)
 

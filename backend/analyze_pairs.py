@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 backend_dir = Path(r'c:\Users\forip\Desktop\WorkSpace\Python\FluencyTides\backend')
 sys.path.insert(0, str(backend_dir))
 
-from app.infrastructure.llm.client import LLMClient
+from app.infrastructure.llm.factory import create_llm_client
 
 class ProblematicPair(BaseModel):
     id: int = Field(..., description="ID of the note")
@@ -20,7 +20,7 @@ class AnalysisResult(BaseModel):
     problematic_pairs: list[ProblematicPair]
 
 async def main():
-    llm = LLMClient()
+    llm = create_llm_client()
     
     with open('anki_verb_pairs.json', 'r', encoding='utf-8') as f:
         pairs = json.load(f)
