@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.services.card_service import CardService
     from app.services.relation_service import RelationService
-    from app.infrastructure.llm.client import LLMClient
 
 
 class BaseHandler(ABC):

@@ -1,0 +1,539 @@
+<title>LLM Provider 層級化計畫</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+JP:wght@400;500;600&family=Noto+Sans+TC:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F5F6F3;--surface:#FFFFFF;--ink:#1C211E;--muted:#5A625C;--faint:#8B938D;--line:#D9DED9;
+  --accent:#0F6E56;--accent-soft:#E1F5EE;--code-bg:#EDF0EB;--warn:#854F0B;--warn-soft:#FAEEDA;
+  --purple-f:#EEEDFE;--purple-s:#534AB7;--purple-t:#3C3489;--purple-u:#534AB7;
+  --teal-f:#E1F5EE;--teal-s:#0F6E56;--teal-t:#085041;--teal-u:#0F6E56;
+  --coral-f:#FAECE7;--coral-s:#993C1D;--coral-t:#712B13;--coral-u:#993C1D;
+  --gray-f:#F1EFE8;--gray-s:#5F5E5A;--gray-t:#444441;--gray-u:#5F5E5A;
+  --amber-f:#FAEEDA;--amber-s:#854F0B;--amber-t:#633806;--amber-u:#854F0B;
+  --sans:"Noto Sans TC","IBM Plex Sans JP",system-ui,sans-serif;
+  --head:"IBM Plex Sans JP","Noto Sans TC",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#14181A;--surface:#1B2023;--ink:#E4E7E2;--muted:#A0A8A2;--faint:#6F776F;--line:#2A3033;
+    --accent:#5DCAA5;--accent-soft:#0F2A22;--code-bg:#20262A;--warn:#FAC775;--warn-soft:#2E2410;
+    --purple-f:#26215C;--purple-s:#7F77DD;--purple-t:#CECBF6;--purple-u:#AFA9EC;
+    --teal-f:#04342C;--teal-s:#1D9E75;--teal-t:#9FE1CB;--teal-u:#5DCAA5;
+    --coral-f:#4A1B0C;--coral-s:#D85A30;--coral-t:#F5C4B3;--coral-u:#F0997B;
+    --gray-f:#2C2C2A;--gray-s:#888780;--gray-t:#D3D1C7;--gray-u:#B4B2A9;
+    --amber-f:#412402;--amber-s:#BA7517;--amber-t:#FAC775;--amber-u:#EF9F27;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#14181A;--surface:#1B2023;--ink:#E4E7E2;--muted:#A0A8A2;--faint:#6F776F;--line:#2A3033;
+  --accent:#5DCAA5;--accent-soft:#0F2A22;--code-bg:#20262A;--warn:#FAC775;--warn-soft:#2E2410;
+  --purple-f:#26215C;--purple-s:#7F77DD;--purple-t:#CECBF6;--purple-u:#AFA9EC;
+  --teal-f:#04342C;--teal-s:#1D9E75;--teal-t:#9FE1CB;--teal-u:#5DCAA5;
+  --coral-f:#4A1B0C;--coral-s:#D85A30;--coral-t:#F5C4B3;--coral-u:#F0997B;
+  --gray-f:#2C2C2A;--gray-s:#888780;--gray-t:#D3D1C7;--gray-u:#B4B2A9;
+  --amber-f:#412402;--amber-s:#BA7517;--amber-t:#FAC775;--amber-u:#EF9F27;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.75;-webkit-font-smoothing:antialiased}
+.page{max-width:780px;margin:0 auto;padding:56px 24px 96px}
+a{color:var(--accent);text-decoration:none;border-bottom:1px solid transparent}
+a:hover,a:focus-visible{border-bottom-color:var(--accent);outline:none}
+code{font-family:var(--mono);font-size:.88em;background:var(--code-bg);padding:.1em .38em;border-radius:4px}
+pre{font-family:var(--mono);font-size:13px;line-height:1.6;background:var(--code-bg);padding:16px 18px;border-radius:8px;overflow-x:auto;margin:16px 0}
+pre code{background:none;padding:0;font-size:inherit}
+h1,h2,h3,h4{font-family:var(--head);font-weight:500;line-height:1.3;text-wrap:balance;margin:0}
+h1{font-size:30px;letter-spacing:-.01em;margin:10px 0 18px}
+h2{font-size:22px;margin:64px 0 18px;padding-top:22px;border-top:1px solid var(--line)}
+h3{font-size:17px;margin:34px 0 10px}
+h4{font-size:15px;margin:22px 0 8px;color:var(--muted)}
+p{margin:0 0 14px;max-width:68ch}
+ul,ol{margin:0 0 16px;padding-left:22px;max-width:70ch}
+li{margin:4px 0}
+li::marker{color:var(--faint)}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap}
+.eyebrow .st{color:var(--warn);background:var(--warn-soft);padding:1px 8px;border-radius:999px;letter-spacing:.04em;text-transform:none}
+.lede{font-size:17px;color:var(--muted);max-width:64ch}
+.meta{display:grid;grid-template-columns:96px 1fr;gap:10px 18px;margin:28px 0 8px;padding:18px 20px;background:var(--surface);border:1px solid var(--line);border-radius:12px;font-size:14px;line-height:1.6}
+.meta dt{font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--faint);text-transform:uppercase;padding-top:3px}
+.meta dd{margin:0}
+.toc{display:flex;flex-wrap:wrap;gap:6px 18px;margin:22px 0 0;padding:0;list-style:none;font-size:14px}
+.toc li{margin:0}
+.toc a{color:var(--muted)}
+.toc a:hover{color:var(--accent)}
+.d{font-family:var(--mono);font-size:12px;color:var(--accent);background:var(--accent-soft);padding:1px 8px;border-radius:4px;margin-right:10px;vertical-align:2px;letter-spacing:.04em}
+figure{margin:26px 0 30px}
+.fig{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px 18px 12px;overflow-x:auto}
+.fig svg{display:block;width:100%;max-width:680px;height:auto;margin:0 auto;font-family:var(--head)}
+figcaption{font-size:13px;color:var(--muted);margin:10px 4px 0;max-width:70ch}
+.dg .th{font-size:14px;font-weight:500;fill:var(--ink)}
+.dg .t{font-size:14px;fill:var(--ink)}
+.dg .ts{font-size:12px;fill:var(--muted)}
+.dg .arr{stroke:var(--muted);stroke-width:1.5;fill:none}
+.dg .leader{stroke:var(--faint);stroke-width:.75;stroke-dasharray:4 3;fill:none}
+.dg .c-purple>rect,.dg rect.c-purple{fill:var(--purple-f);stroke:var(--purple-s)}
+.dg .c-purple>.th{fill:var(--purple-t)}.dg .c-purple>.ts{fill:var(--purple-u)}
+.dg .c-teal>rect,.dg rect.c-teal{fill:var(--teal-f);stroke:var(--teal-s)}
+.dg .c-teal>.th{fill:var(--teal-t)}.dg .c-teal>.ts{fill:var(--teal-u)}
+.dg .c-coral>rect,.dg rect.c-coral{fill:var(--coral-f);stroke:var(--coral-s)}
+.dg .c-coral>.th{fill:var(--coral-t)}.dg .c-coral>.ts{fill:var(--coral-u)}
+.dg .c-gray>rect,.dg rect.c-gray{fill:var(--gray-f);stroke:var(--gray-s)}
+.dg .c-gray>.th{fill:var(--gray-t)}.dg .c-gray>.ts{fill:var(--gray-u)}
+.dg .c-amber>rect,.dg rect.c-amber{fill:var(--amber-f);stroke:var(--amber-s)}
+.dg .c-amber>.th{fill:var(--amber-t)}.dg .c-amber>.ts{fill:var(--amber-u)}
+.dg .grp{fill:none;stroke:var(--line);stroke-width:.75;stroke-dasharray:4 3}
+.tbl{overflow-x:auto;margin:14px 0 22px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px;line-height:1.55;font-variant-numeric:tabular-nums}
+th,td{text-align:left;vertical-align:top;padding:10px 14px;border-bottom:1px solid var(--line)}
+th{font-family:var(--head);font-weight:500;font-size:13px;color:var(--muted);background:var(--code-bg);white-space:nowrap}
+tr:last-child td{border-bottom:none}
+td code{white-space:nowrap}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+@media (max-width:640px){.cols{grid-template-columns:1fr}.meta{grid-template-columns:1fr;gap:4px}}
+.cols h4{margin-top:0}
+.callout{border-left:3px solid var(--accent);padding:10px 16px;margin:16px 0 20px;background:var(--surface);border-radius:0;max-width:70ch}
+.callout.warn{border-left-color:var(--warn)}
+.callout p:last-child{margin-bottom:0}
+.checks{list-style:none;padding:0}
+.checks li{position:relative;padding-left:28px;margin:8px 0}
+.checks li::before{content:"";position:absolute;left:0;top:6px;width:15px;height:15px;border:1.5px solid var(--faint);border-radius:4px}
+.phase{display:grid;grid-template-columns:44px 1fr;gap:0 16px;margin:0 0 18px;max-width:72ch}
+.phase .p{font-family:var(--mono);font-size:13px;color:var(--accent);padding-top:3px}
+.phase p{margin-bottom:6px}
+.small{font-size:13px;color:var(--muted)}
+</style>
+
+<div class="page">
+<header>
+  <div class="eyebrow"><span>FEAT</span><span>2026-09-06</span><span>FluencyTides · backend</span><span class="st">實作中 · P1 完成並驗收、待提交 PR · P0 實測待跑</span></div>
+  <h1>LLM 客戶端層級化：抽象基底、CLI 中間層，與兩個新 provider</h1>
+  <p class="lede">把文字 LLM 軸線的三個裸類別掛上 <code>BaseLLMClient</code>，以 <code>HeadlessCliLLMClient</code> 承載 subprocess 共用流程，接入 Gemini 原生 SDK 與 Antigravity CLI（<code>agy -p</code>）。既有兩條路徑逐位元不變。</p>
+  <dl class="meta">
+    <dt>範圍</dt><dd><code>app/infrastructure/llm/</code>（六個新檔、四個改檔）、<code>app/core/exceptions/infrastructure.py</code>、<code>app/core/config.py</code>、<code>app/core/dependencies.py</code>、<code>app/services/runtime_config_service.py</code>、<code>scripts/common/llm_label.py</code>、<code>.env.example</code>、<code>.gitignore</code></dd>
+    <dt>不動</dt><dd><code>generate_structured_data</code> 簽名與 <code>LLMGenerateResult</code>；既有標籤字串；既有錯誤訊息文字；<code>scripts/fastapi_client/**</code>；各 handler 的 prompt 與建卡邏輯；語音軸線；API schema</dd>
+    <dt>關聯</dt><dd><code>docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md</code>（§D11 Anthropic 指引仍有效）、ADR 004（ABC 策略模式先例）、F043（fence 清理重複）、<code>audio_evaluator/base.py</code>（ABC 而非 Protocol 的原始論證）。Markdown 原稿：<code>docs/wip/llm_provider_hierarchy_FEAT_2026-09-06.md</code></dd>
+  </dl>
+  <ul class="toc">
+    <li><a href="#s1">1 問題與動機</a></li><li><a href="#s2">2 目標與非目標</a></li><li><a href="#s3">3 設計決策</a></li><li><a href="#s4">4 改動清單</a></li><li><a href="#s5">5 實作順序</a></li><li><a href="#s6">6 風險</a></li><li><a href="#s7">7 驗收</a></li><li><a href="#s8">8 後續</a></li>
+  </ul>
+</header>
+
+<h2 id="s1">1. 問題與動機</h2>
+<h3>1.1 現況：三個裸類別，契約靠文字</h3>
+<pre><code>app/infrastructure/llm/client.py:57               class LLMClient:
+app/infrastructure/llm/claude_code_client.py:84   class ClaudeCodeLLMClient:
+app/infrastructure/llm/anthropic_client.py:134    class AnthropicLLMClient:</code></pre>
+<p>對照同一個 repo 語音軸線的 <code>class GeminiNativeAudioEvaluator(BaseAudioEvaluator):</code>，差別一眼可見。三者的契約目前靠工廠的 union 型別、三份 docstring、以及錯誤訊息裡的魔術字串 <code>"LLM API 在所有重試後仍回傳空內容"</code> 與 <code>"Quota"</code> 維繫——沒有一樣是型別系統。</p>
+
+<figure><div class="fig">
+<svg class="dg" viewBox="0 0 680 700" role="img" xmlns="http://www.w3.org/2000/svg"><title>現況：兩條 provider 軸線的類別與繼承關係</title>
+<defs><marker id="a1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g class="c-purple"><rect x="40" y="40" width="600" height="248" rx="20" stroke-width="0.5"/><text class="th" x="64" y="70">文字 LLM 軸線</text><text class="ts" x="64" y="90">LLM_PROVIDER · 三個平行類別，無共同基底</text></g>
+<g class="c-gray"><rect x="233" y="106" width="214" height="42" rx="8" stroke-width="0.5"/><text class="th" x="340" y="132" text-anchor="middle">create_llm_client()</text></g>
+<line x1="270" y1="148" x2="152" y2="174" class="arr" marker-end="url(#a1)"/><line x1="340" y1="148" x2="340" y2="174" class="arr" marker-end="url(#a1)"/><line x1="410" y1="148" x2="528" y2="174" class="arr" marker-end="url(#a1)"/>
+<g class="c-teal"><rect x="64" y="178" width="176" height="66" rx="8" stroke-width="0.5"/><text class="th" x="152" y="206" text-anchor="middle">LLMClient</text><text class="ts" x="152" y="226" text-anchor="middle">OpenAI 相容 · 預設路徑</text></g>
+<g class="c-teal"><rect x="252" y="178" width="176" height="66" rx="8" stroke-width="0.5"/><text class="th" x="340" y="206" text-anchor="middle">ClaudeCodeLLMClient</text><text class="ts" x="340" y="226" text-anchor="middle">本機 CLI · 現行啟用</text></g>
+<g class="c-teal"><rect x="440" y="178" width="176" height="66" rx="8" stroke-width="0.5"/><text class="th" x="528" y="206" text-anchor="middle">AnthropicLLMClient</text><text class="ts" x="528" y="226" text-anchor="middle">stub · 建構即拋錯</text></g>
+<text class="ts" x="340" y="266" text-anchor="middle">ClaudeCodeLLMClient 直呼 LLMClient 的 staticmethod（非繼承）</text>
+<g class="c-purple"><rect x="40" y="310" width="600" height="344" rx="20" stroke-width="0.5"/><text class="th" x="64" y="340">語音評分軸線</text><text class="ts" x="64" y="360">AUDIO_EVALUATOR_PROVIDER · ABC 強制繼承</text></g>
+<g class="c-gray"><rect x="233" y="376" width="214" height="52" rx="8" stroke-width="0.5"/><text class="th" x="340" y="400" text-anchor="middle">BaseAudioEvaluator</text><text class="ts" x="340" y="418" text-anchor="middle">abc.ABC · @abstractmethod</text></g>
+<line x1="340" y1="430" x2="340" y2="446" class="arr" marker-end="url(#a1)"/>
+<g class="c-coral"><rect x="64" y="450" width="552" height="32" rx="8" stroke-width="0.5"/><text class="th" x="80" y="471">GeminiNativeAudioEvaluator</text><text class="ts" x="600" y="471" text-anchor="end">google-genai 原生 SDK</text></g>
+<g class="c-coral"><rect x="64" y="488" width="552" height="32" rx="8" stroke-width="0.5"/><text class="th" x="80" y="509">OpenAIAudioEvaluator</text><text class="ts" x="600" y="509" text-anchor="end">AsyncOpenAI + base64 音檔</text></g>
+<g class="c-coral"><rect x="64" y="526" width="552" height="32" rx="8" stroke-width="0.5"/><text class="th" x="80" y="547">ProxyAudioEvaluator</text><text class="ts" x="600" y="547" text-anchor="end">第三方中轉相容</text></g>
+<g class="c-coral"><rect x="64" y="564" width="552" height="32" rx="8" stroke-width="0.5"/><text class="th" x="80" y="585">STTDiffEvaluator</text><text class="ts" x="600" y="585" text-anchor="end">WhisperClient + difflib 零成本</text></g>
+<g class="c-coral"><rect x="64" y="602" width="552" height="32" rx="8" stroke-width="0.5"/><text class="th" x="80" y="623">STTLLMEvaluator</text><text class="ts" x="600" y="623" text-anchor="end">WhisperClient + 自建 AsyncOpenAI</text></g>
+<rect class="c-gray" x="40" y="664" width="12" height="12" rx="3" stroke-width="0.5"/><text class="ts" x="58" y="674">工廠 / 基底</text>
+<rect class="c-teal" x="150" y="664" width="12" height="12" rx="3" stroke-width="0.5"/><text class="ts" x="168" y="674">文字客戶端</text>
+<rect class="c-coral" x="280" y="664" width="12" height="12" rx="3" stroke-width="0.5"/><text class="ts" x="298" y="674">語音評分器</text>
+</svg></div>
+<figcaption>圖 1 — 現況。兩條 provider 軸線的對稱性只到工廠為止：語音那條有 ABC 把介面釘死，文字那條完全靠約定。</figcaption></figure>
+
+<p>代價已經在三處看得到：</p>
+<ul>
+  <li><code>app/core/dependencies.py:103</code> 的型別註記寫 <code>"LLMClient | ClaudeCodeLLMClient"</code>，漏了 <code>AnthropicLLMClient</code>——union 已經對不上</li>
+  <li><code>runtime_config_service.py:131-133, 191-193, 234-246</code> 只能用 <code>getattr(llm_client, "_formatted_model_name")</code>、<code>hasattr(llm_client, "_build_env")</code>，甚至直接呼叫 <code>llm_client._build_env()</code>——沒有可宣告的型別，服務層只能對私有屬性做反射</li>
+  <li>2026-08-27 計畫 §D9 用一張表格逐項人工核對兩個 client 的行為一致性——那張表做的事，<code>@abstractmethod</code> 加一個抽象 property 就能讓 mypy 自動做</li>
+</ul>
+
+<h3>1.2 兩個新 provider 同時到來，而且落在不同的變化軸上</h3>
+<p><strong>Antigravity CLI</strong>。<code>agy -h</code> 顯示它與 <code>claude -p</code> 同型：<code>-p</code>、<code>--model</code>、<code>--effort</code>、<code>--output-format json</code>、<code>--json-schema</code> 全部對得上。「subprocess CLI」現在有第二個成員，重疊的不是模型名，是整套機械流程——<code>asyncio.to_thread(subprocess.run)</code>、UTF-8 解碼、workdir / audit 解析、fence 清理 → <code>json.loads</code> → <code>jsonschema.validate</code>、帶回饋的修復重試、審計落盤。這些佔 <code>ClaudeCodeLLMClient</code> 六成以上行數。</p>
+<p><strong>Gemini 原生 SDK</strong>。目前文字軸線沒有原生 Gemini 實作，<code>LLMClient</code> 走 Google 的 OpenAI 相容端點。<code>client.py:114-117</code> 寫明該端點不認識 <code>safety_settings</code>，傳了直接 400；而 <code>.env</code> 的 <code>LLM_BASE_URL</code> 正是那個端點。</p>
+<div class="callout warn"><p><code>LLM_PROVIDER=google</code> 這條路根本無法把安全閾值調到 <code>BLOCK_NONE</code>，但 galgame 台詞正是最容易觸發 <code>PROHIBITED_CONTENT</code> 的內容。原生 SDK 的 <code>GenerateContentConfig</code> 直接收 <code>safety_settings</code> 與 <code>thinking_config</code>，這是 OpenAI 相容層永遠給不了的。</p></div>
+
+<figure><div class="fig">
+<svg class="dg" viewBox="0 0 680 448" role="img" xmlns="http://www.w3.org/2000/svg"><title>三個客戶端類別各自通往的後端與第三方</title>
+<defs><marker id="a3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g class="c-purple"><rect x="40" y="40" width="600" height="44" rx="8" stroke-width="0.5"/><text class="th" x="64" y="68">create_llm_client() 依 LLM_PROVIDER 路由</text><text class="ts" x="616" y="68" text-anchor="end">三者皆 class X: 無基底</text></g>
+<path d="M80 84 V161 H98" class="arr" marker-end="url(#a3)"/><path d="M80 84 V272 H98" class="arr" marker-end="url(#a3)"/><path d="M80 84 V364 H98" class="arr" marker-end="url(#a3)"/>
+<g class="c-teal"><rect x="100" y="104" width="170" height="114" rx="8" stroke-width="0.5"/><text class="th" x="185" y="145" text-anchor="middle">LLMClient</text><text class="ts" x="185" y="165" text-anchor="middle">AsyncOpenAI · 無基底</text><text class="ts" x="185" y="183" text-anchor="middle">provider ≠ claude-code</text></g>
+<g class="c-gray"><rect x="294" y="104" width="180" height="52" rx="8" stroke-width="0.5"/><text class="th" x="384" y="128" text-anchor="middle">Google 原生端點</text><text class="ts" x="384" y="146" text-anchor="middle">無 safety_settings</text></g>
+<g class="c-gray"><rect x="294" y="166" width="180" height="52" rx="8" stroke-width="0.5"/><text class="th" x="384" y="190" text-anchor="middle">第三方中轉站</text><text class="ts" x="384" y="208" text-anchor="middle">Yinli / New API 等</text></g>
+<g class="c-gray"><rect x="498" y="104" width="142" height="114" rx="8" stroke-width="0.5"/><text class="th" x="569" y="152" text-anchor="middle">gemini-3.x</text><text class="ts" x="569" y="172" text-anchor="middle">白名單 3 款</text></g>
+<line x1="270" y1="145" x2="292" y2="130" class="arr" marker-end="url(#a3)"/><line x1="270" y1="175" x2="292" y2="192" class="arr" marker-end="url(#a3)"/><line x1="474" y1="130" x2="496" y2="140" class="arr" marker-end="url(#a3)"/><line x1="474" y1="192" x2="496" y2="182" class="arr" marker-end="url(#a3)"/>
+<g class="c-teal"><rect x="100" y="234" width="170" height="76" rx="8" stroke-width="0.5"/><text class="th" x="185" y="262" text-anchor="middle">ClaudeCodeLLMClient</text><text class="ts" x="185" y="282" text-anchor="middle">subprocess · 無基底</text><text class="ts" x="185" y="300" text-anchor="middle">provider = claude-code</text></g>
+<g class="c-gray"><rect x="294" y="234" width="180" height="76" rx="8" stroke-width="0.5"/><text class="th" x="384" y="262" text-anchor="middle">claude -p headless</text><text class="ts" x="384" y="282" text-anchor="middle">--safe-mode · 空 cwd</text><text class="ts" x="384" y="300" text-anchor="middle">桌機憑證 / OAuth token</text></g>
+<g class="c-gray"><rect x="498" y="234" width="142" height="76" rx="8" stroke-width="0.5"/><text class="th" x="569" y="262" text-anchor="middle">opus-5</text><text class="ts" x="569" y="282" text-anchor="middle">@ medium 力度</text><text class="ts" x="569" y="300" text-anchor="middle">訂閱額度</text></g>
+<line x1="270" y1="272" x2="292" y2="272" class="arr" marker-end="url(#a3)"/><line x1="474" y1="272" x2="496" y2="272" class="arr" marker-end="url(#a3)"/>
+<g class="c-teal"><rect x="100" y="326" width="170" height="76" rx="8" stroke-width="0.5"/><text class="th" x="185" y="354" text-anchor="middle">AnthropicLLMClient</text><text class="ts" x="185" y="374" text-anchor="middle">stub · 無基底</text><text class="ts" x="185" y="392" text-anchor="middle">provider = anthropic</text></g>
+<g class="c-gray"><rect x="294" y="326" width="180" height="76" rx="8" stroke-width="0.5"/><text class="th" x="384" y="354" text-anchor="middle">Anthropic 官方 API</text><text class="ts" x="384" y="374" text-anchor="middle">__init__ 一律拋錯</text><text class="ts" x="384" y="392" text-anchor="middle">docstring 有實作指引</text></g>
+<g class="c-gray"><rect x="498" y="326" width="142" height="76" rx="8" stroke-width="0.5"/><text class="th" x="569" y="354" text-anchor="middle">未接通</text><text class="ts" x="569" y="374" text-anchor="middle">計畫 opus-5</text><text class="ts" x="569" y="392" text-anchor="middle">Batch API 半價</text></g>
+<line x1="270" y1="364" x2="292" y2="364" class="leader" marker-end="url(#a3)"/><line x1="474" y1="364" x2="496" y2="364" class="leader" marker-end="url(#a3)"/>
+<rect class="c-teal" x="40" y="414" width="12" height="12" rx="3" stroke-width="0.5"/><text class="ts" x="58" y="424">專案內類別</text>
+<rect class="c-gray" x="150" y="414" width="12" height="12" rx="3" stroke-width="0.5"/><text class="ts" x="168" y="424">外部服務 / 模型</text>
+</svg></div>
+<figcaption>圖 2 — 現有三條管道各自通往的後端。<code>LLMClient</code> 內部再按 provider 字串分成 Google 原生端點與中轉站兩支，只有後者能傳 safety_settings。</figcaption></figure>
+
+<h3>1.3 已埋的坑（重構時順手拆）</h3>
+<ul>
+  <li><code>factory.py:94-98</code> 的 anthropic 分支 <code>return AnthropicLLMClient()</code>，既不傳 <code>model</code> 也不傳 <code>effort</code>。今天無害是因為 stub 一律拋錯；實作後兩個覆寫參數會靜默消失</li>
+  <li><code>factory.py:100</code> 硬編碼「effort 覆寫僅 claude-code 支援」。第二個支援 effort 的 provider 一出現這行就錯——agy 有 <code>--effort</code></li>
+  <li>模型標籤推導有三份：<code>client.py:110-112</code>、<code>claude_code_client.py</code>（逐字重複）、<code>scripts/common/llm_label.py</code>；後者記著 2026-08-28 誤標 190 筆的前科</li>
+  <li>錯誤分級靠字串：生成腳本三處 <code>"…仍回傳空內容" in e.response.text</code>。而 <code>FluencyTidesError.error_code</code> 本來就經 <code>main.py:261</code> 進 <code>ErrorResponse</code>——機制存在，只是 <code>LLMServiceError</code> 一律回 <code>LLM_SERVICE_ERROR</code></li>
+</ul>
+
+<figure><div class="fig">
+<svg class="dg" viewBox="0 0 680 406" role="img" xmlns="http://www.w3.org/2000/svg"><title>三層模型切換路徑</title>
+<defs><marker id="a2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g class="c-gray"><rect x="225" y="40" width="230" height="56" rx="8" stroke-width="0.5"/><text class="th" x="340" y="66" text-anchor="middle">.env / Settings</text><text class="ts" x="340" y="84" text-anchor="middle">LLM_PROVIDER · LLM_MODEL_NAME</text></g>
+<line x1="290" y1="96" x2="130" y2="122" class="arr" marker-end="url(#a2)"/><line x1="340" y1="96" x2="340" y2="122" class="arr" marker-end="url(#a2)"/><line x1="390" y1="96" x2="550" y2="122" class="arr" marker-end="url(#a2)"/>
+<g class="c-gray"><rect x="40" y="126" width="180" height="64" rx="8" stroke-width="0.5"/><text class="th" x="130" y="154" text-anchor="middle">L1 啟動期</text><text class="ts" x="130" y="174" text-anchor="middle">main.py lifespan</text></g>
+<g class="c-gray"><rect x="250" y="126" width="180" height="64" rx="8" stroke-width="0.5"/><text class="th" x="340" y="154" text-anchor="middle">L2 每次呼叫</text><text class="ts" x="340" y="174" text-anchor="middle">5 個 handler / 腳本</text></g>
+<g class="c-gray"><rect x="460" y="126" width="180" height="64" rx="8" stroke-width="0.5"/><text class="th" x="550" y="154" text-anchor="middle">L3 每請求覆寫</text><text class="ts" x="550" y="174" text-anchor="middle">POST /jp-verb-readings</text></g>
+<line x1="130" y1="190" x2="130" y2="206" class="arr" marker-end="url(#a2)"/><line x1="340" y1="190" x2="340" y2="206" class="arr" marker-end="url(#a2)"/><line x1="550" y1="190" x2="550" y2="206" class="arr" marker-end="url(#a2)"/>
+<g class="c-teal"><rect x="40" y="210" width="180" height="64" rx="8" stroke-width="0.5"/><text class="th" x="130" y="238" text-anchor="middle">app.state.llm_client</text><text class="ts" x="130" y="258" text-anchor="middle">singleton · 失敗不擋啟動</text></g>
+<g class="c-teal"><rect x="250" y="210" width="180" height="64" rx="8" stroke-width="0.5"/><text class="th" x="340" y="238" text-anchor="middle">create_llm_client()</text><text class="ts" x="340" y="258" text-anchor="middle">現場新建 client</text></g>
+<g class="c-teal"><rect x="460" y="210" width="180" height="64" rx="8" stroke-width="0.5"/><text class="th" x="550" y="238" text-anchor="middle">model / effort</text><text class="ts" x="550" y="258" text-anchor="middle">只作用於該實例</text></g>
+<line x1="130" y1="274" x2="130" y2="290" class="arr" marker-end="url(#a2)"/><line x1="340" y1="274" x2="340" y2="290" class="arr" marker-end="url(#a2)"/><line x1="550" y1="274" x2="550" y2="290" class="arr" marker-end="url(#a2)"/>
+<g class="c-amber"><rect x="40" y="294" width="180" height="64" rx="8" stroke-width="0.5"/><text class="th" x="130" y="322" text-anchor="middle">未被使用</text><text class="ts" x="130" y="342" text-anchor="middle">get_llm_client 零呼叫</text></g>
+<g class="c-teal"><rect x="250" y="294" width="180" height="64" rx="8" stroke-width="0.5"/><text class="th" x="340" y="322" text-anchor="middle">實際主力路徑</text><text class="ts" x="340" y="342" text-anchor="middle">生成流量全走這裡</text></g>
+<g class="c-amber"><rect x="460" y="294" width="180" height="64" rx="8" stroke-width="0.5"/><text class="th" x="550" y="322" text-anchor="middle">目前不可用</text><text class="ts" x="550" y="342" text-anchor="middle">白名單只有 gemini</text></g>
+<rect class="c-teal" x="40" y="372" width="12" height="12" rx="3" stroke-width="0.5"/><text class="ts" x="58" y="382">正常運作</text>
+<rect class="c-amber" x="150" y="372" width="12" height="12" rx="3" stroke-width="0.5"/><text class="ts" x="168" y="382">實際走不通</text>
+</svg></div>
+<figcaption>圖 3 — 模型切換的三層路徑。只有 L2 在跑；L1 的 singleton 無人取用，L3 的覆寫被 <code>MODIFY_LLM_MODEL_NAME</code> 白名單擋回。L3 的白名單問題在 D11 一併處理。</figcaption></figure>
+
+<h2 id="s2">2. 目標與非目標</h2>
+<div class="cols">
+<div><h4>目標</h4><ul>
+  <li><strong>G1</strong> <code>BaseLLMClient(abc.ABC)</code>，五個具體類全部掛上；mypy 可驗證契約</li>
+  <li><strong>G2</strong> 能力旗標取代 provider 字串硬判；工廠不再認得任何 provider 名</li>
+  <li><strong>G3</strong> <code>HeadlessCliLLMClient</code> 承載 subprocess 共用流程；既有 40 項 claude 測試<strong>一行不改</strong>全綠</li>
+  <li><strong>G4</strong> <code>GeminiNativeLLMClient</code>：<code>LLM_PROVIDER=gemini-native</code>，safety_settings 四類 <code>BLOCK_NONE</code></li>
+  <li><strong>G5</strong> <code>AntigravityLLMClient</code>：<code>LLM_PROVIDER=antigravity</code></li>
+  <li><strong>G6</strong> 三個 <code>LLMServiceError</code> 子類各帶 <code>error_code</code>；訊息文字保留識別字串</li>
+  <li><strong>G7</strong> 標籤推導與 schema 工具各只剩一份</li>
+  <li><strong>G8</strong> 既有 google / claude-code 兩條路逐位元一致（例外：拒答訊息依 D5 追加 <code>PROHIBITED_CONTENT</code> 說明；腳本側失敗紀錄的標籤改與後端一致）</li>
+</ul></div>
+<div><h4>非目標</h4><ul>
+  <li>不做母公司層級的中間抽象（D1）</li>
+  <li>原生 SDK 群不設中間層（D4）</li>
+  <li>不改 <code>LLMClient</code> 的重試時序——helper 由新 client 首用</li>
+  <li>不改生成腳本的分級表——<code>error_code</code> 遷移列 §8</li>
+  <li>不實作 <code>AnthropicLLMClient</code> 本體——只掛基底、修正建構子收參數</li>
+  <li>不動語音軸線</li>
+</ul></div>
+</div>
+
+<h2 id="s3">3. 設計決策</h2>
+
+<h3><span class="d">D1</span>分組軸線：傳輸協定，不是母公司</h3>
+<p>繼承樹按「怎麼把 prompt 送出去、怎麼把 JSON 收回來」分，不按「模型是誰家的」分。兩個反例足以說明：<code>ClaudeCodeLLMClient</code> 與 <code>AnthropicLLMClient</code> 同屬 Anthropic，共用面積是零；Google、OpenAI、Yinli/DeepSeek 三個母公司卻共用同一個 <code>LLMClient</code>。</p>
+
+<figure><div class="fig">
+<svg class="dg" viewBox="0 0 680 466" role="img" xmlns="http://www.w3.org/2000/svg"><title>按母公司分組與按傳輸協定分組的對照</title>
+<g class="c-purple"><rect x="40" y="40" width="600" height="192" rx="20" stroke-width="0.5"/><text class="th" x="64" y="70">按母公司分組</text><text class="ts" x="64" y="90">同組內零共用；共用的三者反而被拆散</text></g>
+<g class="c-amber"><rect x="64" y="104" width="110" height="80" rx="8" stroke-width="0.5"/><text class="th" x="119" y="134" text-anchor="middle">Google</text><text class="ts" x="119" y="154" text-anchor="middle">gemini-3.x</text></g>
+<g class="c-amber"><rect x="184" y="104" width="110" height="80" rx="8" stroke-width="0.5"/><text class="th" x="239" y="134" text-anchor="middle">OpenAI</text><text class="ts" x="239" y="154" text-anchor="middle">未接</text></g>
+<g class="c-amber"><rect x="304" y="104" width="110" height="80" rx="8" stroke-width="0.5"/><text class="th" x="359" y="134" text-anchor="middle">中轉站</text><text class="ts" x="359" y="154" text-anchor="middle">Yinli 等</text></g>
+<g class="c-amber"><rect x="424" y="104" width="190" height="80" rx="8" stroke-width="0.5"/><text class="th" x="519" y="132" text-anchor="middle">Anthropic</text><text class="ts" x="519" y="152" text-anchor="middle">claude -p CLI</text><text class="ts" x="519" y="170" text-anchor="middle">官方 API</text></g>
+<path d="M64 186 V194 H414 V186" class="leader"/>
+<text class="ts" x="239" y="212" text-anchor="middle">其實同屬一個 LLMClient</text>
+<g class="c-purple"><rect x="40" y="252" width="600" height="170" rx="20" stroke-width="0.5"/><text class="th" x="64" y="282">按傳輸協定分組</text><text class="ts" x="64" y="302">分組邊界＝實際共用程式碼的邊界</text></g>
+<g class="c-teal"><rect x="64" y="316" width="246" height="86" rx="8" stroke-width="0.5"/><text class="th" x="187" y="344" text-anchor="middle">OpenAI 相容 HTTP</text><text class="ts" x="187" y="364" text-anchor="middle">Google · OpenAI · 中轉站</text><text class="ts" x="187" y="382" text-anchor="middle">= 現在的 LLMClient 一個類別</text></g>
+<g class="c-teal"><rect x="320" y="316" width="138" height="86" rx="8" stroke-width="0.5"/><text class="th" x="389" y="344" text-anchor="middle">subprocess</text><text class="ts" x="389" y="364" text-anchor="middle">claude -p CLI</text><text class="ts" x="389" y="382" text-anchor="middle">+ agy -p CLI</text></g>
+<g class="c-teal"><rect x="468" y="316" width="148" height="86" rx="8" stroke-width="0.5"/><text class="th" x="542" y="344" text-anchor="middle">原生 SDK</text><text class="ts" x="542" y="364" text-anchor="middle">Anthropic 官方 API</text><text class="ts" x="542" y="382" text-anchor="middle">+ Gemini google-genai</text></g>
+<rect class="c-amber" x="40" y="432" width="12" height="12" rx="3" stroke-width="0.5"/><text class="ts" x="58" y="442">不建議的分組</text>
+<rect class="c-teal" x="180" y="432" width="12" height="12" rx="3" stroke-width="0.5"/><text class="ts" x="198" y="442">貼合共用邊界</text>
+</svg></div>
+<figcaption>圖 4 — 兩種分組的對照。母公司分組把零共用的湊在一起、把全共用的拆開。設定層早已做過同樣判斷：<code>LLM_ANTHROPIC_EFFORT</code> 與 <code>LLM_CLAUDE_CODE_EFFORT</code> 刻意用 provider 全名當前綴。</figcaption></figure>
+
+<div class="tbl"><table>
+<tr><th>群</th><th>成員</th><th>中間層</th></tr>
+<tr><td>OpenAI 相容 HTTP</td><td><code>LLMClient</code>（Google 相容端點、OpenAI、各中轉站）</td><td>無——一個類別內以 provider 字串分流，分支只有兩處</td></tr>
+<tr><td>原生 SDK</td><td><code>GeminiNativeLLMClient</code>（新）、<code>AnthropicLLMClient</code>（stub）</td><td>無（D4）</td></tr>
+<tr><td>subprocess CLI</td><td><code>ClaudeCodeLLMClient</code>、<code>AntigravityLLMClient</code>（新）</td><td><code>HeadlessCliLLMClient</code>（D3）</td></tr>
+</table></div>
+
+<figure><div class="fig">
+<svg class="dg" viewBox="0 0 680 442" role="img" xmlns="http://www.w3.org/2000/svg"><title>最終繼承樹</title>
+<defs><marker id="a6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g class="c-gray"><rect x="240" y="40" width="200" height="52" rx="8" stroke-width="0.5"/><text class="th" x="340" y="63" text-anchor="middle">BaseLLMClient</text><text class="ts" x="340" y="82" text-anchor="middle">abc.ABC · 共用瞬時重試</text></g>
+<line x1="340" y1="92" x2="100" y2="124" class="arr" marker-end="url(#a6)"/><line x1="340" y1="92" x2="283" y2="124" class="arr" marker-end="url(#a6)"/><line x1="340" y1="92" x2="523" y2="124" class="arr" marker-end="url(#a6)"/>
+<rect x="40" y="128" width="120" height="106" rx="12" class="grp"/><text class="ts" x="100" y="150" text-anchor="middle">OpenAI 相容</text>
+<g class="c-teal"><rect x="50" y="162" width="100" height="60" rx="8" stroke-width="0.5"/><text class="th" x="100" y="186" text-anchor="middle">LLMClient</text><text class="ts" x="100" y="206" text-anchor="middle">含中轉站</text></g>
+<rect x="178" y="128" width="210" height="176" rx="12" class="grp"/><text class="ts" x="283" y="150" text-anchor="middle">原生 SDK · 不設中間層</text>
+<g class="c-coral"><rect x="188" y="162" width="190" height="60" rx="8" stroke-width="0.5"/><text class="th" x="283" y="186" text-anchor="middle">GeminiNativeLLMClient</text><text class="ts" x="283" y="206" text-anchor="middle">google-genai · 新增</text></g>
+<g class="c-teal"><rect x="188" y="232" width="190" height="60" rx="8" stroke-width="0.5"/><text class="th" x="283" y="256" text-anchor="middle">AnthropicLLMClient</text><text class="ts" x="283" y="276" text-anchor="middle">anthropic SDK · stub</text></g>
+<rect x="406" y="128" width="234" height="262" rx="12" class="grp"/><text class="ts" x="523" y="150" text-anchor="middle">subprocess CLI · 中間層</text>
+<g class="c-gray"><rect x="428" y="162" width="200" height="60" rx="8" stroke-width="0.5"/><text class="th" x="528" y="186" text-anchor="middle">HeadlessCliLLMClient</text><text class="ts" x="528" y="206" text-anchor="middle">abc.ABC · 共用流程</text></g>
+<path d="M436 222 V228 H418 V270 H426" class="arr" marker-end="url(#a6)"/><path d="M436 222 V228 H418 V348 H426" class="arr" marker-end="url(#a6)"/>
+<g class="c-teal"><rect x="428" y="240" width="200" height="60" rx="8" stroke-width="0.5"/><text class="th" x="528" y="264" text-anchor="middle">ClaudeCodeLLMClient</text><text class="ts" x="528" y="284" text-anchor="middle">claude -p · 瘦身</text></g>
+<g class="c-coral"><rect x="428" y="318" width="200" height="60" rx="8" stroke-width="0.5"/><text class="th" x="528" y="342" text-anchor="middle">AntigravityLLMClient</text><text class="ts" x="528" y="362" text-anchor="middle">agy -p · 新增</text></g>
+<rect class="c-gray" x="40" y="408" width="12" height="12" rx="3" stroke-width="0.5"/><text class="ts" x="58" y="418">抽象</text>
+<rect class="c-teal" x="110" y="408" width="12" height="12" rx="3" stroke-width="0.5"/><text class="ts" x="128" y="418">既有實作</text>
+<rect class="c-coral" x="200" y="408" width="12" height="12" rx="3" stroke-width="0.5"/><text class="ts" x="218" y="418">新增</text>
+</svg></div>
+<figcaption>圖 5 — 定案的繼承樹。兩個抽象、五個具體；只有 CLI 群有中間層，因為只有那裡的重複是真的。</figcaption></figure>
+
+<h3><span class="d">D2</span><code>BaseLLMClient</code>：ABC 而非 Protocol，帶能力旗標與共用 helper</h3>
+<p>選 ABC 的三個理由，與 <code>audio_evaluator/base.py</code> 的論證一致：要強制子類實作、漏了在 import 時就炸；基底要放具體共用邏輯（統一的 model 解析、effort 支援檢查、<code>_retry_transient</code>），Protocol 放不了；工廠與 <code>RuntimeConfigService</code> 需要 <code>isinstance</code> 做能力分流，<code>runtime_checkable</code> 只檢查方法名存在。</p>
+<pre><code>class BaseLLMClient(abc.ABC):
+    PROVIDER_NAME: ClassVar[str]                  # 工廠註冊鍵，也是標籤的 (provider) 段
+    SUPPORTS_EFFORT: ClassVar[bool] = False
+    SUPPORTS_SAFETY_SETTINGS: ClassVar[bool] = False
+
+    def __init__(self, *, model: str | None = None, effort: str | None = None) -> None:
+        # model 解析（覆寫 &gt; LLM_MODEL_NAME，空即拋錯）
+        # effort 給值但 SUPPORTS_EFFORT=False → LLMServiceError（取代 factory.py:100）
+
+    @property
+    def model_label(self) -> str: ...             # 取代跨層讀 _formatted_model_name
+
+    @abc.abstractmethod
+    async def generate_structured_data(
+        self, system_prompt: str, user_prompt: str, response_schema: dict[str, object],
+    ) -> LLMGenerateResult: ...
+
+    async def _retry_transient(self, op, *, is_transient, max_retries=3, base_delay=1.0):
+        # 指數退避 + asyncio.wait_for 絕對超時
+        # 藍本：audio_evaluator/gemini_client.py:150-175</code></pre>
+<p class="small"><code>_formatted_model_name</code> 保留一個版本作為 alias（D10），既有讀取點遷到 <code>model_label</code>。</p>
+
+<h3><span class="d">D3</span><code>HeadlessCliLLMClient</code>：template method，固定流程在基底，CLI 差異做成 hook</h3>
+<div class="tbl"><table>
+<tr><th>放在基底（具體實作，子類不碰）</th><th>子類必須提供（<code>@abstractmethod</code>）</th></tr>
+<tr><td><code>generate_structured_data()</code> — 帶回饋的修復重試迴圈（template method 本體）</td><td><code>_build_command(system_prompt, schema_text)</code></td></tr>
+<tr><td><code>_invoke_cli()</code> — <code>to_thread(subprocess.run)</code>、UTF-8 解碼、timeout / OSError → <code>LLMServiceError</code></td><td><code>_build_env()</code></td></tr>
+<tr><td><code>_validate_payload(raw, schema)</code> — fence 清理 → <code>json.loads</code> → dict 檢查 → <code>jsonschema.validate</code>，失敗拋 <code>_RetryableCliError</code></td><td><code>_extract_result(stdout, stderr)</code> — 解析信封；致命 → 子類例外，可重試 → <code>_RetryableCliError</code></td></tr>
+<tr><td><code>_resolve_workdir()</code>、<code>_resolve_audit_dir()</code>、<code>_write_audit()</code></td><td><code>_build_stdin(system_prompt, user_prompt)</code> — 預設回傳 user_prompt；agy 無 <code>--system-prompt</code>，必須覆寫成併入</td></tr>
+<tr><td><code>_resolve_cli_path()</code> — 設定值 → <code>~/.local/bin/&lt;BINARY_NAME&gt;</code> → PATH → <code>_extra_cli_candidates()</code></td><td><code>_extra_cli_candidates()</code>（預設空；claude 覆寫成 <code>%APPDATA%</code> glob）</td></tr>
+<tr><td><code>_RetryableCliError</code> 搬到此模組</td><td></td></tr>
+</table></div>
+<div class="tbl"><table>
+<tr><th>類別屬性</th><th><code>ClaudeCodeLLMClient</code></th><th><code>AntigravityLLMClient</code></th></tr>
+<tr><td><code>PROVIDER_NAME</code></td><td><code>"claude-code"</code></td><td><code>"antigravity"</code></td></tr>
+<tr><td><code>BINARY_NAME</code></td><td><code>"claude"</code></td><td><code>"agy"</code></td></tr>
+<tr><td><code>VALID_EFFORTS</code></td><td>low / medium / high / xhigh / max</td><td>low / medium / high（依 <code>agy -h</code>）</td></tr>
+<tr><td><code>SCRUBBED_ENV_VARS</code></td><td><code>CLAUDE_CODE_OAUTH_TOKEN</code>、<code>ANTHROPIC_*</code></td><td>P0 實測後定（A6）</td></tr>
+<tr><td><code>MODEL_LABEL_STRIP_PREFIX</code></td><td><code>"claude-"</code></td><td><code>""</code></td></tr>
+<tr><td><code>MAX_RETRIES</code></td><td>2（CLI 內建 5 次）</td><td>P0 實測後定（A3）</td></tr>
+<tr><td><code>SUPPORTS_EFFORT</code></td><td colspan="2"><code>True</code>，標在 <code>HeadlessCliLLMClient</code> 上，兩者繼承</td></tr>
+</table></div>
+<p>provider 專屬設定不進基底：子類在 <code>__init__</code> 讀自己的 <code>LLM_&lt;PROVIDER&gt;_*</code> 組成 <code>CliRuntime(cli_path, workdir, timeout_seconds, audit_dir)</code> 交給 <code>super().__init__()</code>。<code>_invoke_cli</code> 必須維持 <code>asyncio.to_thread</code> + <code>subprocess.run</code>——Windows selector event loop 不支援 <code>create_subprocess_exec</code>。</p>
+
+<h3><span class="d">D4</span>原生 SDK 群不設中間層</h3>
+<p>兩個成員一個是 stub、一個尚未建；anthropic 是 <code>messages.create</code> + <code>output_config.format</code> + <code>stop_reason</code>，google-genai 是 <code>generate_content</code> + <code>GenerateContentConfig</code> + <code>finish_reason</code>，信封解析沒得共用。真正共用的只有瞬時錯誤重試，而 <code>LLMClient</code> 也需要它——所以放 <code>BaseLLMClient._retry_transient()</code>。若日後 refusal / safety 映射出現逐字重複再抽；由重複驅動，不由分類法驅動。</p>
+
+<h3><span class="d">D5</span>例外子類：<code>error_code</code> 取代魔術字串，訊息文字保留過渡</h3>
+<div class="tbl"><table>
+<tr><th>例外</th><th><code>error_code</code></th><th>拋出時機</th><th>訊息必含（過渡期）</th><th>腳本既有處置</th></tr>
+<tr><td><code>LLMRetryExhaustedError</code></td><td><code>LLM_RETRY_EXHAUSTED</code></td><td>外層重試耗盡</td><td>「LLM API 在所有重試後仍回傳空內容」</td><td>記錄失敗、跳此句</td></tr>
+<tr><td><code>LLMQuotaError</code></td><td><code>LLM_QUOTA</code></td><td>429 / 額度耗盡 / rate limit 信封</td><td>「Quota」</td><td>暫停 60 秒</td></tr>
+<tr><td><code>LLMRefusalError</code></td><td><code>LLM_REFUSAL</code></td><td>Gemini <code>finish_reason</code> ∈ {SAFETY, PROHIBITED_CONTENT}；Anthropic <code>stop_reason == "refusal"</code>；claude-code 拒答</td><td>「PROHIBITED_CONTENT」與「…仍回傳空內容」兩者皆含</td><td>跳此句</td></tr>
+</table></div>
+<p><code>error_code</code> 零 API 改動即可到達腳本：<code>FluencyTidesError.error_code</code> 經 <code>main.py:261</code> 的 handler 進 <code>ErrorResponse.error_code</code>，腳本已收到該 JSON，只是沒讀那個欄位。腳本改讀 <code>error_code</code> 列 §8。</p>
+
+<h3><span class="d">D6</span>標籤與 schema 工具：各一份</h3>
+<pre><code>llm/labels.py        build_model_label(provider, model, effort, *, strip_prefix="") -&gt; str
+llm/schema_utils.py  resolve_json_schema(schema) / strip_markdown_fences(content)</code></pre>
+<p>規則不變：google / openai / 空 → 裸模型名；其餘 → <code>(provider)model</code>；effort 非 None → <code>@effort</code>。<code>scripts/common/llm_label.py</code> 改為薄包裝，「僅供失敗紀錄與 fallback」的定位不變。</p>
+
+<h3><span class="d">D7</span><code>GeminiNativeLLMClient</code> 規格</h3>
+<div class="tbl"><table>
+<tr><th>項目</th><th>值</th></tr>
+<tr><td><code>PROVIDER_NAME</code></td><td><code>"gemini-native"</code>（連字號，與 <code>claude-code</code> 一致）</td></tr>
+<tr><td>金鑰</td><td>沿用 <code>LLM_API_KEY</code>——Google 原生與 OpenAI 相容本就同一把 key；<code>LLM_BASE_URL</code> 忽略</td></tr>
+<tr><td><code>SUPPORTS_SAFETY_SETTINGS</code></td><td><code>True</code>；四類一律 <code>BLOCK_NONE</code>，不加開關（與現況對中轉站一致）</td></tr>
+<tr><td><code>SUPPORTS_EFFORT</code></td><td><code>False</code>（thinking budget 是另一個概念，列 §8）</td></tr>
+<tr><td>呼叫</td><td><code>client.aio.models.generate_content(model, contents=[user_prompt], config=GenerateContentConfig(system_instruction=system_prompt, temperature=0.0, response_mime_type="application/json", response_schema=&lt;A9&gt;, safety_settings=[…]))</code>，以 <code>_retry_transient()</code> 包裝，120 秒絕對超時</td></tr>
+<tr><td>分流</td><td><code>STOP</code> → 取文字；<code>SAFETY</code> / <code>PROHIBITED_CONTENT</code> / <code>BLOCKLIST</code> → <code>LLMRefusalError</code>；<code>MAX_TOKENS</code> → <code>LLMRetryExhaustedError</code>；429 / <code>RESOURCE_EXHAUSTED</code> → <code>LLMQuotaError</code>；其餘 5xx 走瞬時重試</td></tr>
+<tr><td>標籤</td><td><code>(gemini-native)gemini-3.5-pro</code>，自然與 OpenAI 相容那條（裸 <code>gemini-3.5-pro</code>）區分</td></tr>
+<tr><td>白名單</td><td><code>MODIFY_LLM_MODEL_NAME</code> 現值即 gemini-3.x，<strong>免改</strong>——唯一不用動白名單的新 provider</td></tr>
+<tr><td>依賴</td><td><code>google-genai</code> 已在 <code>requirements.txt:23</code>；模組維持惰性 import</td></tr>
+</table></div>
+<div class="callout"><p><strong>A9（P0 實測）</strong> <code>generate_structured_data</code> 收的是 dict schema，語音軸線是直接丟 Pydantic class。須確認目前安裝的 google-genai 收原始 dict 的方式（<code>response_schema</code> 直接吃 dict、或 <code>response_json_schema</code>），以及是否仍需 <code>resolve_json_schema</code> 展平——該函式當初就是為 Gemini 不吃 <code>$ref</code> 而寫。</p></div>
+
+<h3><span class="d">D8</span><code>AntigravityLLMClient</code> 規格</h3>
+<div class="tbl"><table>
+<tr><th></th><th><code>claude -p</code></th><th><code>agy -p</code></th><th>對 hook 的影響</th></tr>
+<tr><td>system prompt</td><td><code>--system-prompt</code></td><td><strong>無對應旗標</strong></td><td>覆寫 <code>_build_stdin</code> 併入；現有 prompt 是照「system 定角色、user 給資料」寫的，併成一段後效果要重測</td></tr>
+<tr><td>工具隔離</td><td><code>--safe-mode --tools ""</code></td><td>只有 <code>--sandbox</code>、<code>--mode plan</code></td><td>沒有「純文字生成」開關；空 workdir 擋專案脈絡，擋不住模型主動呼叫工具（A4）</td></tr>
+<tr><td>全域脈絡</td><td><code>--safe-mode</code> 隔離 CLAUDE.md</td><td>無旗標；本機有 <code>~/.gemini/GEMINI.md</code></td><td>可能被自動載入污染生成（A5）</td></tr>
+<tr><td>會話殘留</td><td><code>--no-session-persistence</code></td><td>無；有 <code>--new-project</code></td><td>批次會累積 conversation；決定接受或每次 <code>--new-project</code></td></tr>
+<tr><td>自身超時</td><td>無</td><td><code>--print-timeout</code> <strong>預設 5 分鐘</strong></td><td>必須把 <code>LLM_ANTIGRAVITY_TIMEOUT_SECONDS</code> 同步傳給它，否則它先砍</td></tr>
+<tr><td>slash 展開</td><td>無此問題</td><td><code>--disable-slash-commands</code></td><td>一定要開，台詞以 <code>/</code> 開頭會被當指令</td></tr>
+<tr><td>effort 值域</td><td>五檔</td><td>low / medium / high</td><td><code>VALID_EFFORTS</code> 三檔</td></tr>
+</table></div>
+<pre><code>agy -p --output-format json --json-schema &lt;schema&gt; --model &lt;m&gt; --effort &lt;e&gt;
+    --print-timeout &lt;T&gt;s --disable-slash-commands --sandbox [--new-project]</code></pre>
+<p>設定前綴用 provider 全名：<code>LLM_ANTIGRAVITY_CLI_PATH</code> / <code>_EFFORT</code>（預設 high）/ <code>_WORKDIR</code>（預設 <code>backend/.antigravity_workdir</code>）/ <code>_TIMEOUT_SECONDS</code>（900）/ <code>_AUDIT_DIR</code>（<code>logs/antigravity_audit</code>）。workdir 與 audit dir 必須與 claude 分開——agy 有 <code>--project</code> 概念，會在 cwd 留東西。標籤 <code>(antigravity)gemini-3.5-pro@high</code>。</p>
+<h4>P0 實測清單</h4>
+<div class="tbl"><table>
+<tr><th>#</th><th>項目</th><th>為什麼非測不可</th></tr>
+<tr><td>A1</td><td><code>-p</code> 讀 stdin 還是吃參數？</td><td>若只吃參數，18KB prompt 在 Windows 撞 argv 上限</td></tr>
+<tr><td>A2</td><td><code>--output-format json</code> 信封欄位名；錯誤怎麼標；無殘留方式</td><td><code>_extract_result</code> 的全部內容</td></tr>
+<tr><td>A3</td><td><code>--json-schema</code> 是 harness 強制（帶重試）還是只轉給模型？</td><td>決定 <code>MAX_RETRIES</code></td></tr>
+<tr><td>A4</td><td>無工具模式：<code>--sandbox</code> 夠不夠、<code>--mode plan</code> 會不會先寫計畫、有無最小 <code>--agent</code></td><td>防止 print 模式卡在權限提示或工具呼叫</td></tr>
+<tr><td>A5</td><td><code>~/.gemini/GEMINI.md</code> 在 print 模式下讀不讀</td><td>脈絡污染</td></tr>
+<tr><td>A6</td><td>認證：憑證檔位置、要剔除的環境變數、容器的 headless token 等價物</td><td><code>SCRUBBED_ENV_VARS</code> 與 <code>_build_env</code></td></tr>
+<tr><td>A7</td><td>致命標記：模型名錯、未登入、額度耗盡各長什麼樣</td><td><code>_extract_result</code> 的分流</td></tr>
+<tr><td>A8</td><td>Windows 二進位：<code>agy</code> 不在 PATH，IDE 目錄無獨立 exe；<code>agy install</code> 後路徑</td><td><code>_extra_cli_candidates</code></td></tr>
+</table></div>
+
+<h3><span class="d">D9</span>工廠：註冊表 + 統一參數傳遞</h3>
+<pre><code>_LOADERS: dict[str, Callable[[], type[BaseLLMClient]]] = {
+    "claude-code":   lambda: _import("claude_code_client", "ClaudeCodeLLMClient"),
+    "antigravity":   lambda: _import("antigravity_client", "AntigravityLLMClient"),
+    "gemini-native": lambda: _import("gemini_native_client", "GeminiNativeLLMClient"),
+    "anthropic":     lambda: _import("anthropic_client", "AnthropicLLMClient"),
+}
+
+def create_llm_client(*, model=None, effort=None) -&gt; BaseLLMClient:
+    provider = (settings.LLM_PROVIDER or "").strip().lower()
+    client_cls = _LOADERS.get(provider, lambda: LLMClient)()
+    return client_cls(model=model, effort=effort)     # 所有 provider 一律收兩個參數</code></pre>
+<p>惰性 import 慣例不變；effort 支援檢查搬進 <code>BaseLLMClient.__init__</code>，工廠不再有 <code>factory.py:100</code> 那行；未註冊的 provider 值一律回 <code>LLMClient</code>，與現況一致。</p>
+<div class="callout"><p><strong>既有測試的攔截點必須保留。</strong><code>factory.py</code> 頂層維持 <code>from …client import LLMClient</code>（<code>test_claude_code_client.py:533,607</code> 以 <code>mock.patch("…factory.LLMClient")</code> 攔截）；loader 以 <code>importlib.import_module</code> + <code>getattr</code> 在呼叫時解析類別，<code>mock.patch.object(claude_code_client, "ClaudeCodeLLMClient")</code>（<code>:532,542,550</code>）才仍有效。</p></div>
+
+<h3><span class="d">D10</span>相容性保證：兩條既有路徑逐位元一致</h3>
+<div class="tbl"><table>
+<tr><th>面向</th><th>保證</th><th>驗證方式</th></tr>
+<tr><td>標籤字串</td><td><code>google</code> → <code>gemini-3.1-pro-preview</code>；<code>claude-code</code> → <code>(claude-code)opus-5@medium</code>；中轉站 → <code>(yinli)deepseek-chat</code></td><td>既有 <code>test_model_label_*</code> 不改；新增 <code>labels</code> 參數化測試</td></tr>
+<tr><td>錯誤訊息</td><td>每個既有拋錯點的文字不變，只換例外型別（子類仍是 <code>LLMServiceError</code>）</td><td>既有 <code>assertRaises</code> / <code>assertIn</code> 測試不改</td></tr>
+<tr><td>重試時序</td><td><code>LLMClient</code> 維持 3 次 / 固定 2 秒；claude 維持外層 2 次</td><td>不換 helper（非目標）</td></tr>
+<tr><td>私有屬性</td><td><code>_formatted_model_name</code>、<code>_cli_path</code>、<code>_effort</code>、<code>_build_env</code> 保留一個版本</td><td><code>runtime_config_service</code> 遷到公開介面後仍能 fallback</td></tr>
+<tr><td>兩個工具方法</td><td><code>LLMClient._resolve_json_schema</code> / <code>_strip_markdown_fences</code> 保留為轉呼</td><td><code>test_schema_is_flattened_before_sending</code> 等不改</td></tr>
+</table></div>
+
+<h3><span class="d">D11</span>連帶改動</h3>
+<ul>
+  <li><code>runtime_config_service.py</code>——<strong>P1 實作結果</strong>：診斷區塊改由 <code>factory.is_cli_provider(provider)</code> 觸發（查註冊表 + <code>issubclass</code>；client 為 None 時仍能判斷，這是 <code>isinstance(client, …)</code> 做不到的）；屬性讀取採「公開優先、私有 fallback」，因此 <code>test_runtime_config_read.py</code> 一行未改即通過。claude 專屬子探測（token 格式 / auth status / haiku）留在服務內，P3 等 A6 實測後再抽 <code>auth_diagnostics()</code></li>
+  <li><code>MODIFY_LLM_MODEL_NAME</code>：<code>.env.example</code> 註解補「provider 為 claude-code / antigravity 時請加入對應模型名」；gemini-native 免改</li>
+  <li><code>.gitignore</code>：<code>.antigravity_workdir/</code>、<code>logs/antigravity_audit/</code></li>
+  <li><code>scripts/common/llm_label.py</code> 的 <code>if provider == "claude-code"</code> 由 D6 包裝取代</li>
+</ul>
+
+<h3><span class="d">D12</span>影響範圍審計：Telegram bot、config API、前端</h3>
+<p>全 repo grep（類名、私有屬性、<code>settings.LLM_*</code> 讀取點）的結論：</p>
+<div class="tbl"><table>
+<tr><th>面</th><th>現況</th><th>本計畫的影響</th><th>要改嗎</th></tr>
+<tr><td>TG bot <code>callbacks_config.py:142-175</code>（<code>/setconfig</code> 寫入）</td><td><code>setattr(settings, key, value)</code> 純記憶體覆寫；<strong>只有</strong> <code>AUDIO_EVALUATOR_PROVIDER</code> 觸發 singleton 重建；完全不認得 LLM 類名、工廠、<code>_formatted_model_name</code></td><td>零。它只認 <code>MODIFY_*</code> 鍵名，本計畫不改任何鍵名。<code>LLM_MODEL_NAME</code> 改完後下一次生成即生效——所有生成都走 L2 每次 <code>create_llm_client()</code>（圖 3）</td><td><strong>不改</strong></td></tr>
+<tr><td>TG bot <code>commands.py:433</code>（說明文）</td><td>文案列 <code>LLM_MODEL_NAME</code> 等</td><td>零</td><td>不改</td></tr>
+<tr><td><code>app/api/config.py</code>（<code>GET /api/v1/config</code>）</td><td>唯讀，經 <code>RuntimeConfigService</code></td><td>只透過 D11 的 <code>model_label</code> 間接受影響</td><td>不改</td></tr>
+<tr><td><code>app/core/dynamic_config.py</code></td><td>解析 <code>MODIFY_*</code></td><td>零</td><td>不改</td></tr>
+<tr><td>前端 <code>frontend/src</code></td><td>grep <code>claude-code</code> / <code>llm_model</code> / <code>effort</code> / <code>LLM_PROVIDER</code> 零命中</td><td>零</td><td>不改</td></tr>
+<tr><td><code>scripts/local_anki/test_llm.py</code></td><td>獨立診斷腳本，自建 <code>AsyncOpenAI</code></td><td>零（不經工廠）</td><td>不改</td></tr>
+</table></div>
+<p><strong>附帶結果</strong>：重構後 TG 可以直接切 provider——<code>.env</code> 加一行 <code>MODIFY_LLM_PROVIDER=['claude-code','gemini-native','antigravity']</code> 即可，bot 零改動，因為工廠在每次呼叫時讀 <code>settings.LLM_PROVIDER</code>。</p>
+<div class="callout warn"><p><strong>既存殘留，本計畫不修</strong>：TG 改 <code>LLM_*</code> 後 <code>app.state.llm_client</code> 不重建，<code>get_runtime_info()</code> 回報的 <code>llm_label</code> 會是舊值（它讀的是圖 3 的 L1 singleton）。<code>REQUIRES_REBUILD_KEYS</code> 已列這三個鍵，寫入側計畫預留的 REBUILD_REGISTRY 綁定的就是本計畫的 <code>create_llm_client()</code>；屆時把 <code>LLM_ANTIGRAVITY_EFFORT</code> 一併加入。</p></div>
+
+<h2 id="s4">4. 改動清單</h2>
+<div class="tbl"><table>
+<tr><th>檔案</th><th>改動</th></tr>
+<tr><td><code>llm/base.py</code></td><td><strong>新增</strong> <code>BaseLLMClient</code>：能力旗標、統一 <code>__init__</code>、<code>model_label</code>、抽象方法、<code>_retry_transient()</code></td></tr>
+<tr><td><code>llm/cli_base.py</code></td><td><strong>新增</strong> <code>HeadlessCliLLMClient</code>：D3 左欄全部 + 四個 hook + <code>CliRuntime</code> + <code>_RetryableCliError</code></td></tr>
+<tr><td><code>llm/schema_utils.py</code></td><td><strong>新增</strong>（從 <code>client.py</code> 搬出）</td></tr>
+<tr><td><code>llm/labels.py</code></td><td><strong>新增</strong> <code>build_model_label()</code>（三份合一）</td></tr>
+<tr><td><code>llm/gemini_native_client.py</code></td><td><strong>新增</strong>（D7）</td></tr>
+<tr><td><code>llm/antigravity_client.py</code></td><td><strong>新增</strong>（D8；P0 後定案 hook）</td></tr>
+<tr><td><code>llm/client.py</code></td><td>掛基底；<code>super().__init__()</code>；標籤改呼 <code>labels</code>；工具方法轉呼；四個拋錯點換子類（訊息不動）</td></tr>
+<tr><td><code>llm/claude_code_client.py</code></td><td>掛 <code>HeadlessCliLLMClient</code>；刪搬入基底的部分（約 −250 行）；保留三個 hook、類別屬性、token 驗證、<code>auth_diagnostics()</code></td></tr>
+<tr><td><code>llm/anthropic_client.py</code></td><td>掛基底；建構子收 <code>model</code> / <code>effort</code> 後仍拋「尚未實作」；<code>SUPPORTS_EFFORT = True</code></td></tr>
+<tr><td><code>llm/factory.py</code></td><td>註冊表（D9）；刪 <code>:100</code>；回傳型別 <code>BaseLLMClient</code></td></tr>
+<tr><td><code>core/exceptions/infrastructure.py</code></td><td><strong>新增</strong>三個子類；<code>__init__.py</code> 匯出</td></tr>
+<tr><td><code>core/config.py</code></td><td><strong>新增</strong> <code>LLM_ANTIGRAVITY_*</code> 五欄位；<code>LLM_PROVIDER</code> 說明補列</td></tr>
+<tr><td><code>core/dependencies.py:103</code></td><td>型別註記 <code>BaseLLMClient</code></td></tr>
+<tr><td><code>services/runtime_config_service.py</code></td><td>D11</td></tr>
+<tr><td><code>scripts/common/llm_label.py</code></td><td>薄包裝</td></tr>
+<tr><td><code>core/dependencies.py:45,51</code></td><td>頂層 <code>LLMClient</code> 與 <code>TYPE_CHECKING</code> 的 <code>ClaudeCodeLLMClient</code> import 改為單一 <code>BaseLLMClient</code></td></tr>
+<tr><td><code>services/task_handlers/base.py:22</code></td><td><code>TYPE_CHECKING</code> 型別註記改 <code>BaseLLMClient</code></td></tr>
+<tr><td><code>scripts/…/build_llm_index.py:76,165,227</code></td><td>型別註記；<code>model_label</code></td></tr>
+<tr><td><code>scripts/…/build_llm_index_no_context.py:181,314,377</code></td><td>同上（首次 grep 漏列）</td></tr>
+<tr><td><code>analyze_pairs.py:23</code></td><td><code>LLMClient()</code> → <code>create_llm_client()</code>（2026-08-27 計畫漏網的第 9 處）</td></tr>
+<tr><td><code>.env.example</code>、<code>.gitignore</code></td><td>新欄位與註解；兩個目錄</td></tr>
+</table></div>
+<h4>測試</h4>
+<ul>
+  <li><code>tests/test_claude_code_client.py</code>：<strong>一行不改</strong>，40 項全綠——G3 的驗收線，也是切法正確與否的裁判</li>
+  <li><code>test_llm_base.py</code>（新）：抽象方法強制、<code>SUPPORTS_EFFORT</code> 檢查、model 優先序、<code>_retry_transient</code> 三種路徑</li>
+  <li><code>test_llm_labels.py</code>（新）：五個 provider 參數化，與 D10 逐字比對</li>
+  <li><code>test_llm_exceptions.py</code>（新）：三個 <code>error_code</code>；經 handler 後 <code>ErrorResponse</code> 正確；訊息含識別字串</li>
+  <li><code>test_gemini_native_client.py</code>（新，mock SDK）：happy path、五種 <code>finish_reason</code>、429、5xx 重試、<code>safety_settings</code> 與 <code>system_instruction</code> 確實送出、標籤</li>
+  <li><code>test_antigravity_client.py</code>（新，mock subprocess，P0 後寫）：比照 claude 三組；特別驗證 stdin 併入、<code>--print-timeout</code> 同步、<code>--disable-slash-commands</code> 必在</li>
+  <li><code>FactoryTests</code> 追加：兩個新 provider 路由；所有 provider 的 <code>model</code> / <code>effort</code> 皆傳到建構子</li>
+  <li><code>tests/test_jp_verb_reading_judgments.py</code>：<strong>一行不改</strong>必須綠——它 patch <code>ClaudeCodeLLMClient._resolve_cli_path</code> 並讀 <code>_formatted_model_name</code>；前者靠 MRO 仍命中基底方法，後者靠 D10 的 alias</li>
+  <li><code>tests/test_runtime_config_read.py</code>：原計畫「必須改 7 處替身」，<strong>P1 實作後一行未改</strong>——D11 改以註冊表判斷 provider、屬性讀取保留私有 fallback，<code>SimpleNamespace</code> 替身照常通過</li>
+</ul>
+
+<h2 id="s5">5. 實作順序</h2>
+<div class="phase"><div class="p">P0</div><div><p><strong>實測</strong>（可與 P1 平行）。Mac 上跑 A1–A7，把原始信封貼進 md 的實測紀錄小節；Windows 上跑 A8；本機驗證 A9。</p></div></div>
+<div class="phase"><div class="p">P1</div><div><p><strong>基底重構，零功能變更 — 完成（2026-09-06，分支 <code>feat/llm-provider-hierarchy</code>）</strong>。base / cli_base / schema_utils / labels + 三個例外子類；三個既有類掛上；工廠註冊表；七處接線。<code>claude_code_client.py</code> 由約 720 行減為約 330 行。全套 266 項測試綠（含新增 33 項）；三個既有測試檔一行未改；ruff 零警告；以真實 <code>.env</code> 實例化，標籤 <code>(claude-code)opus-5@medium</code> 與重構前一致。mypy 型別驗收於 2026-10-08 補上：<code>mypy app/infrastructure/llm</code> 零錯誤（修掉 P1 引入的 3 個與 <code>main</code> 既存的 6 個；其中 custom tool_call 原會在 <code>try</code> 外拋裸 <code>AttributeError</code>，現視同空內容走重試）。2026-10-08 複查：google 路徑以 MockTransport 對 main 離線比對 9 情境 × 2 共 18 次，請求、結果、標籤全部一致；google / claude-code 實跑與 TG <code>/setconfig</code> 使用者實測通過；anthropic 覆寫值傳遞實測通過，並新增 <code>tests/test_llm_factory.py</code>（10 項，逐列驗證註冊表各 provider 收到原樣覆寫；突變驗證可抓出 §1.3 的回歸）；mypy 已加入 <code>requirements.txt</code>；全套 284 項綠；未註冊 provider（gemini-native / antigravity）目前靜默落到 OpenAI 相容路徑，與 main 相同，列 §8。2026-10-09 code review 修正（8 項 findings，處理 4 項）：腳本側標籤改與後端一致——非 CLI provider 搭配 <code>claude-*</code> 模型不再去前綴、provider 一律小寫（例 <code>(yinli)opus-5</code> → <code>(yinli)claude-opus-5</code>），會改變失敗紀錄寫入的標籤；CLI 建構子檢查順序如實記錄；<code>RECITATION</code> 移出拒答清單，改走重試耗盡；CLI 逾時改回每次呼叫讀設定（<code>/setconfig</code> 調整即時生效）。全套 291 項綠、ruff / mypy 零錯誤。</p><div class="callout warn"><p><strong>順手修掉的既存 bug</strong>：<code>build_llm_index.py:76</code> 與 <code>build_llm_index_no_context.py:181</code> 的 <code>llm_client: LLMClient</code> 註記沒有對應 import——2026-08-27 換工廠時 import 被拿掉後，這兩支腳本 import 期即 <code>NameError</code>，自那天起就跑不起來。</p></div><p class="small">審計 <code>meta.json</code> 欄位集合刻意維持不變（實作時曾加 <code>provider</code>，為守住 D10 已移除）。</p>
+<h4>Code review 後的修正（八個角度 → 10 項 findings，全數處理；274 項綠）</h4>
+<ul>
+  <li>工廠註冊列改帶靜態 <code>is_cli</code> / <code>supports_effort</code> 旗標，載入時與類別宣告核對；<code>is_cli_provider()</code> 因此是純查表——原版會 import provider 模組，依賴缺失時診斷端點會 500，正是它該「帶病回報」的情境</li>
+  <li>effort 不支援的錯誤訊息逐字恢復層級化前的文字；anthropic stub 的 <code>SUPPORTS_EFFORT</code> 改 False，不再把建構即拋錯的 stub 列進「支援的 provider」</li>
+  <li><code>_retry_transient</code> 改用 <code>asyncio.timeout()</code> + <code>scope.expired()</code>：Python ≥ 3.11 的 <code>asyncio.TimeoutError</code> 就是內建 <code>TimeoutError</code>，原版會把 operation 自己拋的逾時誤當本函式逾時而繞過 <code>is_transient</code></li>
+  <li>CLI 探測順序恢復原樣（Windows 只找 <code>.exe</code>）；建構子檢查順序：LLMClient 與層級化前一致；CLI 客戶端改為 effort → 憑證 → 模型名 → CLI 路徑（新增 <code>_check_credentials</code> hook），<strong>與層級化前不完全相同</strong>（原為 CLI 路徑先於模型名，2026-10-09 更正）</li>
+  <li>effort 單一來源：子類提供 <code>_runtime()</code>，<code>__init__</code> 與 <code>default_effort()</code> 讀同一個 <code>CliRuntime</code>；<code>build_model_label</code> 對 effort 去空白小寫，腳本側標籤與後端一致</li>
+  <li><code>_probe_claude_code</code> 收 <code>provider</code>：token / auth status / haiku 三項 claude 專屬，其他 CLI provider 回 <code>unsupported</code></li>
+  <li>廢棄面移除：<code>SUPPORTS_SAFETY_SETTINGS</code>、<code>registered_providers()</code>、<code>workdir</code> / <code>audit_dir</code>、<code>_strip_markdown_fences</code> shim、重複的 <code>ANTHROPIC_PROVIDER</code> 常數、兩個無用 import；<code>normalize_provider</code> 收斂到 <code>labels.py</code> 一份</li>
+</ul></div></div>
+<div class="phase"><div class="p">P2</div><div><p><strong><code>GeminiNativeLLMClient</code></strong>。未知數最少（SDK 先例在 repo、白名單免改、金鑰現成），立刻拿到 safety_settings 的實際價值。驗收：跑 JP_VerbPair 一章，與同章 <code>google</code> 路徑比對拒答率。</p></div></div>
+<div class="phase"><div class="p">P3</div><div><p><strong><code>AntigravityLLMClient</code></strong>。依 P0 結果寫 hook 與測試。驗收：跑同一章；因 system prompt 併入，與 claude-code 路徑做 20 張人工評閱比對。</p></div></div>
+<div class="phase"><div class="p">P4</div><div><p><strong>收尾</strong>。文件回填、F043 標記收斂、移入 <code>archive/</code>。</p></div></div>
+
+<h2 id="s6">6. 風險與未知</h2>
+<div class="tbl"><table>
+<tr><th>風險</th><th>應對</th></tr>
+<tr><td><code>HeadlessCliLLMClient</code> 切法讓既有 claude 測試某項紅</td><td>那是切法錯，不是測試錯——調整 hook 邊界直到 40 項不改全綠；不得為了過而改測試</td></tr>
+<tr><td>agy 無 <code>--system-prompt</code>，併入後品質下降</td><td>P3 以 20 張人工評閱比對；劣化則改結構化分隔區塊再測；仍不行則 agy 限用於 effort 敏感度低的任務</td></tr>
+<tr><td>agy 的 <code>--json-schema</code> 非 harness 強制（A3），壞 JSON 率高</td><td>提高 <code>MAX_RETRIES</code>；P3 統計壞 JSON 率，超過 5% 列為實驗性 provider</td></tr>
+<tr><td><code>~/.gemini/GEMINI.md</code> 被 print 模式讀入（A5）</td><td>若無旗標可關：<code>_build_env</code> 覆寫 <code>HOME</code> / <code>USERPROFILE</code> 指向 workdir 內的空 home</td></tr>
+<tr><td>google-genai 對 dict schema 的接受形式與預期不符（A9）</td><td>依序試 <code>response_schema</code> 吃 dict → <code>response_json_schema</code> → <code>types.Schema</code>；都不行則退回「schema 塞 system_instruction + json mime + 本地複核」</td></tr>
+<tr><td>例外換型別後某處靠 <code>type(e) is LLMServiceError</code></td><td>子類仍是 <code>LLMServiceError</code>；grep 全 repo 無此比對；風險極低</td></tr>
+<tr><td>兩個新 provider 同時開發造成基底介面反覆</td><td>P1 合併後再開 P2 / P3；各開獨立 PR</td></tr>
+</table></div>
+
+<h2 id="s7">7. 驗收標準</h2>
+<ul class="checks">
+  <li><code>grep -n '^class ' app/infrastructure/llm/*.py</code> 顯示五個具體類別皆有基底，無裸 <code>class X:</code></li>
+  <li><code>tests/test_claude_code_client.py</code> 與 <code>tests/test_jp_verb_reading_judgments.py</code> 一行未改，全綠</li>
+  <li><code>tests/test_runtime_config_read.py</code> 一行未改，全綠（P1 已達成）</li>
+  <li>TG <code>/setconfig</code> 改 <code>LLM_MODEL_NAME</code> 後，下一次生成的 <code>llm_model</code> 回應即為新值（bot 程式碼未改）（使用者實測）</li>
+  <li><code>mypy app/infrastructure/llm</code> 零錯誤；<code>create_llm_client()</code> 回傳型別 <code>BaseLLMClient</code>（P1 已達成，2026-10-08）</li>
+  <li><code>grep -rn '_formatted_model_name' app/ scripts/</code> 只剩 <code>base.py</code> 的 alias 定義與 <code>runtime_config_service</code> 的 fallback 讀取（P1 已達成）</li>
+  <li><code>grep -rn 'provider == "claude-code"' app/</code> 為零</li>
+  <li><code>LLM_PROVIDER=google</code> 跑一張卡：標籤、錯誤訊息、審計行為與 main 分支逐位元一致（使用者實測；MockTransport 對 main 離線比對 18 次一致；拒答訊息依 D5 例外）</li>
+  <li><code>LLM_PROVIDER=claude-code</code> 跑一張卡：標籤 <code>(claude-code)opus-5@medium</code>、審計三檔逐位元一致（使用者實測）</li>
+  <li><code>LLM_PROVIDER=gemini-native</code> 跑一章：safety_settings 在請求中；標籤 <code>(gemini-native)&lt;model&gt;</code>；白名單未改即可用</li>
+  <li><code>LLM_PROVIDER=antigravity</code> 跑一章：標籤 <code>(antigravity)&lt;model&gt;@&lt;effort&gt;</code>；審計落盤於 <code>logs/antigravity_audit/</code>；<code>--print-timeout</code> 等於設定值</li>
+  <li><code>create_llm_client(model="x", effort="high")</code> 在 anthropic 下拋「尚未實作」且訊息可見兩個覆寫值（2026-10-08 實測；<code>tests/test_llm_factory.py</code> 守護）</li>
+  <li><code>create_llm_client(effort="high")</code> 在 google 下拋 <code>LLMServiceError</code>，訊息與層級化前逐字相同（P1 已達成）；gemini-native 待 P2</li>
+  <li>三個例外子類經 API 回傳的 <code>error_code</code> 正確，且 <code>message</code> 含既有識別字串；<code>generate_child_cards.py</code> 未改仍正確分級（P1 已達成，2026-10-08）</li>
+  <li><code>RuntimeConfigService.get_runtime_info()</code> 在 claude-code 與 antigravity 下皆回 CLI 診斷區塊，在 gemini-native 下為 <code>None</code>（claude-code 部分已有測試；其餘待 P2 / P3）</li>
+  <li>全套測試綠（含新增五個測試檔）（P1 三檔 ✅ 另加 <code>test_llm_factory</code>、291 項綠；另兩檔待 P2 / P3）</li>
+</ul>
+
+<h2 id="s8">8. 後續事項（不屬本計畫）</h2>
+<ul>
+  <li>未註冊的 <code>LLM_PROVIDER</code> 值不再靜默落到 OpenAI 相容 <code>LLMClient</code>：中轉站 provider 值需改為明確登記，再讓未知值啟動即報錯</li>
+  <li>mypy 加入 CI（<code>requirements.txt</code> 已加入）</li>
+  <li>生成腳本三處分級表改讀 <code>ErrorResponse.error_code</code>，之後移除訊息字串保證</li>
+  <li><code>LLMClient</code> 換用 <code>_retry_transient()</code>（指數退避取代固定 2 秒）；屬行為變更，需獨立驗證</li>
+  <li>移除 <code>_formatted_model_name</code> alias 與 <code>LLMClient</code> 上的兩個轉呼工具方法</li>
+  <li><code>GeminiNativeLLMClient</code> 的 <code>thinking_config</code>——與 effort 是不同概念，先不混入 <code>SUPPORTS_EFFORT</code></li>
+  <li><code>AnthropicLLMClient</code> 本體（§D11 指引 + D5 例外）</li>
+  <li>語音軸線的 <code>GeminiNativeAudioEvaluator</code> 改用 <code>_retry_transient()</code>（F043 的另一半）</li>
+  <li><code>RuntimeConfigService</code> 寫入側——<code>REQUIRES_REBUILD_KEYS</code> 已含 <code>LLM_PROVIDER</code>，重建工廠即本計畫的 <code>create_llm_client()</code></li>
+</ul>
+</div>

@@ -38,6 +38,7 @@ Design decisions:
 
 import logging
 import sys
+from types import FrameType
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -624,12 +625,15 @@ class Settings(BaseSettings):
             Intercept standard logging records and route them to Loguru.
             """
             def emit(self, record: logging.LogRecord) -> None:
+                # 標準層級回名稱，自訂層級（loguru 不認識）回數值
+                level: str | int
                 try:
                     level = logger.level(record.levelname).name
                 except ValueError:
                     level = record.levelno
 
-                frame, depth = logging.currentframe(), 2
+                frame: FrameType | None = logging.currentframe()
+                depth = 2
                 while frame and frame.f_code.co_filename == logging.__file__:
                     frame = frame.f_back
                     depth += 1
