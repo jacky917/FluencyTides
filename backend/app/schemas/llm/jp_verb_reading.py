@@ -31,7 +31,7 @@ class JudgeReadingsRequest(BaseModel):
 
     items: list[JudgeReadingItem] = Field(..., min_length=1, max_length=MAX_ITEMS_PER_REQUEST)
     model: str | None = Field(None, description="覆寫後端模型（缺省沿用 .env）")
-    effort: str | None = Field(None, description="覆寫思考深度（僅 claude-code 有效）")
+    effort: str | None = Field(None, description="覆寫思考深度（僅支援 effort 的 provider 有效：claude-code / antigravity）")
 
 
 class ReadingJudgment(BaseModel):

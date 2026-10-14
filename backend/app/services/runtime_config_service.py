@@ -35,6 +35,7 @@ REQUIRES_REBUILD_KEYS: frozenset[str] = frozenset({
     "LLM_MODEL_NAME",
     "LLM_PROVIDER",
     "LLM_CLAUDE_CODE_EFFORT",
+    "LLM_ANTIGRAVITY_EFFORT",
 })
 
 
@@ -219,8 +220,13 @@ class RuntimeConfigService:
             return info
 
         def _run_version() -> subprocess.CompletedProcess[bytes]:
+            # 用 client 自己的 subprocess 環境（有的話）：antigravity 的環境帶
+            # AGY_CLI_DISABLE_AUTO_UPDATE，診斷端點不該成為意外觸發 agy 自動
+            # 升版的入口；client 未初始化時退回繼承環境
+            build_env = getattr(llm_client, "_build_env", None)
+            env = build_env() if callable(build_env) else None
             return subprocess.run(
-                [cli_path, "--version"], capture_output=True, timeout=15
+                [cli_path, "--version"], capture_output=True, timeout=15, env=env
             )
 
         try:

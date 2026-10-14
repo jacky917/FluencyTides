@@ -2,10 +2,11 @@
 Headless CLI 型 LLM provider 的抽象中間層（計畫 D3）。
 
 所有「以 subprocess 驅動本機 CLI 做結構化生成」的 provider（Claude Code 的
-``claude -p``、Antigravity 的 ``agy -p``）共用的固定流程都在這裡，以
-template method 組織：
+``claude -p``、Antigravity 的 ``agy``——後者經 stream-json stdin，不用 ``-p``）
+共用的固定流程都在這裡，以 template method 組織：
 
-- ``generate_structured_data``：帶錯誤回饋的修復重試迴圈
+- ``generate_structured_data``：帶錯誤回饋的修復重試迴圈；暫時性失敗（服務端
+  不可用之類）在兩次嘗試之間退避，耗盡時以「服務不可用」而非「空內容」回報
 - ``_invoke_cli``：``asyncio.to_thread`` + ``subprocess.run``、UTF-8 解碼、超時
 - ``_validate_payload``：fence 清理 → ``json.loads`` → dict 檢查 → ``jsonschema`` 複核
 - CLI 路徑 / 工作目錄 / 審計目錄解析、審計落盤
@@ -42,7 +43,7 @@ from typing import ClassVar
 
 import jsonschema
 
-from app.core.exceptions import LLMRetryExhaustedError, LLMServiceError
+from app.core.exceptions import LLMRetryExhaustedError, LLMServiceError, LLMServiceUnavailableError
 from app.infrastructure.llm.base import BaseLLMClient
 from app.infrastructure.llm.schema_utils import resolve_json_schema, strip_markdown_fences
 from app.schemas.llm.base import LLMGenerateResult
@@ -59,11 +60,22 @@ class _RetryableCliError(Exception):
 
     Internal marker for failures worth retrying, optionally with
     error feedback appended to the prompt.
+
+    Attributes:
+        feedback: 附回 prompt 的修復說明；None 表示原樣重送。Repair
+            feedback appended to the prompt, or None to resend as-is.
+        transient: 是否為暫時性失敗（服務端不可用、CLI 中途結束），與輸出內容
+            無關。為 True 時重試前先退避，且耗盡後不以「空內容」回報——那會讓
+            生成腳本把基礎設施故障記成內容問題。Whether the failure is
+            transient (service-side), unrelated to the model's output.
     """
 
-    def __init__(self, message: str, feedback: str | None = None) -> None:
+    def __init__(
+        self, message: str, feedback: str | None = None, *, transient: bool = False
+    ) -> None:
         super().__init__(message)
         self.feedback = feedback
+        self.transient = transient
 
 
 @dataclass(frozen=True)
@@ -104,7 +116,11 @@ class HeadlessCliLLMClient(BaseLLMClient):
         SCRUBBED_ENV_VARS: 一律從 subprocess 環境剔除的變數。Env vars
             always scrubbed from the subprocess.
         INSTALL_HINT: 探測失敗時附在錯誤訊息的安裝指引。Install hint.
-        MAX_RETRIES: 外層修復重試次數。Outer repair-retry count.
+        MAX_RETRIES: 總嘗試次數（含第一次）。Total attempts, including the
+            first.
+        TRANSIENT_BACKOFF_SECONDS: 暫時性失敗後、下一次嘗試前的等待秒數，依
+            第幾次失敗取值（超出取最後一個）。Waits before retrying after a
+            transient failure, indexed by failure count.
     """
 
     SUPPORTS_EFFORT: ClassVar[bool] = True
@@ -116,6 +132,7 @@ class HeadlessCliLLMClient(BaseLLMClient):
     SCRUBBED_ENV_VARS: ClassVar[tuple[str, ...]] = ()
     INSTALL_HINT: ClassVar[str] = ""
     MAX_RETRIES: ClassVar[int] = 2
+    TRANSIENT_BACKOFF_SECONDS: ClassVar[tuple[float, ...]] = (10.0, 30.0)
 
     # 基底宣告為 str | None；CLI 一律經白名單驗證，必有值
     _effort: str
@@ -236,10 +253,13 @@ class HeadlessCliLLMClient(BaseLLMClient):
     # ------------------------------------------------------------------
 
     def _validate_effort(self, override: str | None, setting_value: str) -> str:
-        """以白名單驗證 effort（CLI 對非法值會靜默回退，故必須攔在此）。
+        """以白名單驗證 effort，一律在送出前攔截。
 
-        Whitelist-validate effort; the CLI silently falls back on invalid
-        values, so it must be caught here.
+        Whitelist-validate effort before it ever reaches the CLI.
+
+        claude 實測對非法值會靜默回退到預設力度而不報錯；agy 的行為未驗證，
+        同樣前置攔截。錯誤訊息沿用層級化前 claude 的原文（計畫 D10：既有拋錯點
+        的訊息不變），其中「CLI 會靜默回退」一句對 agy 屬未驗證的推定。
         """
         source = override if override is not None else setting_value
         origin = "effort 覆寫參數" if override is not None else f"{self.SETTINGS_PREFIX}_EFFORT"
@@ -342,7 +362,9 @@ class HeadlessCliLLMClient(BaseLLMClient):
         prompt 做修復重試。
 
         Raises:
-            LLMServiceError: 致命失敗、超時、或所有重試後仍無合規 JSON 時。
+            LLMRetryExhaustedError: 所有嘗試後仍無合規 JSON（最後一次為內容問題）。
+            LLMServiceUnavailableError: 最後一次仍是暫時性失敗（服務不可用）。
+            LLMServiceError: 致命失敗或超時。
         """
         logger.info(
             "LLM 結構化生成請求 -> model: %s, user_prompt 長度: %d 字元",
@@ -356,6 +378,7 @@ class HeadlessCliLLMClient(BaseLLMClient):
 
         current_prompt = user_prompt
         last_message = ""
+        last_transient = False
 
         for attempt in range(1, self.MAX_RETRIES + 1):
             stdin_text = self._build_stdin(system_prompt, current_prompt)
@@ -368,8 +391,12 @@ class HeadlessCliLLMClient(BaseLLMClient):
                 parsed_data = self._validate_payload(raw_content, resolved_schema)
             except _RetryableCliError as retryable:
                 last_message = str(retryable)
+                last_transient = retryable.transient
+                # 暫時性失敗與內容問題分開措辭：日後 grep log 統計時不混在一起
                 logger.warning(
-                    "CLI 結構化輸出未通過驗證 (第 %d/%d 次): %s",
+                    "%s %s (第 %d/%d 次): %s",
+                    self.DISPLAY_NAME,
+                    "暫時性失敗" if retryable.transient else "結構化輸出未通過驗證",
                     attempt,
                     self.MAX_RETRIES,
                     last_message,
@@ -381,6 +408,11 @@ class HeadlessCliLLMClient(BaseLLMClient):
                         f"【上次輸出未通過驗證】\n{retryable.feedback}\n"
                         "請修正後重新輸出完整且合規的 JSON。"
                     )
+                backoff = self.TRANSIENT_BACKOFF_SECONDS
+                if attempt < self.MAX_RETRIES and retryable.transient and backoff:
+                    delay = backoff[min(attempt, len(backoff)) - 1]
+                    logger.info("%s 暫時性失敗，%s 秒後重試。", self.DISPLAY_NAME, delay)
+                    await self._sleep(delay)
                 continue
 
             logger.info(
@@ -396,6 +428,13 @@ class HeadlessCliLLMClient(BaseLLMClient):
                 attempt_count=attempt,
             )
 
+        if last_transient:
+            # 刻意不含「仍回傳空內容」：那是內容問題的跳句識別字串，基礎設施故障
+            # 不該被記成內容失敗
+            raise LLMServiceUnavailableError(
+                f"{self.DISPLAY_NAME} 服務在 {self.MAX_RETRIES} 次嘗試後仍不可用。"
+                f"最後一次原因: {last_message}"
+            )
         # 訊息刻意包含分級表識別字串：生成腳本據此走「記錄失敗並跳過此句」路徑
         raise LLMRetryExhaustedError(
             f"LLM API 在所有重試後仍回傳空內容（{self.DISPLAY_NAME}）。最後一次原因: {last_message}"
@@ -404,6 +443,13 @@ class HeadlessCliLLMClient(BaseLLMClient):
     # ------------------------------------------------------------------
     # 內部實作（Internals）
     # ------------------------------------------------------------------
+
+    async def _sleep(self, seconds: float) -> None:
+        """暫時性失敗之間的等待；獨立成方法讓測試能局部替換，不必全域竄改 asyncio。
+
+        Wait between transient failures; a method so tests can stub it locally.
+        """
+        await asyncio.sleep(seconds)
 
     async def _invoke_cli(
         self, system_prompt: str, stdin_text: str, schema_text: str

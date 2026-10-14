@@ -125,6 +125,12 @@ backend/scripts/local_anki/Speaking_Coach_Dark/jsons/
 backend/.claude_code_workdir/
 backend/logs/
 
+# antigravity provider：CLI 的專用空工作目錄（agy 在 workspace 內寫檔不需許可），
+# 以及隔離用的專用 home（agy 的會話紀錄等使用者層級檔案落在這裡，含 prompt 內容）。
+# 只對應預設 workdir；改了 LLM_ANTIGRAVITY_WORKDIR 時 home 會跟著移到新路徑旁
+backend/.antigravity_workdir/
+backend/.antigravity_workdir_home/
+
 # -------------------------
 # dry-run 基線資料 (Dry-run baseline snapshots)
 # -------------------------

@@ -4,9 +4,9 @@
 |---|---|
 | **創建日期** | 2026-09-06 |
 | **性質** | 重構(既有三類掛上抽象基底)+ 新增機能設計(兩個新 provider)+ 實作工作項 |
-| **狀態** | 🚧 實作中 —— P1 基底重構 ✅ 完成並驗收(2026-09-06 實作;2026-10-08 補 mypy、工廠覆寫測試與複查,2026-10-09 處理 code review,全套 291 項測試綠;`test_claude_code_client.py` / `test_jp_verb_reading_judgments.py` / `test_runtime_config_read.py` 三檔一行未改;google / claude-code 實跑與 TG `/setconfig` 使用者實測通過),已合併 [PR #20](https://github.com/jacky917/FluencyTides/pull/20);P2 實作完成(2026-10-14,A9 實測、兩輪 code review 修正、全套 357 項綠、真實 API 煙霧測試通過),已提交 [PR #21](https://github.com/jacky917/FluencyTides/pull/21),跑一章比對拒答率待使用者;P0 的 agy 實測(A1–A8)待跑;P3 未開始 |
-| **範圍** | `app/infrastructure/llm/`(新增 `base.py`、`cli_base.py`、`schema_utils.py`、`labels.py`、`gemini_native_client.py`、`antigravity_client.py`;修改 `client.py`、`claude_code_client.py`、`anthropic_client.py`、`factory.py`)、`app/core/exceptions/infrastructure.py`(三個 `LLMServiceError` 子類)、`app/core/config.py`(`LLM_ANTIGRAVITY_*` 五欄位)、`app/core/dependencies.py`、`app/services/runtime_config_service.py`、`scripts/common/llm_label.py`、`.env.example`、`.gitignore` |
-| **不動** | `generate_structured_data` 簽名與 `LLMGenerateResult`;既有 provider 的標籤字串格式;既有錯誤訊息文字(生成腳本分級表的識別字串保留);`scripts/fastapi_client/**` 生成腳本;各 handler 的 prompt 渲染與建卡邏輯;`audio_evaluator/` 語音軸線;API request/response schema |
+| **狀態** | 🚧 實作中 —— P1 基底重構 ✅ 完成並驗收(2026-09-06 實作;2026-10-08 補 mypy、工廠覆寫測試與複查,2026-10-09 處理 code review,全套 291 項測試綠;`test_claude_code_client.py` / `test_jp_verb_reading_judgments.py` / `test_runtime_config_read.py` 三檔一行未改;google / claude-code 實跑與 TG `/setconfig` 使用者實測通過),已合併 [PR #20](https://github.com/jacky917/FluencyTides/pull/20);P2 實作完成(2026-10-14,A9 實測、兩輪 code review 修正、全套 357 項綠、真實 API 煙霧測試通過),已提交 [PR #21](https://github.com/jacky917/FluencyTides/pull/21),跑一章比對拒答率待使用者;P0 實測完成(2026-10-14,Windows,見 §D8「實測紀錄」);P3 實作完成(2026-10-14,多面向 code review 與複審修正、全套 430 項綠、真實 agy 煙霧測試通過),待跑一章與 20 張人工評閱 |
+| **範圍** | `app/infrastructure/llm/`(新增 `base.py`、`cli_base.py`、`schema_utils.py`、`labels.py`、`gemini_native_client.py`、`antigravity_client.py`;修改 `client.py`、`claude_code_client.py`、`anthropic_client.py`、`factory.py`)、`app/core/exceptions/infrastructure.py`(三個 `LLMServiceError` 子類)、`app/core/config.py`(`LLM_ANTIGRAVITY_*` 六欄位,含 P3 新增的 `_ISOLATE_HOME`)、`app/core/dependencies.py`、`app/services/runtime_config_service.py`、`scripts/common/llm_label.py`、`.env.example`、`.gitignore` |
+| **不動** | `generate_structured_data` 簽名與 `LLMGenerateResult`;既有 provider 的標籤字串格式;既有錯誤訊息文字(生成腳本分級表的識別字串保留;例外:effort 不支援的訊息句型不變、支援清單隨註冊表擴充,見 §7);`scripts/fastapi_client/**` 生成腳本;各 handler 的 prompt 渲染與建卡邏輯;`audio_evaluator/` 語音軸線;API request/response schema |
 | **PR / 進度** | P1:[PR #20](https://github.com/jacky917/FluencyTides/pull/20)(2026-10-14 合併,分支 `feat/llm-provider-hierarchy`);P2:[PR #21](https://github.com/jacky917/FluencyTides/pull/21)(2026-10-14 提交,分支 `feat/gemini-native-llm-client`);P3 待 P0 後另開獨立 PR |
 | **關聯文件** | `docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md`(§D11 的 Anthropic 實作指引仍有效,本計畫只掛基底不實作本體)、`docs/bk/adr/004-audio-evaluator-strategy.md`(ABC 策略模式先例)、`docs/bk/08_Refactor_Recommendations.md` F043(fence 清理重複)、`app/infrastructure/audio_evaluator/base.py`(ABC 而非 Protocol 的原始論證)、本文件 HTML 版 `llm_provider_hierarchy_FEAT_2026-09-06.html`(含架構圖) |
 
@@ -307,6 +307,86 @@ workdir 與 audit dir **必須**與 claude 分開——agy 有 `--project` 概�
 | A7 | 致命標記:模型名錯、未登入、額度耗盡各長什麼樣 | `_extract_result` 的分流 |
 | A8 | Windows 二進位:`agy` 不在 PATH,Antigravity IDE 目錄無獨立 `agy.exe`;`agy install` 後路徑為何 | `_extra_cli_candidates` |
 
+#### 實測紀錄(P0,2026-10-14,Windows 11,agy 1.1.27 → 1.3.5)
+
+在 scratchpad 的空目錄跑,模型 `gemini-3.8-flash`、`--effort low`,一律帶 `--sandbox --disable-slash-commands`、不帶 `--dangerously-skip-permissions`。約 20 次呼叫。
+
+**總表**
+
+| # | 結論 | 對實作的影響 |
+|---|---|---|
+| A1 | `-p` **必須帶值**,`-p -` 的 `-` 被當成字面 prompt,**不讀 stdin**。stdin 只能走 `--input-format stream-json`(須搭配 `--output-format stream-json`、不可再給 `-p`),每行一則 `{"event":"user","message":{"role":"user","content":"…"}}` | 用 stream-json 收發,避開 Windows 命令列長度上限;`_build_stdin` 輸出一行 NDJSON |
+| A2 | 信封見下方原始紀錄;stream-json 逐行輸出 `init` → `step_update`… → `result`,`result` 的結構與 `--output-format json` 相同。workdir 不留東西,但每次呼叫在 `~/.gemini/antigravity-cli/conversations/` 留一個會話檔 | `_extract_result` 取最後一行 `event=result`;會話殘留靠 A5 的專用 home 隔離 |
+| A3 | `--json-schema` **由 CLI 強制**:模型多走一步呼叫 `finish` 工具,結果放在信封獨立的 `structured_output` 欄位;即使 prompt 叫它別輸出 JSON,`structured_output` 仍合 schema。`response` 文字混有散文與 `toolAction` 等額外欄位 | **讀 `structured_output`,不讀 `response`**;單看 A3,`MAX_RETRIES` 可比照 claude 維持 2——後因 A7 的 503 頻率改為總嘗試 3 次 |
+| A4 | print 模式預設開放約 60 個工具(`run_command`、`write_to_file`、`search_web`、`call_mcp_tool`、瀏覽器控制…),`permission_mode=request-review`。**workspace 內寫檔不需許可**(實測真的建出檔案);執行命令被自動拒絕,信封多 `denied_actions`、`status` 仍是 `SUCCESS` 但 `response` 為空 | 有 `denied_actions` 或缺 `structured_output` 一律視為可重試失敗;workdir 必須是專用空目錄 |
+| A5 | **會讀 `~/.gemini/GEMINI.md`**(模型逐字引出 FluencyTides 開發規範的第一個標題),input tokens 多約 1.8k。把 `HOME` / `USERPROFILE` 指到空目錄後回答 NONE、認證照常 | `_build_env` 把 `HOME` / `USERPROFILE` 指向專用 home(會話紀錄也一併隔離在那裡) |
+| A6 | 憑證在 **OS keyring**(Windows Credential Manager,binary 內含 `wincred` / `keyring`),不在 `~/.gemini` 檔案裡——所以換 home 不影響認證。binary 內可見 `JETSKI_OAUTH_TOKEN`、`AGY_ADC_AUTH`(容器 headless 認證的候選,未實測),以及 IDE 設的 `ANTIGRAVITY_CONVERSATION_ID` / `ANTIGRAVITY_LS_ADDRESS` / `ANTIGRAVITY_CSRF_TOKEN` 等 | 剔除 `ANTIGRAVITY_*`(防止從 IDE 終端機啟動時黏到 IDE 會話);容器認證留待部署時測 |
+| A7 | 失敗形態:模型名錯 → exit 1、`status=ERROR`、`error` 含 `invalid model selection`;服務不可用 → exit 1、`error` 含 `Eligibility check failed: UNAVAILABLE (code 503)`,**本日約四成呼叫遇到**,重試即過;用法錯誤 → exit 2(只有 stderr)。未登入、額度耗盡未能觸發(1.3.3 changelog:個人額度耗盡會立即回報、不重試) | 503 / UNAVAILABLE 可重試;invalid model 致命;exit 2 致命 |
+| A8 | Windows:`%LOCALAPPDATA%\agy\bin\agy.exe`。現行安裝會把該目錄加入**使用者 PATH**(9 月的「不在 PATH」是舊安裝的狀況) | `_extra_cli_candidates` 仍加這個路徑,作為 PATH 未生效時(安裝前已啟動的程序)的兜底 |
+| 新 | `--model` 給**基底名**(`gemini-3.8-flash`),思考深度另用 `--effort`;`agy models` 列的 `gemini-3.8-flash-low` 是組合後的顯示名,傳給 `--model` 會被拒。1.3.5 的 effort 值域為 `low\|medium\|high\|xhigh\|max` | `VALID_EFFORTS` 五檔(與 claude 相同);白名單要放基底名 |
+| 新 | **會自動更新**:探測期間從 1.1.27 自己升到 1.3.5,期間 `-h` 輸出改變(`--print-timeout` 預設由 5 分鐘改為 0 = 不限)。binary 內有 `AGY_CLI_DISABLE_AUTO_UPDATE` | `_build_env` 設 `AGY_CLI_DISABLE_AUTO_UPDATE=1`;版本由使用者手動 `agy update` |
+| 新 | 啟動開銷大且不穩:模型本身 2–4 秒,整個程序 8–163 秒(資格檢查與內部重試) | 逾時預設要寬(計畫的 900 秒足夠);批次吞吐量會明顯低於 claude-code |
+
+**原始信封**
+
+`--output-format json` 成功:
+
+```json
+{"conversation_id":"5c5152f0-d71e-49b3-9c04-607bbce2c278","status":"SUCCESS","response":"PONG\n","duration_seconds":117.094311,"num_turns":1,"usage":{"input_tokens":15046,"output_tokens":2,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":15048}}
+```
+
+帶 `--json-schema`(A3,prompt 要求只寫散文):
+
+```json
+{"conversation_id":"f5f43828-…","status":"SUCCESS","response":"The tide breathes against the shore, …\n{\"answer\":0,\"note\":\"Two-sentence poem about the sea completed.\",\"toolAction\":\"Finishing task\",\"toolSummary\":\"Task completion\"}\n","duration_seconds":80.25,"num_turns":2,"structured_output":{"answer":0,"note":"Two-sentence poem about the sea completed."},"json_schema":{…},"usage":{"input_tokens":30746,"output_tokens":174,"thinking_tokens":95,"cache_read_tokens":0,"total_tokens":30920}}
+```
+
+工具被拒(A4,stderr 另有說明):
+
+```json
+{"conversation_id":"0bc7f5bd-…","status":"SUCCESS","response":"","duration_seconds":7.44,"num_turns":1,"usage":{…},"denied_actions":[{"action":"command","display_name":"RunCommand"}]}
+```
+
+```text
+jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow in settings.json (e.g. command(<target>)). Alternatively, re-run with --dangerously-skip-permissions to auto-approve all tools.
+```
+
+模型名錯 / 服務不可用(A7,exit 1):
+
+```json
+{"conversation_id":"","status":"ERROR","response":"","error":"invalid model selection (--model \"gemini-3.8-flash-low\" --effort \"\"): model gemini-3.8-flash-low is not recognized as a known model or custom model in settings","duration_seconds":0,"num_turns":0,"usage":{…}}
+{"conversation_id":"","status":"ERROR","response":"","error":"Eligibility check failed: UNAVAILABLE (code 503): The service is currently unavailable.","duration_seconds":0,"num_turns":0,"usage":{…}}
+```
+
+stream-json 模式下的同一個 503(stdout 只有這一行 `result`,沒有 `init`;stderr 另有 `error: Eligibility check failed: …`)——P3 依此確認 stream-json 的錯誤也會產生 `result` 事件:
+
+```json
+{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"Eligibility check failed: UNAVAILABLE (code 503): The service is currently unavailable.","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0}}}
+```
+
+stream-json 輸出(A1 / A2):
+
+```text
+{"event":"init","conversation_id":"…","init":{"model":"gemini-3.8-flash","cwd":"…","tools":[…約 60 個…],"permission_mode":"request-review"}}
+{"event":"step_update","step_update":{…,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{…,"state":"ACTIVE","step_type":"agent_response","text_delta":"PONG"}}
+{"event":"step_update","step_update":{…,"state":"DONE","step_type":"agent_response","text_delta":"\n","duration_seconds":2.36,"usage":{…}}}
+{"event":"result","result":{"conversation_id":"…","status":"SUCCESS","response":"PONG\n","duration_seconds":2.44,"num_turns":1,"usage":{…}}}
+```
+
+**端到端驗證**:專用 home + `AGY_CLI_DISABLE_AUTO_UPDATE=1` + stream-json stdin(system prompt 以 `<system>…</system>` 區塊併入)+ `--json-schema` 指向展平的 `ChildCardGenerationResult` schema 檔 → 事件序列 `init` → `user_input` → `agent_response` → `finish` → `result`,`structured_output` 通過 Pydantic 驗證,workdir 無殘留,37 秒(前一次遇 503)。
+
+**對 §D8 暫定命令的修正**:
+
+```text
+agy --input-format stream-json --output-format stream-json --json-schema <展平後的 schema 字串>
+    --model <基底名> --effort <e> --sandbox --disable-slash-commands [--print-timeout <T>s]
+    (stdin:一行 {"event":"user","message":{"role":"user","content":"<system 區塊 + user prompt>"}})
+    (env:HOME / USERPROFILE → 專用 home、AGY_CLI_DISABLE_AUTO_UPDATE=1、剔除 ANTIGRAVITY_*)
+```
+
+不再需要 `--new-project`(會話殘留由專用 home 隔離)。schema 以字串傳(與 claude 相同;展平後的卡片 schema 約 5KB,遠低於 Windows 命令列上限,且免去每次呼叫寫暫存檔的並行問題)——P3 實作定案,原先寫的「改傳檔案路徑」不採用。
+
 ### D9 工廠:註冊表 + 統一參數傳遞
 
 ```python
@@ -397,7 +477,7 @@ singleton 的標籤(§1.3 圖 3 的 L1)。`runtime_config_service.py:30-36` 的 
 | `scripts/database/MySQL/JP_VerbPair/build_llm_index.py:76,165,227` | 型別註記 `BaseLLMClient`;`_formatted_model_name` → `model_label` |
 | `scripts/database/MySQL/JP_VerbPair/build_llm_index_no_context.py:181,314,377` | 同上(首次 grep 漏列) |
 | `analyze_pairs.py:23` | `LLMClient()` → `create_llm_client()`(2026-08-27 計畫漏網的第 9 處實例化點) |
-| `.env.example` | 新增 `LLM_ANTIGRAVITY_*` 五欄位與註解;`LLM_PROVIDER` 可選值補列 |
+| `.env.example` | 新增 `LLM_ANTIGRAVITY_*` 六欄位與註解(P3 實作多一個 `_ISOLATE_HOME`);`LLM_PROVIDER` 可選值補列 |
 | `.gitignore` | `+ .antigravity_workdir/`、`+ logs/antigravity_audit/` |
 
 ### Frontend
@@ -488,6 +568,47 @@ singleton 的標籤(§1.3 圖 3 的 L1)。`runtime_config_service.py:30-36` 的 
     全套 357 項綠;ruff 零警告;`mypy app/infrastructure/llm --ignore-missing-imports` 零錯誤
   - **待做**:使用者以 `LLM_PROVIDER=gemini-native` 跑 JP_VerbPair 一章,與同章 `google` 路徑比對拒答率。比對時注意兩邊的拒答認定不完全相同(原生多認 `SPII` / `JAILBREAK`、帶文字的安全中斷也算拒答)
 - **P3 `AntigravityLLMClient`**:依 P0 結果寫 hook 與測試。驗收:`LLM_PROVIDER=antigravity` 跑同一章;因 system prompt 併入(D8),與 claude-code 路徑做 20 張人工評閱比對
+  **實作完成**(2026-10-14,分支 `feat/antigravity-llm-client`):
+  - 新增 `antigravity_client.py`(`AntigravityLLMClient(HeadlessCliLLMClient)`)。初版**基底一行未改**——P1 的 hook 切法足以容納第二個 CLI,G3 的設計目標成立;review 後為暫時性失敗在基底加了退避(見下方 code review 修正),那是新行為、不是切法問題。實作內容逐項對應 §D8 實測紀錄:
+    - `_build_command`:`--input-format stream-json --output-format stream-json --sandbox --disable-slash-commands --model --effort --print-timeout <T>s --json-schema <schema>`;`--print-timeout` 每次呼叫讀 `LLM_ANTIGRAVITY_TIMEOUT_SECONDS`
+    - `_build_stdin`:一行 `{"event":"user","message":{"role":"user","content":"<system>…</system>\n\n<user prompt>"}}`;修復重試的回饋同樣經此併入
+    - `_build_env`:剔除 `ANTIGRAVITY_*`、設 `AGY_CLI_DISABLE_AUTO_UPDATE=1`、(預設)`HOME` / `USERPROFILE` 指向工作目錄旁的 `<workdir>_home`——刻意不放進 workdir,因為 workdir 是 agy 的 workspace,模型可列出與寫入其中檔案
+    - `_extract_result`:由後往前取 `event=result`;`status != SUCCESS` 時模型名錯 → 致命(提示用基底名)、額度 → `LLMQuotaError`、未登入 → 致命、其餘(含 503 資格檢查)→ 可重試;成功但有 `denied_actions` 或缺 `structured_output` → 可重試並附「不要呼叫工具」回饋;回傳 `structured_output` 序列化後的 JSON,交給基底的 `jsonschema` 複核
+    - `MAX_RETRIES = 3`(比 claude 多一次,因 503 約四成)、`VALID_EFFORTS` 五檔、`_extra_cli_candidates` 加 `%LOCALAPPDATA%\agy\bin\agy.exe`
+  - 設定:`LLM_ANTIGRAVITY_CLI_PATH` / `_EFFORT`(預設 high)/ `_WORKDIR` / `_TIMEOUT_SECONDS`(900)/ `_AUDIT_DIR`(`logs/antigravity_audit`)加上計畫外的 **`_ISOLATE_HOME`**(預設 true):Windows 實測憑證在 keyring、隔離不影響認證,但 macOS / Linux 未驗證,留一個關閉開關
+  - 接線:工廠註冊 `antigravity`(`is_cli=True`、`supports_effort=True`);`REQUIRES_REBUILD_KEYS` 加 `LLM_ANTIGRAVITY_EFFORT`(§D12);`.gitignore` 加 `.antigravity_workdir/` 與 `.antigravity_workdir_home/`(審計目錄在既有的 `backend/logs/` 規則內);`.env.example` 新增第 11-B 區
+  - `test_llm_base` 一處斷言更新:effort 不支援的錯誤訊息由「僅 claude-code provider 支援」變為「僅 claude-code, antigravity provider 支援」——支援清單取自註冊表,這正是 §1.3 第二項要的行為
+  - 測試:`tests/test_antigravity_client.py` 初版 34 項、review 後 55 項、複審後 68 項(信封樣本依 P0 原始輸出結構簡化),涵蓋命令列旗標、stdin 格式與 system 區塊、`--print-timeout` 同步、schema 展平、HOME 隔離與開關、IDE 變數剔除、各失敗形態分流、工具被拒的修復回饋、schema 不符的修復重試、Windows 安裝路徑兜底、審計三檔、工廠路由、runtime info 的 CLI 區塊。突變驗證(改讀 `response`、拿掉 HOME 隔離 / IDE 剔除 / 自動更新關閉 / `--disable-slash-commands` / system 區塊、忽略 `denied_actions`、503 改致命)各自被對應測試抓到
+  - 真實 agy 煙霧測試:經工廠建出客戶端、`gemini-3.8-flash` + `low`、真實 `ChildCardGenerationResult` schema → 第 1 次即通過 Pydantic 驗證,138 秒;workdir 無殘留、會話紀錄落在專用 home、審計已寫入
+  - 驗收指令(在 `backend/` 下):
+
+    ```bash
+    python -m pytest tests -q -p no:cacheprovider
+    ```
+
+    全套 430 項綠(複審修正後);ruff 零警告;`mypy app/infrastructure/llm --ignore-missing-imports` 零錯誤;三個受保護測試檔與 `main` 相同
+  - **code review 修正**(2026-10-14,code / errors / tests / comments 四面向;code-reviewer 無 ≥80 信心的問題,其餘全數處理):
+    - **503 耗盡不再偽裝成「空內容」**:初版 503 三次全中時拋 `LLMRetryExhaustedError`(含跳句識別字串),腳本會記成「安全審查攔截」並永久跳句——基礎設施故障被算在內容頭上。基底 `_RetryableCliError` 加 `transient` 旗標與 `TRANSIENT_BACKOFF_SECONDS = (10, 30)`:暫時性失敗在下一次嘗試前退避,耗盡時若最後一次仍是暫時性,改拋「服務在 N 次嘗試後仍不可用」(複審後為新子類 `LLMServiceUnavailableError`,`error_code="LLM_SERVICE_UNAVAILABLE"`,不含跳句字串)。claude 目前沒有標為暫時性的失敗,行為不變(受保護測試照過)
+    - **只以 `\n` 分行**:`str.splitlines()` 還會在 U+2028 / U+2029 / U+0085 切行,生成內容含這些字元時 result 行被切斷、誤判為致命錯誤而中斷批次
+    - **錯誤分流改看 gRPC 狀態名**:先解析 `error` 欄位的 `<STATUS_NAME> (code N)`(`RESOURCE_EXHAUSTED` / code 429 → 額度;`UNAUTHENTICATED` / `PERMISSION_DENIED` → 致命),措辭標記只看 `error` 欄位,`error` 為空才退回 stderr;不再把裸「429」子字串當額度。模型選擇被拒的訊息附 CLI 原文與當下 effort(可能是模型與 effort 的組合不被接受);認證失敗提示 `LLM_ANTIGRAVITY_ISOLATE_HOME=false`;CLI 自身逾時(措辭未實測,只認明確提到 print timeout 的)→ 致命
+    - **status 缺失或不在 {SUCCESS, ERROR} → 致命**(信封格式漂移時重試只會每句燒三次慢速呼叫);**有 `structured_output` 就採用**,`denied_actions` 只記警告(初版會連有效結果一起丟掉)
+    - **沒有 result 事件分兩種**:一個事件都沒有(用法錯誤)→ 致命;有事件但沒有 result(CLI 中途結束)→ 暫時性重試;訊息附無法解析的行數與 stderr 尾端
+    - `--print-timeout` 設為逾時設定減 30 秒(下限 1 秒,agy 把 0 解讀為不限),讓 CLI 先以結構化錯誤結束,不和 subprocess 逾時賽跑
+    - 專用 home 改在建構時建立,建立失敗以專屬訊息拋出(不再被基底包成「無法啟動 CLI」);每次呼叫後檢查 workdir,有殘留檔案記警告
+    - 診斷端點的 `--version` 探測改用 client 的 `_build_env()`,不會成為意外觸發 agy 自動升版的入口
+    - 測試:新增 U+2028 內容、兩次 503 後第三次成功(鎖住總嘗試 3 次)、退避間隔、狀態名分流、stderr 不參與判斷、status 漂移、中途結束、denied 但有結果、非 dict 結果、workdir 殘留警告、隔離設定每次呼叫才讀等;`os.name` 不再全域竄改(原寫法在 Linux 上必壞),改替換模組參照;`test_llm_factory` 加由註冊表推導的檢查:支援 effort 的 CLI provider 其 effort 鍵必須在 `REQUIRES_REBUILD_KEYS`
+    - 突變驗證:改回 `splitlines()`、503 不標暫時性、拿掉 status 檢查、denied 時丟棄結果、拿掉逾時餘裕、stderr 參與判斷、版本探測不帶環境、暫時性耗盡改回空內容、拿掉退避——各自被對應測試抓到
+    - **複審修正**(errors / tests 兩面向重審,確認上列皆已解決後的新發現):
+      - CLI 自身逾時改以 result 的 `duration_seconds` 判斷(已到 `--print-timeout` 即致命),不再只靠未實測的措辭——否則以 `DEADLINE_EXCEEDED` 回報時會被當暫時性錯誤重試三輪、約 44 分鐘
+      - `--print-timeout` 餘裕改為「180 秒與逾時 20% 取小」:180 秒涵蓋實測最壞啟動開銷(agy 的計時起點未驗證),比例上限讓小設定值不會算出一兩秒就中止
+      - 解析得到 gRPC 狀態名時只依狀態名與 code 分流,措辭只在沒有狀態名時才用(避免 `UNAVAILABLE … quota service` 被判成額度)
+      - 新增 `LLMServiceUnavailableError`,讓 §8 的腳本修正能以 `error_code` 區分「服務不可用」與真正的致命錯誤,不必比對中文訊息
+      - **還原 claude 路徑的 effort 錯誤訊息**:初次修正時把基底 `_validate_effort` 的訊息改了字,違反 D10「既有拋錯點訊息不變」;已還原原文,agy 的差異改寫在 docstring
+      - 只有被截斷的 JSON 行(沒有完整事件)視為中途結束(暫時性),不再判成用法錯誤;退避表為空時不會 IndexError;基底的重試 log 區分「暫時性失敗」與「未通過驗證」並帶 provider 名
+      - 測試:退避改以基底新增的 `_sleep()` 局部替換(不再全域竄改 `asyncio.sleep`);補暫時性 / 內容問題混合序列(最後一次決定例外、只在暫時性失敗後退避)、耗盡後不再等待、執行期建立 home 失敗、stderr 退回判斷的正向案例、狀態名優先、逾時依實耗判斷、CRLF 行尾、預設 home 路徑與 `.gitignore` 一致;print-timeout 測試改鎖不變式(0 < print-timeout < 逾時,且不低於逾時的 80%)
+      - 突變驗證:措辭蓋過狀態名、拿掉實耗判斷、截斷行改致命、最後一次後仍退避、改回一般 `LLMServiceError`、改回固定餘裕——各自被對應測試抓到;修正後再以真實 agy 跑通一次(113 秒,第 1 次即通過)
+    - 註解與文件:`cli_base` 模組說明改正(agy 不用 `-p`);`base._reject_unsupported_effort` 與 §7 不再宣稱 effort 訊息「逐字相同」;OpenAPI 欄位說明、`judge_verb_readings.py` 的 `--effort` 說明、`main.py` 註解、`jp_verb_reading_service` 的白名單提示改為涵蓋 antigravity;額度標記同樣未實測的事實寫進註解;`.env.example` 的模型清單改為「以 `agy models` 為準」、耗時改稱「整體耗時」、補 TG 白名單與 home 會累積的說明
+  - **待做**:使用者以 `LLM_PROVIDER=antigravity` 跑一章;與 claude-code 做 20 張人工評閱比對(system prompt 併入 stdin 的品質影響)
 - **P4 收尾**:文件回填(本文件狀態、`docs/bk/02_Backend_Architecture.md` 的 LLM 段、`.env.example`);F043 標記「fence 清理已收斂到 `schema_utils`」;移入 `archive/`
 
 ## 6. 風險與未知
@@ -515,12 +636,12 @@ singleton 的標籤(§1.3 圖 3 的 L1)。`runtime_config_service.py:30-36` 的 
 - [x] `LLM_PROVIDER=google` 跑一張卡:標籤 `gemini-3.1-pro-preview`、錯誤訊息、審計行為與 main 分支逐位元一致(使用者實測;另以 MockTransport 對 `main` 離線比對 18 次一致;拒答訊息依 D5 例外)
 - [x] `LLM_PROVIDER=claude-code` 跑一張卡:標籤 `(claude-code)opus-5@medium`、審計三檔與 main 分支逐位元一致(使用者實測)
 - [ ] `LLM_PROVIDER=gemini-native` 跑一章:`safety_settings` 在請求中(mock 或 SDK debug log 證明);標籤 `(gemini-native)<model>`;`MODIFY_LLM_MODEL_NAME` 未改即可用(2026-10-14:`safety_settings` 已由 HTTP 層測試與真實 API 請求攔截證明、標籤已驗;跑一章待使用者)
-- [ ] `LLM_PROVIDER=antigravity` 跑一章:標籤 `(antigravity)<model>@<effort>`;審計三檔落盤於 `logs/antigravity_audit/`;`--print-timeout` 值等於 `LLM_ANTIGRAVITY_TIMEOUT_SECONDS`
+- [ ] `LLM_PROVIDER=antigravity` 跑一章:標籤 `(antigravity)<model>@<effort>`;審計三檔落盤於 `logs/antigravity_audit/`;`--print-timeout` 值等於 `LLM_ANTIGRAVITY_TIMEOUT_SECONDS`(2026-10-14:標籤、審計三檔、`--print-timeout` 同步已由測試與真實煙霧測試證明;跑一章待使用者)
 - [x] `create_llm_client(model="x", effort="high")` 在 `LLM_PROVIDER=anthropic` 下拋「尚未實作」且訊息可見兩個覆寫值(證明參數已傳入,不再靜默丟棄)(2026-10-08 實測;`tests/test_llm_factory.py` 守護)
-- [x] `create_llm_client(effort="high")` 在 `LLM_PROVIDER=google` 下拋 `LLMServiceError`,訊息與層級化前逐字相同(`effort 覆寫僅 claude-code provider 支援（目前 LLM_PROVIDER='google'）。`);gemini-native 同樣拒絕(P2 測試覆蓋)
+- [x] `create_llm_client(effort="high")` 在 `LLM_PROVIDER=google` 下拋 `LLMServiceError`,訊息句型與層級化前相同(P1 時逐字相同:`effort 覆寫僅 claude-code provider 支援（目前 LLM_PROVIDER='google'）。`;P3 加入 antigravity 後支援清單隨註冊表變為 `claude-code, antigravity`,這正是 §1.3 第二項要的行為);gemini-native 同樣拒絕(P2 測試覆蓋)
 - [x] 三個例外子類經 API 回傳的 `error_code` 分別為 `LLM_RETRY_EXHAUSTED` / `LLM_QUOTA` / `LLM_REFUSAL`,且 `message` 含既有識別字串;`generate_child_cards.py` 未改仍正確分級(2026-10-08:離線比對各情境拋出正確子類;`test_llm_exceptions` 驗全域 handler;三支生成腳本未改,比對字串仍在訊息中)
-- [ ] `RuntimeConfigService.get_runtime_info()` 在 claude-code 與 antigravity 下皆回 CLI 診斷區塊,在 gemini-native 下為 `None`(claude-code 部分已由 `test_runtime_config_read` 覆蓋;gemini-native 為 `None` 已由 P2 測試覆蓋;antigravity 待 P3)
-- [ ] 全套測試綠(含新增五個測試檔)(P1 的三個新測試檔 ✅,另加 `test_llm_factory`;全套 291 項綠;P2 加 `test_gemini_native_client` 64 項,全套 357 項綠;`test_antigravity_client` 待 P3)
+- [x] `RuntimeConfigService.get_runtime_info()` 在 claude-code 與 antigravity 下皆回 CLI 診斷區塊,在 gemini-native 下為 `None`(claude-code 部分已由 `test_runtime_config_read` 覆蓋;gemini-native 為 `None` 已由 P2 測試覆蓋;antigravity 回 CLI 區塊已由 P3 測試覆蓋)
+- [x] 全套測試綠(含新增五個測試檔)(P1 的三個新測試檔 ✅,另加 `test_llm_factory`;全套 291 項綠;P2 加 `test_gemini_native_client` 64 項;P3 加 `test_antigravity_client` 68 項,全套 430 項綠)
 
 ## 8. 後續事項(不屬本計畫範圍)
 
@@ -529,9 +650,12 @@ singleton 的標籤(§1.3 圖 3 的 L1)。`runtime_config_service.py:30-36` 的 
 - 生成腳本三處分級表改讀 `ErrorResponse.error_code`,之後移除訊息字串保證(D5 過渡期結束)
 - `LLMClient` 換用 `_retry_transient()`(指數退避取代固定 2 秒);屬行為變更,需獨立驗證
 - 移除 `_formatted_model_name` alias 與 `LLMClient` 上的兩個轉呼工具方法
-- 生成腳本遇到確定性設定錯誤(金鑰無效、模型不存在、schema 被拒)應中止,而不是逐句 `record_failure`:目前所有 `LLMServiceError` 都回 502,腳本對 ≥500 一律記失敗後跳過,設定錯誤會把整批句子累加 failure_count 直到永久跳過。P2 只在 gemini-native 的訊息裡加設定提示;`LLMClient` 有同樣問題,修法(例如設定錯誤改用 4xx 狀態碼或專屬 `error_code`)兩個客戶端與腳本一起改。在那之前,用 gemini-native 跑大批次前先手動打一次端點確認金鑰與模型名
+- 生成腳本遇到確定性設定錯誤(金鑰無效、模型不存在、schema 被拒)或服務持續不可用(P3 的 `LLMServiceUnavailableError` / `LLM_SERVICE_UNAVAILABLE`)應中止或暫停,而不是逐句 `record_failure`;另外腳本以 `"429" in 回應文字` 判斷額度,錯誤訊息裡的 CLI 原文或 conversation_id 碰巧含 429 時會誤判,改讀 `error_code` 可一併解除:目前所有 `LLMServiceError` 都回 502,腳本對 ≥500 一律記失敗後跳過,設定錯誤會把整批句子累加 failure_count 直到永久跳過。P2 只在 gemini-native 的訊息裡加設定提示;`LLMClient` 有同樣問題,修法(例如設定錯誤改用 4xx 狀態碼或專屬 `error_code`)兩個客戶端與腳本一起改。在那之前,用 gemini-native 跑大批次前先手動打一次端點確認金鑰與模型名
 - `jp_verb_reading_service` 帶覆寫時,把 `create_llm_client` 拋出的**任何** `LLMServiceError` 都轉成 `InvalidOverrideError`(422);伺服器環境問題(金鑰未設、SDK Client 建立失敗)因此被歸咎成使用者的覆寫不合法。應讓覆寫驗證失敗(effort 不支援、模型名為空)拋專屬子類,service 只轉那個
 - `GeminiNativeLLMClient` 的 `thinking_config`(`LLM_GEMINI_NATIVE_THINKING_BUDGET`)——與 effort 是不同概念,先不混入 `SUPPORTS_EFFORT`
 - `AnthropicLLMClient` 本體(§D11 指引 + D5 例外)
+- CLI 診斷的 hook 化:`get_runtime_info()` 的區塊鍵仍叫 `claude_code`,antigravity 只回通用部分(路徑 / 版本 / effort),帳號與認證探測標 `unsupported`。agy 的認證在 keyring、無 `auth status` 類子命令,要做需另找探測方式;屆時把鍵改為中性名稱並抽 `auth_diagnostics()`
+- agy 的容器 / headless 認證:binary 內可見 `JETSKI_OAUTH_TOKEN`、`AGY_ADC_AUTH`,未實測;目前只驗證過 Windows 桌機
+- `LLM_ANTIGRAVITY_ISOLATE_HOME` 在 macOS / Linux 的行為未驗證(憑證若不在 keyring,隔離後會無法認證)
 - 語音軸線的 `GeminiNativeAudioEvaluator` 改用 `BaseLLMClient._retry_transient()`(F043 的另一半)
 - `RuntimeConfigService` 寫入側(`set_config`)——`REQUIRES_REBUILD_KEYS` 已含 `LLM_PROVIDER`,重建工廠即為本計畫的 `create_llm_client()`

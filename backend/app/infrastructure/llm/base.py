@@ -255,8 +255,9 @@ class BaseLLMClient(abc.ABC):
 
         做成 classmethod 是為了讓子類能在自己的其他檢查**之前**先呼叫（保持
         層級化前的錯誤順序），基底 ``__init__`` 再呼叫一次是冪等的。訊息
-        文字與層級化前 ``factory.py`` 的版本逐字相同；支援清單來自工廠的
-        靜態註冊表，不 import 任何 provider 模組。
+        句型與層級化前 ``factory.py`` 的版本相同；支援清單取自工廠靜態註冊表中
+        ``supports_effort=True`` 的 provider（依註冊順序，隨註冊表增減），
+        不 import 任何 provider 模組。
 
         Raises:
             LLMServiceError: 不支援 effort 卻收到值時。

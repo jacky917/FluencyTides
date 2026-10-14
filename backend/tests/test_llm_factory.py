@@ -87,3 +87,21 @@ def test_anthropic_stub_without_overrides_has_no_echo_suffix():
             create_llm_client()
 
     assert "收到覆寫" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "provider", factory.providers_supporting_effort(), ids=factory.providers_supporting_effort()
+)
+def test_effort_setting_requires_rebuild(provider):
+    """支援 effort 的 CLI provider，其 effort 設定鍵必須列在 REQUIRES_REBUILD_KEYS。
+
+    TG /setconfig 改了 effort 卻不重建 singleton，診斷端點回報的標籤就會停在舊值
+    （計畫 §D12）。由註冊表推導，下一個 provider 忘了加會在這裡被擋下。
+    """
+    from app.services.runtime_config_service import REQUIRES_REBUILD_KEYS
+
+    client_cls = factory.resolve_client_class(provider)
+    prefix = getattr(client_cls, "SETTINGS_PREFIX", None)
+    if prefix is None:  # 非 CLI 型（如 anthropic 實作後）的 effort 設定鍵另行約定
+        pytest.skip(f"{provider} 沒有 SETTINGS_PREFIX")
+    assert f"{prefix}_EFFORT" in REQUIRES_REBUILD_KEYS
