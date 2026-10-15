@@ -97,7 +97,7 @@ fi
 
 echo "========================================================="
 echo " Deployment Complete!"
-echo " - Backend API: http://${HOST_IP}:${BACKEND_PORT}/docs"
-echo " - Frontend UI: http://${HOST_IP}:${FRONTEND_PORT}"
+echo " - Backend API: http://${HOST_IP}:${BACKEND_PORT}/docs  (外部: https://ft-backend.jacky917.com/docs)"
+echo " - Frontend UI: http://${HOST_IP}:${FRONTEND_PORT}  (外部: https://ft.jacky917.com)"
 echo " (Make sure /DATA/AppData/FluencyTides/backend/.env is set)"
 echo "========================================================="

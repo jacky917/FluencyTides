@@ -24,13 +24,13 @@ FluencyTides 是一套**個人語言學習自動化系統**，把「LLM 內容�
 
 ## 技術棧
 
-### 後端（Python 3.11，`backend/requirements.txt`）
+### 後端（Python 3.13，`backend/requirements.txt` 宣告直接依賴、`backend/requirements.lock` 鎖定精確版本）
 
 | 類別 | 套件 | 用途 |
 |---|---|---|
 | Web 框架 | fastapi、uvicorn[standard]、python-multipart | API 中樞、ASGI 伺服器、檔案上傳 |
 | 驗證/設定 | pydantic v2、pydantic-settings、python-dotenv | Pydantic v2 合約、`.env` 集中設定 |
-| 資料庫 | sqlmodel、aiosqlite、alembic、greenlet | SQLAlchemy 2.0 async ORM、SQLite 驅動、Schema 遷移 |
+| 資料庫 | sqlalchemy[asyncio]（含 greenlet）、sqlmodel、aiosqlite、aiomysql、alembic | SQLAlchemy 2.0 async ORM、SQLite / MySQL 驅動、Schema 遷移 |
 | AI 整合 | httpx、openai、google-genai、jinja2 | AnkiConnect 客戶端、LLM 生卡、Gemini 原生語音評測、Prompt 模板 |
 | 外部服務 | minio、aiogram（3.4+） | 媒體存儲、Telegram Bot（純 aiogram 3） |
 
@@ -120,14 +120,14 @@ FluencyTides/
 
 ## 本地啟動
 
-前置需求：Python 3.11、Node.js 20、可存取的 AnkiConnect（本地 Anki + AnkiConnect 外掛）、以及 LLM API 金鑰。MinIO 為選用。
+前置需求：Python 3.13（容器版本；本機 3.14 亦可）、Node.js 20、可存取的 AnkiConnect（本地 Anki + AnkiConnect 外掛）、以及 LLM API 金鑰。MinIO 為選用。
 
 ### 後端
 
 ```bash
 cd backend
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.lock   # 精確版本，與容器相同；requirements.txt 只宣告範圍
 
 cp .env.example .env      # 依實際環境填入 LLM_API_KEY、ANKI_CONNECT_URL、TG_BOT_TOKEN 等
 # 本地開發建議把 DATABASE_URL 改為相對路徑，例如：
@@ -137,8 +137,8 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 - API 位於 `http://127.0.0.1:8000`，Swagger UI 在 `/docs`，健康檢查在 `/api/health`。
-- **開發模式**（`ENVIRONMENT=development`，預設）下 `API_SECRET_KEY` 為空會放行所有 API 以方便本地測試；**生產模式**（`ENVIRONMENT=production`）下密鑰為空會在啟動時被拒絕（fail-closed）。
-- 資料庫 schema：開發模式啟動時自動 `create_all`；生產模式跳過並改由 Alembic 管理，部署前應執行 `alembic upgrade head`。
+- **API 認證**：`API_SECRET_KEY` 留空時後端**不驗證**任何請求（每次請求記一條警告）。線上目前即採此設定，存取控制交給外層：對外經 Cloudflare Tunnel（webhook 只放行 `/api/webhook`，網頁與後端的 hostname 以 Cloudflare Access 登入保護），家用區網內則視為可信。填上金鑰即啟用驗證，此時前端（nginx 代為注入 `X-API-Key`，值來自前端容器的 `API_SECRET_KEY`）與生成腳本都必須帶同一把金鑰。（舊版文件所述「`ENVIRONMENT=production` 時空金鑰拒絕啟動」並未實作，程式碼不讀取 `ENVIRONMENT`。）
+- 資料庫 schema：每次啟動都會執行 `create_all` 建立缺少的資料表（不分環境）；既有資料表的結構變更由 Alembic 管理，需要時手動執行 `alembic upgrade head`。
 
 ### 前端
 
