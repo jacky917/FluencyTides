@@ -61,9 +61,12 @@ x-casaos:
     en_US: FluencyTides API
     zh_CN: FluencyTides 後端
   icon: https://cdn.jsdelivr.net/gh/WalkxCode/dashboard-icons/png/fastapi.png
+  # CasaOS 的「開啟」連結：經 Cloudflare Tunnel 對外的網域（tunnel 端 ft-backend.jacky917.com → http://localhost:8000）。
+  # 後端 API 目前不驗證（API_SECRET_KEY 留空），此 hostname 務必在 Cloudflare Access 加上登入保護
+  hostname: ft-backend.jacky917.com
   index: /docs
-  port_map: "8000"
-  scheme: "http"
+  port_map: "443"
+  scheme: "https"
 
 # 定義外部網路，指向後端建立的自訂網路 (fluencytides_net)
 networks:

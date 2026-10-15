@@ -49,9 +49,11 @@ x-casaos:
     zh_CN: FluencyTides 前端
   # 使用 React 的圖示來代表前端
   icon: "https://images.icon-icons.com/2699/PNG/512/nginx_logo_icon_169915.png"
+  # CasaOS 的「開啟」連結：經 Cloudflare Tunnel 對外的網域（tunnel 端 ft.jacky917.com → http://localhost:8080）
+  hostname: ft.jacky917.com
   index: /
-  port_map: "8080"
-  scheme: "http"
+  port_map: "443"
+  scheme: "https"
 
 # 定義外部網路，指向後端建立的自訂網路 (fluencytides_net)
 networks:
