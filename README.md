@@ -137,8 +137,8 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 - API 位於 `http://127.0.0.1:8000`，Swagger UI 在 `/docs`，健康檢查在 `/api/health`。
-- **開發模式**（`ENVIRONMENT=development`，預設）下 `API_SECRET_KEY` 為空會放行所有 API 以方便本地測試；**生產模式**（`ENVIRONMENT=production`）下密鑰為空會在啟動時被拒絕（fail-closed）。
-- 資料庫 schema：開發模式啟動時自動 `create_all`；生產模式跳過並改由 Alembic 管理，部署前應執行 `alembic upgrade head`。
+- **API 認證**：`API_SECRET_KEY` 留空時後端**不驗證**任何請求（每次請求記一條警告）。線上目前即採此設定，存取控制交給外層：對外經 Cloudflare Tunnel（webhook 只放行 `/api/webhook`，網頁與後端的 hostname 以 Cloudflare Access 登入保護），家用區網內則視為可信。填上金鑰即啟用驗證，此時前端（nginx 代為注入 `X-API-Key`，值來自前端容器的 `API_SECRET_KEY`）與生成腳本都必須帶同一把金鑰。（舊版文件所述「`ENVIRONMENT=production` 時空金鑰拒絕啟動」並未實作，程式碼不讀取 `ENVIRONMENT`。）
+- 資料庫 schema：每次啟動都會執行 `create_all` 建立缺少的資料表（不分環境）；既有資料表的結構變更由 Alembic 管理，需要時手動執行 `alembic upgrade head`。
 
 ### 前端
 
