@@ -1,30 +1,51 @@
+# ════════════════════════════════════════════════════════════════════
+# 直接依賴（人工維護）
+# ════════════════════════════════════════════════════════════════════
+# 本檔列出程式碼直接 import 或執行時必需的套件，以「下限＝實測版本、上限＝
+# 不跨下一個大版本」的範圍宣告相容性。實際安裝的精確版本（含所有間接依賴）
+# 在 requirements.lock，Dockerfile 以它安裝——每次建置結果完全相同，不會因
+# 上游發布新版而突然改變行為（2026-10-14 的部署事故：重建時間接依賴
+# SQLAlchemy 升到 2.1，不再自動附帶 greenlet，後端 import 即崩潰）。
+#
+# 新增 / 升級套件後，重產鎖定檔（需 uv：`pip install uv`；在 backend/ 執行）：
+#   uv pip compile requirements.txt --universal --python-version 3.13 -o requirements.lock
+# 想維持既有版本、只補新套件時，加 `-c requirements.lock` 當約束再產一次。
+#
+# 範圍慣例：1.0 以上的套件上限為下一個大版本；0.x 套件上限為 1.0（0.x 的小版號
+# 也可能不相容，以鎖定檔為準、升級時跑完整測試）。
+
 # ─── Core Web Framework ──────────────────────────────────────────────
-fastapi>=0.100.0
-uvicorn[standard]>=0.23.0
-python-multipart>=0.0.6
+fastapi>=0.138.1,<1.0
+uvicorn[standard]>=0.49.0,<1.0      # 容器啟動指令（Dockerfile CMD）
+python-multipart>=0.0.32,<1.0       # FastAPI 上傳檔案（app/api/storage.py 的 UploadFile / Form）
 
 # ─── Data Validation & Configuration ─────────────────────────────────
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
-python-dotenv>=1.0.0
-loguru>=0.7.2
-jsonschema>=4.0.0
+pydantic>=2.13.4,<3
+pydantic-settings>=2.14.2,<3
+python-dotenv>=1.2.2,<2
+loguru>=0.7.3,<1.0
+jsonschema>=4.26.0,<5
 
 # ─── Database & ORM ──────────────────────────────────────────────────
-sqlmodel>=0.0.22
-aiosqlite>=0.20.0
-alembic>=1.13.0
-aiomysql>=0.2.0
-cryptography>=41.0.0
+# SQLAlchemy 直接被 app / scripts / alembic import，且用的是 async 引擎
+# （sqlalchemy.ext.asyncio）——[asyncio] extra 會帶入必需的 greenlet。
+# 2.0 會在 x86_64 等平台「順便」附帶 greenlet，2.1 起不再附帶，必須明確宣告。
+# 上限 <2.1：2.1 尚未在本專案驗證過。
+sqlalchemy[asyncio]>=2.0.51,<2.1
+sqlmodel>=0.0.39,<1.0
+aiosqlite>=0.22.1,<1.0              # 主資料庫驅動（DATABASE_URL=sqlite+aiosqlite://）
+alembic>=1.18.5,<2
+aiomysql>=0.3.2,<1.0                # 語料庫驅動（mysql+aiomysql://），scripts 亦直接 import
+cryptography>=49.0.0,<50            # MySQL 8 的 caching_sha2_password 認證需要
 
 # ─── Async Clients & AI Integration ──────────────────────────────────
-httpx>=0.24.0
-openai>=1.30.0
-google-genai>=2.10.0     # gemini-native 用到 response_json_schema 等較新 API；2.10.0 為實測版本
-anthropic>=0.40.0        # app/infrastructure/llm/anthropic_client.py（延遲 import，缺裝時該 provider 執行期才會炸）
-jinja2>=3.1.0
-tenacity>=8.2.0          # 生成管線的重試機制（anki_media_uploader / backend_api_client）
-aiohttp>=3.9.0           # gemini-native（google-genai 的非同步傳輸層，gemini_native_client 直接 import 以辨識連線錯誤）、scripts/database/Elasticsearch/test_es_connection.py
+httpx>=0.28.1,<1.0
+openai>=2.44.0,<3                   # 3.x 改用 httpx2 傳輸層，尚未在本專案驗證
+google-genai>=2.10.0,<3             # gemini-native 用到 response_json_schema 等較新 API；2.10.0 為實測版本
+anthropic>=1.1.0,<2                 # app/infrastructure/llm/anthropic_client.py（目前為佔位、尚未 import；實作本體時使用）
+jinja2>=3.1.6,<4
+tenacity>=9.1.4,<10                 # 生成管線的重試機制（anki_media_uploader / backend_api_client）
+aiohttp>=3.14.1,<4                  # gemini-native（google-genai 的非同步傳輸層，gemini_native_client 直接 import 以辨識連線錯誤）、scripts/database/Elasticsearch/test_es_connection.py
 
 # ─── 日文形態素解析 (Japanese NLP) ────────────────────────────────────
 # fugashi 為 MeCab 的 Python 綁定。詞典雙軌：
@@ -40,18 +61,18 @@ aiohttp>=3.9.0           # gemini-native（google-genai 的非同步傳輸層，
 # 使用點：app/infrastructure/utils/nlp.py（動詞 lemma 正規化，取 feature[7]）、
 # JP_CoreVerb / JP_VerbPair 選句管線的 token 級驗證、
 # scripts/database/MySQL/JP_VerbPair/build_nlp_index.py。
-fugashi>=1.3.0
-unidic>=1.1.0
-unidic-lite>=1.0.8
+fugashi>=1.5.2,<2
+unidic>=1.1.0,<2
+unidic-lite>=1.0.8,<2
 
 # ─── Database Drivers (scripts 直接使用) ─────────────────────────────
-pymysql>=1.1.0           # scripts/database/MySQL 系列同步腳本直接 import（先前僅靠 aiomysql 間接帶入）
+pymysql>=1.2.0,<2                   # scripts/database/MySQL 系列同步腳本直接 import（先前僅靠 aiomysql 間接帶入）
 
 # ─── Storage & External Services ─────────────────────────────────────
-minio>=7.2.0
-aiogram>=3.4.0
-elasticsearch[async]>=8.13.0,<9.0.0
+minio>=7.2.20,<8
+aiogram>=3.29.1,<4                  # 3.29.0 已被官方撤回（yanked：巢狀 RichBlock 解析嚴重變慢）
+elasticsearch[async]>=8.19.3,<9
 
 # ─── Test & Static Checks ────────────────────────────────────────────
-pytest>=8.0.0
-mypy>=2.4.0              # 型別檢查：`mypy app/infrastructure/llm --ignore-missing-imports` 須零錯誤（尚未進 CI）
+pytest>=9.1.1,<10
+mypy>=2.4.0,<3                      # 型別檢查：`mypy app/infrastructure/llm --ignore-missing-imports` 須零錯誤（尚未進 CI）

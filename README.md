@@ -24,13 +24,13 @@ FluencyTides 是一套**個人語言學習自動化系統**，把「LLM 內容�
 
 ## 技術棧
 
-### 後端（Python 3.11，`backend/requirements.txt`）
+### 後端（Python 3.13，`backend/requirements.txt` 宣告直接依賴、`backend/requirements.lock` 鎖定精確版本）
 
 | 類別 | 套件 | 用途 |
 |---|---|---|
 | Web 框架 | fastapi、uvicorn[standard]、python-multipart | API 中樞、ASGI 伺服器、檔案上傳 |
 | 驗證/設定 | pydantic v2、pydantic-settings、python-dotenv | Pydantic v2 合約、`.env` 集中設定 |
-| 資料庫 | sqlmodel、aiosqlite、alembic、greenlet | SQLAlchemy 2.0 async ORM、SQLite 驅動、Schema 遷移 |
+| 資料庫 | sqlalchemy[asyncio]（含 greenlet）、sqlmodel、aiosqlite、aiomysql、alembic | SQLAlchemy 2.0 async ORM、SQLite / MySQL 驅動、Schema 遷移 |
 | AI 整合 | httpx、openai、google-genai、jinja2 | AnkiConnect 客戶端、LLM 生卡、Gemini 原生語音評測、Prompt 模板 |
 | 外部服務 | minio、aiogram（3.4+） | 媒體存儲、Telegram Bot（純 aiogram 3） |
 
@@ -120,14 +120,14 @@ FluencyTides/
 
 ## 本地啟動
 
-前置需求：Python 3.11、Node.js 20、可存取的 AnkiConnect（本地 Anki + AnkiConnect 外掛）、以及 LLM API 金鑰。MinIO 為選用。
+前置需求：Python 3.13（容器版本；本機 3.14 亦可）、Node.js 20、可存取的 AnkiConnect（本地 Anki + AnkiConnect 外掛）、以及 LLM API 金鑰。MinIO 為選用。
 
 ### 後端
 
 ```bash
 cd backend
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.lock   # 精確版本，與容器相同；requirements.txt 只宣告範圍
 
 cp .env.example .env      # 依實際環境填入 LLM_API_KEY、ANKI_CONNECT_URL、TG_BOT_TOKEN 等
 # 本地開發建議把 DATABASE_URL 改為相對路徑，例如：

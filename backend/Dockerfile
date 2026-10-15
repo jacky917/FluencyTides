@@ -18,10 +18,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 5. 依賴安裝分離 (利用 Docker 快取機制加速部署)
-# 先只複製 requirements.txt，這樣只要依賴沒變，就不會重新執行 pip install
-COPY requirements.txt .
+# 先只複製依賴清單，這樣只要依賴沒變，就不會重新執行 pip install。
+# 以 requirements.lock（所有套件含間接依賴的精確版本）安裝，而非 requirements.txt
+# 的版本範圍：重建時才不會抓到上游剛發布的新版而突然改變行為
+# （2026-10-14：SQLAlchemy 升到 2.1 不再附帶 greenlet，後端 import 即崩潰）。
+# requirements.txt 一併複製，供容器內查閱直接依賴與重產鎖定檔。
+COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.lock
 
 # 6. 建立非 root 使用者並安裝 Claude Code CLI
 # 【層順序】刻意放在 COPY 原始碼之前：CLI 下載安裝是重量層（數十 MB），
