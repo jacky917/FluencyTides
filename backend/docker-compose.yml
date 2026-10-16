@@ -20,7 +20,13 @@ services:
     # 保持原本的環境變數設定 (例如時區)
     environment:
       - TZ=Asia/Tokyo
-      
+      # 資料庫一律放在下方掛載的 /app/data，重建容器（deploy_local.sh 的
+      # --force-recreate）才不會遺失；compose 的 environment 優先於 env_file，
+      # 主機 .env 裡的 DATABASE_URL 對容器不再生效。四個斜線＝容器內絕對路徑。
+      # （2026-10-16 前預設的 ./fluencytides.db 會落在容器內的 /app，每次部署都被清空；
+      # 舊資料搬移見模型路由計畫 llm_model_routing_FEAT_2026-10-15.md §9）
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/fluencytides.db
+
     volumes:
       # 將 SQLite 資料庫獨立放在一個資料夾中進行映射，避免覆蓋到容器內的程式碼
       - /DATA/AppData/FluencyTides/backend/data:/app/data

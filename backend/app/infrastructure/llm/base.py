@@ -24,18 +24,39 @@ English summary:
 
 import abc
 import asyncio
+import enum
 import logging
 from collections.abc import Awaitable, Callable
-from typing import ClassVar, TypeVar
+from typing import ClassVar, Final, TypeAlias, TypeVar
 
 from app.core.config import settings
 from app.core.exceptions import LLMServiceError
+from app.infrastructure.llm.endpoints import Endpoint
 from app.infrastructure.llm.labels import build_model_label, normalize_provider
 from app.schemas.llm.base import LLMGenerateResult
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+
+
+class EffortMode(enum.Enum):
+    """effort 參數的特殊值。Special values for the effort argument."""
+
+    OMIT = "omit"
+
+
+# 明確「不使用 effort」（白名單中不帶 @effort 的模型）。與 None 不同：None 是「沿用
+# 該 provider 在 .env 的預設」，OMIT_EFFORT 是「不傳」——CLI 類收到時命令列省略
+# --effort，不支援 effort 的 provider 視同 None。刻意用 Enum 而非空字串：使用者從
+# API 傳進來的任何字串（包括 ""）都不可能等於它，照舊走 effort 驗證並被拒絕。
+# Explicit "no effort", distinct from None ("use the configured default").
+# An Enum member, so no user-supplied string (not even "") can collide with it.
+OMIT_EFFORT: Final = EffortMode.OMIT
+
+# effort 參數的型別：明確值、OMIT_EFFORT（不傳），或 None（沿用預設）
+EffortArg: TypeAlias = str | EffortMode | None
 
 
 class BaseLLMClient(abc.ABC):
@@ -50,7 +71,10 @@ class BaseLLMClient(abc.ABC):
         MODEL_LABEL_STRIP_PREFIX: 標籤中要去掉的模型名前綴。Prefix
             stripped from the model name in labels.
         _model_name: 實際送給後端的模型名。The model name sent upstream.
-        _provider: 正規化後的 ``LLM_PROVIDER``。Normalized provider.
+        _provider: 端點 ID；未指定端點時為正規化後的 ``LLM_PROVIDER``。
+            Endpoint ID, or the normalized ``LLM_PROVIDER`` without one.
+        _endpoint: 建立時指定的端點；None 表示讀舊式單組設定。The endpoint
+            given at construction, or None to read the legacy settings.
         _effort: 生效的 effort；無此概念的 provider 為 None。Effective
             effort, or None.
     """
@@ -58,22 +82,40 @@ class BaseLLMClient(abc.ABC):
     PROVIDER_NAME: ClassVar[str] = ""
     SUPPORTS_EFFORT: ClassVar[bool] = False
     MODEL_LABEL_STRIP_PREFIX: ClassVar[str] = ""
+    # 本類可接受的端點類型（見 endpoints.ALL_TYPES）；建構時檢查，避免例如
+    # Gemini 客戶端拿到中轉站端點、用錯金鑰打錯服務
+    ENDPOINT_TYPES: ClassVar[frozenset[str]] = frozenset()
 
-    def __init__(self, *, model: str | None = None, effort: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        effort: EffortArg = None,
+        endpoint: Endpoint | None = None,
+    ) -> None:
         """解析模型名並檢查 effort 是否受支援。
 
         Resolve the model name and validate effort support.
 
         Args:
             model: 覆寫模型名；None 沿用 ``LLM_MODEL_NAME``。Model override.
-            effort: 覆寫思考深度；不支援的 provider 給值即拋錯。Effort
-                override; rejected when unsupported.
+            effort: 覆寫思考深度；不支援的 provider 給值即拋錯；
+                :data:`OMIT_EFFORT` 表示不傳。Effort override; rejected when
+                unsupported, :data:`OMIT_EFFORT` means none.
+            endpoint: 端點（網址、金鑰、標籤前綴的來源），類型須在
+                ``ENDPOINT_TYPES`` 內；None 沿用舊式單組設定（``LLM_PROVIDER``
+                等），與導入端點之前的行為相同。指定端點時通常應一併指定
+                ``model``：None 仍取 ``LLM_MODEL_NAME``，不看端點的白名單。The
+                endpoint; None keeps reading the legacy settings.
 
         Raises:
-            LLMServiceError: effort 不受支援、或模型名為空時。When effort is
-                unsupported or the model name is empty.
+            LLMServiceError: 端點類型不符、effort 不受支援、或模型名為空時。
+                When the endpoint type mismatches, effort is unsupported or
+                the model name is empty.
         """
-        self._provider = normalize_provider(settings.LLM_PROVIDER)
+        self._check_endpoint_type(endpoint)
+        self._endpoint = endpoint
+        self._provider = endpoint.id if endpoint is not None else normalize_provider(settings.LLM_PROVIDER)
         self._reject_unsupported_effort(effort)
 
         self._model_name = (model or settings.LLM_MODEL_NAME or "").strip()
@@ -116,8 +158,16 @@ class BaseLLMClient(abc.ABC):
 
     @property
     def provider(self) -> str:
-        """正規化後的 provider 值。The normalized provider value."""
+        """端點 ID，標籤前綴的來源（google / openai / 空字串不加前綴）。
+
+        The endpoint ID, source of the label prefix.
+        """
         return self._provider
+
+    @property
+    def endpoint(self) -> Endpoint | None:
+        """建立時指定的端點；None＝舊式單組設定。The endpoint, if any."""
+        return self._endpoint
 
     @property
     def model_name(self) -> str:
@@ -247,7 +297,22 @@ class BaseLLMClient(abc.ABC):
         raise LLMServiceError("LLM API 重試迴圈異常結束。")  # pragma: no cover - 型別保底
 
     @classmethod
-    def _reject_unsupported_effort(cls, effort: str | None) -> None:
+    def _check_endpoint_type(cls, endpoint: Endpoint | None) -> None:
+        """端點類型不在 ``ENDPOINT_TYPES`` 內時拋錯（工廠之外直接建構時的防線）。
+
+        Raise when the endpoint's type is not one this class serves.
+
+        Raises:
+            LLMServiceError: 類型不符時。On a type mismatch.
+        """
+        if endpoint is not None and endpoint.type not in cls.ENDPOINT_TYPES:
+            raise LLMServiceError(
+                f"{cls.__name__} 不能使用 {endpoint.type} 類端點 '{endpoint.id}'"
+                f"（可接受：{', '.join(sorted(cls.ENDPOINT_TYPES)) or '無'}）。"
+            )
+
+    @classmethod
+    def _reject_unsupported_effort(cls, effort: EffortArg) -> None:
         """``SUPPORTS_EFFORT`` 為 False 卻收到 effort 時拋錯。
 
         Raise when an effort override is given to a class that does not
@@ -262,7 +327,8 @@ class BaseLLMClient(abc.ABC):
         Raises:
             LLMServiceError: 不支援 effort 卻收到值時。
         """
-        if effort is None or cls.SUPPORTS_EFFORT:
+        # None 與 OMIT_EFFORT 都不算 effort 覆寫；空字串照舊視為非法覆寫
+        if effort is None or effort is OMIT_EFFORT or cls.SUPPORTS_EFFORT:
             return
         # 延遲 import：factory 於模組層 import 本模組，反向必須惰性以免循環；
         # providers_supporting_effort 是純查表，不會載入 provider 模組。

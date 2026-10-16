@@ -116,7 +116,8 @@ import logging
 from typing import ClassVar
 
 from app.core.exceptions import LLMServiceError
-from app.infrastructure.llm.base import BaseLLMClient
+from app.infrastructure.llm.base import OMIT_EFFORT, BaseLLMClient, EffortArg
+from app.infrastructure.llm.endpoints import TYPE_ANTHROPIC, Endpoint
 from app.schemas.llm.base import LLMGenerateResult
 
 logger = logging.getLogger(__name__)
@@ -142,11 +143,18 @@ class AnthropicLLMClient(BaseLLMClient):
     """
 
     PROVIDER_NAME: ClassVar[str] = "anthropic"  # 須與工廠註冊鍵一致，載入時核對
+    ENDPOINT_TYPES: ClassVar[frozenset[str]] = frozenset({TYPE_ANTHROPIC})
     # 佔位期間為 False：不能把一個建構即拋錯的 stub 列進「支援 effort 的 provider」
     # 錯誤訊息裡誤導使用者。實作本體（output_config.effort）時改 True，並同步改工廠註冊列。
     SUPPORTS_EFFORT: ClassVar[bool] = False
 
-    def __init__(self, *, model: str | None = None, effort: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        effort: EffortArg = None,
+        endpoint: Endpoint | None = None,
+    ) -> None:
         """尚未實作，一律拋錯；訊息回顯收到的覆寫值。
 
         Not implemented; always raises, echoing any overrides received.
@@ -164,6 +172,7 @@ class AnthropicLLMClient(BaseLLMClient):
         Args:
             model: 覆寫模型名。Model override.
             effort: 覆寫思考深度。Effort override.
+            endpoint: 端點（stub 不使用）。Endpoint; unused by the stub.
 
         Raises:
             LLMServiceError: 一律拋出。Always.

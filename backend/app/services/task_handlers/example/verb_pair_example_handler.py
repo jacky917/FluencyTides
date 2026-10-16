@@ -18,7 +18,7 @@ from app.services.task_handlers.base import BaseHandler
 from app.services.task_handlers.registry import register_handler
 from app.infrastructure.utils.id_generator import generate_unique_card_id
 from app.core.dependencies import get_template_engine
-from app.infrastructure.llm.factory import create_llm_client
+from app.infrastructure.llm.routing import llm_route
 from app.schemas.llm.example.verb_pair import VerbPairGenerationResult
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 
@@ -27,6 +27,9 @@ if TYPE_CHECKING:
     from app.services.relation_service import RelationService
 
 logger = logging.getLogger(__name__)
+
+# LLM 用途鍵（生效設定的解析見 app.infrastructure.llm.routing）
+EXAMPLE_LLM = llm_route("verb_pair_example", "範例 handler 生成")
 
 @register_handler
 class VerbPairExampleHandler(BaseHandler):
@@ -98,7 +101,7 @@ class VerbPairExampleHandler(BaseHandler):
         )
 
         system_prompt = "You are an expert Japanese language curriculum designer. Always output strict JSON."
-        llm_client = create_llm_client()
+        llm_client = await EXAMPLE_LLM.client()
         schema_dict = VerbPairGenerationResult.model_json_schema()
         
         result = await llm_client.generate_structured_data(

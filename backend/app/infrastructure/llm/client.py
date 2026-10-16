@@ -57,7 +57,8 @@ from app.core.exceptions import (
     LLMRetryExhaustedError,
     LLMServiceError,
 )
-from app.infrastructure.llm.base import BaseLLMClient
+from app.infrastructure.llm.base import BaseLLMClient, EffortArg
+from app.infrastructure.llm.endpoints import NO_SAFETY_SETTINGS_IDS, TYPE_OPENAI, Endpoint
 from app.infrastructure.llm.schema_utils import resolve_json_schema, strip_markdown_fences
 from app.schemas.llm.base import LLMGenerateResult
 
@@ -71,9 +72,9 @@ _REFUSAL_FINISH_REASONS: frozenset[str] = frozenset(
     {"CONTENT_FILTER", "SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST"}
 )
 
-# 不支援 safety_settings 的 provider：Google 原生 OpenAI 相容端點嚴格遵守
-# OpenAI Schema，不認識該欄位會直接 400；只有第三方中轉站支援經 extra_body 傳遞。
-_NO_SAFETY_SETTINGS_PROVIDERS: frozenset[str] = frozenset({"google", "openai", ""})
+# 不送 safety_settings 的 provider（定義與理由見 endpoints.NO_SAFETY_SETTINGS_IDS）；
+# 指定端點時改看端點的 send_safety_settings
+_NO_SAFETY_SETTINGS_PROVIDERS: frozenset[str] = NO_SAFETY_SETTINGS_IDS
 
 
 class LLMClient(BaseLLMClient):
@@ -94,6 +95,7 @@ class LLMClient(BaseLLMClient):
     # 此類別服務多個 provider 值（google / openai / 各中轉站），工廠不以此路由；
     # 標籤前綴由 labels.build_model_label 依實際 provider 決定。
     PROVIDER_NAME: ClassVar[str] = "openai-compatible"
+    ENDPOINT_TYPES: ClassVar[frozenset[str]] = frozenset({TYPE_OPENAI})
 
     # 最大重試次數，用於處理暫時性 API 錯誤
     MAX_RETRIES = 3
@@ -101,36 +103,58 @@ class LLMClient(BaseLLMClient):
     # 重試間隔秒數
     RETRY_DELAY_SECONDS = 2
 
-    def __init__(self, *, model: str | None = None, effort: str | None = None) -> None:
-        """根據 Settings 的設定初始化 AsyncOpenAI 客戶端。
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        effort: EffortArg = None,
+        endpoint: Endpoint | None = None,
+    ) -> None:
+        """依端點（或舊式單組設定）初始化 AsyncOpenAI 客戶端。
 
-        Initialize the AsyncOpenAI client from Settings.
+        Initialize the AsyncOpenAI client from the endpoint, or from the
+        legacy settings when no endpoint is given.
 
         Args:
             model: 覆寫模型名；None 沿用 ``LLM_MODEL_NAME``。Instance-scoped
                 model override.
             effort: 本 provider 不支援；給值即由基底拋錯。Unsupported here;
                 any value is rejected by the base class.
+            endpoint: 端點；None 讀 ``LLM_API_KEY`` / ``LLM_BASE_URL``。The
+                endpoint, or None for the legacy settings.
 
         Raises:
-            LLMServiceError: 當 effort 給值、LLM_API_KEY 或 LLM_BASE_URL
-                未設定時。Raised when effort is given, or when LLM_API_KEY
-                or LLM_BASE_URL is not configured.
+            LLMServiceError: 端點類型不符、effort 給值、金鑰或端點網址未設定時。
+                Raised on an endpoint type mismatch, when effort is given, or
+                when the key or base URL is missing.
         """
+        self._check_endpoint_type(endpoint)
+        if endpoint is not None:
+            api_key = endpoint.api_key.get_secret_value() if endpoint.api_key else None
+            base_url = endpoint.base_url
+            key_setting, url_setting = endpoint.api_key_setting, endpoint.base_url_setting
+        else:
+            api_key, base_url = settings.LLM_API_KEY, settings.LLM_BASE_URL
+            key_setting, url_setting = "LLM_API_KEY", "LLM_BASE_URL"
+
         # 檢查順序與層級化前一致：effort（原在工廠）→ API 金鑰 → 端點 → 模型名
         self._reject_unsupported_effort(effort)
-        if not settings.LLM_API_KEY:
-            raise LLMServiceError("LLM_API_KEY 未設定，無法初始化 LLM 客戶端。")
-        if not settings.LLM_BASE_URL:
-            raise LLMServiceError("LLM_BASE_URL 未設定，無法初始化 LLM 客戶端。")
-        super().__init__(model=model, effort=effort)
+        if not api_key:
+            raise LLMServiceError(f"{key_setting} 未設定，無法初始化 LLM 客戶端。")
+        if not base_url:
+            raise LLMServiceError(f"{url_setting} 未設定，無法初始化 LLM 客戶端。")
+        super().__init__(model=model, effort=effort, endpoint=endpoint)
 
         self._client = AsyncOpenAI(
-            api_key=settings.LLM_API_KEY,
-            base_url=settings.LLM_BASE_URL,
+            api_key=api_key,
+            base_url=base_url,
             timeout=120.0,  # 加入 120 秒的 Timeout，防止中轉站無回應時無限卡死
         )
-        self._supports_safety_settings = self._provider not in _NO_SAFETY_SETTINGS_PROVIDERS
+        self._supports_safety_settings = (
+            endpoint.send_safety_settings
+            if endpoint is not None
+            else self._provider not in _NO_SAFETY_SETTINGS_PROVIDERS
+        )
 
         logger.info("LLMClient 初始化完成，目標模型: %s", self.model_label)
 

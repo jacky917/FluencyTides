@@ -39,9 +39,46 @@ Design decisions:
 import logging
 import sys
 from types import FrameType
+from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class LLMEndpointSettings(BaseModel):
+    """``.env`` 中一個自訂 LLM 端點的**未驗證**原始設定（``LLM_ENDPOINTS__<ID>__<欄位>``）。
+
+    Raw, unvalidated settings for one custom LLM endpoint, read from
+    ``LLM_ENDPOINTS__<ID>__<FIELD>`` variables via the nested delimiter.
+
+    這裡刻意不做任何驗證，連型別都原樣收下（``models`` / ``safety_settings`` 為
+    ``Any``：從 ``.env`` 來的是原始字串，pydantic-settings 不會嘗試解析）。寫錯一個
+    端點不該讓整個後端起不來——``MODELS`` 不是 JSON、``SAFETY_SETTINGS`` 不是布林、
+    欄位名拼錯（``extra="allow"`` 收進 ``model_extra``），都在
+    ``app/infrastructure/llm/endpoints.py`` 載入時檢查，跳過該端點並記 ERROR。
+
+    Deliberately unvalidated, down to the field types: a single bad endpoint
+    must not stop the backend from starting. The loader in
+    ``app/infrastructure/llm/endpoints.py`` parses and reports instead.
+
+    Attributes:
+        type: ``openai``（OpenAI 相容）或 ``gemini-native``。Endpoint type.
+        base_url: OpenAI 相容端點網址；``gemini-native`` 不使用。Base URL.
+        api_key: API 金鑰。API key.
+        models: 白名單，``.env`` 中寫成 JSON 陣列，每項為 ``模型`` 或
+            ``模型@effort1|effort2``。Whitelist as a JSON array.
+        safety_settings: 是否送 ``safety_settings``（``true`` / ``false``）；未設
+            時 ID 為 google / openai 者不送、其餘送。只對 openai 類有效。
+            Whether to send safety_settings; openai type only.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    type: str = "openai"
+    base_url: str | None = None
+    api_key: SecretStr | None = None
+    models: Any = ()
+    safety_settings: Any = None
 
 
 class Settings(BaseSettings):
@@ -96,6 +133,9 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # LLM_ENDPOINTS__<ID>__<欄位> → LLM_ENDPOINTS[<id>].<欄位>；目前只有
+        # LLM_ENDPOINTS 是巢狀欄位，其他設定不受影響。此後新增的設定名不可含 "__"
+        env_nested_delimiter="__",
     )
 
     # ====================================================================
@@ -496,6 +536,27 @@ class Settings(BaseSettings):
     LLM_PARSE_BATCH_SIZE: int = Field(
         default=20,
         description="LLM 進行劇本批次解析時，一次抓取的台詞數量 (預設 20 句)",
+    )
+
+    # --- 多端點與白名單（模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D5）---
+    # 上方 LLM_PROVIDER / LLM_BASE_URL / LLM_API_KEY / LLM_MODEL_NAME 那組仍是
+    # 「.env 那一層」的預設，並自動合成為一個端點；要讓管理介面能選 .env 預設
+    # 以外的端點或模型時才需要這裡。三個欄位都原樣收下，格式錯誤由
+    # app/infrastructure/llm/endpoints.py 載入時記 ERROR，不會讓後端起不來。
+    # 型別刻意寫成 dict[str, Any] | Any：dict 讓巢狀變數照常組成字典；| Any 讓頂層
+    # 直接設值（LLM_ENDPOINTS= / =foo / =[]）原樣通過、不讓 Settings() 失敗；值也是
+    # Any，LLM_ENDPOINTS__FOO=bar 這類結構錯誤同樣交給 endpoints.py 逐一驗證後跳過
+    LLM_ENDPOINTS: dict[str, Any] | Any = Field(
+        default_factory=dict,
+        description="自訂端點：LLM_ENDPOINTS__<ID>__TYPE / BASE_URL / API_KEY / MODELS / SAFETY_SETTINGS",
+    )
+    LLM_CLAUDE_CODE_MODELS: Any = Field(
+        default=(),
+        description='claude-code 端點的白名單（JSON 陣列），每項為 "模型" 或 "模型@low|high"',
+    )
+    LLM_ANTIGRAVITY_MODELS: Any = Field(
+        default=(),
+        description='antigravity 端點的白名單（JSON 陣列），每項為 "基底名" 或 "基底名@low|high"',
     )
 
     # --- claude-code provider 專屬設定 ---

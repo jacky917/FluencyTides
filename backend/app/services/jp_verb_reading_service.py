@@ -19,6 +19,7 @@ from app.core.dependencies import get_template_engine
 from app.core.dynamic_config import get_modifiable_configs
 from app.core.exceptions.infrastructure import LLMServiceError
 from app.infrastructure.llm.factory import create_llm_client
+from app.infrastructure.llm.routing import llm_route
 from app.schemas.llm.jp_verb_reading import (
     JudgeReadingItem,
     JudgeReadingsResponse,
@@ -27,6 +28,9 @@ from app.schemas.llm.jp_verb_reading import (
 )
 
 logger = logging.getLogger(__name__)
+
+# LLM 用途鍵（生效設定的解析見 app.infrastructure.llm.routing）
+JUDGE_LLM = llm_route("jp_verb_reading", "讀音判斷")
 
 TEMPLATE_PATH = "prompts/anki/JP_VerbReading_Judge.j2"
 SYSTEM_PROMPT = (
@@ -115,8 +119,10 @@ class JpVerbReadingService:
 
         Args:
             items: 待判句子（≤ 40）。Items to judge.
-            model: 覆寫模型；None 沿用設定。Model override.
-            effort: 覆寫思考深度；None 沿用設定。Effort override.
+            model: 覆寫模型。與 effort 都是 None 時走用途鍵 ``jp_verb_reading``
+                的路由設定；只要帶了其中一個，就改用 ``.env`` 的 provider 加覆寫值，
+                不看路由設定（P3 移除覆寫）。Model override.
+            effort: 覆寫思考深度；規則同上。Effort override.
 
         Returns:
             JudgeReadingsResponse: 實際模型標籤與逐句結果。
@@ -127,17 +133,20 @@ class JpVerbReadingService:
             LLMServiceError: 未帶覆寫時的 client 建立失敗，或 LLM 呼叫失敗。
         """
         validate_model_override(model)
-        # 每次請求建立自己的 client（與生成 handler 相同的既有模式）；有覆寫
-        # 時不動 app.state.llm_client、不寫回設定。帶覆寫時的建立失敗
-        # （effort 不在白名單、provider 不支援 effort）是呼叫端的輸入問題，
-        # 轉成 InvalidOverrideError 讓端點回 422；未帶覆寫的失敗則是伺服器
-        # 設定問題，原樣拋出。
-        try:
-            llm_client = create_llm_client(model=model, effort=effort)
-        except LLMServiceError as e:
-            if model is not None or effort is not None:
+        # 每次請求建立自己的 client（與生成 handler 相同的既有模式）。未帶覆寫
+        # 時走用途鍵 jp_verb_reading 的路由設定；帶覆寫時沿用舊行為（.env 的
+        # provider + 覆寫值）。TODO(P3): 移除覆寫——目前帶覆寫時的「任何」建立失敗都報
+        # 成 422，連金鑰未設、找不到 CLI、端點設定有誤這類伺服器問題也會被說成覆寫無效
+        # （導入前即如此，覆寫移除後自然消失）。帶覆寫時的建立失敗（effort 不在白名單、
+        # provider 不支援 effort）是呼叫端的輸入問題，轉成 InvalidOverrideError
+        # 讓端點回 422；未帶覆寫的失敗則是伺服器設定問題，原樣拋出。
+        if model is None and effort is None:
+            llm_client = await JUDGE_LLM.client()
+        else:
+            try:
+                llm_client = create_llm_client(model=model, effort=effort)
+            except LLMServiceError as e:
                 raise InvalidOverrideError(str(e)) from e
-            raise
 
         prompt_text = get_template_engine().render(TEMPLATE_PATH, items=items)
         raw = await llm_client.generate_structured_data(

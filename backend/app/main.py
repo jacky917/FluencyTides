@@ -58,6 +58,7 @@ from app.infrastructure.database.database import (
     dispose_engine,
 )
 from app.infrastructure.database.corpus_database import dispose_corpus_engine
+from app.infrastructure.llm.endpoints import log_endpoint_summary
 from app.infrastructure.llm.factory import create_llm_client
 from app.infrastructure.storage.minio_client import MinioClient
 from app.schemas.card import ErrorResponse
@@ -110,6 +111,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 初始化資料庫（建立資料表，若已存在則跳過）
     await create_db_and_tables()
     logger.info("✅ 資料庫初始化完成。")
+
+    # LLM 端點與白名單（.env）載入一次：設定寫錯的端點在此記 ERROR、不會讓啟動失敗
+    log_endpoint_summary()
 
     # LLM 客戶端由 create_llm_client() 依 LLM_PROVIDER 選型，初始化可能因
     # 缺少 API Key（API 模式）或找不到 CLI／effort 設定錯誤（CLI 模式：claude-code / antigravity）

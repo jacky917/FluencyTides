@@ -55,11 +55,13 @@ from typing import ClassVar
 
 from app.core.config import settings
 from app.core.exceptions import LLMQuotaError, LLMServiceError
+from app.infrastructure.llm.base import EffortArg
 from app.infrastructure.llm.cli_base import (
     CliRuntime,
     HeadlessCliLLMClient,
     _RetryableCliError,
 )
+from app.infrastructure.llm.endpoints import EFFORT_VALUES, TYPE_ANTIGRAVITY, Endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -129,15 +131,22 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
     # 暫時性失敗之間的退避由基底 TRANSIENT_BACKOFF_SECONDS 控制
     MAX_RETRIES: ClassVar[int] = 3
 
-    # agy 1.3.5 的 effort 值域（1.1.27 只有前三檔，自動更新後擴充）
-    VALID_EFFORTS: ClassVar[frozenset[str]] = frozenset({"low", "medium", "high", "xhigh", "max"})
+    # agy 1.3.5 的 effort 值域（1.1.27 只有前三檔，自動更新後擴充）；唯一定義在 endpoints.EFFORT_VALUES
+    VALID_EFFORTS: ClassVar[frozenset[str]] = EFFORT_VALUES[TYPE_ANTIGRAVITY]
+    ENDPOINT_TYPES: ClassVar[frozenset[str]] = frozenset({TYPE_ANTIGRAVITY})
 
     INSTALL_HINT: ClassVar[str] = (
         "請安裝 Antigravity CLI 並完成登入（Windows 預設裝在 %LOCALAPPDATA%\\agy\\bin，"
         "安裝時會加入使用者 PATH，但安裝前已啟動的程序看不到），或以 LLM_ANTIGRAVITY_CLI_PATH 明確指定路徑。"
     )
 
-    def __init__(self, *, model: str | None = None, effort: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        effort: EffortArg = None,
+        endpoint: Endpoint | None = None,
+    ) -> None:
         """驗證與路徑解析全在基底；本覆寫另建專用 home 並記初始化 log。
 
         Validation and path resolution happen in the base (effort, model
@@ -146,15 +155,16 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
         Args:
             model: 覆寫模型名（基底名，如 ``gemini-3.8-flash``）；None 沿用
                 ``LLM_MODEL_NAME``。Model override.
-            effort: 覆寫思考深度；None 沿用 ``LLM_ANTIGRAVITY_EFFORT``。
-                Effort override.
+            effort: 覆寫思考深度；None 沿用 ``LLM_ANTIGRAVITY_EFFORT``，
+                ``OMIT_EFFORT`` 不傳 ``--effort``。Effort override.
+            endpoint: 內建 ``antigravity`` 端點。The built-in endpoint.
 
         Raises:
             LLMServiceError: effort 非白名單值、模型名為空、
                 ``LLM_ANTIGRAVITY_CLI_PATH`` 指向不存在的檔案、找不到 agy 執行檔，
                 或無法建立專用 home 時。
         """
-        super().__init__(model=model, effort=effort)
+        super().__init__(model=model, effort=effort, endpoint=endpoint)
         if settings.LLM_ANTIGRAVITY_ISOLATE_HOME:
             self._ensure_home_dir()
         logger.info(
@@ -207,8 +217,11 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
         """組裝 CLI 命令列參數；system prompt 走 stdin（見 ``_build_stdin``）。
 
         Assemble the CLI argument vector; the system prompt travels on stdin.
+        ``self._effort`` 為 None（建構時收到 ``OMIT_EFFORT``）時省略 ``--effort``，
+        由 agy 用自己的預設（2026-10-15 實測可正常完成）。
         """
         print_timeout = self._print_timeout_seconds()
+        effort_args = ["--effort", self._effort] if self._effort else []
         return [
             self._cli_path,
             "--input-format", "stream-json",   # prompt 經 stdin（-p 不讀 stdin）
@@ -217,7 +230,7 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
             "--sandbox",
             "--disable-slash-commands",        # 台詞以 / 開頭時不被當成指令
             "--model", self._model_name,
-            "--effort", self._effort,
+            *effort_args,
             "--print-timeout", f"{print_timeout}s",
             "--json-schema", schema_text,
         ]

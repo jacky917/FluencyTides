@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-10-15 |
 | **性質** | 新增機能設計 + 實作工作項（含移除既有的兩種暫時性覆蓋） |
-| **狀態** | 📝 設計中（待使用者確認後實作） |
+| **狀態** | 🚧 實作中（P1 完成） |
 | **範圍** | `app/infrastructure/llm/`（端點設定、工廠依端點建立客戶端、新增路由模組）、`app/infrastructure/database/models.py`（新資料表）、`app/services/task_handlers/`（呼叫點宣告用途鍵並改走路由）、`app/services/jp_verb_reading_service.py`、`app/api/`（路由管理端點）、`app/bot/handlers/`（新增 `/models` 選單、`/setconfig` 移除 LLM 設定）、`app/services/runtime_config_service.py`（診斷）、`scripts/common/llm_label.py` 與 `scripts/fastapi_client/JP_Common/judge_verb_readings.py`、`.env.example` |
 | **不動** | `generate_structured_data` 簽名與 `LLMGenerateResult`；各客戶端的生成邏輯（只改金鑰、網址的來源）；DB 沒有任何設定時的行為（全部照 `.env`，與現在逐位元一致）；語音評分的設定（`AUDIO_*`、`STT_LLM_MODEL_NAME`）與其 `/setconfig` |
-| **PR / 進度** | 尚未開始 |
+| **PR / 進度** | P1 完成（分支 `feat/llm-model-routing`，PR 待開）；P2–P4 未開始 |
 | **關聯文件** | `docs/archive/llm_provider_hierarchy_FEAT_2026-09-06.md`（工廠註冊表與 `BaseLLMClient` 的由來）、`docs/archive/runtime_config_service_FEAT_2026-08-29.md`（`/setconfig` 與診斷端點） |
 
 ---
@@ -133,7 +133,7 @@ GENERATE_LLM = llm_route("scenario.generate", "實用句生成")
 | `updated_at` | 時間 | 最後修改時間（`onupdate=func.now()`） |
 
 ```python
-class LLMRoute(SQLModel, table=True):
+class LLMRouteSetting(SQLModel, table=True):
     __tablename__ = "llm_routes"
 
     id: int | None = Field(default=None, primary_key=True)
@@ -219,8 +219,10 @@ LLM_ENDPOINTS__GEMINI__MODELS=["gemini-3.1-flash-lite", "gemini-3.5-flash", "gem
 | `MODELS` | 是 | 白名單，格式見下；**JSON 格式（雙引號）**；空清單＝`/models` 不列出此端點 |
 | `SAFETY_SETTINGS` | 否 | 是否送 `safety_settings`。預設沿用現行規則：ID 為 `google` / `openai` 時不送，其餘送 |
 
-- 以 pydantic-settings 的巢狀分隔符（`env_nested_delimiter="__"`）解析成 `LLM_ENDPOINTS: dict[str, EndpointConfig]`。已在本機以 pydantic-settings 2.14.2 驗證：`.env` 檔與環境變數都讀得到、兩者會合併、ID 自動轉小寫
-- **ID 規則**：小寫英數字與 `_`（環境變數名稱不能含 `-`）、長度 ≤ 32、不得與內建 ID 相同。啟動時檢查，不合規的端點跳過並記 ERROR（不讓整個後端起不來）
+- 以 pydantic-settings 的巢狀分隔符（`env_nested_delimiter="__"`）解析成 `LLM_ENDPOINTS: dict[str, LLMEndpointSettings]`（`app/core/config.py`）。已在本機以 pydantic-settings 2.14.2 驗證：`.env` 檔與環境變數都讀得到、兩者會合併、ID 自動轉小寫
+- **原樣收下、載入時才解析**：`LLMEndpointSettings` 的 `MODELS` / `SAFETY_SETTINGS` 型別為 `Any`、`extra="allow"`，從 `.env` 來的都是原始字串，`Settings()` 不會因為某個端點寫錯而拋錯（實作時發現：若宣告成 `tuple[str, ...]` / `bool`，`MODELS` 不是 JSON 或 `SAFETY_SETTINGS=maybe` 會讓整個後端起不來）。解析、欄位名拼錯的提醒都在 `endpoints.py` 載入時進行；`LLM_CLAUDE_CODE_MODELS` / `LLM_ANTIGRAVITY_MODELS` 同理
+- **ID 規則**：小寫英數字與 `_`（環境變數名稱不能含 `-`）、不可含連續的 `__`（巢狀分隔符會把 ID 切開）、長度 ≤ 32、不得與內建 ID 相同。不合規的端點跳過並記 ERROR（不讓整個後端起不來）
+- **何時檢查**：後端啟動時（lifespan）載入一次並記一行摘要「LLM 端點已載入：…」，設定錯誤因此出現在啟動 log；之後每次建立客戶端都會重新載入，同一則錯誤只記一次
 - **ID 唯一**：字典鍵本身唯一；同一 ID 在 `.env` 檔與環境變數各寫一份時，環境變數優先（pydantic-settings 的既定順序）
 - **標籤前綴**：沿用現行規則，ID 為 `google` / `openai` 時不加前綴（與現在的標籤一致），其餘加 `(ID)`
 - 一家服務想用兩把金鑰（例如分帳號計費）就定義兩個 ID，彼此獨立
@@ -248,7 +250,7 @@ LLM_ANTIGRAVITY_MODELS=["<基底名，見 .env.example 第 11-B 區>@low|high"]
 - 同一模型寫兩項時合併其 effort
 - 一行就能看出某端點允許的所有組合，比巢狀 JSON 物件好讀好改
 
-啟動時逐項檢查，不合格的**那一項**跳過並記 ERROR（指出端點 ID 與該項），其餘照常載入：
+載入時逐項檢查，不合格的**那一項**跳過並記 ERROR（指出端點 ID 與該項），其餘照常載入：
 
 - effort 值必須是該客戶端認得的值（目前 CLI 類為 `low` / `medium` / `high` / `xhigh` / `max`）
 - 客戶端不支援 effort 的端點類型（目前為 `openai`、`gemini-native`）不可帶 `@effort`
@@ -264,7 +266,9 @@ LLM_ANTIGRAVITY_MODELS=["<基底名，見 .env.example 第 11-B 區>@low|high"]
 | `claude-code` / `antigravity` | 直接對應內建端點 |
 | 留空 | 同 `google`，但只供 `.env` 那一層使用，不在 `/models` 列出 |
 
-所以**現有 `.env` 一行都不用改**；想加第二家時才開始寫 `LLM_ENDPOINTS__*`。`LLM_ENDPOINTS` 有同 ID 的端點時以它為準，舊的 `LLM_BASE_URL` / `LLM_API_KEY` 不再使用並記 WARNING。
+所以**現有 `.env` 一行都不用改**；想加第二家時才開始寫 `LLM_ENDPOINTS__*`。`LLM_ENDPOINTS` 有同 ID 的端點時以它為準，舊的 `LLM_BASE_URL` / `LLM_API_KEY` 不再使用並記 WARNING——工廠在**不指定端點**時也會走它（`create_llm_client()` 偵測到 `LLM_PROVIDER` 指向 `LLM_ENDPOINTS` 的端點即改走端點路徑），所以 .env 那一層與 DB 選它時用的是同一組網址與金鑰。該端點寫錯被跳過時不以舊設定頂替，工廠明確報「端點不存在」。
+
+「.env 那一層」的預設組合併進白名單時，若白名單把同一模型寫成**不帶** effort，則尊重白名單、不改寫（只記 WARNING），以免 DB 中 effort 為空的設定被判為不合格。
 
 `.env` 那一層（D1 最底層）＝ 端點 `LLM_PROVIDER` + 模型 `LLM_MODEL_NAME` + 該端點的 `.env` 預設 effort（CLI 類為 `LLM_CLAUDE_CODE_EFFORT` / `LLM_ANTIGRAVITY_EFFORT`，其餘無）。這一組**自動加進白名單**，所以現有 `.env` 不必另寫白名單，最底層也永遠合法，不會出現「最後一層也失效」的情況。
 
@@ -275,7 +279,7 @@ LLM_ANTIGRAVITY_MODELS=["<基底名，見 .env.example 第 11-B 區>@low|high"]
 - `BaseLLMClient` 不再讀 `settings.LLM_PROVIDER`（`base.py:76`、`base.py:272`），改由工廠傳入端點；標籤前綴取自端點
 - `LLMClient` 不再讀 `settings.LLM_API_KEY` / `LLM_BASE_URL`（`client.py:122-130`），改用端點的值；`safety_settings` 改看端點的 `SAFETY_SETTINGS`（`client.py:133`）
 - `GeminiNativeLLMClient` 不再讀 `settings.LLM_API_KEY`（`gemini_native_client.py:238-246`），改用端點的金鑰
-- `effort` 的來源一律是解析結果：DB 那兩層存的就是白名單內的明確值；`.env` 那一層用 `LLM_*_EFFORT`。為 None 時（白名單中不帶 effort 的模型）客戶端**不傳** effort。目前兩個 CLI 客戶端都會固定帶上 `.env` 的預設 effort，須改為「沒有就不帶」；claude-code 省略 `--effort` 應可正常執行，antigravity 的 effort 用來挑模型變體、沒有 effort 時的行為須實測（P1 先驗證）
+- `effort` 的來源一律是解析結果：DB 那兩層存的就是白名單內的明確值；`.env` 那一層用 `LLM_*_EFFORT`。為 None 時（白名單中不帶 effort 的模型）客戶端**不傳** effort。「不傳」以 `OMIT_EFFORT`（空字串）表示，與 None（沿用 `.env` 預設）區分；CLI 客戶端收到時命令列省略 `--effort`，不支援 effort 的客戶端視同 None。2026-10-15 實測：claude-code（2.1.292，haiku）與 antigravity（gemini-3.8-flash）省略 `--effort` 都正常完成結構化輸出（agy 回報有思考 token，即走 CLI 自己的預設）
 
 #### 端點從 `.env` 被拿掉時
 
@@ -381,14 +385,14 @@ cd ~/FluencyTides && docker compose -f backend/docker-compose.yml up -d --force-
 
 | 檔案 | 改動 |
 |---|---|
-| `app/infrastructure/llm/endpoints.py` | **新增**：`EndpointConfig`、`get_endpoint()` / `list_endpoints()`、ID 檢查、舊式單組設定的合成 |
+| `app/infrastructure/llm/endpoints.py` | **新增**：`Endpoint` / `ModelOption`、`get_endpoint()` / `list_endpoints()` / `log_endpoint_summary()`、ID 檢查、原始設定解析、舊式單組設定的合成 |
 | `app/infrastructure/llm/factory.py` | `create_llm_client` 加 `endpoint` 參數，依端點類型選客戶端 |
-| `app/infrastructure/llm/claude_code_client.py`、`antigravity_client.py` | effort 為 None 時不傳 effort |
+| `app/infrastructure/llm/claude_code_client.py`、`antigravity_client.py` | 收到 `OMIT_EFFORT` 時省略 `--effort`；`VALID_EFFORTS` 改取自 `endpoints.EFFORT_VALUES` |
 | `app/infrastructure/llm/base.py` | 接收端點，不再讀 `settings.LLM_PROVIDER` |
 | `app/infrastructure/llm/client.py` | 網址、金鑰、`safety_settings` 改取自端點 |
 | `app/infrastructure/llm/gemini_native_client.py` | 金鑰改取自端點 |
 | `app/infrastructure/llm/routing.py` | **新增**：`llm_route()` 宣告與登記、`resolve` / `list_effective` / `list_route_keys`、快取 |
-| `app/infrastructure/database/models.py` | **新增** `LLMRoute` 資料表；`alembic/versions/` 補遷移 |
+| `app/infrastructure/database/models.py` | **新增** `LLMRouteSetting` 資料表（`llm_routes`）；`alembic/versions/` 補遷移 |
 | 4 個 handler 與 `jp_verb_reading_service.py` | 模組層級宣告用途鍵（D2 表），呼叫點改 `await XXX_LLM.client()` |
 | `app/services/llm_route_service.py` | **新增**：寫入驗證與試建（API 與 TG 共用） |
 | `app/api/llm_routes.py` | **新增**：GET / PUT / DELETE |
@@ -423,10 +427,10 @@ cd ~/FluencyTides && docker compose -f backend/docker-compose.yml up -d --force-
 | 風險 | 應對 |
 |---|---|
 | 端點改到基底類別與兩個客戶端，標籤、`safety_settings` 或金鑰來源意外改變 | 端點等於 `.env` 的 `LLM_PROVIDER` 時逐位元比對標籤與請求 body（沿用 LLM 層級化計畫的 MockTransport 比對法） |
-| `.env` 寫錯（ID 含 `-`、`MODELS` 用單引號、缺 `BASE_URL`、effort 拼錯） | 啟動時逐一檢查，跳過有問題的端點或白名單項目並記 ERROR 指出是哪一個；診斷端點列出實際載入的端點與白名單 |
+| `.env` 寫錯（ID 含 `-`、`MODELS` 用單引號、缺 `BASE_URL`、effort 拼錯、欄位名拼錯） | 設定欄位原樣收下，`Settings()` 不會拋錯；啟動時載入一次，跳過有問題的端點或白名單項目並記 ERROR 指出是哪一個，拼錯的欄位名記 WARNING；啟動摘要與診斷端點列出實際載入的端點 |
 | 白名單寫了模型實際不支援的 effort | 存檔時的試建擋不到（不打 API），要到生成才報錯；與模型名打錯相同，靠填寫時對照各家文件 |
-| antigravity 沒有「不傳 effort」的模式 | P1 先實測；若不可行，antigravity 白名單的每個模型都必須帶 effort，啟動檢查擋下不帶的項目 |
-| 金鑰外洩到診斷端點或 log | `EndpointConfig.api_key` 用 `SecretStr`；診斷與 log 只列 ID、類型、網址 |
+| antigravity 沒有「不傳 effort」的模式 | ✅ 已排除：P1 實測省略 `--effort` 可正常完成（見 D5「工廠與客戶端」） |
+| 金鑰外洩到診斷端點或 log | 設定層 `LLMEndpointSettings.api_key` 與載入後的 `Endpoint.api_key` 都是 `SecretStr`（後者另設 `repr=False`）；診斷與 log 只列 ID、類型、網址 |
 | `/models` 選單的 callback data 超過 64 位元組 | 一律用序號；測試鎖住上限 |
 | 改了設定卻以為沒生效（其實還在快取或是本機腳本） | 寫入後清快取；回覆新生效設定；本機腳本的限制寫進說明 |
 | 讀音判斷失去一次性覆寫，實驗變麻煩 | D8 已列代價；若常用，日後可為腳本加「暫時指定用途鍵」的參數（例如在同一用途下另設 `jp_verb_reading.experiment`） |
@@ -459,3 +463,30 @@ cd ~/FluencyTides && docker compose -f backend/docker-compose.yml up -d --force-
 - 前端網頁的路由管理介面
 - 「情境實用句」功能（第一個宣告多個用途鍵的 handler：`scenario.ask` / `scenario.generate`）
 - **既有問題（盤點時發現）**：`vocabulary_mining_handler.execute_create` 目前沒有呼叫 LLM（程式註解寫明「尚未包含呼叫 LLM 的邏輯」），TG 的單字卡流程實際只建立空卡；TG 狀態機文件（`docs/bk/16_TG_Bot_State_Machine.html`）§4.3 的描述需一併更正
+
+## 9. 進度紀錄
+
+### P1 路由骨架（2026-10-15 完成）
+
+- **端點**：`app/infrastructure/llm/endpoints.py`（`Endpoint` / `ModelOption`、`load_endpoints` / `get_endpoint` / `list_endpoints`、白名單解析、舊式單組設定合成）；`Settings` 新增 `LLM_ENDPOINTS`（`env_nested_delimiter="__"`）、`LLM_CLAUDE_CODE_MODELS`、`LLM_ANTIGRAVITY_MODELS`
+- **客戶端**：`BaseLLMClient` 與四個客戶端的建構子加 `endpoint` 參數，並以 `ENDPOINT_TYPES` 檢查端點類型（避免例如 Gemini 客戶端拿中轉站金鑰）；未指定端點時完全照舊讀 `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_BASE_URL`。新增 `OMIT_EFFORT`（Enum 成員，任何字串包括 `""` 都不會等於它），CLI 客戶端收到時省略 `--effort`
+- **工廠**：`create_llm_client(endpoint=...)` 依端點類型選類別並傳入端點；不指定端點且 `LLM_PROVIDER` 指向 `LLM_ENDPOINTS` 的端點時也走端點路徑；其餘情況（含現有 `.env`）路徑未變
+- **資料表**：`LLMRouteSetting`（`llm_routes`）＋ Alembic `a01287171364`（暫存 SQLite 上驗證 upgrade / downgrade / `alembic check` 無差異）
+- **路由**：`app/infrastructure/llm/routing.py`（`llm_route()` 宣告、`resolve` / `client_for`、白名單逐次比對、程序內快取與 `invalidate_cache()`）。只有資料庫錯誤（`SQLAlchemyError` / `OSError`）退回 `.env`，故障開始記 WARNING 附 traceback、恢復記 INFO；程式錯誤照常拋出。DB 層建立客戶端失敗時不退回下一層，記 ERROR 補路由脈絡後原樣拋出
+- **啟動**：lifespan 呼叫 `log_endpoint_summary()`，端點設定錯誤出現在啟動 log
+- **呼叫點**：D2 表的五個鍵已宣告並改走路由。讀音判斷帶 `model` / `effort` 覆寫時暫時沿用舊行為（P3 移除）
+- **測試**：新增 `test_llm_endpoints.py`（71）、`test_llm_routing.py`（53，含記憶體 SQLite 讀表與缺表、DB 選擇到真實客戶端的端到端）、`test_llm_factory.py` 追加 23 個端點案例（含傳輸層驗證 safety_settings、註冊表逐列收得到端點）、`test_jp_verb_reading_judgments.py` 追加 5 個服務層案例；`conftest.py` 預設不讓路由讀真實 DB、忽略開發機 .env 的自訂端點；全套 582 passed
+- **審查後修正（2026-10-15）**：多面向審查找出的問題已修——`OMIT_EFFORT` 由空字串改為 Enum（原本 API 的 `effort: ""` 會從 422 變成被接受）、端點設定改為原樣收下（原本 `MODELS` 寫錯會讓後端起不來）、.env 那一層與 DB 層對同一端點 ID 用同一組憑證、DB 故障只攔資料庫錯誤並依狀態轉換記 log、啟動時載入端點、拼錯欄位與被忽略欄位會提醒、客戶端檢查端點類型、型別加上建構時檢查（`Endpoint` / `ModelOption` / `RouteChoice` / `LLMRoute`）、`Endpoint.api_key` 改 `SecretStr`。複審後再修：`LLM_ENDPOINTS` 的值與頂層也原樣收下（`LLM_ENDPOINTS__FOO=bar`、`LLM_ENDPOINTS=` 留空這類寫錯都不再讓後端起不來）、只攔 `DBAPIError` / 連線池逾時 / `OSError`（ORM 設定錯誤照常拋出）、解析結果標 `db_unavailable`、「端點不存在」的錯誤直接附上跳過原因、啟動摘要列出被跳過的端點、DB 層建立失敗以 `add_note` 把路由脈絡附在例外上
+- **驗收比對**：以 main 的 worktree 與本分支跑同一支腳本，六種 `LLM_PROVIDER`（google、中轉站名、留空、gemini-native、claude-code、antigravity）由 `create_llm_client()` 建出的客戶端，類別、標籤、網址、金鑰、safety 判斷、CLI 命令列逐項相同；經路由（DB 為空）建出的標籤亦相同
+- **部署修正（2026-10-16 發現）**：主機 `.env` 的 `DATABASE_URL=./fluencytides.db` 解析成容器內的 `/app/fluencytides.db`，不在掛載的 `/app/data` 底下，每次 `deploy_local.sh`（`--force-recreate`）都會連同容器可寫層一起被清空——既有的卡片關聯資料一直如此，DB 存的用途設定也會一部署就消失。已在 `backend/docker-compose.yml` 的 `environment` 固定 `DATABASE_URL=sqlite+aiosqlite:////app/data/fluencytides.db`（優先於 `env_file`，本機不受影響），README 與 `.env.example` 補上說明
+- **尚未做**：`.env.example` 的端點範例與說明（P4）；寫入端與管理介面（P2）；移除暫時性覆蓋與診斷（P3）
+
+### 部署注意：第一次部署本分支前先搬資料
+
+改了資料庫位置後，新容器會讀主機 `data/` 底下的資料庫（目前是空的）。要保留現有的卡片關聯資料，**在執行 `deploy_local.sh` 之前**先把舊容器裡的資料庫複製出來：
+
+```bash
+docker cp fluencytides-backend:/app/fluencytides.db /DATA/AppData/FluencyTides/backend/data/fluencytides.db
+```
+
+確認檔案在 `data/` 後再部署；新表 `llm_routes` 會在啟動時由 `create_all` 自動補建。之後的部署不必再做這一步。

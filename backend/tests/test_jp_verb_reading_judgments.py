@@ -258,6 +258,81 @@ class TestClientOverrides:
 
 
 # ============================================================
+# 服務層的客戶端選擇（模型路由 P1：無覆寫走用途鍵，有覆寫沿用舊行為）
+# ============================================================
+
+def _fake_llm():
+    llm = mock.MagicMock()
+    llm.generate_structured_data = mock.AsyncMock(
+        return_value=SimpleNamespace(parsed_data={"results": []}, model_name="(x)m")
+    )
+    return llm
+
+
+def _judge(**overrides):
+    engine = mock.MagicMock()
+    engine.render.return_value = "PROMPT"
+    with mock.patch.object(svc_mod, "get_template_engine", return_value=engine), \
+         mock.patch.object(svc_mod, "get_modifiable_configs", return_value={}):
+        return asyncio.run(svc_mod.JpVerbReadingService().judge(_items(), **overrides))
+
+
+class TestServiceClientSelection:
+    def test_no_override_uses_route(self):
+        """不帶覆寫：走用途鍵 jp_verb_reading 的路由，不呼叫 create_llm_client。"""
+        route = mock.MagicMock()
+        route.client = mock.AsyncMock(return_value=_fake_llm())
+        with mock.patch.object(svc_mod, "JUDGE_LLM", route), \
+             mock.patch.object(svc_mod, "create_llm_client") as create:
+            response = _judge()
+        route.client.assert_awaited_once_with()
+        create.assert_not_called()
+        assert response.llm_model == "(x)m"
+
+    def test_override_bypasses_route(self):
+        """只帶 model：沿用舊行為（.env provider + 覆寫），不看路由設定。"""
+        route = mock.MagicMock()
+        route.client = mock.AsyncMock()
+        with mock.patch.object(svc_mod, "JUDGE_LLM", route), \
+             mock.patch.object(svc_mod, "create_llm_client", return_value=_fake_llm()) as create:
+            _judge(model="a")
+        create.assert_called_once_with(model="a", effort=None)
+        route.client.assert_not_awaited()
+
+    def test_override_construction_failure_is_input_error(self):
+        """帶覆寫時 client 建立失敗：呼叫端的輸入問題，轉 InvalidOverrideError（端點回 422）。"""
+        with mock.patch.object(svc_mod, "create_llm_client", side_effect=LLMServiceError("effort 無效")):
+            try:
+                _judge(effort="ultra")
+                assert False
+            except svc_mod.InvalidOverrideError as e:
+                assert "effort 無效" in str(e)
+
+    def test_route_construction_failure_is_raised_as_is(self):
+        """不帶覆寫時 client 建立失敗：伺服器設定問題，原樣拋出，不轉成 422。"""
+        route = mock.MagicMock()
+        route.client = mock.AsyncMock(side_effect=LLMServiceError("找不到 claude 執行檔"))
+        with mock.patch.object(svc_mod, "JUDGE_LLM", route):
+            try:
+                _judge()
+                assert False
+            except svc_mod.InvalidOverrideError:
+                assert False, "伺服器設定錯誤不可報成輸入錯誤"
+            except LLMServiceError as e:
+                assert "claude" in str(e)
+
+    def test_empty_effort_string_is_rejected(self):
+        """effort 空字串照舊是非法覆寫（422），不會被當成「不傳 effort」。"""
+        with mock.patch.object(settings, "LLM_PROVIDER", "google"), \
+             mock.patch.object(settings, "LLM_ENDPOINTS", {}):
+            try:
+                _judge(effort="")
+                assert False
+            except svc_mod.InvalidOverrideError:
+                pass
+
+
+# ============================================================
 # 判讀腳本
 # ============================================================
 

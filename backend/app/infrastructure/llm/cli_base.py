@@ -44,7 +44,8 @@ from typing import ClassVar
 import jsonschema
 
 from app.core.exceptions import LLMRetryExhaustedError, LLMServiceError, LLMServiceUnavailableError
-from app.infrastructure.llm.base import BaseLLMClient
+from app.infrastructure.llm.base import OMIT_EFFORT, BaseLLMClient, EffortArg
+from app.infrastructure.llm.endpoints import Endpoint
 from app.infrastructure.llm.schema_utils import resolve_json_schema, strip_markdown_fences
 from app.schemas.llm.base import LLMGenerateResult
 
@@ -134,10 +135,17 @@ class HeadlessCliLLMClient(BaseLLMClient):
     MAX_RETRIES: ClassVar[int] = 2
     TRANSIENT_BACKOFF_SECONDS: ClassVar[tuple[float, ...]] = (10.0, 30.0)
 
-    # 基底宣告為 str | None；CLI 一律經白名單驗證，必有值
-    _effort: str
+    # 經白名單驗證的 effort；None 僅出現在明確要求不傳（OMIT_EFFORT）時，
+    # 此時命令列省略 --effort，由 CLI 用自己的預設
+    _effort: str | None
 
-    def __init__(self, *, model: str | None = None, effort: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        effort: EffortArg = None,
+        endpoint: Endpoint | None = None,
+    ) -> None:
         """驗證 effort 與憑證、解析 CLI 路徑與目錄。
 
         Validate effort and credentials, then resolve the CLI path and
@@ -152,15 +160,18 @@ class HeadlessCliLLMClient(BaseLLMClient):
 
         Args:
             model: 覆寫模型名。Model override.
-            effort: 覆寫思考深度。Effort override.
+            effort: 覆寫思考深度；None 沿用設定檔，:data:`OMIT_EFFORT` 不傳。
+                Effort override; None uses the setting, OMIT_EFFORT sends none.
+            endpoint: 內建 CLI 端點（只影響標籤前綴）。The built-in endpoint.
 
         Raises:
             LLMServiceError: effort 非白名單值、憑證不合格、或找不到執行檔時。
         """
+        self._check_endpoint_type(endpoint)
         runtime = self._runtime()
         validated_effort = self._validate_effort(effort, runtime.effort_setting)
         self._check_credentials()
-        super().__init__(model=model, effort=effort)
+        super().__init__(model=model, effort=effort, endpoint=endpoint)
         self._effort = validated_effort
         self._cli_path = self._resolve_cli_path(runtime.cli_path_setting)
         self._workdir = self._resolve_workdir(runtime.workdir_setting)
@@ -252,15 +263,20 @@ class HeadlessCliLLMClient(BaseLLMClient):
     # 初始化輔助（Initialization helpers）
     # ------------------------------------------------------------------
 
-    def _validate_effort(self, override: str | None, setting_value: str) -> str:
+    def _validate_effort(self, override: EffortArg, setting_value: str) -> str | None:
         """以白名單驗證 effort，一律在送出前攔截。
 
         Whitelist-validate effort before it ever reaches the CLI.
+
+        ``override`` 為 :data:`OMIT_EFFORT` 時回 None（命令列省略 ``--effort``）。
+        Returns None for :data:`OMIT_EFFORT` so the flag is omitted.
 
         claude 實測對非法值會靜默回退到預設力度而不報錯；agy 的行為未驗證，
         同樣前置攔截。錯誤訊息沿用層級化前 claude 的原文（計畫 D10：既有拋錯點
         的訊息不變），其中「CLI 會靜默回退」一句對 agy 屬未驗證的推定。
         """
+        if override is OMIT_EFFORT:
+            return None
         source = override if override is not None else setting_value
         origin = "effort 覆寫參數" if override is not None else f"{self.SETTINGS_PREFIX}_EFFORT"
         value = (source or "").strip().lower()

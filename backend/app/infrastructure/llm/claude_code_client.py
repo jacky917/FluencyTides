@@ -43,11 +43,13 @@ from typing import ClassVar
 
 from app.core.config import settings
 from app.core.exceptions import LLMQuotaError, LLMServiceError
+from app.infrastructure.llm.base import EffortArg
 from app.infrastructure.llm.cli_base import (
     CliRuntime,
     HeadlessCliLLMClient,
     _RetryableCliError,
 )
+from app.infrastructure.llm.endpoints import EFFORT_VALUES, TYPE_CLAUDE_CODE, Endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +79,9 @@ class ClaudeCodeLLMClient(HeadlessCliLLMClient):
     # 故此處只需少量的「帶錯誤回饋修復」重試。
     MAX_RETRIES: ClassVar[int] = 2
 
-    # CLI 接受的 effort 值（實測三個模型皆全數接受）
-    VALID_EFFORTS: ClassVar[frozenset[str]] = frozenset({"low", "medium", "high", "xhigh", "max"})
+    # CLI 接受的 effort 值（實測三個模型皆全數接受）；值域唯一定義在 endpoints.EFFORT_VALUES
+    VALID_EFFORTS: ClassVar[frozenset[str]] = EFFORT_VALUES[TYPE_CLAUDE_CODE]
+    ENDPOINT_TYPES: ClassVar[frozenset[str]] = frozenset({TYPE_CLAUDE_CODE})
 
     # 必須從 subprocess 環境剔除的變數：
     # - CLAUDE_CODE_OAUTH_TOKEN 優先級高於落盤憑證，殘留壞值會造成 401
@@ -94,21 +97,28 @@ class ClaudeCodeLLMClient(HeadlessCliLLMClient):
         "並確認已加入 PATH，或以 LLM_CLAUDE_CODE_CLI_PATH 明確指定路徑。"
     )
 
-    def __init__(self, *, model: str | None = None, effort: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        effort: EffortArg = None,
+        endpoint: Endpoint | None = None,
+    ) -> None:
         """驗證 effort 白名單與 token 格式，並解析 CLI 路徑（順序由基底維持）。
 
         Validate effort and the token format, then resolve the CLI path.
 
         Args:
             model: 覆寫模型名；None 沿用 ``LLM_MODEL_NAME``。Model override.
-            effort: 覆寫思考深度；None 沿用 ``LLM_CLAUDE_CODE_EFFORT``。
-                Effort override.
+            effort: 覆寫思考深度；None 沿用 ``LLM_CLAUDE_CODE_EFFORT``，
+                ``OMIT_EFFORT`` 不傳 ``--effort``。Effort override.
+            endpoint: 內建 ``claude-code`` 端點。The built-in endpoint.
 
         Raises:
             LLMServiceError: effort 非白名單值、token 內含空白、或找不到
                 claude 執行檔時。
         """
-        super().__init__(model=model, effort=effort)
+        super().__init__(model=model, effort=effort, endpoint=endpoint)
         logger.info(
             "ClaudeCodeLLMClient 初始化完成，CLI: %s，目標模型: %s",
             self._cli_path,
@@ -157,7 +167,12 @@ class ClaudeCodeLLMClient(HeadlessCliLLMClient):
         return [candidates[-1]] if candidates else []
 
     def _build_command(self, system_prompt: str, schema_text: str) -> list[str]:
-        """組裝 CLI 命令列參數。Assemble the CLI argument vector."""
+        """組裝 CLI 命令列參數。Assemble the CLI argument vector.
+
+        ``self._effort`` 為 None（建構時收到 ``OMIT_EFFORT``）時省略 ``--effort``，
+        由 CLI 用自己的預設（2026-10-15 以 claude 2.1.292 實測可正常完成）。
+        """
+        effort_args = ["--effort", self._effort] if self._effort else []
         return [
             self._cli_path,
             "-p",
@@ -165,7 +180,7 @@ class ClaudeCodeLLMClient(HeadlessCliLLMClient):
             "--tools", "",              # 停用全部內建工具，純文本生成
             "--no-session-persistence", # 批量呼叫不留會話殘骸
             "--model", self._model_name,
-            "--effort", self._effort,
+            *effort_args,
             "--output-format", "json",
             "--system-prompt", system_prompt,
             "--json-schema", schema_text,
