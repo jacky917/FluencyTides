@@ -54,9 +54,13 @@ logger = logging.getLogger(__name__)
 GLOBAL_ROUTE_KEY = "*"
 
 # 用途鍵規則；長度與 llm_routes.route_key 欄位一致
-_ROUTE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+ROUTE_KEY_MAX_LENGTH = 64
+_ROUTE_KEY_PATTERN = re.compile(rf"^[A-Za-z0-9._-]{{1,{ROUTE_KEY_MAX_LENGTH}}}$")
 
 RouteSource = Literal["route", "global", "env"]
+
+# 視為「資料庫異常」的例外（DB 回報的錯誤、連線池逾時、網路錯誤）；其餘是程式錯誤
+DATABASE_ERRORS: tuple[type[BaseException], ...] = (DBAPIError, PoolTimeoutError, OSError)
 
 # 同一則「設定已不在白名單」只記一次；快取失效時重置
 _reported: set[str] = set()
@@ -162,7 +166,8 @@ class LLMRoute:
     def __post_init__(self) -> None:
         if self.key == GLOBAL_ROUTE_KEY or not _ROUTE_KEY_PATTERN.fullmatch(self.key):
             raise ValueError(
-                f"LLM 用途鍵 {self.key!r} 不合規：只能用英數字與 . _ -、長度 1–64，且 * 保留給全域。"
+                f"LLM 用途鍵 {self.key!r} 不合規：只能用英數字與 . _ -、長度 1–{ROUTE_KEY_MAX_LENGTH}，"
+                "且 * 保留給全域。"
             )
 
     async def resolve(self) -> ResolvedRoute:
@@ -216,11 +221,21 @@ def list_route_keys() -> list[LLMRoute]:
 
 _choices_cache: dict[str, RouteChoice] | None = None
 
+# 快取世代：每次 invalidate_cache 遞增。讀取開始後世代變了（期間有寫入），讀到的就可能是
+# 寫入前的舊快照，不能放進快取——否則舊值會一直留到下次寫入或重啟
+_cache_generation = 0
+
 
 def invalidate_cache() -> None:
-    """清空設定快取；寫入或刪除設定後呼叫。Drop the cached rows after a write."""
-    global _choices_cache
+    """清空設定快取；寫入或刪除設定後呼叫。Drop the cached rows after a write.
+
+    同時遞增快取世代，讓寫入前就開始、寫入後才讀完的讀取不會把舊快照寫回快取。
+    Also bumps the generation so a read that started before the write cannot
+    put its stale snapshot back into the cache.
+    """
+    global _choices_cache, _cache_generation
     _choices_cache = None
+    _cache_generation += 1
     _reported.clear()
 
 
@@ -248,6 +263,27 @@ async def _fetch_choices() -> dict[str, RouteChoice]:
     return {row.route_key: RouteChoice(row.endpoint, row.model, row.effort) for row in rows}
 
 
+async def _fetch_and_cache() -> dict[str, RouteChoice]:
+    """讀 DB，成功時結束故障狀態並放進快取（讀取期間有寫入則不放）。
+
+    Read the table; on success leave the failure state and cache the result,
+    unless a write invalidated the cache while the read was in flight.
+
+    Raises:
+        DBAPIError / sqlalchemy.exc.TimeoutError / OSError: 讀不到 DB 時（見
+            :data:`DATABASE_ERRORS`），快取與故障狀態都不動。
+    """
+    global _choices_cache, _db_failing
+    generation = _cache_generation
+    choices = await _fetch_choices()
+    if _db_failing:
+        logger.info("LLM 用途設定（llm_routes）已恢復讀取，DB 設定重新生效。")
+        _db_failing = False
+    if generation == _cache_generation:
+        _choices_cache = choices
+    return choices
+
+
 async def _load_choices() -> tuple[dict[str, RouteChoice], bool]:
     """取設定（有快取用快取）。Get the stored choices, cached.
 
@@ -261,12 +297,12 @@ async def _load_choices() -> tuple[dict[str, RouteChoice], bool]:
     Returns:
         ``(設定, 是否讀取成功)``。``(choices, read_ok)``.
     """
-    global _choices_cache, _db_failing
+    global _db_failing
     if _choices_cache is not None:
         return _choices_cache, True
     try:
-        choices = await _fetch_choices()
-    except (DBAPIError, PoolTimeoutError, OSError) as error:  # D4：只有 DB 異常才退回 .env
+        return await _fetch_and_cache(), True
+    except DATABASE_ERRORS as error:  # D4：只有 DB 異常才退回 .env
         if not _db_failing:
             logger.warning(
                 "讀取 LLM 用途設定（llm_routes）失敗，改用 .env 設定直到 DB 恢復：%s: %s",
@@ -276,11 +312,45 @@ async def _load_choices() -> tuple[dict[str, RouteChoice], bool]:
             )
         _db_failing = True
         return {}, False
-    if _db_failing:
-        logger.info("LLM 用途設定（llm_routes）已恢復讀取，DB 設定重新生效。")
-        _db_failing = False
-    _choices_cache = choices
-    return choices, True
+
+
+async def stored_choices() -> tuple[dict[str, RouteChoice], bool]:
+    """DB 中目前存的全部設定（含不在白名單、或用途鍵已不存在的孤兒列），與解析共用快取。
+
+    Every stored choice, including rows outside the whitelist and orphan
+    keys; shares the resolution cache.
+
+    讀取失敗時回 ``({}, False)``——那是生成路徑「不中斷」的退回，**管理路徑必須檢查
+    ``read_ok``**，不能把空字典當成「沒有設定」。回傳的是複本，呼叫端改了也不影響快取。
+
+    On a read failure this returns ``({}, False)``; management callers must
+    check ``read_ok`` rather than treat the empty dict as "nothing stored".
+
+    Returns:
+        ``(用途鍵 → 選擇, 是否讀取成功)``。``(choices, read_ok)``.
+    """
+    choices, read_ok = await _load_choices()
+    return dict(choices), read_ok
+
+
+async def stored_choices_strict() -> dict[str, RouteChoice]:
+    """與 :func:`stored_choices` 共用快取，但讀不到時拋出原始的資料庫例外（不退回）。
+
+    Shares the cache with :func:`stored_choices` but raises the original
+    database error instead of falling back, so management callers can log
+    the real cause.
+
+    讀取成功時同樣寫入快取並結束「DB 故障」狀態；失敗時不記 log、也不進入故障狀態
+    （原因交給呼叫端記錄），所以不影響生成路徑「故障開始才記 WARNING」的節奏。
+    回傳的是複本。
+
+    Raises:
+        DBAPIError / sqlalchemy.exc.TimeoutError / OSError: 讀不到 DB 時（見
+            :data:`DATABASE_ERRORS`）。
+    """
+    if _choices_cache is not None:
+        return dict(_choices_cache)
+    return dict(await _fetch_and_cache())
 
 
 # ----------------------------------------------------------------------
@@ -325,6 +395,26 @@ async def resolve(route_key: str) -> ResolvedRoute:
         生效的設定與來源。The effective setting and its source.
     """
     choices, read_ok = await _load_choices()
+    return resolve_with(route_key, choices, read_ok)
+
+
+def resolve_with(route_key: str, choices: dict[str, RouteChoice], read_ok: bool) -> ResolvedRoute:
+    """以一份已讀出的設定快照解析（不碰 DB）。Resolve against a given snapshot.
+
+    管理介面一次列出所有用途時用同一份快照，DB 只讀一次，各列也不會來自不同次讀取。
+
+    Lets a listing resolve every key from one snapshot: one DB read, and no
+    row built from a different read than its neighbours.
+
+    Args:
+        route_key: 用途鍵（``*`` 查全域）。Route key, or ``*``.
+        choices: 用途鍵 → 選擇。The stored choices.
+        read_ok: 該快照是否讀取成功（失敗時結果標上 ``db_unavailable``）。
+            Whether the snapshot was read successfully.
+
+    Returns:
+        生效的設定與來源。The effective setting and its source.
+    """
     layers: list[tuple[str, RouteSource]] = [(GLOBAL_ROUTE_KEY, "global")]
     if route_key != GLOBAL_ROUTE_KEY:
         layers.insert(0, (route_key, "route"))

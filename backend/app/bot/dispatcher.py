@@ -46,9 +46,10 @@ def setup_dispatcher() -> Dispatcher:
     # 這裡採用延遲匯入，避免模組循環依賴
     from app.bot.handlers import commands, messages, voice, callbacks, media
     from app.bot.handlers.fsm import expression_fsm, speaking_fsm, vocabulary_fsm
-    from app.bot.handlers import callbacks_config, newcard_menu
+    from app.bot.handlers import callbacks_config, models_menu, newcard_menu
     
     dp.include_router(commands.router)
+    dp.include_router(models_menu.router)  # /models：各用途的 LLM 模型設定（管理員）
     dp.include_router(newcard_menu.router)  # 統一 /newcard 入口與卡片類型選單
     dp.include_router(callbacks_config.router) # 動態設定選單回呼
     dp.include_router(callbacks.router) # 回呼處理

@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-10-15 |
 | **性質** | 新增機能設計 + 實作工作項（含移除既有的兩種暫時性覆蓋） |
-| **狀態** | 🚧 實作中（P1 完成） |
+| **狀態** | 🚧 實作中（P1、P2 完成） |
 | **範圍** | `app/infrastructure/llm/`（端點設定、工廠依端點建立客戶端、新增路由模組）、`app/infrastructure/database/models.py`（新資料表）、`app/services/task_handlers/`（呼叫點宣告用途鍵並改走路由）、`app/services/jp_verb_reading_service.py`、`app/api/`（路由管理端點）、`app/bot/handlers/`（新增 `/models` 選單、`/setconfig` 移除 LLM 設定）、`app/services/runtime_config_service.py`（診斷）、`scripts/common/llm_label.py` 與 `scripts/fastapi_client/JP_Common/judge_verb_readings.py`、`.env.example` |
 | **不動** | `generate_structured_data` 簽名與 `LLMGenerateResult`；各客戶端的生成邏輯（只改金鑰、網址的來源）；DB 沒有任何設定時的行為（全部照 `.env`，與現在逐位元一致）；語音評分的設定（`AUDIO_*`、`STT_LLM_MODEL_NAME`）與其 `/setconfig` |
-| **PR / 進度** | P1 完成（分支 `feat/llm-model-routing`，PR 待開）；P2–P4 未開始 |
+| **PR / 進度** | P1（`fdb98ab`）、P2 完成（分支 `feat/llm-model-routing`，PR 待開）；P3、P4 未開始 |
 | **關聯文件** | `docs/archive/llm_provider_hierarchy_FEAT_2026-09-06.md`（工廠註冊表與 `BaseLLMClient` 的由來）、`docs/archive/runtime_config_service_FEAT_2026-08-29.md`（`/setconfig` 與診斷端點） |
 
 ---
@@ -313,9 +313,9 @@ LLM_ANTIGRAVITY_MODELS=["<基底名，見 .env.example 第 11-B 區>@low|high"]
 
 ```text
 /models
-  └─ 用途清單（每列顯示「用途：模型@來源」，可翻頁；第一列是「* 全域」）
+  └─ 用途清單（每列顯示「用途：標籤［來源］」，可翻頁；第一列是「* 全域」）
        └─ 選一個用途
-            ├─ [設定] → 選端點 → 選模型 → 選 effort → 試建 → 儲存
+            ├─ [設定] → 選端點 → 選模型 → 選 effort → 確認（顯示將寫進卡片的標籤）→ 儲存（試建後寫入）
             └─ [恢復預設] → 刪除該筆，顯示退回後生效的設定
 ```
 
@@ -327,9 +327,9 @@ LLM_ANTIGRAVITY_MODELS=["<基底名，見 .env.example 第 11-B 區>@low|high"]
 | 模型 | 該端點白名單裡的模型 |
 | effort | 該模型白名單裡的 effort；只有一個時自動選上，模型不帶 effort 時跳過這一層 |
 
-- **不使用狀態機**：每個按鈕的 callback data 自帶目前選到哪一步，例如 `lr:m:<用途序號>:<端點序號>:<模型序號>`，以序號代替名稱，確保不超過 Telegram 的 64 位元組上限。這樣沒有「狀態殘留」「舊按鈕拉回舊流程」的問題（TG 狀態機盤點的已知坑），也不會和其他流程搶輸入
-- 每一步都有「返回」與「取消」
-- 儲存成功後回覆新生效的設定與標籤，例如 `jp_verb_reading：(yinli)gemini-3.5-flash（來源：route）`
+- **不使用狀態機**：每個按鈕的 callback data 自帶目前選到哪一步，格式為 `lr:<動作>:<版本>:<序號…>`（例如選模型畫面是 `lr:m:<版本>:<用途序號>:<端點序號>`），以序號代替名稱，確保不超過 Telegram 的 64 位元組上限。「版本」是用途清單＋白名單的雜湊：清單變了（重新部署改了 `.env`、刪了孤兒鍵）時舊按鈕的序號可能指向別的項目，一律提示「選單已過期」。關閉鈕 `lr:x` 例外，不帶版本。這樣沒有「狀態殘留」「舊按鈕拉回舊流程」的問題（TG 狀態機盤點的已知坑），也不會和其他流程搶輸入
+- 每一步都有「返回」與「✖️ 關閉」；讀不到資料庫時清單照常顯示（附警示），但不接受任何操作
+- 儲存成功後回覆新生效的設定與標籤，例如 `jp_verb_reading：(yinli)gemini-3.5-flash（來源：用途）`
 
 ### D8 移除暫時性覆蓋
 
@@ -479,7 +479,31 @@ cd ~/FluencyTides && docker compose -f backend/docker-compose.yml up -d --force-
 - **審查後修正（2026-10-15）**：多面向審查找出的問題已修——`OMIT_EFFORT` 由空字串改為 Enum（原本 API 的 `effort: ""` 會從 422 變成被接受）、端點設定改為原樣收下（原本 `MODELS` 寫錯會讓後端起不來）、.env 那一層與 DB 層對同一端點 ID 用同一組憑證、DB 故障只攔資料庫錯誤並依狀態轉換記 log、啟動時載入端點、拼錯欄位與被忽略欄位會提醒、客戶端檢查端點類型、型別加上建構時檢查（`Endpoint` / `ModelOption` / `RouteChoice` / `LLMRoute`）、`Endpoint.api_key` 改 `SecretStr`。複審後再修：`LLM_ENDPOINTS` 的值與頂層也原樣收下（`LLM_ENDPOINTS__FOO=bar`、`LLM_ENDPOINTS=` 留空這類寫錯都不再讓後端起不來）、只攔 `DBAPIError` / 連線池逾時 / `OSError`（ORM 設定錯誤照常拋出）、解析結果標 `db_unavailable`、「端點不存在」的錯誤直接附上跳過原因、啟動摘要列出被跳過的端點、DB 層建立失敗以 `add_note` 把路由脈絡附在例外上
 - **驗收比對**：以 main 的 worktree 與本分支跑同一支腳本，六種 `LLM_PROVIDER`（google、中轉站名、留空、gemini-native、claude-code、antigravity）由 `create_llm_client()` 建出的客戶端，類別、標籤、網址、金鑰、safety 判斷、CLI 命令列逐項相同；經路由（DB 為空）建出的標籤亦相同
 - **部署修正（2026-10-16 發現）**：主機 `.env` 的 `DATABASE_URL=./fluencytides.db` 解析成容器內的 `/app/fluencytides.db`，不在掛載的 `/app/data` 底下，每次 `deploy_local.sh`（`--force-recreate`）都會連同容器可寫層一起被清空——既有的卡片關聯資料一直如此，DB 存的用途設定也會一部署就消失。已在 `backend/docker-compose.yml` 的 `environment` 固定 `DATABASE_URL=sqlite+aiosqlite:////app/data/fluencytides.db`（優先於 `env_file`，本機不受影響），README 與 `.env.example` 補上說明
-- **尚未做**：`.env.example` 的端點範例與說明（P4）；寫入端與管理介面（P2）；移除暫時性覆蓋與診斷（P3）
+- **尚未做**（P1 當時）：`.env.example` 的端點範例與說明（P4）；寫入端與管理介面（P2，見下節）；移除暫時性覆蓋與診斷（P3）
+
+### P2 管理介面（2026-10-16 完成）
+
+- **寫入服務**：`app/services/llm_route_service.py`，API 與 TG 共用。`set_route()` 依序檢查用途鍵已宣告（或 `*`）、白名單（與讀取端同一個 `check_choice`）、試建一次客戶端，通過後以「有就更新、沒有就新增」寫入並清空路由快取；`delete_route()` 恢復預設，孤兒鍵也可刪；`list_routes()` / `describe()` 列出每個用途的生效設定、本身存的值與被跳過的原因。錯誤為 `FluencyTidesError` 子類，由全域 handler 轉成狀態碼：`LLMRouteNotFoundError`（404）、`InvalidLLMRouteError`（422）、`LLMRouteStoreUnavailableError`（503）
+- **標籤預覽**：`preview_label()` 不建客戶端就算出標籤（去前綴、預設 effort 取自客戶端類別本身）。effort 為 None 的意思依層不同——DB 的選擇是「不帶 effort」，.env 那一層是「沿用預設」——由呼叫端以 `env_layer` 說明（煙霧測試時發現原本把兩者混為一談，存了不帶 effort 的模型卻顯示 `@medium`，已修並加測試鎖住「顯示的標籤＝實際寫進卡片的標籤」）
+- **API**：`app/api/llm_routes.py`。`GET /api/v1/llm-routes` 回傳全部用途（全域、已宣告、孤兒）與可選的端點白名單（不含金鑰）；`PUT` / `DELETE /api/v1/llm-routes/{route_key}`（全域為 `*`）；掛在 `verify_api_key` 之下
+- **TG `/models`**：`app/bot/handlers/models_menu.py`，管理員限定。用途清單（可翻頁）→ 詳情（生效設定、本身的設定、被跳過的原因）→ 設定：端點 → 模型 →（多個 effort 時）effort → 確認（顯示將寫進卡片的標籤）→ 儲存；或恢復預設。callback data 為 `lr:<動作>:<版本>:<序號…>`，版本是用途清單＋白名單的雜湊，清單變了的舊按鈕一律提示「選單已過期」。`/help` 補上說明
+- **審查後修正（2026-10-17）**：多面向審查找出的問題已修——管理路徑不再沿用生成路徑的「讀不到 DB＝沒有設定」（查詢單一用途、恢復預設在讀不到時回 503，不再把孤兒鍵說成不存在；清單照常回傳並標 `db_unavailable`；TG 選單讀不到 DB 時唯讀）；每個請求只讀一次 DB、所有列由同一份快照解析（`routing.resolve_with()`）；寫入提交後直接由寫入的值回報、不再讀回（不會「已存卻顯示失敗」），TG 更新畫面失敗時明說「已儲存」；試建時缺套件（`ImportError`；複審後縮小為 `ModuleNotFoundError`，見下）、工作目錄不可寫（`OSError`）也轉成 422 並記 WARNING；`.env` 那一層的生效 effort 填實際預設值（與標籤一致）；`/models` 指令有錯誤邊界；log 帶 user id 與用途鍵；型別：`RouteKeyEntry`（NamedTuple）、`MenuContext.version` 由內容算出不可指定、動作碼 `Action`（StrEnum）＋參數個數表、`handle_menu` 的過濾條件排除關閉鈕
+- **複審後再修**：寫入或刪除時資料庫異常也轉成 503（「結果未知、請重新查看」，TG 原樣轉達，不說成沒存進去）；管理操作讀不到 DB 時每次都記下底層原因（`routing.stored_choices_strict()`）；刪除提交後組不出狀態時仍回報成功；試建只把 `ModuleNotFoundError` 當成「套件未安裝」（provider 內 import 打錯照常拋出）；TG 選單的版本與清單內容來自同一次讀取；按鈕過期與 DB 唯讀拒絕都記 log；錯誤回覆先截斷再跳脫 HTML
+- **第三輪審查後再修（2026-10-17）**：
+  - 快取競態：讀取在寫入前開始、寫入後才讀完時，舊快照會被寫回快取，寫入後的生成一直用舊模型、直到下次寫入或重啟。快取改帶世代號（`invalidate_cache()` 遞增），讀取期間世代變了就不寫入快取；`_load_choices()` 與 `stored_choices_strict()` 共用同一段讀取與快取邏輯（`_fetch_and_cache()`）
+  - 清單不再因單列壞掉而打不開：生效端點需要的第三方套件沒裝時，該列改用不去前綴的標籤並在新欄位 `problem` 說明（API 的 `LLMRouteRead.problem`、TG 清單標 ⚠️、詳情列出原因），其餘照常——原本整份清單會拋 `ModuleNotFoundError`，`/models` 與 `GET` 都打不開，管理員失去改設定救急的手段
+  - `.env` 的 `LLM_PROVIDER` 指向寫錯而被跳過的端點時，落到 `.env` 那一層的用途同樣標在 `problem`（原本顯示成正常的預設，實際上每次生成都會失敗）
+  - 缺的是專案自己的 `app.*` 模組（註冊表模組名打錯、provider 改名）是程式錯誤：試建與清單都照常拋出，不說成「套件未安裝」
+  - `set_route()` 在寫入前就組好回傳的狀態，提交之後只剩清快取與記 log（原本提交後才組，組失敗會讓已存的設定被報成失敗）
+  - 恢復預設的結果區分兩種 null：`DeleteResult.view_unavailable`／API 的 `route_unavailable` 標出「刪除已提交、但組不出刪除後的狀態」，與孤兒鍵刪除後本來就沒有狀態區分；TG 結果畫面明說無法顯示
+  - 錯誤的註解與 docstring：`LLMRouteNotFoundError`（寫入時指未宣告，孤兒鍵也一樣）、`LLMRouteStoreUnavailableError`（也涵蓋寫入／刪除時結果未知）、各處漏列的 503 `Raises`、`models_menu` 參數個數表與關閉鈕註冊順序的註解、`LLMRoute` 錯誤訊息改引用 `ROUTE_KEY_MAX_LENGTH`
+- **第三輪複審後再修（2026-10-18）**：
+  - 第三方套件版本不符（`ImportError: cannot import name 'X' from 'google.genai'` 這類，不是 `ModuleNotFoundError`）同樣是部署問題：清單退化並標 `problem`（「套件版本不符或無法載入」），試建回 422；`app.*` 的判斷改看 `ImportError.name`，涵蓋 provider 內 import 名稱打錯
+  - `set_route` / `delete_route` 不論成敗都在 `finally` 清快取：提交後才出錯（關閉 session 時被取消、非 DBAPI 的 SQLAlchemy 錯誤）時 DB 可能已改，不能留著舊快取
+  - `problem` 的說明補上「None 只表示沒偵測到這兩類問題，不代表已驗證可用」，並註明退化時生效 effort 也可能不準確
+  - 補測試：`.env` 那一層缺套件且 DB 沒有設定、退化標籤確實不去前綴、恢復預設後讀回失敗與退回層有問題時的結果畫面、`_is_internal_module` 的邊界（`appdirs`、name 為 None）、提交後才出錯時快取仍會清掉
+- **測試**：`test_llm_route_service.py`（57）、`test_llm_routes_api.py`（18，含以真實 app 驗證 API 金鑰與路由掛載）、`test_models_menu.py`（48，含從 /models 一路點到儲存、孤兒鍵刪除、分頁、壞掉的按鈕、DB 故障時舊的儲存／恢復預設按鈕不會寫入、關閉鈕的過濾條件、/models 掛在接住所有文字的 router 之前）；`conftest.py` 新增共用的 `llm_route_db`（暫存 SQLite）、`llm_whitelist`、`declare_route_key`；全套 705 passed（`tests/`）
+- **煙霧測試**：本機以暫存資料庫啟動後端（關閉 TG bot），經 HTTP 寫入用途與全域設定、讀回清單、恢復預設，資料表內容與回應一致
 
 ### 部署注意：第一次部署本分支前先搬資料
 

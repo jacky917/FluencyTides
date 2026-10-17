@@ -92,10 +92,12 @@ NO_SAFETY_SETTINGS_IDS: frozenset[str] = frozenset({"google", "openai", ""})
 
 # 自訂端點 ID：環境變數名稱不能含 "-"；不可含 "__"（巢狀分隔符會把 ID 切開）；
 # pydantic-settings 會把鍵轉成小寫
-_ID_PATTERN = re.compile(r"(?!.*__)[a-z0-9_]{1,32}")
+ENDPOINT_ID_MAX_LENGTH = 32
+_ID_PATTERN = re.compile(rf"(?!.*__)[a-z0-9_]{{1,{ENDPOINT_ID_MAX_LENGTH}}}")
 
-# 與 llm_routes.model 欄位長度一致
+# 與 llm_routes.endpoint / model / effort 欄位長度一致（ENDPOINT_ID_MAX_LENGTH 見上）
 MODEL_NAME_MAX_LENGTH = 128
+EFFORT_MAX_LENGTH = 16
 
 _KNOWN_FIELDS = "TYPE / BASE_URL / API_KEY / MODELS / SAFETY_SETTINGS"
 _TRUE_WORDS = frozenset({"true", "1", "yes", "on"})

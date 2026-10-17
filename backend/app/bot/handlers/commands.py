@@ -431,7 +431,11 @@ async def command_help_handler(message: Message) -> None:
         "    ├ <code>stt_diff</code> — 本地 Whisper 轉文字＋逐字比對，零 API 費用、秒回\n"
         "    └ <code>stt_llm</code> — 本地 Whisper 轉文字＋輕量 LLM 評分，低成本\n"
         "  • <b>模型切換</b>：AUDIO_MODEL_NAME / LLM_MODEL_NAME / STT_LLM_MODEL_NAME\n"
-        "<i>設定僅本次執行期間有效，重啟後回到 .env 預設值。</i>"
+        "<i>設定僅本次執行期間有效，重啟後回到 .env 預設值。</i>\n\n"
+        "6️⃣ <b>LLM 模型設定（管理員限定）</b>\n"
+        "輸入 /models 為每個用途（例如自他動詞子卡、讀音判斷）或全域指定端點、模型與思考深度。"
+        "選項來自 .env 的白名單；設定存在資料庫，重啟後仍有效。恢復預設後改用全域設定，"
+        "全域也沒設定時用 .env 預設。/models 的設定優先於上方 /setconfig 的 LLM_MODEL_NAME。"
     )
     await message.answer(help_text)
 

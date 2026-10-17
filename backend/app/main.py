@@ -48,6 +48,7 @@ from app.api.example.verb_pair import router as example_verb_pair_router
 from app.api.webhook import router as webhook_router
 from app.api.config import router as config_router
 from app.api.jp_tokenizer import router as jp_tokenizer_router
+from app.api.llm_routes import router as llm_routes_router
 from app.api.jp_verb_readings import router as jp_verb_readings_router
 from app.bot.dispatcher import create_bot, setup_dispatcher
 from app.core.config import settings
@@ -379,6 +380,7 @@ app.include_router(example_verb_pair_router, prefix="/api/v1/example")
 app.include_router(config_router, prefix="/api/v1")
 app.include_router(jp_verb_readings_router, prefix="/api/v1")
 app.include_router(jp_tokenizer_router, prefix="/api/v1")
+app.include_router(llm_routes_router, prefix="/api/v1")
 
 # 註冊 Webhook Router路由 (不受 prefix 限制，完全依照 TG_WEBHOOK_PATH 設定)
 app.include_router(webhook_router)

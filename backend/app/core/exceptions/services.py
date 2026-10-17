@@ -113,3 +113,50 @@ class ClozePositioningError(LLMGenerationError):
     """
     error_code = "CLOZE_POSITIONING_FAILED"
     status_code = 422
+
+
+class LLMRouteError(ServiceBaseError):
+    """LLM 用途設定（/models、/api/v1/llm-routes）的錯誤基類。
+
+    Base error for LLM route settings management.
+    """
+    error_code = "LLM_ROUTE_ERROR"
+    status_code = 400
+
+
+class LLMRouteNotFoundError(LLMRouteError):
+    """用途鍵不存在或不可設定。
+
+    查詢與刪除時指「既未在程式中宣告、DB 中也沒有」；寫入時指「未在程式中宣告」——
+    即使 DB 有該鍵的孤兒列也一樣（孤兒鍵只能刪除）。
+
+    The route key does not exist (lookup / delete: neither declared nor
+    stored) or cannot be set (write: not declared, even if an orphan row
+    exists).
+    """
+    error_code = "LLM_ROUTE_NOT_FOUND"
+    status_code = 404
+
+
+class InvalidLLMRouteError(LLMRouteError):
+    """要寫入的設定不合格：不在 .env 白名單，或試建客戶端失敗（呼叫端可修正）。
+
+    The choice is outside the whitelist or the trial client build failed.
+    """
+    error_code = "INVALID_LLM_ROUTE"
+    status_code = 422
+
+
+class LLMRouteStoreUnavailableError(LLMRouteError):
+    """llm_routes 資料表讀寫時資料庫異常。
+
+    兩種情況，訊息不同：讀不到（無法判斷設定是否存在，與「不存在」區分），或寫入／刪除時
+    出錯（結果未知，應先重新查看）。DB 恢復後重試即可——寫入是 upsert、刪除依鍵，重做
+    一次結果相同。
+
+    The llm_routes table could not be read (existence cannot be decided) or
+    a write / delete failed with an unknown outcome. Retrying after the
+    database recovers is safe: both operations are idempotent.
+    """
+    error_code = "LLM_ROUTE_STORE_UNAVAILABLE"
+    status_code = 503
