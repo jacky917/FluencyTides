@@ -70,6 +70,76 @@ export interface ErrorResponse {
   error_code: string;
   message: string;
   details?: unknown;
+  /** HTTP 狀態碼（由 API client 的攔截器補上）。HTTP status, added by the API client interceptor. */
+  status?: number;
+}
+
+// ============================================================================
+// LLM 用途設定 (LLM Routes)
+// ============================================================================
+
+/** 生效的層：用途自己的設定、全域 `*`、`.env` 預設。The winning layer. */
+export type LLMRouteSource = 'route' | 'global' | 'env';
+
+/** 一組選擇。A choice of endpoint / model / effort. */
+export interface LLMRouteChoice {
+  endpoint: string;
+  model: string;
+  effort: string | null;
+}
+
+/** 解析時被跳過的一層與原因。A skipped layer and why. */
+export interface LLMRejectedLayer {
+  route_key: string;
+  reason: string;
+}
+
+/** 一個用途鍵的狀態（`*` 為全域）。The state of one route key (`*` is global). */
+export interface LLMRoute {
+  route_key: string;
+  description: string | null;
+  /** false＝DB 中的孤兒鍵，只能刪除。false for orphan rows, which can only be deleted. */
+  declared: boolean;
+  source: LLMRouteSource;
+  effective: LLMRouteChoice;
+  /** 生效設定對應的卡片標籤。The card label of the effective setting. */
+  label: string;
+  stored: LLMRouteChoice | null;
+  rejected: LLMRejectedLayer[];
+  db_unavailable: boolean;
+  /** 生效設定目前無法使用的原因。Why the effective setting is unusable right now. */
+  problem: string | null;
+}
+
+/** 白名單中的模型；efforts 為空＝不使用 effort。A whitelisted model; empty efforts = no effort. */
+export interface LLMModelOption {
+  name: string;
+  efforts: string[];
+}
+
+/** 可選的端點與白名單。A selectable endpoint and its whitelist. */
+export interface LLMEndpointOption {
+  id: string;
+  type: string;
+  models: LLMModelOption[];
+}
+
+/** `GET /llm-routes` 的回應。Response of `GET /llm-routes`. */
+export interface LLMRoutesResponse {
+  routes: LLMRoute[];
+  endpoints: LLMEndpointOption[];
+  /** 讀不到資料庫：各列為 `.env` 預設，暫時無法修改。DB unreadable; rows show `.env` defaults. */
+  db_unavailable: boolean;
+}
+
+/** `DELETE /llm-routes/{key}` 的回應。Response of `DELETE /llm-routes/{key}`. */
+export interface LLMRouteDeleteResponse {
+  /** 是否真的刪了一列。Whether a row was removed. */
+  deleted: boolean;
+  /** 刪除後的狀態；孤兒鍵刪除後或組不出狀態時為 null。The state afterwards, or null. */
+  route: LLMRoute | null;
+  /** 刪除已提交但組不出之後的狀態。The delete committed but the state could not be built. */
+  route_unavailable: boolean;
 }
 
 // ============================================================================

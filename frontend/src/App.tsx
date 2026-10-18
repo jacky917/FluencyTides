@@ -1,5 +1,5 @@
 import { Routes, Route, Link, useLocation } from 'react-router-dom'
-import { LayoutDashboard, PlusCircle, Network } from 'lucide-react'
+import { LayoutDashboard, PlusCircle, Network, Bot } from 'lucide-react'
 import { cn } from './lib/utils'
 import { Toaster } from './components/ui/sonner'
 
@@ -7,6 +7,7 @@ import { Toaster } from './components/ui/sonner'
 import Dashboard from './pages/Dashboard'
 import CardGenerator from './pages/CardGenerator'
 import KnowledgeGraph from './pages/KnowledgeGraph'
+import LlmRoutes from './pages/LlmRoutes'
 
 /**
  * 應用程式根元件：提供側邊欄導覽、路由切換與全域 Toast。
@@ -20,6 +21,7 @@ function App() {
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     { name: 'Card Generator', path: '/generate', icon: PlusCircle },
     { name: 'Knowledge Graph', path: '/graph', icon: Network },
+    { name: 'LLM Models', path: '/llm-models', icon: Bot },
   ]
 
   return (
@@ -66,6 +68,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/generate" element={<CardGenerator />} />
             <Route path="/graph" element={<KnowledgeGraph />} />
+            <Route path="/llm-models" element={<LlmRoutes />} />
           </Routes>
         </div>
       </main>

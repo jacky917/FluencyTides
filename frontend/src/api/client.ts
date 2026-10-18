@@ -23,6 +23,10 @@ import type {
   HandlerCreateResponse,
   HandlerActionResponse,
   HandlerUpdatePayload,
+  LLMRouteChoice,
+  LLMRouteDeleteResponse,
+  LLMRoute,
+  LLMRoutesResponse,
 } from '../types/api';
 
 /**
@@ -52,19 +56,31 @@ const apiClient = axios.create({
 
 /**
  * Response 攔截器：自動解包 `response.data`，
- * 並將後端的 ErrorResponse 結構提取為 rejection payload。
+ * 並將後端的 ErrorResponse 結構（附上 HTTP 狀態碼 `status`）提取為 rejection payload。
  * Response interceptor: automatically unwraps `response.data`,
- * and extracts the backend ErrorResponse structure as the rejection payload.
+ * and extracts the backend ErrorResponse structure (plus the HTTP `status`)
+ * as the rejection payload.
  */
 apiClient.interceptors.response.use(
   (response) => response.data,
   (error) => {
     if (error.response?.data?.error_code) {
-      return Promise.reject(error.response.data);
+      return Promise.reject({ ...error.response.data, status: error.response.status });
     }
     return Promise.reject(error);
   }
 );
+
+/**
+ * 把用途鍵編碼成 URL path 片段；`encodeURIComponent` 不編碼 `*`，全域鍵另外轉成 `%2A`。
+ * Encodes a route key as a URL path segment; `encodeURIComponent` leaves `*`
+ * alone, so the global key is escaped to `%2A` explicitly.
+ * @param routeKey - 用途鍵。Route key.
+ * @returns 編碼後的片段。The encoded segment.
+ */
+function encodeRouteKey(routeKey: string): string {
+  return encodeURIComponent(routeKey).replace(/\*/g, '%2A');
+}
 
 /**
  * FluencyTides 後端 API 的統一呼叫介面。
@@ -237,6 +253,37 @@ export const FluencyTidesAPI = {
    */
   getCard: (noteId: number): Promise<CardDetail> =>
     apiClient.get(`/handlers/cards/${noteId}`),
+
+  // ======================================================================
+  // LLM 用途設定 (LLM Routes)
+  // ======================================================================
+
+  /**
+   * 列出全部用途鍵的生效設定，以及白名單內可選的端點與模型。
+   * Lists every route key's effective setting plus the selectable endpoints.
+   * @returns 用途清單、可選端點與 DB 是否可讀。Routes, endpoints, and DB availability.
+   */
+  listLLMRoutes: (): Promise<LLMRoutesResponse> =>
+    apiClient.get('/llm-routes'),
+
+  /**
+   * 為一個用途（或全域 `*`）設定端點、模型與 effort。
+   * Stores the endpoint / model / effort for a route key (or the global `*`).
+   * @param routeKey - 用途鍵。Route key.
+   * @param choice - 選擇；模型不使用 effort 時 effort 為 null。The choice; effort is null when unused.
+   * @returns 寫入後的狀態。The state after the write.
+   */
+  putLLMRoute: (routeKey: string, choice: LLMRouteChoice): Promise<LLMRoute> =>
+    apiClient.put(`/llm-routes/${encodeRouteKey(routeKey)}`, choice),
+
+  /**
+   * 恢復一個用途的預設（刪除其設定；孤兒鍵也可刪除）。
+   * Restores a route key's default by deleting its row (orphan keys included).
+   * @param routeKey - 用途鍵。Route key.
+   * @returns 刪除結果與之後的狀態。The delete result and the state afterwards.
+   */
+  deleteLLMRoute: (routeKey: string): Promise<LLMRouteDeleteResponse> =>
+    apiClient.delete(`/llm-routes/${encodeRouteKey(routeKey)}`),
 
   // ======================================================================
   // Health
