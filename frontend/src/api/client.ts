@@ -28,6 +28,7 @@ import type {
   LLMRoute,
   LLMRoutesResponse,
 } from '../types/api';
+import { encodeRouteKey } from '../lib/llmRoutes';
 
 /**
  * Axios 實例，baseURL 對應後端 `/api/v1`。
@@ -70,17 +71,6 @@ apiClient.interceptors.response.use(
     return Promise.reject(error);
   }
 );
-
-/**
- * 把用途鍵編碼成 URL path 片段；`encodeURIComponent` 不編碼 `*`，全域鍵另外轉成 `%2A`。
- * Encodes a route key as a URL path segment; `encodeURIComponent` leaves `*`
- * alone, so the global key is escaped to `%2A` explicitly.
- * @param routeKey - 用途鍵。Route key.
- * @returns 編碼後的片段。The encoded segment.
- */
-function encodeRouteKey(routeKey: string): string {
-  return encodeURIComponent(routeKey).replace(/\*/g, '%2A');
-}
 
 /**
  * FluencyTides 後端 API 的統一呼叫介面。

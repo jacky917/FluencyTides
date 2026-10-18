@@ -12,7 +12,7 @@
  */
 
 import { useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../api/client'
@@ -23,8 +23,12 @@ import { cn } from '../lib/utils'
 import {
   GLOBAL_ROUTE_KEY,
   SOURCE_LABELS,
+  defaultEffort,
   describeApiError,
+  failureTitle,
   formatChoice,
+  initialSelection,
+  isBackendError,
   previewLabel,
 } from '../lib/llmRoutes'
 import type { LLMEndpointOption, LLMRoute, LLMRouteChoice } from '../types/api'
@@ -42,15 +46,42 @@ interface Notice {
 }
 
 /**
- * 寫入失敗時的標題：503 表示資料庫在寫入時異常，結果未知。
- * Title for a failed write; 503 means the outcome is unknown.
- * @param status - HTTP 狀態碼。HTTP status.
- * @param action - 動作名稱。Action name.
- * @returns 標題。The title.
+ * 一列的寫入（PUT / DELETE）共用的 mutation key，讓同一列同時只能有一個寫入。
+ * Mutation key shared by a row's writes so only one runs at a time.
+ * @param routeKey - 用途鍵。Route key.
+ * @returns mutation key。The mutation key.
  */
-function failureTitle(status: number | undefined, action: string): string {
-  return status === 503 ? `${action}結果未知，請重新整理查看` : `無法${action}`
+const writeKey = (routeKey: string) => ['llm-route-write', routeKey]
+
+/**
+ * 寫入失敗的共用處理：非業務錯誤留在 console，結果顯示在該列並跳出 toast。
+ * Shared write-failure handling: log non-business errors, show the outcome.
+ * @param error - 捕捉到的錯誤。The caught error.
+ * @param action - 動作名稱。Action name.
+ * @param routeKey - 用途鍵。Route key.
+ * @param onNotice - 顯示在該列。Shows the outcome on the row.
+ */
+function reportWriteFailure(
+  error: unknown,
+  action: string,
+  routeKey: string,
+  onNotice: (notice: Notice) => void,
+) {
+  if (!isBackendError(error)) {
+    console.error(`[LlmRoutes] ${action} ${routeKey} 失敗`, error)
+  }
+  const { status, message } = describeApiError(error)
+  const title = failureTitle(status, action)
+  onNotice({ kind: 'error', title, lines: [message] })
+  toast.error(title, { description: message })
 }
+
+/**
+ * toast 的多行說明（sonner 預設不保留換行）。Multi-line toast description.
+ * @param lines - 各行。Lines.
+ * @returns 保留換行的說明。A description that keeps line breaks.
+ */
+const toastLines = (lines: string[]) => <span className="whitespace-pre-line">{lines.join('\n')}</span>
 
 /**
  * 寫入後一列狀態的說明（生效設定與警示），與 TG 結果畫面相同。
@@ -75,7 +106,7 @@ function describeAfterWrite(route: LLMRoute): string[] {
  * @returns 頁面 JSX。Page JSX.
  */
 export default function LlmRoutes() {
-  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
+  const { data, isPending, isError, error, fetchStatus, refetch, isFetching } = useQuery({
     queryKey: QUERY_KEY,
     queryFn: FluencyTidesAPI.listLLMRoutes,
   })
@@ -108,16 +139,25 @@ export default function LlmRoutes() {
         </Button>
       </div>
 
-      {isLoading ? (
+      {isPending && fetchStatus === 'paused' ? (
+        <Warning title="目前離線" lines={['恢復網路後會自動載入，或按右上角「重新整理」。']} />
+      ) : isPending ? (
         <div className="space-y-3">
           <Skeleton className="h-24 w-full" />
           <Skeleton className="h-24 w-full" />
           <Skeleton className="h-24 w-full" />
         </div>
-      ) : isError || !data ? (
-        <Warning title="無法載入 LLM 用途設定" lines={[describeApiError(error).message]} />
+      ) : !data ? (
+        <Warning
+          title="無法載入 LLM 用途設定"
+          lines={[describeApiError(error).message, '請按右上角「重新整理」重試；持續失敗請查看後端 log。']}
+        />
       ) : (
         <>
+          {/* 背景重新整理失敗時保留上次的資料（與編輯中的選擇），只加一條警示 */}
+          {isError && (
+            <Warning title="重新整理失敗，以下為上次載入的資料" lines={[describeApiError(error).message]} />
+          )}
           {data.db_unavailable && (
             <Warning
               title="目前讀不到資料庫"
@@ -188,27 +228,27 @@ function RouteRow({ route, endpoints, readOnly, editing, onEdit, notice, onNotic
   const flagged = !route.declared || route.rejected.length > 0 || route.problem !== null
 
   const deleteMutation = useMutation({
+    mutationKey: writeKey(route.route_key),
     mutationFn: () => FluencyTidesAPI.deleteLLMRoute(route.route_key),
     onSuccess: (result) => {
       const title = result.deleted ? '已恢復預設' : '這個用途本來就沒有設定'
-      const lines = result.route
-        ? describeAfterWrite(result.route)
-        : result.route_unavailable
-          ? ['無法顯示目前生效的設定（詳見後端 log），請重新整理查看。']
-          : [`${route.route_key}：孤兒設定已刪除。`]
+      let lines: string[]
+      if (result.route) {
+        lines = describeAfterWrite(result.route)
+      } else if (result.route_unavailable) {
+        lines = ['無法顯示目前生效的設定（詳見後端 log），請重新整理查看。']
+      } else {
+        lines = [`${route.route_key}：孤兒設定${result.deleted ? '已刪除' : '已不存在'}。`]
+      }
       onNotice({ kind: 'success', title, lines })
-      toast.success(title, { description: lines.join('\n') })
+      toast.success(title, { description: toastLines(lines) })
     },
-    onError: (error) => {
-      const { status, message } = describeApiError(error)
-      const title = failureTitle(status, '恢復預設')
-      onNotice({ kind: 'error', title, lines: [message] })
-      toast.error(title, { description: message })
-    },
+    onError: (error) => reportWriteFailure(error, '恢復預設', route.route_key, onNotice),
     onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
   })
 
-  const busy = deleteMutation.isPending
+  // 儲存（編輯區）與恢復預設共用同一個 key：任一進行中時兩邊都停用
+  const busy = useIsMutating({ mutationKey: writeKey(route.route_key) }) > 0
 
   return (
     <Card className={cn(flagged && 'border-amber-500/60')}>
@@ -246,7 +286,7 @@ function RouteRow({ route, endpoints, readOnly, editing, onEdit, notice, onNotic
                 }}
                 disabled={busy}
               >
-                {busy ? '處理中…' : '恢復預設'}
+                {deleteMutation.isPending ? '處理中…' : '恢復預設'}
               </Button>
             )}
           </div>
@@ -282,6 +322,7 @@ function RouteRow({ route, endpoints, readOnly, editing, onEdit, notice, onNotic
           <RouteEditor
             route={route}
             endpoints={endpoints}
+            busy={busy}
             onCancel={() => onEdit(false)}
             onSubmit={() => onNotice(null)}
             onSaved={(saved) => {
@@ -346,6 +387,8 @@ function NoticeBox({ notice }: { notice: Notice }) {
 interface RouteEditorProps {
   route: LLMRoute
   endpoints: LLMEndpointOption[]
+  /** 這一列有寫入進行中。A write for this row is in flight. */
+  busy: boolean
   onCancel: () => void
   /** 送出前（清掉上一次的結果）。Called before submitting. */
   onSubmit: () => void
@@ -366,7 +409,7 @@ interface RouteEditorProps {
  *
  * @returns 編輯區 JSX。Editor JSX.
  */
-function RouteEditor({ route, endpoints, onCancel, onSubmit, onSaved, onFailed }: RouteEditorProps) {
+function RouteEditor({ route, endpoints, busy, onCancel, onSubmit, onSaved, onFailed }: RouteEditorProps) {
   const queryClient = useQueryClient()
   const initial = initialSelection(route.stored, endpoints)
   const [endpointId, setEndpointId] = useState(initial.endpoint)
@@ -383,22 +426,17 @@ function RouteEditor({ route, endpoints, onCancel, onSubmit, onSaved, onFailed }
 
   const selectModel = (name: string, from: LLMEndpointOption | undefined) => {
     setModelName(name)
-    const efforts = from?.models.find((item) => item.name === name)?.efforts ?? []
-    setEffort(efforts.length === 1 ? efforts[0] : '')
+    setEffort(defaultEffort(from?.models.find((item) => item.name === name)?.efforts ?? []))
   }
 
   const saveMutation = useMutation({
+    mutationKey: writeKey(route.route_key),
     mutationFn: (value: LLMRouteChoice) => FluencyTidesAPI.putLLMRoute(route.route_key, value),
     onSuccess: (saved) => {
       toast.success('已儲存', { description: `${saved.route_key}：${saved.label}` })
       onSaved(saved)
     },
-    onError: (err) => {
-      const { status, message } = describeApiError(err)
-      const title = failureTitle(status, '儲存')
-      onFailed({ kind: 'error', title, lines: [message] })
-      toast.error(title, { description: message })
-    },
+    onError: (err) => reportWriteFailure(err, '儲存', route.route_key, onFailed),
     onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
   })
 
@@ -416,7 +454,7 @@ function RouteEditor({ route, endpoints, onCancel, onSubmit, onSaved, onFailed }
       className="space-y-4 rounded-lg border bg-muted/30 p-4"
       onSubmit={(e) => {
         e.preventDefault()
-        if (choice) {
+        if (choice && !busy) {
           onSubmit()
           saveMutation.mutate(choice)
         }
@@ -508,7 +546,7 @@ function RouteEditor({ route, endpoints, onCancel, onSubmit, onSaved, onFailed }
       )}
 
       <div className="flex gap-2">
-        <Button type="submit" disabled={!choice || saveMutation.isPending}>
+        <Button type="submit" disabled={!choice || busy}>
           {saveMutation.isPending ? '儲存中…' : '儲存'}
         </Button>
         <Button type="button" variant="ghost" onClick={onCancel} disabled={saveMutation.isPending}>
@@ -517,28 +555,4 @@ function RouteEditor({ route, endpoints, onCancel, onSubmit, onSaved, onFailed }
       </div>
     </form>
   )
-}
-
-/**
- * 編輯區的初始選擇：本用途已存的設定（仍在白名單內的部分），否則全部留空。
- * Initial picker state: the stored choice, as far as it is still whitelisted.
- * @param stored - 已存的設定。The stored choice.
- * @param endpoints - 白名單。The whitelist.
- * @returns 初始的端點、模型、effort（空字串＝未選）。Initial values ('' = unset).
- */
-function initialSelection(
-  stored: LLMRouteChoice | null,
-  endpoints: LLMEndpointOption[],
-): { endpoint: string; model: string; effort: string } {
-  const endpoint = stored ? endpoints.find((item) => item.id === stored.endpoint) : undefined
-  if (!stored || !endpoint) return { endpoint: '', model: '', effort: '' }
-  const model = endpoint.models.find((item) => item.name === stored.model)
-  if (!model) return { endpoint: endpoint.id, model: '', effort: '' }
-  const effort =
-    stored.effort && model.efforts.includes(stored.effort)
-      ? stored.effort
-      : model.efforts.length === 1
-        ? model.efforts[0]
-        : ''
-  return { endpoint: endpoint.id, model: model.name, effort }
 }
