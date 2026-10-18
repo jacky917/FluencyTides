@@ -28,6 +28,27 @@ import abc
 from app.schemas.llm.speaking import AudioEvaluationResult
 
 
+class AudioNotScoredError(Exception):
+    """這次無法評分（不是 0 分）：例如沒偵測到語音、卡片沒有參考答案可比對。
+
+    The recording could not be scored at all (not a score of 0), e.g. no
+    speech was detected or the card has no reference answers to compare.
+
+    呼叫端不寫入評分紀錄，把 ``reason`` 轉告使用者。以前是回傳 ``score=0`` 加說明，下游分不出
+    「真的 0 分」與「沒有評分」，卡片上會多一筆 0 分紀錄、TG 也顯示「評分完成」。
+
+    Callers skip the recording and show ``reason``; returning ``score=0``
+    made "scored zero" and "not scored" indistinguishable.
+
+    Attributes:
+        reason: 給使用者看的原因（純文字）。The user-facing reason (plain text).
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class BaseAudioEvaluator(abc.ABC):
     """語音評分器的抽象基底類別。
 

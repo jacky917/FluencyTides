@@ -6,6 +6,7 @@ Telegram crash alert module.
 import logging
 import httpx
 
+from app.bot.utils.formatting import escape_tg
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -33,12 +34,13 @@ async def send_crash_alert(url: str, method: str, error_msg: str) -> None:
         logger.debug("TG_BOT_TOKEN 或 TG_ADMIN_CHAT_ID 未設定，略過發送 Telegram 崩潰警報。")
         return
 
+    # error_msg 多半是 repr(exc)（常含 <Response [500]> 這類 <…>）、URL 的查詢字串含 &：
+    # 不轉義、不限長度的話，警報常在最需要的時候被 Telegram 拒收（上限 4096 字）
     message = (
-        "🚨 <b>系統發生未預期崩潰 (HTTP 500)</b> 🚨\n\n"
-        f"<b>Method:</b> {method}\n"
-        f"<b>URL:</b> <code>{url}</code>\n"
-        f"<b>Error:</b> <code>{error_msg}</code>\n\n"
-        "<i>請至伺服器查看完整日誌與 Stack Trace。</i>"
+        "🚨 <b>HTTP 500</b>\n"
+        f"{escape_tg(method, 10)} <code>{escape_tg(url, 300)}</code>\n"
+        f"<code>{escape_tg(error_msg, 1000)}</code>\n"
+        "詳見伺服器日誌。"
     )
 
     api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"

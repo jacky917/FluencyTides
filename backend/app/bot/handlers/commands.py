@@ -33,7 +33,15 @@ from aiogram.types import Message
 
 from app.bot.state import UserState, UserStateManager
 from app.bot.utils.deep_link_parser import DeepLinkParser
-from app.bot.utils.formatting import anki_field_to_tg_text
+from app.bot.utils.formatting import anki_field_to_tg_text, escape_tg
+from app.bot.utils.texts import (
+    ANKI_UNREACHABLE,
+    CARD_NOT_FOUND,
+    NO_MODIFIABLE_CONFIGS,
+    error_detail,
+    field_label,
+    state_minutes,
+)
 from app.core.exceptions import AnkiFieldCorruptedError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.tg.deep_link import (
@@ -41,6 +49,7 @@ from app.schemas.tg.deep_link import (
     GenerateCardAction,
     RecordAudioAction,
     AddAudioAction,
+    TTSAudioAction,
 )
 from app.core.config import settings
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
@@ -52,6 +61,9 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 logger = logging.getLogger(__name__)
 
 router = Router(name="commands_router")
+
+# 刪除連結指向的那一筆已不存在（多半是卡片畫面還沒更新）
+_ENTRY_GONE = "❌ 這筆資料已不存在（卡片畫面可能還沒更新），請在 Anki 同步後再看。"
 
 
 @router.message(CommandStart())
@@ -105,11 +117,7 @@ async def command_start_handler(
 
     action = DeepLinkParser.parse(payload)
     if not action:
-        await message.answer(
-            f"👋 歡迎使用 FluencyTides Bot！\n\n"
-            f"收到的 Payload: <code>{payload}</code>\n"
-            f"目前無法處理此連結。請直接傳送單字或使用 /help 查看說明。"
-        )
+        await message.answer("❌ 無法辨識這個連結，請回 Anki 重新點按鈕，或用 /help 查看說明。")
         return
 
     if isinstance(action, RecordAudioAction):
@@ -117,16 +125,11 @@ async def command_start_handler(
         try:
             note_ids = await anki_client.find_notes(f"Card_ID:{action.card_id}")
             if not note_ids:
-                await message.answer(
-                    f"❌ 找不到 Card ID 為 <code>{action.card_id}</code> 的卡片。\n"
-                    f"請確認 Anki 是否正在執行。"
-                )
+                await message.answer(CARD_NOT_FOUND)
                 return
         except AnkiConnectError as e:
             logger.error("驗證卡片時發生錯誤: %s", e)
-            await message.answer(
-                "❌ 無法連線到 Anki，請確認 AnkiConnect 正在執行。"
-            )
+            await message.answer(ANKI_UNREACHABLE)
             return
 
         chat_id = message.chat.id
@@ -196,16 +199,11 @@ async def command_start_handler(
         try:
             note_ids = await anki_client.find_notes(f"Card_ID:{action.card_id}")
             if not note_ids:
-                await message.answer(
-                    f"❌ 找不到 Card ID 為 <code>{action.card_id}</code> 的卡片。\n"
-                    f"請確認 Anki 是否正在執行。"
-                )
+                await message.answer(CARD_NOT_FOUND)
                 return
         except AnkiConnectError as e:
             logger.error("驗證卡片時發生錯誤: %s", e)
-            await message.answer(
-                "❌ 無法連線到 Anki，請確認 AnkiConnect 正在執行。"
-            )
+            await message.answer(ANKI_UNREACHABLE)
             return
 
         # 切換使用者狀態為 add_audio
@@ -213,17 +211,16 @@ async def command_start_handler(
         user_state_manager.set_state(
             chat_id,
             UserState(
-                action="add_audio", 
+                action="add_audio",
                 card_id=action.card_id,
                 extra={"field_name": action.field_name, "index": action.index}
             ),
         )
 
+        # 只處理 Telegram 的「語音訊息」（F.voice）；以檔案傳送的 mp3 等不會被處理，所以明說
         await message.answer(
-            f"🎙️ <b>上傳模式已啟動</b>\n\n"
-            f"目標卡片：<code>{action.card_id}</code>\n"
-            f"目標欄位：<code>{action.field_name}</code>\n\n"
-            f"請直接發送現成的語音訊息，我會將其上傳並附加到卡片中！"
+            f"📤 <b>上傳到{field_label(action.field_name)}</b>\n"
+            f"請傳一則語音訊息（不收 mp3 等檔案，{state_minutes()} 分鐘內有效）。"
         )
         return
 
@@ -232,7 +229,12 @@ async def command_start_handler(
         return
 
     if isinstance(action, GenerateCardAction):
-        await message.answer(f"🚧 生成卡片操作尚未實作: 目標={action.target_id}")
+        await message.answer("🚧 這個連結的功能尚未開放。")
+        return
+
+    if isinstance(action, TTSAudioAction):
+        # 卡片模板已有「透過 AI TTS 生成語音」的連結，但後端還沒實作；不回覆的話使用者以為按了沒反應
+        await message.answer("🚧 AI 語音生成尚未開放。")
         return
 
 
@@ -274,10 +276,7 @@ async def _handle_delete_entry(
         for lang in LANG_CODES
     )
     if field_name not in allowed_fields:
-        await message.answer(
-            f"❌ 不支援的目標欄位: <code>{field_name}</code>。\n"
-            f"僅支援: {', '.join(allowed_fields)}"
-        )
+        await message.answer("❌ 這個刪除連結不支援，請回 Anki 重新點。")
         return
 
     # 查詢 Anki 卡片
@@ -287,31 +286,28 @@ async def _handle_delete_entry(
 
         note_ids = await anki_client.find_notes(f"Card_ID:{action.card_id}")
         if not note_ids:
-            await message.answer(
-                f"❌ 找不到 Card ID 為 <code>{action.card_id}</code> 的卡片。"
-            )
+            await message.answer(CARD_NOT_FOUND)
             return
 
         notes_info = await anki_client.get_notes_info(notes=note_ids[:1])
         if not notes_info:
-            await message.answer("❌ 無法取得卡片詳細資訊。")
+            await message.answer(CARD_NOT_FOUND)
             return
 
         note_info = notes_info[0]
         note_id = note_info.noteId
     except AnkiConnectError as e:
         logger.error("查詢 Anki 卡片失敗: %s", e)
-        await message.answer("❌ 無法連線到 Anki。")
+        await message.answer(ANKI_UNREACHABLE)
         return
 
     # 讀取 JSON 欄位
     field_data = note_info.fields.get(field_name, {})
     raw_json = str(field_data.get("value", "")).strip()
 
+    section_name = field_label(field_name)
     if not raw_json:
-        await message.answer(
-            f"❌ 卡片的 <code>{field_name}</code> 欄位為空。"
-        )
+        await message.answer(f"❌ {section_name}已經沒有資料。")
         return
 
     # 以共用解析器讀取：會先剝除 Anki 插入的 HTML、還原 &quot; 等實體，
@@ -321,9 +317,7 @@ async def _handle_delete_entry(
     try:
         items_list = AnkiJsonFieldManager.parse_field_string(raw_json)
     except AnkiFieldCorruptedError as e:
-        await message.answer(
-            f"❌ 無法解析 <code>{field_name}</code> 欄位的 JSON: {e}"
-        )
+        await message.answer(f"❌ {section_name}的資料無法解析：{error_detail(e)}")
         return
 
     # 驗證索引範圍
@@ -332,16 +326,16 @@ async def _handle_delete_entry(
     except ValueError:
         if action.index == "last" and items_list:
             index_val = len(items_list) - 1
+        elif action.index == "last":
+            await message.answer(f"❌ {section_name}已經沒有資料。")
+            return
         else:
-            await message.answer(f"❌ 無效的索引: <code>{action.index}</code>")
+            await message.answer(_ENTRY_GONE)
             return
 
     if index_val < 0 or index_val >= len(items_list):
-        await message.answer(
-            f"❌ 索引 {index_val} 超出範圍。\n"
-            f"<code>{field_name}</code> 目前有 {len(items_list)} 筆資料 "
-            f"(索引 0~{len(items_list) - 1})。"
-        )
+        # 最常見的原因是卡片畫面還沒更新（剛刪過一筆，索引已位移）
+        await message.answer(_ENTRY_GONE)
         return
 
     # 執行刪除
@@ -360,21 +354,10 @@ async def _handle_delete_entry(
         )
     except (AnkiConnectError, FluencyTidesError) as e:
         logger.error("更新 Anki 卡片欄位失敗: %s", e)
-        await message.answer(f"❌ 寫回 Anki 失敗: {e}")
+        # 寫回失敗代表沒有刪到、索引也沒位移：可以直接再點一次同一個刪除按鈕
+        await message.answer(f"❌ 寫回 Anki 失敗：{error_detail(e)}\n可回 Anki 再點一次刪除。")
         return
 
-    from app.services.task_handlers.shared.trilingual_lang import (
-        LANG_DISPLAY,
-        lang_from_field,
-    )
-
-    section_names = {"References": "參考範本", "Recordings": "歷史錄音", "Prompt_Audios": "正面語音"}
-    _lang = lang_from_field(field_name)
-    if _lang:
-        _base = field_name.rsplit("_", 1)[0]
-        section_name = f"{section_names.get(_base, _base)}({LANG_DISPLAY[_lang]})"
-    else:
-        section_name = section_names.get(field_name, field_name)
     removed_preview = ""
     if isinstance(removed_item, dict):
         removed_preview = removed_item.get(
@@ -387,13 +370,11 @@ async def _handle_delete_entry(
     from app.bot.handlers.callbacks import _sync_with_warning
     sync_warning = await _sync_with_warning(anki_client)
 
+    # 內容是使用者資料（References 已被 parse_field_string 還原過實體）：不轉義的話含 < 或 & 時
+    # 這則確認送不出去，使用者以為沒刪而再點一次，就會刪到下一筆
     await message.answer(
-        f"✅ <b>刪除成功</b>\n\n"
-        f"卡片：<code>{action.card_id}</code>\n"
-        f"區塊：{section_name}\n"
-        f"索引：{action.index}\n"
-        f"內容：{removed_preview[:100]}\n\n"
-        f"<i>剩餘 {len(items_list)} 筆資料。(結果已自動寫入本地 Anki)</i>{sync_warning}"
+        f"✅ 已刪除{section_name}：{escape_tg(str(removed_preview), 100)}\n"
+        f"剩 {len(items_list)} 筆。{sync_warning}"
     )
 
 
@@ -455,24 +436,20 @@ async def command_sync_handler(
         anki_client: 注入的 AnkiClient。Injected AnkiClient instance.
         relation_service: 注入的 RelationService。Injected RelationService.
     """
-    status_msg = await message.answer("🔄 正在與 Anki 進行同步清理，請稍候...")
+    # 這個指令不會觸發 AnkiWeb 同步，只是掃描 Anki 現有卡片、清掉指向已刪卡片的關聯
+    status_msg = await message.answer("⏳ 清理失效關聯中…")
 
     try:
         valid_note_ids = await anki_client.find_notes("deck:*")
         deleted_count = await relation_service.sync_with_anki(valid_note_ids)
 
+        # 顯示掃描張數：Anki 回 0 張卻刪了一堆關聯時，使用者看得出不對勁
         await status_msg.edit_text(
-            f"✅ <b>同步完成！</b>\n\n"
-            f"已成功掃描 Anki 卡片，並從資料庫清理了 "
-            f"<b>{deleted_count}</b> 筆孤兒關聯紀錄。"
+            f"✅ 清理完成：掃描 {len(valid_note_ids)} 張卡片，移除 {deleted_count} 筆失效關聯。"
         )
     except (AnkiConnectError, FluencyTidesError) as e:
         logger.exception("Telegram Bot 同步發生未預期錯誤: %s", e)
-        await status_msg.edit_text(
-            f"❌ <b>同步失敗</b>\n\n"
-            f"無法與 Anki 完成同步。\n"
-            f"詳細: {str(e)}"
-        )
+        await status_msg.edit_text(f"❌ 清理失敗：{error_detail(e)}")
 
 
 @router.message(Command("setconfig"))
@@ -495,7 +472,7 @@ async def command_setconfig_handler(message: Message) -> None:
 
     modifiable = get_modifiable_configs()
     if not modifiable:
-        await message.answer("⚠️ 目前 .env 中沒有設定任何允許動態修改的變數 (MODIFY_ 開頭)。")
+        await message.answer(NO_MODIFIABLE_CONFIGS)
         return
 
     # 建立 Inline Keyboard 顯示所有可用的設定

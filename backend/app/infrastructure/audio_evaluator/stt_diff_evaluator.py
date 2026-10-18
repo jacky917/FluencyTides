@@ -35,7 +35,7 @@ import html
 import logging
 import unicodedata
 
-from app.infrastructure.audio_evaluator.base import BaseAudioEvaluator
+from app.infrastructure.audio_evaluator.base import AudioNotScoredError, BaseAudioEvaluator
 from app.infrastructure.stt.whisper_client import WhisperClient
 from app.schemas.llm.speaking import AudioEvaluationResult
 
@@ -214,23 +214,13 @@ class STTDiffEvaluator(BaseAudioEvaluator):
             target_language=target_language,
         )
 
+        # 以下兩種情況都不是評分結果（不是 0 分）：拋出讓呼叫端不寫入紀錄、照實告訴使用者
         if not transcript.strip():
-            return AudioEvaluationResult(
-                score=0,
-                feedback="未能偵測到語音內容。",
-                transcript="（無語音）",
-                evaluator_label=label,
-            )
+            raise AudioNotScoredError("沒有偵測到語音。")
 
         if not reference_answers:
-            return AudioEvaluationResult(
-                score=0,
-                feedback=(
-                    "此卡片沒有參考答案 (References)，不支援 stt_diff 純比對模式。\n"
-                    "請切換至 stt_llm 或其他評分模式。"
-                ),
-                transcript=transcript,
-                evaluator_label=label,
+            raise AudioNotScoredError(
+                "這張卡沒有參考答案，比對模式無法評分；管理員可用 /setconfig 改用 stt_llm。"
             )
 
         norm_transcript, transcript_map = _normalize_with_map(transcript)

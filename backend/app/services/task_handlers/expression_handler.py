@@ -298,11 +298,14 @@ class ExpressionCorrectionHandler(BaseHandler):
                     "TG_Bot": tg_bot
                 }
 
+                # 子卡與母卡用同一個 allow_duplicate：允許重複或覆蓋時舊卡的子卡還在（覆蓋是新卡建好後
+                # 才刪舊卡），內容相同的子卡不能讓整組交易回滾
                 await tx.create_note(
                     deck_name=deck_name_full,
                     model_name="Expression_Micro_Dark",
                     fields=micro_fields,
-                    tags=micro_tags
+                    tags=micro_tags,
+                    allow_duplicate=allow_duplicate,
                 )
 
             return list(tx.created_ids)

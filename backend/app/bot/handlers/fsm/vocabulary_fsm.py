@@ -19,6 +19,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+from app.bot.utils.formatting import escape_tg
+from app.bot.utils.texts import NEWCARD_RESTART, error_detail
 from app.core.exceptions import FluencyTidesError
 from app.services.card_service import CardService
 from app.services.relation_service import RelationService
@@ -61,15 +63,16 @@ async def start_vocabulary_fsm_flow(message: types.Message, state: FSMContext) -
     Returns:
         None
     """
+    await state.clear()
     await state.set_state(VocabularyStates.waiting_for_word)
-    
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ 取消", callback_data="vocab_cancel")]
     ])
-    
+
     await message.answer(
-        "📚 <b>新增單字卡 (Vocabulary Mining)</b>\n\n"
-        "請輸入您想學習的外語單字或片語：",
+        "📚 <b>單字卡</b>\n\n"
+        "輸入外語單字或片語：",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
@@ -90,7 +93,7 @@ async def process_vocab_cancel(callback_query: types.CallbackQuery, state: FSMCo
     """
     if callback_query.message:
         await callback_query.message.edit_reply_markup(reply_markup=None)
-        await callback_query.message.answer("🗑️ 已取消單字卡新增。")
+        await callback_query.message.answer("🗑️ 已取消。")
     await state.clear()
     await callback_query.answer()
 
@@ -121,9 +124,10 @@ async def process_word(
         return
 
     word = message.text.strip()
-    
-    # 回覆處理中訊息，提升使用者體驗
-    status_msg = await message.reply("⏳ 正在為您查字典並生成卡片，請稍候...")
+
+    # 目前的 handler 不呼叫 LLM（只建立 Meaning 為佔位文字的卡片，見 vocabulary_mining_handler），
+    # 不要說成「查字典並生成」
+    status_msg = await message.reply("⏳ 建立中…")
 
     try:
         handler = handler_registry.get_handler("vocabulary_mining")
@@ -147,36 +151,25 @@ async def process_word(
         from app.bot.handlers.callbacks import _sync_with_warning
         sync_warning = await _sync_with_warning(anki_client)
 
-        # 生成成功，修改回覆訊息
+        # 單字是使用者輸入，要轉義（否則含 < 或 & 時卡片已建、畫面卻停在「建立中」）；
+        # 「模型」指 Anki 筆記類型，容易與 /models 的 LLM 模型混淆，不顯示
         await status_msg.edit_text(
-            f"✅ <b>卡片生成完成！</b>\n\n"
-            f"🎯 學習字詞：<b>{word}</b>\n"
-            f"📦 目標牌組：<code>{default_deck}</code>\n"
-            f"🔖 使用模型：<code>{default_model}</code>\n"
-            f"🆔 Note ID：<code>{note_id}</code>\n\n"
-            f"<i>可以到 Anki 中查看結果，已寫入本地！🎉</i>{sync_warning}",
+            f"✅ <b>單字卡已建立</b>（釋義尚未自動產生）\n"
+            f"單字：<b>{escape_tg(word, 100)}</b>\n"
+            f"牌組：<code>{default_deck}</code>{sync_warning}",
             parse_mode="HTML"
         )
     except FluencyTidesError as e:
         logger.warning("Telegram Bot 卡片生成失敗 (業務異常): %s", e.message)
-        error_icon = "⚠️"
         if e.error_code == "DUPLICATE_CARD":
-            error_icon = "🔁"
-        elif e.error_code == "FIELD_MISMATCH":
-            error_icon = "📋"
-
-        await status_msg.edit_text(
-            f"{error_icon} <b>生成失敗</b>\n\n"
-            f"錯誤碼：<code>{e.error_code}</code>\n"
-            f"原因：{e.message}",
-            parse_mode="HTML"
-        )
+            text = "🔁 已有相同單字的卡片，未建立。"
+        else:
+            text = f"❌ 建立失敗：{error_detail(e.message)}\n{NEWCARD_RESTART}"
+        await status_msg.edit_text(text, parse_mode="HTML")
     except AnkiConnectError as e:
         logger.exception("Telegram Bot 卡片生成發生未預期錯誤: %s", e)
         await status_msg.edit_text(
-            f"❌ <b>系統發生異常</b>\n\n"
-            f"無法完成生成卡片，請檢查後端日誌或確認 AnkiConnect 是否正常運作。\n"
-            f"詳細: {str(e)[:200]}",
+            f"❌ 建立失敗：{error_detail(e)}\n請確認電腦版 Anki 已開啟。",
             parse_mode="HTML"
         )
     finally:

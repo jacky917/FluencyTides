@@ -251,7 +251,7 @@ def test_orphan_delete_then_back_to_list(llm_route_db, llm_whitelist):
     _, markup, _ = _click(_button_starting(markup, "⚠️ zz.orphan"))
     assert not any(text.startswith("⚙️ 設定") for text in _buttons(markup))
     text, markup, _ = _click(_button_starting(markup, "↩️ 恢復預設"))
-    assert "已恢復預設" in text
+    assert "已刪除" in text and "zz.orphan" in text
     text, markup, query = _click(_button_starting(markup, "⬅️ 返回清單"))
 
     assert "LLM 模型設定" in text
@@ -357,7 +357,7 @@ def test_db_down_menu_is_read_only(llm_route_db, llm_whitelist):
         text, _ = _open_menu()
         _, _, query = _click(button)
 
-    assert "目前讀不到資料庫" in text
+    assert "讀不到資料庫" in text and "選單暫停使用" in text
     alert = query.answer.await_args.args[0]
     assert "讀不到資料庫" in alert
     query.message.edit_text.assert_not_awaited()

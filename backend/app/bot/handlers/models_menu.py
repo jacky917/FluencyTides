@@ -76,7 +76,8 @@ ALERT_TEXT_LIMIT = 190
 
 _SOURCE_LABELS = {"route": "用途", "global": "全域", "env": ".env"}
 _STALE_ALERT = "選單已過期，請重新輸入 /models。"
-_DB_ALERT = "⚠️ 目前讀不到資料庫，無法修改設定（詳見後端 log），請稍後再試。"
+# 讀不到 DB 時整個選單都拒絕操作（含翻頁、看詳情），不只是修改
+_DB_ALERT = "⚠️ 讀不到資料庫，選單暫停使用，請稍後重新輸入 /models。"
 
 
 class Action(StrEnum):
@@ -288,7 +289,7 @@ def render_list(ctx: MenuContext, views: list[RouteView], page: int) -> tuple[st
         "<b>.env</b>＝部署預設。"
     )
     if not ctx.db_ok:
-        text += "\n\n⚠️ 目前讀不到資料庫：以下皆為 .env 預設，實際存的設定未知，暫時無法修改（詳見後端 log）。"
+        text += "\n\n⚠️ 讀不到資料庫：以下為 .env 預設，實際設定未知，選單暫停使用。"
     if pages > 1:
         text += f"\n\n第 {page + 1} / {pages} 頁"
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
@@ -719,7 +720,13 @@ async def _delete(callback_query: CallbackQuery, ctx: MenuContext, key_index: in
         result = await llm_route_service.delete_route(key, updated_by=f"tg:{callback_query.from_user.id}")
     finally:
         await _refresh_global_client_if(key, app)
-    title = "↩️ 已恢復預設" if result.deleted else "ℹ️ 這個用途本來就沒有設定"
+    if not result.deleted:
+        title = "ℹ️ 這個用途本來就沒有設定"
+    elif result.view is None and not result.view_unavailable:
+        # 孤兒鍵刪除後已從清單消失，沒有「預設」可言
+        title = f"🗑️ 已刪除 <b>{html.escape(key)}</b>"
+    else:
+        title = "↩️ 已恢復預設"
 
     async def screen() -> tuple[str, InlineKeyboardMarkup]:
         # 刪除孤兒鍵會讓清單變短、版本改變：用重新載入的選單產生按鈕，並把序號夾在範圍內，

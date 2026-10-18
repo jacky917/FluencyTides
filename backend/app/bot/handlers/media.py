@@ -20,6 +20,8 @@ from app.bot.state import UserStateManager
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from aiogram.exceptions import TelegramAPIError
 
+from app.bot.utils.texts import error_detail
+
 logger = logging.getLogger(__name__)
 
 router = Router(name="media_router")
@@ -53,18 +55,19 @@ async def process_photo_handler(
     if not state or state.action != "wait_avatar_upload":
         return
 
-    status_msg = await message.reply("🔄 <b>處理中...</b>\n\n正在下載並處理圖片...")
+    status_msg = await message.reply("⏳ 處理圖片中…")
 
     try:
         photo = message.photo[-1]  # 取得最高解析度
         bot = message.bot
         if not bot:
-            await status_msg.edit_text("❌ Bot 實例不可用。")
+            await status_msg.edit_text("❌ 系統錯誤，請稍後再試。")
             return
 
         file = await bot.get_file(photo.file_id)
         if not file or not file.file_path:
-            await status_msg.edit_text("❌ 無法取得圖片檔案路徑。")
+            # 狀態沒變（仍在等圖片），可以直接再傳
+            await status_msg.edit_text("❌ 圖片下載失敗，請再傳一次。")
             return
 
         photo_buffer = BytesIO()
@@ -73,11 +76,11 @@ async def process_photo_handler(
 
         # 產生唯一檔名
         filename = f"avatar_{chat_id}_{datetime.now(tz=timezone.utc).strftime('%Y%m%d_%H%M%S')}.jpg"
-        
+
         # 儲存到本地 assets/avatars，供未來作為系統頭像重複使用
         if not AVATARS_DIR.exists():
             AVATARS_DIR.mkdir(parents=True, exist_ok=True)
-            
+
         local_path = AVATARS_DIR / filename
         with open(local_path, "wb") as f:
             f.write(photo_data)
@@ -93,8 +96,9 @@ async def process_photo_handler(
         state.expires_at = None
         user_state_manager.set_state(chat_id, state)
 
-        await status_msg.edit_text(f"✅ <b>圖片上傳成功！</b>\n\n請輸入說話者的名字 (例如: 約翰, 教練)：")
+        await status_msg.edit_text("✅ 已收到圖片。請輸入說話者名稱（例如：約翰）：")
 
     except (TelegramAPIError, AnkiConnectError, IOError) as e:
         logger.error("處理圖片失敗: %s", e)
-        await status_msg.edit_text(f"❌ 處理圖片失敗: {str(e)[:200]}")
+        # 狀態沒有推進（仍在等圖片），可以直接再傳
+        await status_msg.edit_text(f"❌ 圖片處理失敗：{error_detail(e)}\n請再傳一次。")
