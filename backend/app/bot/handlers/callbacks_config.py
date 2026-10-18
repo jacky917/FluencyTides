@@ -13,8 +13,13 @@ from typing import Any
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
+from app.bot.utils.formatting import escape_tg
+from app.bot.utils.texts import NO_MODIFIABLE_CONFIGS, SETCONFIG_EXPIRED_ALERT
 from app.core.config import settings
 from app.core.dynamic_config import get_modifiable_configs
+
+# Telegram 的 callback data 上限（位元組，不是字元：中文一字 3 bytes）
+_CALLBACK_DATA_LIMIT = 64
 
 logger = logging.getLogger(__name__)
 
@@ -43,42 +48,45 @@ async def handle_setconfig_key_selection(callback: CallbackQuery) -> None:
     modifiable = get_modifiable_configs()
 
     if key not in modifiable:
-        await callback.answer("此設定不允許被修改。", show_alert=True)
+        # 只會在舊按鈕上發生（.env 改過、或該鍵已改由 /models 管理）
+        await callback.answer(SETCONFIG_EXPIRED_ALERT, show_alert=True)
         return
 
+    await callback.answer()
     options = modifiable[key]
-    
-    # 建立按鈕
-    buttons = []
     if options is None:
-        # 如果沒有選項限制，提示使用者（進階實作可改用 ForceReply 讓使用者輸入，這裡先簡單提示）
+        # 沒有選項清單時無法用按鈕選（進階實作可改用 ForceReply 讓使用者輸入）
         await callback.message.edit_text(
-            f"設定 `{key}` 目前沒有選項限制。\n"
-            f"請直接修改 .env 或設定選項清單來啟用互動按鈕。"
+            f"<code>{escape_tg(key)}</code> 沒有可選的值，只能改 .env。",
+            reply_markup=_back_keyboard(),
         )
         return
-    else:
-        for opt in options:
-            # 使用 setcfg_val:KEY:VALUE 格式
-            cb_data = f"setcfg_val:{key}:{opt}"
-            if len(cb_data) > 64:
-                logger.warning("Callback data 超過 64 bytes 限制: %s", cb_data)
-                # 簡單截斷或略過，這裡若超過則截斷 VALUE，但通常不會
-                cb_data = cb_data[:64]
-            buttons.append([InlineKeyboardButton(text=opt, callback_data=cb_data)])
-            
-            
-        # 加入返回按鈕
-        buttons.append([InlineKeyboardButton(text="⬅️ 返回", callback_data="setconfig_back")])
-            
+
+    buttons = []
+    for opt in options:
+        cb_data = f"setcfg_val:{key}:{opt}"
+        if len(cb_data.encode("utf-8")) > _CALLBACK_DATA_LIMIT:
+            # 截斷後的值與清單對不上，按下去必定被當成無效選項：寧可不列出
+            logger.warning("/setconfig：%s 的選項 %r 超過 callback data 的 64 bytes 上限，不列出", key, opt)
+            continue
+        buttons.append([InlineKeyboardButton(text=opt, callback_data=cb_data)])
+    buttons.append([InlineKeyboardButton(text="⬅️ 返回", callback_data="setconfig_back")])
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     current_val = getattr(settings, key, "未知")
     await callback.message.edit_text(
-        f"您正在修改 `<b>{key}</b>`\n"
-        f"目前的值：`{current_val}`\n\n"
-        f"請選擇新的值：",
+        f"⚙️ <b>{escape_tg(key)}</b>\n"
+        f"目前：<code>{escape_tg(str(current_val))}</code>\n"
+        f"選擇新的值：",
         reply_markup=keyboard,
         parse_mode="HTML"
+    )
+
+
+def _back_keyboard() -> InlineKeyboardMarkup:
+    """只有「返回設定列表」的鍵盤（避免訊息成為死路）。A keyboard with just the back button."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="⬅️ 返回", callback_data="setconfig_back")]]
     )
 
 @router.callback_query(F.data == "setconfig_back")
@@ -98,9 +106,10 @@ async def handle_setconfig_back(callback: CallbackQuery) -> None:
         await callback.answer("您沒有權限執行此操作。", show_alert=True)
         return
 
+    await callback.answer()
     modifiable = get_modifiable_configs()
     if not modifiable:
-        await callback.message.edit_text("⚠️ 目前 .env 中沒有設定任何允許動態修改的變數 (MODIFY_ 開頭)。")
+        await callback.message.edit_text(NO_MODIFIABLE_CONFIGS)
         return
 
     buttons = []
@@ -142,12 +151,13 @@ async def handle_setconfig_value_selection(callback: CallbackQuery, app: "Any" =
     modifiable = get_modifiable_configs()
 
     if key not in modifiable:
-        await callback.answer("此設定不允許被修改。", show_alert=True)
+        await callback.answer(SETCONFIG_EXPIRED_ALERT, show_alert=True)
         return
 
     options = modifiable[key]
     if options is not None and value not in options:
-        await callback.answer("無效的選項！", show_alert=True)
+        # 選項清單改過（.env 變了）的舊按鈕
+        await callback.answer(SETCONFIG_EXPIRED_ALERT, show_alert=True)
         return
 
     # 動態覆寫 settings (這只存在記憶體中)
@@ -161,9 +171,8 @@ async def handle_setconfig_value_selection(callback: CallbackQuery, app: "Any" =
         if key == "AUDIO_EVALUATOR_PROVIDER":
             if app is None:
                 setattr(settings, key, old_value)
-                await callback.answer(
-                    "無法取得應用程式實例，已回滾設定。", show_alert=True
-                )
+                logger.warning("/setconfig：dispatcher 沒有注入 app，無法重建 audio evaluator，%s 已回滾為 %s", key, old_value)
+                await callback.answer("❌ 切換失敗，設定未變更（詳見伺服器日誌）。", show_alert=True)
                 return
             try:
                 from app.infrastructure.audio_evaluator.factory import (
@@ -172,23 +181,21 @@ async def handle_setconfig_value_selection(callback: CallbackQuery, app: "Any" =
                 app.state.audio_evaluator = create_audio_evaluator()
             except Exception as e:
                 setattr(settings, key, old_value)
-                logger.error("切換 Audio Evaluator 失敗，已回滾: %s", e)
+                logger.exception("切換 Audio Evaluator 為 %s 失敗，已回滾為 %s", value, old_value)
+                await callback.answer()
                 await callback.message.edit_text(
-                    f"❌ 切換評分器失敗，設定已回滾為 <b>{old_value}</b>。\n\n"
-                    f"<i>原因：{type(e).__name__}，詳見伺服器日誌。</i>",
+                    f"❌ 切換失敗，維持 <b>{escape_tg(str(old_value))}</b>（詳見伺服器日誌）。",
+                    reply_markup=_back_keyboard(),
                     parse_mode="HTML",
                 )
                 return
 
         logger.info("動態修改設定成功: %s = %s", key, value)
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="⬅️ 返回設定列表", callback_data="setconfig_back")]]
-        )
+        await callback.answer()
         await callback.message.edit_text(
-            f"✅ 成功將 `<b>{key}</b>` 暫時設為 `<b>{value}</b>`！\n\n"
-            f"<i>此設定僅在本次執行期間有效，伺服器重啟後將退回 .env 的設定值。</i>",
-            reply_markup=keyboard,
+            f"✅ <b>{escape_tg(key)}</b> 已設為 <b>{escape_tg(value)}</b>（重啟後還原）。",
+            reply_markup=_back_keyboard(),
             parse_mode="HTML"
         )
     else:
-        await callback.answer(f"找不到對應的系統設定 {key}。", show_alert=True)
+        await callback.answer(f"找不到對應的系統設定 {key}。"[:190], show_alert=True)

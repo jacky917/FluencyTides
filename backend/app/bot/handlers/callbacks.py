@@ -11,6 +11,8 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.bot.state import UserState, UserStateManager
+from app.bot.utils.formatting import escape_tg
+from app.bot.utils.texts import CARD_NOT_FOUND, UPLOAD_EXPIRED_ALERT, UPLOAD_RETRY, error_detail, upload_done_text
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from app.services.card_service import CardService
 from app.core.exceptions import FluencyTidesError
@@ -50,13 +52,14 @@ async def _sync_with_warning(anki_client: AnkiClient, force: bool = True) -> str
         await anki_client.sync(raise_errors=True, force=force)
     except AnkiConnectError as e:
         logger.warning("Anki 同步失敗: %s", e)
+        # 兩種情況資料都已寫進電腦版 Anki，只是沒同步到 AnkiWeb——要說清楚，免得使用者以為沒寫入。
+        # 衝突時「上傳」會以電腦版覆蓋 AnkiWeb（手機上還沒同步的複習紀錄會遺失），不能寫成無副作用
         if "衝突" in str(e) or "背景同步" in str(e):
             return (
-                "\n\n⚠️ <b>Anki 同步衝突</b>\n"
-                "您的 Anki 電腦版遇到了同步衝突，請打開電腦版 Anki，"
-                "點擊「同步」並選擇「上傳到 AnkiWeb」即可解決！"
+                "\n\n⚠️ 已寫入 Anki，但同步衝突：請在電腦版 Anki 手動同步"
+                "（選「上傳」會以電腦版覆蓋 AnkiWeb）。"
             )
-        return "\n\n⚠️ <b>Anki 同步失敗</b>\n請確認 Anki 電腦版狀態。"
+        return "\n\n⚠️ 已寫入 Anki，但同步 AnkiWeb 失敗；下次操作會再試。"
     return ""
 
 
@@ -92,7 +95,7 @@ async def _execute_final_update(
         relation_service: 關聯服務。The RelationService instance.
     """
     await callback.message.edit_text(status_msg_text)
-    
+
     try:
         # 取前同步 (有防抖)
         await anki_client.sync(raise_errors=False)
@@ -100,11 +103,15 @@ async def _execute_final_update(
         card_id = state.card_id
         note_ids = await anki_client.find_notes(f"Card_ID:{card_id}")
         if not note_ids:
-            await callback.message.edit_text(f"❌ 找不到 Card ID 為 <code>{card_id}</code> 的卡片。")
+            await callback.message.edit_text(CARD_NOT_FOUND)
             user_state_manager.clear_state(chat_id)
             return
 
         notes_info = await anki_client.get_notes_info(notes=note_ids[:1])
+        if not notes_info:
+            await callback.message.edit_text(CARD_NOT_FOUND)
+            user_state_manager.clear_state(chat_id)
+            return
         note_id = notes_info[0].noteId
 
         field_name = state.extra.get("field_name")
@@ -124,7 +131,7 @@ async def _execute_final_update(
             "speaking_trilingual" if is_trilingual else "speaking_coach"
         )
         audio_filename = state.extra.get("audio_filename")
-        
+
         import base64
         from app.schemas.anki import AnkiStoreMediaParams
 
@@ -142,7 +149,7 @@ async def _execute_final_update(
             relation_service,
             note_id,
             {
-                "action": "add_audio", 
+                "action": "add_audio",
                 "field_name": field_name,
                 "index": index_str,
                 "audio": audio_filename,
@@ -150,22 +157,17 @@ async def _execute_final_update(
                 "speaker": speaker_name
             },
         )
-        
+
         user_state_manager.clear_state(chat_id)
-        
+
         # 寫入完成後觸發同步
         sync_warning = await _sync_with_warning(anki_client)
 
-        await callback.message.edit_text(
-            f"✅ <b>語音上傳完成！</b>\n\n"
-            f"🎯 卡片：<code>{card_id}</code>\n"
-            f"📂 目標欄位：<code>{field_name}</code>\n"
-            f"👤 說話者：<code>{speaker_name}</code>\n\n"
-            f"<i>音檔與頭像設定已寫入本地！🎉</i>{sync_warning}"
-        )
+        await callback.message.edit_text(upload_done_text(field_name, speaker_name, sync_warning))
     except (AnkiConnectError, FluencyTidesError) as e:
         logger.error("寫回 Anki 失敗: %s", e)
-        await callback.message.edit_text(f"❌ 寫回 Anki 失敗: {str(e)[:200]}")
+        # 狀態已清：要說重新進入的入口（音檔已上傳到 Anki Media，重新上傳即可）
+        await callback.message.edit_text(f"❌ 寫回 Anki 失敗：{error_detail(e)}\n{UPLOAD_RETRY}")
         user_state_manager.clear_state(chat_id)
 
 
@@ -183,33 +185,47 @@ async def handle_avatar_sys(callback: CallbackQuery, user_state_manager: UserSta
     state = user_state_manager.get_state(chat_id)
 
     if not state or state.action != "wait_avatar_selection":
-        await callback.answer("狀態已失效，請重新操作。", show_alert=True)
+        await callback.answer(UPLOAD_EXPIRED_ALERT, show_alert=True)
         return
 
-    avatar_files = []
-    if AVATARS_DIR.exists():
-        for file in AVATARS_DIR.iterdir():
-            if file.is_file() and file.suffix.lower() in (".jpg", ".png", ".jpeg"):
-                avatar_files.append(file.name)
-
+    avatar_files = _system_avatars()
     if not avatar_files:
         await callback.answer("系統目前沒有內建頭像，請選擇上傳自訂圖片。", show_alert=True)
         return
 
-    buttons = []
-    for filename in avatar_files:
-        display_name = Path(filename).stem
-        buttons.append([InlineKeyboardButton(text=f"👤 {display_name}", callback_data=f"avatar_sel_{filename}")])
-    
+    # 把這一刻的清單存進狀態，按鈕的序號就對應使用者看到的這份清單：自訂頭像也存在同一個目錄，
+    # 若之後重新列目錄，期間有人上傳頭像就會讓序號位移、選到別張
+    state.extra["avatar_files"] = avatar_files
+    user_state_manager.set_state(chat_id, state)
+
+    await callback.answer()
+    buttons = [
+        [InlineKeyboardButton(text=f"👤 {Path(filename).stem}"[:60], callback_data=f"avatar_sel_{index}")]
+        for index, filename in enumerate(avatar_files)
+    ]
     buttons.append([InlineKeyboardButton(text="⬅️ 返回", callback_data="avatar_back")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await callback.message.edit_text("請選擇一個系統頭像：", reply_markup=keyboard)
 
 
+def _system_avatars() -> list[str]:
+    """系統內建頭像的檔名，依名稱排序（按鈕以序號對應，排序固定才不會選錯）。
+
+    Built-in avatar file names, sorted so button indices stay stable.
+    """
+    if not AVATARS_DIR.exists():
+        return []
+    return sorted(
+        file.name
+        for file in AVATARS_DIR.iterdir()
+        if file.is_file() and file.suffix.lower() in (".jpg", ".png", ".jpeg")
+    )
+
+
 @router.callback_query(F.data.startswith("avatar_sel_"))
 async def handle_avatar_sys_select(
-    callback: CallbackQuery, 
+    callback: CallbackQuery,
     user_state_manager: UserStateManager,
     anki_client: AnkiClient,
     handler_registry: HandlerRegistry,
@@ -232,15 +248,23 @@ async def handle_avatar_sys_select(
     state = user_state_manager.get_state(chat_id)
 
     if not state or state.action != "wait_avatar_selection":
-        await callback.answer("狀態已失效，請重新操作。", show_alert=True)
+        await callback.answer(UPLOAD_EXPIRED_ALERT, show_alert=True)
         return
 
-    filename = callback.data.replace("avatar_sel_", "", 1)
+    # 序號對應顯示選單當下存進狀態的清單（見 handle_avatar_sys），不重新列目錄
+    avatar_files = state.extra.get("avatar_files") or []
+    raw_index = callback.data.replace("avatar_sel_", "", 1)
+    if not (raw_index.isascii() and raw_index.isdigit()) or int(raw_index) >= len(avatar_files):
+        # 舊格式（以檔名當 callback data）或沒有對應的清單：當成過期，不要選錯頭像
+        await callback.answer(UPLOAD_EXPIRED_ALERT, show_alert=True)
+        return
+    filename = avatar_files[int(raw_index)]
     speaker_name = Path(filename).stem
-    
+
+    await callback.answer("⏳ 寫入中…")
     await _execute_final_update(
-        chat_id, 
-        f"🔄 <b>處理中...</b>\n\n已選擇系統頭像「{speaker_name}」，正在寫回 Anki...",
+        chat_id,
+        f"⏳ 以「{escape_tg(speaker_name, 50)}」寫入 Anki 中…",
         callback, state, filename, speaker_name,
         user_state_manager, anki_client, handler_registry, card_service, relation_service
     )
@@ -260,19 +284,20 @@ async def handle_avatar_upload(callback: CallbackQuery, user_state_manager: User
     state = user_state_manager.get_state(chat_id)
 
     if not state or state.action != "wait_avatar_selection":
-        await callback.answer("狀態已失效，請重新操作。", show_alert=True)
+        await callback.answer(UPLOAD_EXPIRED_ALERT, show_alert=True)
         return
 
     state.action = "wait_avatar_upload"
     state.expires_at = None
     user_state_manager.set_state(chat_id, state)
 
-    await callback.message.edit_text("🖼️ 請傳送一張圖片 (將作為頭像使用)：")
+    await callback.answer()
+    await callback.message.edit_text("🖼️ 請傳一張照片作為頭像（不要用「檔案」傳送）。")
 
 
 @router.callback_query(F.data == "avatar_skip")
 async def handle_avatar_skip(
-    callback: CallbackQuery, 
+    callback: CallbackQuery,
     user_state_manager: UserStateManager,
     anki_client: AnkiClient,
     handler_registry: HandlerRegistry,
@@ -296,12 +321,13 @@ async def handle_avatar_skip(
     state = user_state_manager.get_state(chat_id)
 
     if not state or state.action != "wait_avatar_selection":
-        await callback.answer("狀態已失效，請重新操作。", show_alert=True)
+        await callback.answer(UPLOAD_EXPIRED_ALERT, show_alert=True)
         return
 
+    await callback.answer("⏳ 寫入中…")
     await _execute_final_update(
-        chat_id, 
-        "🔄 <b>處理中...</b>\n\n已跳過頭像設定 (預設為 User)，正在寫回 Anki...",
+        chat_id,
+        "⏳ 不使用頭像，寫入 Anki 中…",
         callback, state, "", "User",
         user_state_manager, anki_client, handler_registry, card_service, relation_service
     )
@@ -321,16 +347,21 @@ async def handle_avatar_back(callback: CallbackQuery, user_state_manager: UserSt
     state = user_state_manager.get_state(chat_id)
 
     if not state or state.action != "wait_avatar_selection":
-        await callback.answer("狀態已失效，請重新操作。", show_alert=True)
+        await callback.answer(UPLOAD_EXPIRED_ALERT, show_alert=True)
         return
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    await callback.answer()
+    await callback.message.edit_text(AVATAR_PROMPT, reply_markup=avatar_keyboard())
+
+
+# 收到上傳的語音後，請使用者選頭像（voice.py 與「返回」共用）
+AVATAR_PROMPT = "✅ 已收到語音。選擇搭配的頭像："
+
+
+def avatar_keyboard() -> InlineKeyboardMarkup:
+    """選頭像的按鈕。The avatar-choice keyboard."""
+    return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📂 選擇系統頭像", callback_data="avatar_sys")],
         [InlineKeyboardButton(text="🖼️ 上傳自訂圖片", callback_data="avatar_upload")],
-        [InlineKeyboardButton(text="⏭️ 跳過 (不使用圖片)", callback_data="avatar_skip")]
+        [InlineKeyboardButton(text="⏭️ 不用頭像", callback_data="avatar_skip")],
     ])
-
-    await callback.message.edit_text(
-        f"✅ <b>語音接收成功！</b>\n\n接下來，請選擇要為這段語音搭配的頭像：",
-        reply_markup=keyboard
-    )

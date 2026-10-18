@@ -23,6 +23,7 @@
 | [13_Implementation_Log.md](13_Implementation_Log.md) | 多語言口說教練支援：Target_Language 欄位、FSM 語言選取、Evaluator 簽名重構 |
 | [14_STT_Dual_Mode_Evaluator_Plan.md](14_STT_Dual_Mode_Evaluator_Plan.md) | STT 雙模式語音評分整合計畫（stt_diff / stt_llm）：可行性調查結論與設計方案 |
 | [15_Bug_Scan_Report.md](15_Bug_Scan_Report.md) | 全項目 Bug 掃描報告（S001–S062：High 16 / Med 21 / Low 25），修復狀態追蹤 |
+| [16_TG_Bot_State_Machine.html](16_TG_Bot_State_Machine.html) | Telegram Bot 完整狀態機（HTML，瀏覽器開啟）：入口與授權、router 比對順序、aiogram FSM 與 UserStateManager 兩套狀態、各流程轉換、`/models` 無狀態選單、已知坑與程式碼索引（2026-10-15 依 main@1f76ef7 盤點；2026-10-18 依 feat/llm-model-routing 更新，含 /models 選單） |
 
 ### 早期專案文檔（與上表共存，已於第三輪修正對齊實況）
 

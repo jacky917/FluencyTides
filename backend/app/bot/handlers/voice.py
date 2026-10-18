@@ -42,10 +42,11 @@ from aiogram.exceptions import TelegramAPIError
 from app.core.exceptions import FluencyTidesError
 
 from app.bot.state import UserStateManager
+from app.bot.utils.texts import CARD_NOT_FOUND, error_detail, state_minutes
 from app.core.exceptions import AnkiFieldCorruptedError
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
-from app.infrastructure.audio_evaluator.base import BaseAudioEvaluator
+from app.infrastructure.audio_evaluator.base import AudioNotScoredError, BaseAudioEvaluator
 from app.services.card_service import CardService
 from app.services.relation_service import RelationService
 from app.services.task_handlers.registry import HandlerRegistry
@@ -53,6 +54,9 @@ from app.services.task_handlers.registry import HandlerRegistry
 logger = logging.getLogger(__name__)
 
 router = Router(name="voice_router")
+
+# 清掉狀態的失敗之後，重新進入的方式
+_RETRY_FROM_ANKI = "請回 Anki 卡片重新點按鈕。"
 
 
 @router.message(F.voice)
@@ -95,32 +99,29 @@ async def process_voice_handler(
 
     if not state or state.action not in ("recording", "add_audio"):
         await message.reply(
-            "❓ 目前沒有進行中的錄音任務（或任務已超時過期）。\n\n"
-            "請重新在 Anki 卡片上點擊按鈕，跳轉到此 Bot 後再發送語音。"
+            f"⌛ 沒有等待中的錄音（或已超過 {state_minutes()} 分鐘）。請回 Anki 卡片重新點按鈕。"
         )
         return
 
     card_id = state.card_id
-    status_msg = await message.reply(
-        "🔄 <b>處理中...</b>\n\n"
-        "正在下載語音..."
-    )
+    status_msg = await message.reply("⏳ 下載語音中…")
 
     # ── Step 1: 下載語音檔 ──
     try:
         voice = message.voice
+        # 這一步失敗時狀態沒清（仍在等語音），可以直接再傳
         if not voice:
-            await status_msg.edit_text("❌ 無法讀取語音訊息。")
+            await status_msg.edit_text("❌ 語音下載失敗，請再傳一次。")
             return
 
         bot = message.bot
         if not bot:
-            await status_msg.edit_text("❌ Bot 實例不可用。")
+            await status_msg.edit_text("❌ 系統錯誤，請稍後再試。")
             return
 
         file = await bot.get_file(voice.file_id)
         if not file or not file.file_path:
-            await status_msg.edit_text("❌ 無法取得語音檔案路徑。")
+            await status_msg.edit_text("❌ 語音下載失敗，請再傳一次。")
             return
 
         audio_buffer = BytesIO()
@@ -135,11 +136,11 @@ async def process_voice_handler(
         )
     except TelegramAPIError as e:
         logger.error("語音下載失敗: %s", e)
-        await status_msg.edit_text(f"❌ 語音下載失敗: {e}")
+        await status_msg.edit_text(f"❌ 語音下載失敗：{error_detail(e)}\n請再傳一次。")
         return
 
     # ── Step 2: 查詢卡片以取得資訊 ──
-    await status_msg.edit_text("🔄 <b>處理中...</b>\n\n正在讀取卡片資訊...")
+    await status_msg.edit_text("⏳ 讀取卡片中…")
 
     try:
         # 取前同步 (有防抖)
@@ -147,7 +148,7 @@ async def process_voice_handler(
 
         note_ids = await anki_client.find_notes(f"Card_ID:{card_id}")
         if not note_ids:
-            await status_msg.edit_text(f"❌ 找不到 Card ID 為 <code>{card_id}</code> 的卡片。")
+            await status_msg.edit_text(CARD_NOT_FOUND)
             user_state_manager.clear_state(chat_id)
             return
 
@@ -204,7 +205,7 @@ async def process_voice_handler(
             reference_answers = []
     except AnkiConnectError as e:
         logger.error("讀取卡片資訊失敗: %s", e)
-        await status_msg.edit_text(f"❌ 讀取卡片資訊失敗: {e}")
+        await status_msg.edit_text(f"❌ 讀取卡片失敗：{error_detail(e)}\n{_RETRY_FROM_ANKI}")
         user_state_manager.clear_state(chat_id)
         return
 
@@ -216,17 +217,20 @@ async def process_voice_handler(
         logger.info(f"✅ 已上傳 {audio_filename} 至 Anki Media")
     except AnkiConnectError as e:
         logger.error("上傳音檔失敗: %s", e)
-        await status_msg.edit_text(f"❌ 上傳音檔至 Anki 失敗: {e}")
+        await status_msg.edit_text(f"❌ 上傳音檔到 Anki 失敗：{error_detail(e)}\n{_RETRY_FROM_ANKI}")
         user_state_manager.clear_state(chat_id)
         return
 
     # ── Step 4: 分支處理 ──
     if state.action == "recording":
         if not audio_evaluator:
-            await status_msg.edit_text("⚠️ 語音評分服務目前不可用（尚未成功初始化）。\n請聯絡系統管理員檢查 API Key 設定。")
+            # 狀態沒清（仍在錄音模式）：切換評分模式後可在時限內直接重傳
+            await status_msg.edit_text(
+                "❌ 語音評分服務未啟用，這次沒有評分。管理員可用 /setconfig 切換評分模式，之後在錄音模式內重傳語音即可。"
+            )
             return
 
-        await status_msg.edit_text("🔄 <b>處理中...</b>\n\nAI 正在分析語音...")
+        await status_msg.edit_text("⏳ 評分中…")
 
         try:
             result = await audio_evaluator.evaluate_audio(
@@ -238,26 +242,34 @@ async def process_voice_handler(
                 target_language=target_language if target_language else None,
                 template_name=eval_template,
             )
+        except AudioNotScoredError as e:
+            # 不是 0 分而是沒有評分：不寫入紀錄（否則卡片上多一筆 0 分），照實說明並給重新進入的入口
+            logger.info("錄音未評分（%s）：%s", card_id, e.reason)
+            await status_msg.edit_text(f"❌ 這次沒有評分：{html.escape(e.reason)}\n{_RETRY_FROM_ANKI}")
+            user_state_manager.clear_state(chat_id)
+            return
         except FluencyTidesError as e:
             logger.error("AI 評分失敗: %s", e)
             error_str = str(e)
+            # 三種情況都會清掉狀態：要說「回 Anki 重新點錄音按鈕」，只說「稍後再試」的話
+            # 使用者再傳語音只會收到「沒有等待中的錄音」
             if "503" in error_str or "UNAVAILABLE" in error_str or "high demand" in error_str:
-                user_msg = "目前 AI 伺服器忙碌中（高負載），請稍後再試。🙇‍♂️"
+                user_msg = "❌ AI 評分服務忙碌，這次沒有評分。請稍後回 Anki 重新點錄音按鈕。"
             elif "429" in error_str or "quota" in error_str.lower():
-                user_msg = "AI 服務的請求額度已達上限，請稍後再試。"
+                user_msg = "❌ AI 評分額度已用完，這次沒有評分。請稍後回 Anki 重新點錄音按鈕。"
             else:
-                user_msg = "發生未預期的系統錯誤，請稍後再試或聯絡管理員。"
-                
-            await status_msg.edit_text(f"❌ <b>AI 評分失敗</b>\n\n{user_msg}")
+                user_msg = "❌ AI 評分失敗（詳見伺服器日誌）。請回 Anki 重新點錄音按鈕。"
+
+            await status_msg.edit_text(user_msg)
             user_state_manager.clear_state(chat_id)
             return
         except Exception as e:
             logger.exception("AI 評分發生未處理的異常: %s", e)
-            await status_msg.edit_text("❌ <b>AI 評分失敗</b>\n\n發生未預期的系統異常，請稍後再試或聯絡管理員。")
+            await status_msg.edit_text("❌ AI 評分失敗（詳見伺服器日誌）。請回 Anki 重新點錄音按鈕。")
             user_state_manager.clear_state(chat_id)
             return
 
-        await status_msg.edit_text("🔄 <b>處理中...</b>\n\n正在寫回 Anki...")
+        await status_msg.edit_text("⏳ 寫入 Anki 中…")
 
         try:
             new_recording = {
@@ -289,17 +301,17 @@ async def process_voice_handler(
             )
         except FluencyTidesError as e:
             logger.error("寫回 Anki 失敗: %s", e)
-            await status_msg.edit_text("❌ <b>寫回 Anki 失敗</b>\n\n發生未預期的系統錯誤，請聯絡管理員。")
+            await status_msg.edit_text(f"❌ 寫回 Anki 失敗：{error_detail(e)}\n{_RETRY_FROM_ANKI}")
             user_state_manager.clear_state(chat_id)
             return
         except Exception as e:
             logger.exception("寫回 Anki 發生未處理的異常: %s", e)
-            await status_msg.edit_text("❌ <b>寫回 Anki 失敗</b>\n\n發生未預期的系統異常，請聯絡管理員。")
+            await status_msg.edit_text(f"❌ 寫回 Anki 失敗（詳見伺服器日誌）。\n{_RETRY_FROM_ANKI}")
             user_state_manager.clear_state(chat_id)
             return
 
         user_state_manager.clear_state(chat_id)
-        
+
         score = result.score
         score_emoji = "🟢" if score >= 90 else ("🟡" if score >= 60 else "🔴")
 
@@ -337,23 +349,12 @@ async def process_voice_handler(
         )
 
     elif state.action == "add_audio":
-        await status_msg.edit_text("🔄 <b>處理中...</b>\n\n正在上傳音檔...")
-        # 音檔已經在上方的共用邏輯中傳至 Anki
-        # 這裡只需更新狀態並進入頭像選擇流程
+        # 音檔已經在上方的共用邏輯中傳至 Anki，這裡只需更新狀態並進入頭像選擇流程
         state.extra["audio_filename"] = audio_filename
         state.action = "wait_avatar_selection"
         state.expires_at = None # 重置超時時間
         user_state_manager.set_state(chat_id, state)
 
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📂 選擇系統頭像", callback_data="avatar_sys")],
-            [InlineKeyboardButton(text="🖼️ 上傳自訂圖片", callback_data="avatar_upload")],
-            [InlineKeyboardButton(text="⏭️ 跳過 (不使用圖片)", callback_data="avatar_skip")]
-        ])
+        from app.bot.handlers.callbacks import AVATAR_PROMPT, avatar_keyboard
 
-        await status_msg.edit_text(
-            f"✅ <b>語音接收成功！</b>\n\n"
-            f"接下來，請選擇要為這段語音搭配的頭像：",
-            reply_markup=keyboard
-        )
+        await status_msg.edit_text(AVATAR_PROMPT, reply_markup=avatar_keyboard())

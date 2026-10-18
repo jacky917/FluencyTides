@@ -177,3 +177,94 @@ class RelationType(SQLModel, table=True):
             nullable=False,
         ),
     )
+
+
+class LLMRouteSetting(SQLModel, table=True):
+    """LLM 用途設定表（模型路由）。
+
+    LLM route settings table (model routing).
+
+    每列記錄一個用途鍵（或全域 ``*``）目前選用的「端點 + 模型 + effort」。
+    可選的組合由 ``.env`` 的白名單決定（見 ``app/infrastructure/llm/endpoints.py``），
+    這裡只存選擇；讀取時逐次比對白名單，不在白名單內的列不使用、退回下一層。
+    刪除一列＝退回下一層（用途列退回全域列，全域列退回 .env）。
+
+    注意：SQLModel 的 ``table=True`` 模型建構時不執行 pydantic 驗證器，不要在這裡加
+    驗證——寫入前的檢查放在服務層（鍵格式、白名單、effort 空字串存成 NULL）。
+
+    Stores the endpoint + model + effort currently chosen for one route key
+    (or the global ``*``). The whitelist lives in ``.env``; rows outside it
+    are ignored at read time and fall back to the next layer. Deleting a row
+    falls back to the next layer. Table models skip pydantic validators, so
+    write-time checks live in the service layer.
+
+    Attributes:
+        id (int | None): 自增主鍵（單一 PK，MySQL 相容）；程式一律以
+            route_key 查詢。Auto-increment primary key; lookups use
+            route_key.
+        route_key (str): 用途鍵，唯一；``*`` 為全域。Route key, unique;
+            ``*`` is the global default.
+        endpoint (str): 端點 ID。Endpoint ID.
+        model (str): 模型名（CLI 類為基底名）。Model name.
+        effort (str | None): 思考深度；只有該模型在白名單中不帶 effort 時為
+            None。Effort; None only when the model takes no effort.
+        updated_by (str): 最後修改者（``tg:<user id>`` 或 ``api``）。Last
+            editor.
+        created_at (datetime | None): 建立時間。Creation timestamp.
+        updated_at (datetime | None): 最後修改時間。Last update timestamp.
+    """
+
+    __tablename__ = "llm_routes"
+
+    id: int | None = Field(
+        default=None,
+        primary_key=True,
+        description="自增主鍵 ID",
+    )
+
+    route_key: str = Field(
+        max_length=64,
+        unique=True,
+        index=True,
+        description="用途鍵；* 為全域",
+    )
+
+    endpoint: str = Field(
+        max_length=32,
+        description="端點 ID",
+    )
+
+    model: str = Field(
+        max_length=128,
+        description="模型名",
+    )
+
+    effort: str | None = Field(
+        default=None,
+        max_length=16,
+        description="思考深度；模型不使用 effort 時為空",
+    )
+
+    updated_by: str = Field(
+        max_length=64,
+        description="最後修改者：tg:<user id> 或 api",
+    )
+
+    created_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            server_default=func.now(),
+            nullable=False,
+        ),
+    )
+
+    updated_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+    )

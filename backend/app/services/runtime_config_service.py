@@ -18,24 +18,27 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import subprocess
 from dataclasses import dataclass
 from typing import Any
 
 from app.core.config import settings
 from app.core.dynamic_config import get_modifiable_configs
+from app.infrastructure.llm.endpoints import get_endpoint, load_endpoints, skipped_endpoints
 from app.infrastructure.llm.factory import CLAUDE_CODE_PROVIDER, is_cli_provider
 from app.infrastructure.llm.labels import normalize_provider
+from app.infrastructure.llm.routing import GLOBAL_ROUTE_KEY
+from app.services import llm_route_service
+
+logger = logging.getLogger(__name__)
 
 # 改值後需要重建 singleton 的設定鍵(計畫 §3.5 REBUILD_REGISTRY 的鍵集合;
-# 對應的 factory 綁定在寫入側實作時補上)。
+# 對應的 factory 綁定在寫入側實作時補上)。LLM 設定已不經這裡修改(改由 /models,
+# 模型路由計畫 D8),所以不在其中。
 # Keys whose changes require a singleton rebuild.
 REQUIRES_REBUILD_KEYS: frozenset[str] = frozenset({
     "AUDIO_EVALUATOR_PROVIDER",
-    "LLM_MODEL_NAME",
-    "LLM_PROVIDER",
-    "LLM_CLAUDE_CODE_EFFORT",
-    "LLM_ANTIGRAVITY_EFFORT",
 })
 
 
@@ -124,11 +127,14 @@ class RuntimeConfigService:
                 genuinely verify authentication (costs one tiny request).
 
         Returns:
-            dict: ``llm_label``(活 client 算好的顯示標籤,client 為 None
-            時為 None)、``llm_provider``、``anki_connect_url``(後端實際
-            連線的 Anki 端點,供腳本啟動對帳),以及 provider 為
-            claude-code 時的 ``claude_code`` 環境診斷區塊(其他 provider
-            為 None)。
+            dict: ``llm_label``(全域 client 算好的顯示標籤,client 為 None
+            時為 None)、``llm_client_matches_global``(該 client 是否與全域 * 目前的設定
+            一致;無法比對時為 None)、``llm_provider``(全域設定生效的端點 ID;組不出
+            清單時退回 .env 的 ``LLM_PROVIDER``)、
+            ``anki_connect_url``(後端實際連線的 Anki 端點,供腳本啟動對帳)、
+            全域端點為 CLI 型時的 ``claude_code`` 環境診斷區塊(其他為 None),
+            以及模型路由計畫 D9 的 ``llm_routes``(每個用途生效的設定與來源)
+            與 ``llm_endpoints``(端點與白名單,不含金鑰)。
         """
         llm_client = getattr(app_state, "llm_client", None)
         # model_label 是 BaseLLMClient 的公開標籤屬性;過渡期仍容忍只有
@@ -137,19 +143,76 @@ class RuntimeConfigService:
             getattr(llm_client, "model_label", None)
             or getattr(llm_client, "_formatted_model_name", None)
         )
-        provider = normalize_provider(settings.LLM_PROVIDER) or None
+        llm_routes, global_route = await self._llm_routes()
+        global_endpoint_id = global_route["effective"]["endpoint"] if global_route is not None else None
+        # 全域客戶端是啟動時或最後一次改 * 時建立的；之後全域設定的解析結果可能變了（例如啟動時
+        # 讀不到 DB 而用了 .env、之後 DB 恢復）。比對兩者的標籤，不一致就明說，不讓標籤與端點互相矛盾
+        matches_global = llm_label == global_route["label"] if global_route is not None else None
+        if matches_global is False:
+            logger.warning(
+                "診斷：全域 LLM 客戶端（%s）與全域 * 目前的設定（%s）不一致；寫入一次 * 或重啟後端即可重建",
+                llm_label, global_route["label"] if global_route is not None else None,
+            )
+        # 組不出清單時退回 .env 的 LLM_PROVIDER（llm_client_matches_global 為 None 表示無法比對）
+        provider = global_endpoint_id or normalize_provider(settings.LLM_PROVIDER) or None
+        endpoint = get_endpoint(provider) if provider else None
+        provider_type = endpoint.type if endpoint is not None else provider
 
-        # CLI 型 provider 才有環境診斷區塊;判斷交給工廠註冊表的靜態旗標——
+        # CLI 型端點才有環境診斷區塊;判斷交給工廠註冊表的靜態旗標——
         # 純查表、不 import provider 模組,環境壞掉(依賴缺失)時端點仍能帶病回報
         claude_code: dict[str, Any] | None = None
-        if provider and is_cli_provider(provider):
-            claude_code = await self._probe_claude_code(llm_client, check_auth, provider)
+        if provider_type and is_cli_provider(provider_type):
+            claude_code = await self._probe_claude_code(llm_client, check_auth, provider_type)
 
         return {
             "llm_label": llm_label,
+            "llm_client_matches_global": matches_global,
             "llm_provider": provider,
             "anki_connect_url": settings.ANKI_CONNECT_URL,
             "claude_code": claude_code,
+            "llm_routes": llm_routes,
+            "llm_endpoints": self._llm_endpoints(),
+        }
+
+    @staticmethod
+    async def _llm_routes() -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """各用途生效的設定(與 ``GET /api/v1/llm-routes`` 的 ``routes`` 同格式)。
+
+        Every route's effective setting, plus the global row itself.
+
+        Returns:
+            ``({"routes": [...], "db_unavailable": bool}, 全域 * 那一列)``。組不出清單時
+            (非預期錯誤,含清單裡找不到全域 *)回 ``({"error": "<型別>: <訊息>"}, None)`` 並記下
+            traceback——診斷端點要能帶病回報,不因這一塊整個失敗。
+        """
+        try:
+            views, read_ok = await llm_route_service.list_routes()
+            routes = [llm_route_service.to_read(view).model_dump() for view in views]
+            # 依鍵找全域那一列，不依賴清單順序
+            global_route = next(route for route in routes if route["route_key"] == GLOBAL_ROUTE_KEY)
+        except Exception as error:  # noqa: BLE001 - 診斷端點：其餘區塊照常回報，錯誤寫進回應並記錄
+            logger.exception("診斷端點組 llm_routes 失敗")
+            return {"error": f"{type(error).__name__}: {error}"}, None
+        return {"routes": routes, "db_unavailable": not read_ok}, global_route
+
+    @staticmethod
+    def _llm_endpoints() -> dict[str, Any]:
+        """端點與白名單(不含金鑰),以及設定有誤被跳過的端點與原因。
+
+        Every endpoint and its whitelist (never keys), plus skipped ones.
+        """
+        return {
+            "endpoints": [
+                {
+                    "id": endpoint.id,
+                    "type": endpoint.type,
+                    "base_url": endpoint.base_url,
+                    "listed": endpoint.listed,
+                    "models": [{"name": o.name, "efforts": list(o.efforts)} for o in endpoint.models],
+                }
+                for endpoint in sorted(load_endpoints().values(), key=lambda endpoint: endpoint.id)
+            ],
+            "skipped": skipped_endpoints(),
         }
 
     @staticmethod
@@ -169,9 +232,11 @@ class RuntimeConfigService:
         environment is broken.
 
         Args:
-            llm_client: 活的 LLM client(取已解析的 CLI 路徑);None 表示
-                後端啟動時初始化失敗。The live client, or None when
-                startup initialization failed.
+            llm_client: 診斷用的全域 LLM client(取已解析的 CLI 路徑);None 表示
+                啟動時或最後一次改全域 * 後建立失敗。The global client, or None
+                when building it failed.
+            provider: 全域端點的類型(claude-code / antigravity),決定是否做
+                claude 專屬的探測。The global endpoint's type.
 
         Returns:
             dict: ``client_initialized`` / ``cli_path`` / ``cli_version``
@@ -215,7 +280,7 @@ class RuntimeConfigService:
         cli_path = info["cli_path"]
         if not cli_path:
             info["cli_version_error"] = (
-                "LLM client 未初始化,無 CLI 路徑可探測(檢查後端啟動 log)"
+                "全域 LLM client 不存在或不是 CLI 型,無 CLI 路徑可探測(見後端 log 的「全域 LLM 客戶端」;寫入一次 * 會重建)"
             )
             return info
 

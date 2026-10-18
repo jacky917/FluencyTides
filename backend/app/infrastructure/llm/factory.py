@@ -1,7 +1,7 @@
 """
 LLM 客戶端工廠模組（計畫 D9：註冊表 + 統一參數傳遞）。
 
-依 ``settings.LLM_PROVIDER`` 從註冊表取得客戶端類別並建立實例。註冊表的值是
+依 ``settings.LLM_PROVIDER``（或指定端點的類型）從註冊表取得客戶端類別並建立實例。註冊表的值是
 ``_ProviderEntry``：模組名、類別名，加上兩個**靜態**能力旗標（``is_cli`` /
 ``supports_effort``）。旗標靜態宣告是為了讓「這個 provider 是不是 CLI」「支不支援
 effort」這類查詢不必 import 任何 provider 模組——診斷端點與錯誤訊息都要在
@@ -12,13 +12,19 @@ effort」這類查詢不必 import 任何 provider 模組——診斷端點與�
 google-genai）不成為其他 provider 的啟動前提。未註冊的 provider 值（google /
 openai / 各中轉站名 / 空）一律回傳預設的 :class:`~app.infrastructure.llm.client.LLMClient`。
 
-所有客戶端一律收 ``model`` / ``effort`` 兩個覆寫參數；不支援 effort 的 provider
-由 :class:`~app.infrastructure.llm.base.BaseLLMClient` 依 ``SUPPORTS_EFFORT`` 拒絕。
+所有客戶端一律收 ``model`` / ``effort`` / ``endpoint`` 三個參數；不支援 effort 的
+provider 由 :class:`~app.infrastructure.llm.base.BaseLLMClient` 依 ``SUPPORTS_EFFORT`` 拒絕。
+
+指定端點（模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D5）時改依端點類型選
+類別，並把端點傳給建構子——網址、金鑰與標籤前綴都取自端點。未指定端點時：
+``LLM_PROVIDER`` 指向 ``LLM_ENDPOINTS`` 中定義的端點就走它；否則路徑與導入端點之前
+完全相同（不傳 ``endpoint``，客戶端讀舊式單組設定）。
 
 新增 provider 的作法：在 ``_REGISTRY`` 加一列即可；旗標填錯會在第一次解析時被抓到。
 
 English summary:
-    Registry-based LLM client factory routing on ``LLM_PROVIDER``. Entries
+    Registry-based LLM client factory routing on ``LLM_PROVIDER``, or on
+    the endpoint's type when an endpoint ID is given. Entries
     carry static ``is_cli`` / ``supports_effort`` flags so capability
     queries never import provider modules; the flags are verified against
     the class on first load so they cannot drift. Unknown providers fall
@@ -30,8 +36,10 @@ import logging
 from dataclasses import dataclass
 
 from app.core.config import settings
-from app.infrastructure.llm.base import BaseLLMClient
+from app.core.exceptions import LLMServiceError
+from app.infrastructure.llm.base import BaseLLMClient, EffortArg
 from app.infrastructure.llm.client import LLMClient
+from app.infrastructure.llm.endpoints import env_endpoint_id, env_endpoint_is_custom, get_endpoint, skip_reason
 from app.infrastructure.llm.labels import normalize_provider
 
 logger = logging.getLogger(__name__)
@@ -157,28 +165,42 @@ def providers_supporting_effort() -> list[str]:
 
 
 def create_llm_client(
-    *, model: str | None = None, effort: str | None = None,
+    *,
+    endpoint: str | None = None,
+    model: str | None = None,
+    effort: EffortArg = None,
 ) -> BaseLLMClient:
-    """依設定建立對應的 LLM 客戶端（可覆寫模型 / 思考深度）。
+    """依設定建立對應的 LLM 客戶端（可指定端點、覆寫模型 / 思考深度）。
 
-    Create the LLM client matching the configured provider, optionally
-    overriding the model and effort for this instance only.
+    Create the LLM client for an endpoint (or the configured provider),
+    optionally overriding the model and effort for this instance only.
 
     覆寫只作用在回傳的這個實例（請求範圍），不改 settings、不動
     ``app.state.llm_client``。
 
     Args:
-        model: 覆寫模型名；None 沿用 ``LLM_MODEL_NAME``。Model override.
-        effort: 覆寫思考深度；None 沿用該 provider 的設定。不支援的
-            provider 給值即拋錯。Effort override.
+        endpoint: 端點 ID（見 :mod:`~app.infrastructure.llm.endpoints`）；None
+            用 ``LLM_PROVIDER``（它指向 ``LLM_ENDPOINTS`` 定義的端點時走該端點，
+            否則讀舊式單組設定）。Endpoint ID, or None for ``LLM_PROVIDER``.
+        model: 覆寫模型名；None 沿用 ``LLM_MODEL_NAME``（指定端點時通常應一併
+            指定，None 不看端點的白名單）。Model override.
+        effort: 覆寫思考深度；None 沿用該 provider 的設定，``OMIT_EFFORT``
+            表示不傳。不支援的 provider 給值即拋錯。Effort override.
 
     Returns:
-        依 ``LLM_PROVIDER`` 回傳對應的客戶端。The client for the provider.
+        對應的客戶端。The client for the endpoint or provider.
 
     Raises:
-        LLMServiceError: 所選客戶端初始化失敗時（如 API 金鑰未設、effort 值
-            非法或不受支援、找不到 CLI 執行檔），或選到尚未實作的 provider。
+        LLMServiceError: 端點不存在、所選客戶端初始化失敗時（如 API 金鑰未設、
+            effort 值非法或不受支援、找不到 CLI 執行檔），或選到尚未實作的 provider。
     """
+    if endpoint is not None:
+        return _create_for_endpoint(endpoint, model=model, effort=effort)
+    if env_endpoint_is_custom():
+        # LLM_PROVIDER 指向 LLM_ENDPOINTS 的端點：用它的網址與金鑰，而不是舊的
+        # LLM_BASE_URL / LLM_API_KEY；寫錯被跳過時明確報「端點不存在」
+        return _create_for_endpoint(env_endpoint_id(), model=model, effort=effort)
+
     provider = normalize_provider(settings.LLM_PROVIDER)
     client_cls = resolve_client_class(provider)
 
@@ -193,3 +215,33 @@ def create_llm_client(
         )
 
     return client_cls(model=model, effort=effort)
+
+
+def _create_for_endpoint(
+    endpoint_id: str, *, model: str | None, effort: EffortArg
+) -> BaseLLMClient:
+    """依端點類型建立客戶端，並把端點交給建構子。
+
+    Create the client matching the endpoint's type, handing it the endpoint.
+
+    Raises:
+        LLMServiceError: 端點不存在（未定義，或設定有誤已被跳過）或客戶端初始化失敗。
+    """
+    endpoint = get_endpoint(endpoint_id)
+    if endpoint is None:
+        reason = skip_reason(endpoint_id)
+        detail = (
+            f"LLM_ENDPOINTS__{endpoint_id.strip().upper()} 設定有誤已被跳過——{reason}"
+            if reason
+            else "未在 .env 定義"
+        )
+        raise LLMServiceError(f"LLM 端點 '{endpoint_id}' 不存在：{detail}。")
+    # openai 類不在註冊表，resolve_client_class 回 LLMClient
+    client_cls = resolve_client_class(endpoint.type)
+    logger.debug(
+        "LLM 端點 = %s（%s），使用 %s。",
+        endpoint.id,
+        endpoint.type,
+        getattr(client_cls, "__name__", repr(client_cls)),
+    )
+    return client_cls(model=model, effort=effort, endpoint=endpoint)

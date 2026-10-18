@@ -13,8 +13,19 @@ their allowed options (when specified as an array).
 """
 
 import ast
+import logging
 from pathlib import Path
 from dotenv import dotenv_values
+
+logger = logging.getLogger(__name__)
+
+# LLM 設定改由 /models（DB，重啟後仍在）管理，不再經 /setconfig 暫時覆寫
+# （模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D8）
+_RESERVED_PREFIX = "LLM_"
+
+# 已提醒過的 MODIFY_LLM_* 鍵（每個只記一次 WARNING，避免每次開選單都記）
+_warned_reserved: set[str] = set()
+
 
 def get_modifiable_configs(env_path: str = ".env") -> dict[str, list[str] | None]:
     """從指定的 .env 檔案讀取允許修改的配置與可選項。
@@ -25,11 +36,14 @@ def get_modifiable_configs(env_path: str = ".env") -> dict[str, list[str] | None
     - 只要鍵以 MODIFY_ 開頭，即代表允許修改 (對應到後面的設定名稱)。
     - 如果值為空白，代表無限制輸入 (None)。
     - 如果值為類似 ['A', 'B'] 的陣列字串，代表限制選項。
+    - ``LLM_`` 開頭的設定一律不列出（即使 .env 還留著 ``MODIFY_LLM_*``），並記一次 WARNING：
+      LLM 模型改由 ``/models`` 依用途設定。
 
     Rules:
     - A key starting with MODIFY_ marks the trailing setting name modifiable.
     - An empty value means unrestricted input (None).
     - An array-like string such as ['A', 'B'] restricts the allowed options.
+    - ``LLM_*`` settings are never listed (warned once); use ``/models``.
 
     Args:
         env_path: .env 檔案的路徑（相對於 backend 根目錄解析）。
@@ -59,7 +73,16 @@ def get_modifiable_configs(env_path: str = ".env") -> dict[str, list[str] | None
     for key, value in env_vars.items():
         if key.startswith("MODIFY_"):
             target_key = key[7:]  # 去除 MODIFY_
-            
+            if target_key.startswith(_RESERVED_PREFIX):
+                if key not in _warned_reserved:
+                    _warned_reserved.add(key)
+                    logger.warning(
+                        "%s 已不再生效：LLM 模型請改用 TG 的 /models（或 /api/v1/llm-routes）依用途設定，"
+                        "可從 .env 移除這一行。",
+                        key,
+                    )
+                continue
+
             if not value or not value.strip():
                 modifiable[target_key] = None
             else:

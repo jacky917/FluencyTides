@@ -32,6 +32,7 @@ from app.services.relation_service import RelationService
 from app.services.task_handlers.registry import HandlerRegistry
 
 from app.bot.state import UserStateManager
+from app.bot.utils.texts import CARD_NOT_FOUND, UPLOAD_RETRY, error_detail, upload_done_text
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 
 logger = logging.getLogger(__name__)
@@ -78,8 +79,8 @@ async def process_word_handler(
     # ── 攔截：互動式頭像設定完成 ──
     if state and state.action == "wait_speaker_name":
         speaker_name = word
-        status_msg = await message.reply("🔄 <b>處理中...</b>\n\n正在將資料寫回 Anki...")
-        
+        status_msg = await message.reply("⏳ 寫入 Anki 中…")
+
         try:
             # 取前同步 (有防抖)
             await anki_client.sync(raise_errors=False)
@@ -87,26 +88,30 @@ async def process_word_handler(
             card_id = state.card_id
             note_ids = await anki_client.find_notes(f"Card_ID:{card_id}")
             if not note_ids:
-                await status_msg.edit_text(f"❌ 找不到 Card ID 為 <code>{card_id}</code> 的卡片。")
+                await status_msg.edit_text(CARD_NOT_FOUND)
                 user_state_manager.clear_state(chat_id)
                 return
 
             notes_info = await anki_client.get_notes_info(notes=note_ids[:1])
+            if not notes_info:
+                await status_msg.edit_text(CARD_NOT_FOUND)
+                user_state_manager.clear_state(chat_id)
+                return
             note_id = notes_info[0].noteId
 
             speaking_handler = handler_registry.get_handler("speaking_coach")
-            
+
             field_name = state.extra.get("field_name")
             index_str = state.extra.get("index")
             audio_filename = state.extra.get("audio_filename")
             avatar_filename = state.extra.get("avatar", "")
-            
+
             await speaking_handler.execute_update(
                 card_service,
                 relation_service,
                 note_id,
                 {
-                    "action": "add_audio", 
+                    "action": "add_audio",
                     "field_name": field_name,
                     "index": index_str,
                     "audio": audio_filename,
@@ -114,34 +119,36 @@ async def process_word_handler(
                     "speaker": speaker_name
                 },
             )
-            
+
             user_state_manager.clear_state(chat_id)
 
             # 寫入完成後觸發同步
             from app.bot.handlers.callbacks import _sync_with_warning
             sync_warning = await _sync_with_warning(anki_client)
 
-            await status_msg.edit_text(
-                f"✅ <b>語音上傳完成！</b>\n\n"
-                f"🎯 卡片：<code>{card_id}</code>\n"
-                f"📂 目標欄位：<code>{field_name}</code>\n"
-                f"👤 說話者：<code>{speaker_name}</code>\n\n"
-                f"<i>音檔與頭像設定已寫入本地！🎉</i>{sync_warning}"
-            )
+            await status_msg.edit_text(upload_done_text(field_name, speaker_name, sync_warning))
         except (AnkiConnectError, FluencyTidesError) as e:
             logger.error("寫回 Anki 失敗: %s", e)
-            await status_msg.edit_text(f"❌ 寫回 Anki 失敗: {str(e)[:200]}")
+            await status_msg.edit_text(f"❌ 寫回 Anki 失敗：{error_detail(e)}\n{UPLOAD_RETRY}")
             user_state_manager.clear_state(chat_id)
-            
+
         return
 
-    # ── 預設流程：無狀態兜底 (防呆) ──
-    # 不再提供隨打即查的服務，強制使用者使用明確的指令與狀態機流程
-    await message.reply(
-        "❌ <b>系統不明白您的意思。</b>\n\n"
-        "您目前不在任何新增卡片的流程中。請使用以下指令開始操作：\n\n"
-        "📝 /newcard - 新增各式卡片 (單字、糾錯、對話)\n"
-        "📖 /help - 查看完整教學\n"
-        "🔄 /sync - 同步資料庫",
-        parse_mode="HTML"
-    )
+    # ── 預設流程：兜底 ──
+    # 不再提供隨打即查的服務。錄音、上傳、選頭像這些等待中的狀態收到文字也會落到這裡：
+    # 依狀態說明現在在等什麼，不要說成「不在任何流程中」
+    await message.reply(_fallback_reply(state.action if state else None))
+
+
+def _fallback_reply(action: str | None) -> str:
+    """沒有 handler 接住的文字訊息的回覆，依目前的等待狀態而定。
+
+    The reply to unhandled text, depending on what the bot is waiting for.
+    """
+    if action in ("recording", "add_audio"):
+        return "🎙️ 正在等語音訊息，文字不會被處理。"
+    if action == "wait_avatar_selection":
+        return "請點上方按鈕選擇頭像。"
+    if action == "wait_avatar_upload":
+        return "🖼️ 請傳一張照片。"
+    return "💡 用 /newcard 新增卡片，/help 查看說明。"

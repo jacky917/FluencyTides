@@ -40,7 +40,6 @@ from fastapi import Depends, Request
 from app.infrastructure.database.database import get_async_session
 
 from app.infrastructure.anki.client import AnkiClient
-from app.infrastructure.llm.base import BaseLLMClient
 from app.infrastructure.storage.minio_client import MinioClient
 from app.services.anki_model_manager import AnkiModelManager
 from app.services.card_service import CardService
@@ -92,26 +91,9 @@ def get_anki_client(request: Request) -> AnkiClient:
     return request.app.state.anki_client
 
 
-def get_llm_client(request: Request) -> BaseLLMClient:
-    """從 app.state 取得 LLM 客戶端 Singleton 實例。
-
-    Get the LLM client singleton from app.state.
-
-    客戶端在 lifespan startup 時由 ``create_llm_client()`` 依
-    ``LLM_PROVIDER`` 建立並存入 app.state；具體類別依 provider 而定，
-    一律為 ``BaseLLMClient`` 子類。
-
-    Created at lifespan startup by ``create_llm_client()`` according to
-    ``LLM_PROVIDER``; always a ``BaseLLMClient`` subclass.
-
-    Args:
-        request: FastAPI Request 物件，用於存取 app.state。
-            FastAPI Request object used to access app.state.
-
-    Returns:
-        LLM 客戶端 Singleton 實例。The LLM client singleton instance.
-    """
-    return request.app.state.llm_client
+# LLM 客戶端不經依賴注入：各用途以宣告的用途鍵（app.infrastructure.llm.routing.llm_route）
+# 每次取得自己的客戶端。app.state.llm_client 只給診斷端點用（全域設定，見 llm_route_service.
+# refresh_global_client），不可拿來生成——那會略過各用途的設定。
 
 
 def get_minio_client(request: Request) -> MinioClient:

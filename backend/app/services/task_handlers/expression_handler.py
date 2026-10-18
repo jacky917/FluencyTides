@@ -20,7 +20,7 @@ from app.services.task_handlers.base import BaseHandler
 from app.services.task_handlers.registry import register_handler
 from app.infrastructure.utils.id_generator import generate_unique_card_id
 from app.core.dependencies import get_template_engine
-from app.infrastructure.llm.factory import create_llm_client
+from app.infrastructure.llm.routing import llm_route
 from app.schemas.llm.expression import LLMExpressionCorrectionResult
 from app.core.config import settings
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
@@ -31,6 +31,9 @@ if TYPE_CHECKING:
     from app.services.relation_service import RelationService
 
 logger = logging.getLogger(__name__)
+
+# LLM 用途鍵（生效設定的解析見 app.infrastructure.llm.routing）
+CORRECTION_LLM = llm_route("expression_correction", "外語糾錯")
 
 @register_handler
 class ExpressionCorrectionHandler(BaseHandler):
@@ -133,7 +136,7 @@ class ExpressionCorrectionHandler(BaseHandler):
         system_prompt = "You are a strict JSON data extractor and native language coach."
 
         # 2. 呼叫 LLM
-        llm_client = create_llm_client()
+        llm_client = await CORRECTION_LLM.client()
         schema_dict = LLMExpressionCorrectionResult.model_json_schema()
 
         result = await llm_client.generate_structured_data(
@@ -295,11 +298,14 @@ class ExpressionCorrectionHandler(BaseHandler):
                     "TG_Bot": tg_bot
                 }
 
+                # 子卡與母卡用同一個 allow_duplicate：允許重複或覆蓋時舊卡的子卡還在（覆蓋是新卡建好後
+                # 才刪舊卡），內容相同的子卡不能讓整組交易回滾
                 await tx.create_note(
                     deck_name=deck_name_full,
                     model_name="Expression_Micro_Dark",
                     fields=micro_fields,
-                    tags=micro_tags
+                    tags=micro_tags,
+                    allow_duplicate=allow_duplicate,
                 )
 
             return list(tx.created_ids)

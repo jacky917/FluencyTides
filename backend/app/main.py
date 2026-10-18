@@ -48,6 +48,7 @@ from app.api.example.verb_pair import router as example_verb_pair_router
 from app.api.webhook import router as webhook_router
 from app.api.config import router as config_router
 from app.api.jp_tokenizer import router as jp_tokenizer_router
+from app.api.llm_routes import router as llm_routes_router
 from app.api.jp_verb_readings import router as jp_verb_readings_router
 from app.bot.dispatcher import create_bot, setup_dispatcher
 from app.core.config import settings
@@ -58,7 +59,8 @@ from app.infrastructure.database.database import (
     dispose_engine,
 )
 from app.infrastructure.database.corpus_database import dispose_corpus_engine
-from app.infrastructure.llm.factory import create_llm_client
+from app.infrastructure.llm.endpoints import log_endpoint_summary
+from app.services import llm_route_service
 from app.infrastructure.storage.minio_client import MinioClient
 from app.schemas.card import ErrorResponse
 
@@ -111,20 +113,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await create_db_and_tables()
     logger.info("✅ 資料庫初始化完成。")
 
-    # LLM 客戶端由 create_llm_client() 依 LLM_PROVIDER 選型，初始化可能因
-    # 缺少 API Key（API 模式）或找不到 CLI／effort 設定錯誤（CLI 模式：claude-code / antigravity）
-    # 而失敗，但不應阻止整個應用啟動（其他端點仍可使用）。
-    try:
-        app.state.llm_client = create_llm_client()
-        logger.info(
-            "✅ LLM 客戶端 Singleton 已初始化 (%s)。",
-            type(app.state.llm_client).__name__,
-        )
-    except Exception as e:
-        logger.warning(
-            "⚠️ LLM 客戶端初始化失敗（LLM 相關端點將不可用）: %s", e
-        )
-        app.state.llm_client = None
+    # LLM 端點與白名單（.env）載入一次：設定寫錯的端點在此記 ERROR、不會讓啟動失敗
+    log_endpoint_summary()
+
+    # 全域 LLM 客戶端依「全域 *（DB）→ .env」建立，只給診斷端點用（標籤與 CLI 探測，
+    # 模型路由計畫 D9）；各用途的生成每次依自己的用途鍵建立。建立失敗（缺金鑰、找不到 CLI、
+    # effort 設定錯誤）不阻止啟動：設為 None 並記 WARNING
+    await llm_route_service.refresh_global_client(app.state)
 
     # MinioClient 初始化同理，不應阻止應用啟動。
     try:
@@ -375,6 +370,7 @@ app.include_router(example_verb_pair_router, prefix="/api/v1/example")
 app.include_router(config_router, prefix="/api/v1")
 app.include_router(jp_verb_readings_router, prefix="/api/v1")
 app.include_router(jp_tokenizer_router, prefix="/api/v1")
+app.include_router(llm_routes_router, prefix="/api/v1")
 
 # 註冊 Webhook Router路由 (不受 prefix 限制，完全依照 TG_WEBHOOK_PATH 設定)
 app.include_router(webhook_router)

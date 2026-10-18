@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FluencyTides TG Bot 狀態機</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;900&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  /* Layout: single reading column (~68ch) with full-bleed diagram panels that scroll sideways on their own */
+  :root {
+    --bg: #f6f8fa;
+    --surface: #ffffff;
+    --ink: #17212b;
+    --muted: #55626f;
+    --line: #d9e1e8;
+    --accent: #1f8fd6;          /* Telegram 藍，壓暗一階以便白底閱讀 */
+    --accent-soft: #e3f1fb;
+    --fsm: #6b4fd8;             /* aiogram FSM */
+    --fsm-soft: #eeeafc;
+    --us: #c2610f;              /* UserStateManager */
+    --us-soft: #fbeee2;
+    --warn: #b3261e;
+    --warn-soft: #fbe9e7;
+    --font-display: "Noto Serif TC", "Songti TC", "PMingLiU", serif;
+    --font-body: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1418; --surface: #161d23; --ink: #e3e9ee; --muted: #9aa8b4; --line: #26313a;
+      --accent: #5cb8f2; --accent-soft: #14283a; --fsm: #a995ff; --fsm-soft: #221d3d;
+      --us: #f0a35e; --us-soft: #33230f; --warn: #f28b82; --warn-soft: #3a1714;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1418; --surface: #161d23; --ink: #e3e9ee; --muted: #9aa8b4; --line: #26313a;
+    --accent: #5cb8f2; --accent-soft: #14283a; --fsm: #a995ff; --fsm-soft: #221d3d;
+    --us: #f0a35e; --us-soft: #33230f; --warn: #f28b82; --warn-soft: #3a1714;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15.5px; line-height: 1.75; }
+  .page { max-width: 1080px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 72px; display: grid; gap: 44px; }
+  .prose { max-width: 68ch; }
+  h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; line-height: 1.3; margin: 0; }
+  h1 { font-size: clamp(1.9rem, 4.2vw, 2.7rem); font-weight: 900; letter-spacing: 0.01em; }
+  h2 { font-size: 1.45rem; font-weight: 900; }
+  h3 { font-size: 1.12rem; font-weight: 600; }
+  p { margin: 0; }
+  code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+  code { background: var(--accent-soft); color: var(--ink); padding: 0.08em 0.38em; border-radius: 4px; overflow-wrap: anywhere; }
+
+  header { display: grid; gap: 14px; }
+  .eyebrow { font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+  .lede { color: var(--muted); max-width: 68ch; }
+  .facts { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 6px; }
+  .fact { display: grid; gap: 0; }
+  .fact b { font-family: var(--font-display); font-size: 1.5rem; font-weight: 900; font-variant-numeric: tabular-nums; }
+  .fact span { color: var(--muted); font-size: 0.85rem; }
+
+  section { display: grid; gap: 16px; }
+  .section-head { display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 22px; }
+  .section-head .num { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); letter-spacing: 0.06em; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 0.86rem; color: var(--muted); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 1px 10px; border-radius: 999px; font-size: 0.82rem; font-weight: 500; white-space: nowrap; }
+  .chip.fsm { background: var(--fsm-soft); color: var(--fsm); }
+  .chip.us { background: var(--us-soft); color: var(--us); }
+  .chip.tg { background: var(--accent-soft); color: var(--accent); }
+  .chip.warn { background: var(--warn-soft); color: var(--warn); }
+
+  .diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 16px; overflow-x: auto; }
+  .diagram pre.mermaid { margin: 0; background: transparent; min-width: 560px; text-align: center; }
+  .caption { font-size: 0.85rem; color: var(--muted); }
+  /* mermaid 載入前或載入失敗時，原始碼以等寬字顯示，仍可閱讀 */
+  .diagram pre.mermaid:not([data-processed]) { font-family: var(--font-mono); font-size: 0.8rem; text-align: left; white-space: pre; color: var(--muted); }
+  .offline { display: none; font-size: 0.85rem; color: var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 10px 14px; }
+  .offline.show { display: block; }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  th { font-weight: 700; color: var(--muted); font-size: 0.8rem; letter-spacing: 0.04em; background: var(--bg); }
+  tr:last-child td { border-bottom: 0; }
+  td code { white-space: nowrap; }
+
+  .flows { display: grid; gap: 36px; }
+  .flow { display: grid; gap: 12px; }
+  .flow-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
+
+  .pitfalls { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+  .pitfalls li { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .pitfalls li > div { min-width: 0; display: grid; gap: 4px; }
+  .pitfalls .sev { font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600; padding: 2px 8px; border-radius: 4px; white-space: nowrap; margin-top: 3px; }
+  .sev.high { background: var(--warn-soft); color: var(--warn); }
+  .sev.mid { background: var(--us-soft); color: var(--us); }
+  .sev.low { background: var(--accent-soft); color: var(--accent); }
+  .pitfalls b { font-weight: 700; }
+  .pitfalls p { color: var(--muted); font-size: 0.92rem; }
+
+  footer { color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--line); padding-top: 18px; }
+
+  @media (max-width: 560px) {
+    body { font-size: 15px; }
+    .pitfalls li { grid-template-columns: 1fr; }
+  }
+  /* 圖表工具列：縮放、符合大小、全螢幕（由頁尾腳本在圖畫好後插入） */
+  .diagram[data-zoom-ready="1"] { display: grid; gap: 10px; padding: 12px 16px 16px; overflow: visible; }
+  .diagram-bar { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
+  .diagram-bar button {
+    font: 500 0.8rem/1.6 var(--font-body); color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; min-width: 2.4em; cursor: pointer;
+  }
+  .diagram-bar button:hover { border-color: var(--accent); color: var(--accent); }
+  .diagram-bar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .diagram-bar .zoom-level { font-family: var(--font-mono); font-size: 0.78rem; color: var(--muted); min-width: 5ch; text-align: center; font-variant-numeric: tabular-nums; }
+  .diagram-bar .hint { font-size: 0.75rem; color: var(--muted); margin-right: auto; }
+  .diagram-view { overflow: auto; min-width: 0; }
+  .diagram-view.can-pan { cursor: grab; }
+  .diagram-view.dragging { cursor: grabbing; user-select: none; }
+  .diagram-view svg { display: block; margin: 0 auto; }
+  .diagram pre.mermaid[data-processed] { min-width: 0; }
+  .diagram.is-full {
+    position: fixed; inset: 0; z-index: 1000; border: 0; border-radius: 0;
+    grid-template-rows: auto minmax(0, 1fr);
+    padding: calc(12px + env(safe-area-inset-top, 0px)) 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  .diagram.is-full .diagram-view { height: 100%; }
+  .diagram:fullscreen { background: var(--surface); }
+  body.has-full { overflow: hidden; }
+  @media (max-width: 560px) { .diagram-bar .hint { display: none; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="offline" id="offline">無法載入繪圖程式（mermaid，來自 cdn.jsdelivr.net），下方的圖改以原始碼顯示。連上網路後重新整理即可看到圖。</p>
+
+  <header>
+    <div class="eyebrow">FluencyTides · Telegram Bot · feat/llm-model-routing（基於 main@1f76ef7）</div>
+    <h1>FluencyTides TG Bot 狀態機</h1>
+    <p class="lede">一則 Telegram 訊息從進門到寫進 Anki 的完整路徑：入口與授權、處理器的比對順序、兩套互不相通的狀態系統，以及每一條流程的狀態轉換。所有狀態與轉換都對照過 <code>backend/app/bot/</code> 的程式碼（2026-10-15 依 main@1f76ef7 盤點；2026-10-18 依分支 feat/llm-model-routing 更新，新增 <code>/models</code> 選單）。</p>
+    <div class="facts">
+      <div class="fact"><b>3</b><span>條 aiogram FSM 流程</span></div>
+      <div class="fact"><b>14</b><span>個 FSM 狀態</span></div>
+      <div class="fact"><b>5</b><span>個自訂狀態（10 分鐘過期）</span></div>
+      <div class="fact"><b>4</b><span>種 Deep Link</span></div>
+      <div class="fact"><b>11</b><span>個 router，依序比對</span></div>
+    </div>
+  </header>
+
+  <section id="pipeline">
+    <div class="section-head">
+      <span class="num">§1</span>
+      <h2>訊息進來後怎麼走</h2>
+    </div>
+    <p class="prose">Telegram 推送先過 webhook 密鑰比對，再經兩層中介層。之後 aiogram 依 router 註冊順序逐一比對，<b>第一個符合條件的處理器接手，後面的就不再看</b>。這個順序決定了很多行為，例如語音與圖片先於 FSM 被攔下，而一般文字要等三條 FSM 都不認領才會落到最後的兜底回覆。</p>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart TD
+  TG["Telegram 伺服器"] -->|"webhook 推送（帶 Secret Token）"| WH{"POST /api/webhook&lt;br/&gt;比對 TG_WEBHOOK_SECRET"}
+  TG -.->|"未設 TG_WEBHOOK_URL 時改用 polling"| PL["dp.start_polling"]
+  WH -->|"不符"| X1["回 unauthorized，不處理"]
+  WH -->|"相符，背景執行 dp.feed_update"| WL
+  PL --> WL
+  WL{"WhitelistMiddleware&lt;br/&gt;user.id ∈ TG_ALLOWED_USER_IDS？"}
+  WL -->|"名單未設定"| X2["全部擋下（只記 log）"]
+  WL -->|"不在名單"| X3["回覆：您沒有權限使用此 Bot"]
+  WL -->|"通過"| SI["ServiceInjectionMiddleware&lt;br/&gt;注入 CardService、AnkiClient、UserStateManager、&lt;br/&gt;AudioEvaluator、RelationService（每則開一個 DB session）"]
+  SI --> R1["① commands&lt;br/&gt;/start /help /sync /setconfig"]
+  R1 -->|"不符"| RM["② models_menu&lt;br/&gt;/models、lr:*（LLM 模型選單）"]
+  RM -->|"不符"| R2["③ newcard_menu&lt;br/&gt;/newcard、newcard:*"]
+  R2 -->|"不符"| R3["④ callbacks_config&lt;br/&gt;setconfig_* / setcfg_val:*"]
+  R3 -->|"不符"| R4["⑤ callbacks&lt;br/&gt;avatar_* 頭像按鈕"]
+  R4 -->|"不符"| R5["⑥ media&lt;br/&gt;圖片"]
+  R5 -->|"不符"| R6["⑦ voice&lt;br/&gt;語音"]
+  R6 -->|"不符"| R7["⑧⑨⑩ FSM：外語糾錯 / 對話卡 / 單字卡&lt;br/&gt;（只認領自己狀態下的訊息與按鈕）"]
+  R7 -->|"都不認領"| R10["⑪ messages&lt;br/&gt;wait_speaker_name 或兜底回覆"]
+</pre>
+    </div>
+    <p class="caption">部署注意：webhook 模式下，後端關閉時 lifespan 會呼叫 <code>delete_webhook</code>，啟動時重新綁定並 <code>drop_pending_updates=True</code>。新容器若起不來，webhook 就會一直是空的（2026-10-14 的事故即此）。</p>
+  </section>
+
+  <section id="two-systems">
+    <div class="section-head">
+      <span class="num">§2</span>
+      <h2>兩套互不相通的狀態系統</h2>
+    </div>
+    <p class="prose">新增卡片的三條流程用 aiogram 內建的 FSM；從 Anki 卡片點進來的錄音與上傳音檔，則用自寫的 <code>UserStateManager</code>。兩者各自記錄、互相看不到對方。</p>
+    <div class="table-wrap">
+      <table>
+        <tr><th>系統</th><th>用在哪</th><th>狀態</th><th>存放與過期</th></tr>
+        <tr>
+          <td><span class="chip fsm">aiogram FSM</span></td>
+          <td>/newcard 的三條流程</td>
+          <td>外語糾錯 8 個、對話卡 5 個、單字卡 1 個</td>
+          <td>預設 MemoryStorage；<b>不會過期</b>，後端重啟即全部消失</td>
+        </tr>
+        <tr>
+          <td><span class="chip us">UserStateManager</span></td>
+          <td>Deep Link 錄音、上傳音檔、頭像</td>
+          <td><code>recording</code> <code>add_audio</code> <code>wait_avatar_selection</code> <code>wait_avatar_upload</code> <code>wait_speaker_name</code></td>
+          <td>記憶體；<b>10 分鐘過期</b>（<code>TG_STATE_EXPIRE_MINUTES</code>），重啟即消失</td>
+        </tr>
+      </table>
+    </div>
+  </section>
+
+  <section id="overview">
+    <div class="section-head">
+      <span class="num">§3</span>
+      <h2>全貌</h2>
+    </div>
+    <p class="prose">以「目前在哪個流程」為狀態畫出整體。每個流程內部的細節在 §4。</p>
+    <div class="legend">
+      <span class="chip tg">指令與選單（無狀態）</span>
+      <span class="chip fsm">aiogram FSM 流程</span>
+      <span class="chip us">UserStateManager 流程</span>
+    </div>
+    <div class="diagram">
+<pre class="mermaid">
+stateDiagram-v2
+  direction LR
+  state "閒置（沒有任何狀態）" as Idle
+  state "卡片類型選單" as Menu
+  state "外語糾錯 FSM（§4.1）" as Expr
+  state "對話卡 FSM（§4.2）" as Speak
+  state "單字卡 FSM（§4.3）" as Vocab
+  state "錄音評分 recording（§4.4）" as Rec
+  state "上傳音檔 add_audio（§4.4）" as Add
+  state "頭像與說話者（§4.4）" as Avatar
+  state "設定選單（§4.5）" as Config
+  state "LLM 模型選單（§4.6）" as Models
+
+  [*] --> Idle
+  Idle --> Idle : /start、/help、/sync、任意文字（提示用 /newcard）
+  Idle --> Idle : Deep Link del-…（立即刪除條目）
+  Idle --> Menu : /newcard
+  Menu --> Menu : 翻頁
+  Menu --> Expr : 外語糾錯
+  Menu --> Speak : 對話卡
+  Menu --> Vocab : 單字卡
+  Expr --> Idle : 寫入完成 / 放棄 / 取消 / 失敗
+  Speak --> Idle : 建卡完成 / 取消 / 失敗
+  Vocab --> Idle : 建卡完成 / 取消 / 失敗
+  Idle --> Rec : Deep Link rec-…
+  Idle --> Add : Deep Link addaudio-…
+  Rec --> Idle : 傳語音 → 評分寫回
+  Add --> Avatar : 傳語音 → 上傳 Anki Media
+  Avatar --> Idle : 寫回卡片
+  Rec --> Idle : 10 分鐘未完成
+  Add --> Idle : 10 分鐘未完成
+  Avatar --> Idle : 10 分鐘未完成
+  Idle --> Config : /setconfig（限管理員）
+  Config --> Idle : 選定新值
+  Idle --> Models : /models（限管理員）
+  Models --> Idle : 儲存 / 恢復預設 / 關閉
+</pre>
+    </div>
+  </section>
+
+  <section id="flows">
+    <div class="section-head">
+      <span class="num">§4</span>
+      <h2>各流程的狀態轉換</h2>
+    </div>
+    <div class="flows">
+
+      <div class="flow" id="expression">
+        <div class="flow-head"><h3>4.1 外語糾錯</h3><span class="chip fsm">ExpressionStates · 8 個狀態</span></div>
+        <p class="prose">最長的一條。每一步都有「返回上一步」按鈕，圖中以「返回」標出。在呼叫 LLM 之前，先到 Anki 查有沒有同原文的母卡，避免白花 token。</p>
+        <div class="diagram">
+<pre class="mermaid">
+stateDiagram-v2
+  state "waiting_for_lang：語言對" as lang
+  state "waiting_for_text：外語原文" as text
+  state "waiting_for_context：情境" as ctx
+  state "waiting_for_source_tag：來源標籤" as tag
+  state "waiting_for_grammar_correction：文法修正版" as gram
+  state "waiting_for_reorganization：高階重組版" as reorg
+  state dup_check &lt;&lt;choice&gt;&gt;
+  state "waiting_for_duplicate_decision：重複怎麼辦" as dup
+  state "呼叫 LLM 產生預覽" as llm
+  state "waiting_for_card_selection：選要寫入的子卡" as sel
+
+  [*] --> lang : 選「外語糾錯」
+  lang --> text : 輸入「中文→日文」（或 /skip 用預設）
+  text --> ctx : 輸入原文
+  ctx --> tag : 輸入情境（或 /skip）
+  tag --> gram : 點標籤 / 打字 / 跳過
+  gram --> reorg : 輸入修正版 / 跳過（交給 AI）
+  reorg --> dup_check : 輸入重組版 / 跳過（交給 AI）
+  dup_check --> llm : 查無重複（查詢出錯也直接往下）
+  dup_check --> dup : Anki 已有同原文母卡
+  dup --> llm : 覆蓋舊卡 / 允許重複
+  dup --> [*] : 取消糾錯
+  llm --> sel : 預覽成功
+  llm --> [*] : 生成失敗
+  sel --> [*] : 全部添加，或輸入編號 → 寫入 Anki
+  sel --> [*] : 全部放棄
+  sel --> sel : 編號無效 → 重新詢問
+  sel --> reorg : 返回修改重組
+  text --> lang : 返回
+  ctx --> text : 返回
+  tag --> ctx : 返回
+  gram --> tag : 返回
+  reorg --> gram : 返回
+</pre>
+        </div>
+        <p class="caption">選擇「覆蓋舊卡」時，真正的刪除發生在最後寫入 Anki 時（級聯刪除舊母卡與子卡），不是在選擇當下。</p>
+      </div>
+
+      <div class="flow" id="speaking">
+        <div class="flow-head"><h3>4.2 對話卡</h3><span class="chip fsm">SpeakingStates · 5 個狀態</span></div>
+        <div class="diagram">
+<pre class="mermaid">
+stateDiagram-v2
+  state "waiting_for_deck：牌組" as deck
+  state "waiting_for_language：語言" as lang
+  state "waiting_for_front：目標句" as front
+  state "waiting_for_back：情境" as back
+  state "waiting_for_answers：參考回答（多行）" as ans
+
+  [*] --> deck : 選「對話卡」
+  deck --> lang : 輸入牌組 / 跳過（Default）
+  lang --> front : 點 en-US、ja-JP、zh-TW，或輸入代碼
+  lang --> lang : 代碼無法辨識 → 重新輸入
+  front --> back : 輸入目標句
+  back --> ans : 輸入情境 / 跳過
+  ans --> ans : 內容空白 → 重新輸入
+  ans --> [*] : 建立 Speaking_Coach 卡（成功或 Anki 錯誤都結束）
+  deck --> [*] : 取消
+  lang --> deck : 返回
+  front --> lang : 返回
+  back --> front : 返回
+  ans --> back : 返回
+</pre>
+        </div>
+      </div>
+
+      <div class="flow" id="vocab">
+        <div class="flow-head"><h3>4.3 單字卡</h3><span class="chip fsm">VocabularyStates · 1 個狀態</span></div>
+        <div class="diagram">
+<pre class="mermaid">
+stateDiagram-v2
+  state "waiting_for_word：單字或片語" as word
+  [*] --> word : 選「單字卡」
+  word --> [*] : 輸入單字 → 建立空殼卡寫入 Anki（未呼叫 LLM；成功或失敗都結束）
+  word --> [*] : 取消
+</pre>
+        </div>
+        <p class="caption">更正（2026-10-18）：舊版此處寫「LLM 生成並寫入 Anki」，與程式不符。<code>vocabulary_mining</code> handler 的 <code>execute_create</code> 目前<b>沒有呼叫 LLM</b>（程式註解寫明尚未移植），只以輸入的單字為 <code>Expression</code>、<code>Meaning</code> 填固定佔位文字「（由 LLM 產生的翻譯）」、<code>Context</code> 留空，建到 <code>Default</code> 牌組（模型取該 handler 的第一個 supported model）。Bot 的進度訊息「正在為您查字典並生成卡片」也因此名不副實。這條流程也沒有宣告任何 LLM 用途鍵，不會出現在 <code>/models</code>。</p>
+      </div>
+
+      <div class="flow" id="deeplink">
+        <div class="flow-head"><h3>4.4 錄音評分與上傳音檔</h3><span class="chip us">UserStateManager · 5 個狀態</span></div>
+        <p class="prose">從 Anki 卡片上的按鈕點進 Bot，Deep Link 的格式是 <code>{動作}-{欄位}-{序號}-{Card_ID}</code>。進入狀態前會先確認 Anki 裡找得到這張卡。</p>
+        <div class="diagram">
+<pre class="mermaid">
+stateDiagram-v2
+  state "recording：等語音（評分）" as rec
+  state "add_audio：等語音（上傳）" as add
+  state "wait_avatar_selection：選頭像" as sel
+  state "wait_avatar_upload：等圖片" as up
+  state "wait_speaker_name：等說話者名稱" as name
+
+  [*] --> rec : /start rec-…（卡片存在）
+  [*] --> add : /start addaudio-…（卡片存在）
+  rec --> [*] : 傳語音 → 上傳 Media → AI 評分 → 寫回錄音欄位
+  add --> sel : 傳語音 → 上傳 Anki Media
+  sel --> sel : 打開系統頭像清單 / 返回
+  sel --> [*] : 點某個系統頭像 → 寫回（說話者＝檔名）
+  sel --> [*] : 跳過 → 寫回（說話者＝User）
+  sel --> up : 上傳自訂圖片
+  up --> name : 傳圖片 → 存到 assets/avatars 與 Anki Media
+  name --> [*] : 輸入名稱 → 寫回
+</pre>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <tr><th>Deep Link</th><th>行為</th></tr>
+            <tr><td><code>rec-…</code></td><td>顯示題目，進入 <code>recording</code>，等使用者傳語音</td></tr>
+            <tr><td><code>addaudio-…</code></td><td>進入 <code>add_audio</code>，等使用者傳現成音檔</td></tr>
+            <tr><td><code>del-…</code></td><td>不進入任何狀態，直接刪除該欄位的指定條目並寫回 Anki（沒有確認步驟）</td></tr>
+            <tr><td><code>gen_…</code></td><td>回覆「生成卡片操作尚未實作」</td></tr>
+          </table>
+        </div>
+        <p class="caption">沒有進行中的任務卻傳了語音：回覆「目前沒有進行中的錄音任務」。沒有在等圖片時傳圖片：靜默忽略。</p>
+      </div>
+
+      <div class="flow" id="admin">
+        <div class="flow-head"><h3>4.5 管理與維護指令</h3><span class="chip tg">不使用狀態，靠訊息上的按鈕推進</span></div>
+        <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  S["/setconfig"] --> A{"是 TG_ADMIN_CHAT_ID？"}
+  A -->|"否"| N["回覆：沒有權限"]
+  A -->|"是"| K["列出 .env 的 MODIFY_* 設定&lt;br/&gt;（MODIFY_LLM_* 一律略過）"]
+  K -->|"setconfig_key:KEY"| O{"有選項清單？"}
+  O -->|"沒有"| T["提示改 .env 或補選項清單"]
+  O -->|"有"| V["列出可選的值"]
+  V -->|"setconfig_back"| K
+  V -->|"setcfg_val:KEY:VALUE"| W["寫入 settings（只存在記憶體）"]
+  W -->|"KEY 是 AUDIO_EVALUATOR_PROVIDER"| R{"重建語音評分器"}
+  R -->|"失敗"| RB["還原舊值並回報"]
+  R -->|"成功"| OK["完成"]
+  W -->|"其他 KEY"| OK
+  SY["/sync"] --> SY2["Anki 同步，清掉 DB 中卡片已不存在的孤兒關聯"]
+  H["/help"] --> H2["回覆使用說明"]
+</pre>
+        </div>
+        <p class="caption">2026-10-18 起 <code>/setconfig</code> 不再處理任何 <code>LLM_</code> 開頭的設定：<code>.env</code> 若還留著 <code>MODIFY_LLM_*</code>，選單不列出並在後端記一次 WARNING。生成用的 LLM 模型改由 §4.6 的 <code>/models</code> 依用途設定（存在資料庫，重啟後仍有效）；<code>/setconfig</code> 的其餘設定仍只存在記憶體，重啟後回到 <code>.env</code>。</p>
+      </div>
+
+      <div class="flow" id="models">
+        <div class="flow-head"><h3>4.6 LLM 模型選單 /models</h3><span class="chip tg">不使用狀態，按鈕自帶位置</span></div>
+        <p class="prose">管理每個 LLM 用途（例如 <code>jp_verb_pair</code>、<code>jp_verb_reading</code>）與全域 <code>*</code> 該用哪個端點、模型與思考深度（effort）。選項只來自 <code>.env</code> 的白名單，寫入與 API <code>/api/v1/llm-routes</code> 共用同一個服務（白名單檢查＋試建一次客戶端），存在資料庫的 <code>llm_routes</code> 表，下一次生成即生效、重啟後仍在。<b>沒有任何 FSM 或 UserStateManager 狀態</b>：每個按鈕的 callback data 寫成 <code>lr:&lt;動作&gt;:&lt;版本&gt;:&lt;序號…&gt;</code>，自帶目前選到哪一步，以序號代替名稱以符合 Telegram 的 64 位元組上限。</p>
+        <div class="diagram">
+<pre class="mermaid">
+flowchart TD
+  S["/models"] --> A{"是 TG_ADMIN_CHAT_ID？"}
+  A -->|"否 / 未設定管理員"| N["回覆：只有管理員可以使用"]
+  A -->|"是"| L["用途清單 lr:l（每頁 8 個，第一列是 * 全域）&lt;br/&gt;每列「用途：標籤［來源］」，⚠️ 標出孤兒鍵與被略過的設定"]
+  L -->|"上一頁 / 下一頁"| L
+  L -->|"lr:k 選一個用途"| D["詳情：目前生效、本用途的設定、被略過的原因"]
+  D -->|"⚙️ 設定（孤兒鍵沒有）lr:e"| E["選端點（白名單非空者）"]
+  E -->|"lr:m"| M["選模型"]
+  M -->|"多個 effort：lr:f"| F["選 effort"]
+  M -->|"只有一個 effort 自動選上 / 不使用 effort 跳過"| C
+  F -->|"lr:c"| C["確認：顯示將寫進卡片的標籤"]
+  C -->|"✅ 儲存 lr:s"| W{"白名單＋試建客戶端"}
+  W -->|"不合格"| ER["❌ 無法儲存：原因"]
+  ER -->|"返回"| D
+  W -->|"通過"| OK["✅ 已儲存：新的生效設定"]
+  D -->|"↩️ 恢復預設（有存值才出現）lr:d"| R["刪除該筆（無確認步驟），顯示退回後的生效設定"]
+  OK -->|"返回清單"| L
+  R -->|"返回清單"| L
+  E -->|"返回"| D
+  M -->|"返回"| E
+  F -->|"返回"| M
+  C -->|"返回（多個 effort 時回選 effort）"| M
+  D -->|"返回清單"| L
+  X["任何畫面的 ✖️ 關閉 lr:x"] --> Z["已關閉 LLM 模型設定"]
+</pre>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <tr><th>規則</th><th>行為</th></tr>
+            <tr><td>舊按鈕偵測</td><td>「版本」是用途清單＋端點白名單的 6 碼雜湊，每次按鈕都重新計算比對。清單變了（重新部署改了 <code>.env</code>、刪了孤兒鍵）或序號、格式無效時一律提示「選單已過期，請重新輸入 /models」，不會誤改別的用途。關閉鈕 <code>lr:x</code> 不帶版本，任何時候都能按</td></tr>
+            <tr><td>授權</td><td>指令與每個按鈕都檢查 <code>TG_ADMIN_CHAT_ID</code>；未設定管理員時整個選單無法使用</td></tr>
+            <tr><td>讀不到資料庫</td><td>清單照常顯示（皆為 <code>.env</code> 預設並附警示），但除關閉鈕外的所有按鈕都被拒絕（唯讀），避免把「讀不到」當成「沒有設定」</td></tr>
+            <tr><td>解析順序</td><td>用途自己的設定 → 全域 <code>*</code> → <code>.env</code>；不在白名單的設定被略過並在詳情標示。改的是 <code>*</code> 時另重建診斷用的全域客戶端</td></tr>
+            <tr><td>與其他流程</td><td>不讀寫任何狀態，在 FSM 流程中途也能用（router 排在 FSM 之前），用完後原流程的狀態不變</td></tr>
+          </table>
+        </div>
+        <p class="caption">「⬅️ 返回清單」會回到該用途所在的頁。儲存後若更新畫面失敗，Bot 會明說「已儲存」，不會把已寫入的設定報成失敗。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="pitfalls">
+    <div class="section-head">
+      <span class="num">§5</span>
+      <h2>交互規則與已知坑</h2>
+    </div>
+    <ul class="pitfalls">
+      <li><span class="sev high">衝突</span><div><b>兩套狀態同時存在時，文字會先被 FSM 吃掉</b><p>例如在外語糾錯流程中途點了 addaudio 連結並走到「輸入說話者名稱」，打的名稱會被 FSM 當成糾錯流程的輸入（FSM 排在兜底 router 之前），頭像流程收不到，10 分鐘後過期。</p></div></li>
+      <li><span class="sev high">卡住</span><div><b>沒有全域取消</b><p>/start、/help、/sync、/setconfig、/models 在流程中都能用（它們的 router 排在 FSM 之前，且不帶狀態過濾），但不會清除 FSM 狀態。外語糾錯沒有取消按鈕，只有遇到重複時的「取消糾錯」和預覽時的「全部放棄」。FSM 不會過期，想離開只能 /newcard 重新開始（會覆蓋）或等後端重啟。</p></div></li>
+      <li><span class="sev mid">舊按鈕</span><div><b>「返回」與對話卡「取消」按鈕不檢查目前狀態</b><p><code>expr_back_*</code>、<code>speak_back_*</code>、<code>speak_cancel</code> 沒有綁狀態過濾。點聊天紀錄中舊訊息上的返回鈕，會把已經結束的流程重新拉回那一步。單字卡的取消有綁狀態，不受影響。<code>/models</code> 的按鈕以版本雜湊偵測過期（§4.6），也不受影響。</p></div></li>
+      <li><span class="sev mid">殘留</span><div><b>評分服務未初始化時，錄音狀態不會清除</b><p><code>recording</code> 收到語音後，音檔已先上傳到 Anki Media，接著發現評分器不可用就直接結束，狀態留到 10 分鐘過期。</p></div></li>
+      <li><span class="sev mid">重啟</span><div><b>兩套狀態都只存在記憶體</b><p>部署或重啟後，所有進行到一半的流程都會消失，使用者需要重新開始；Deep Link 的錄音任務要重新點卡片上的按鈕。</p></div></li>
+      <li><span class="sev low">未實作</span><div><b>gen_ Deep Link 與自由輸入的設定</b><p><code>gen_…</code> 只回覆尚未實作；<code>/setconfig</code> 裡沒有選項清單的設定無法在 Telegram 修改。</p></div></li>
+      <li><span class="sev low">授權</span><div><b>白名單沒設定時一律擋下</b><p><code>TG_ALLOWED_USER_IDS</code> 為空時所有人都被擋，而且不回覆任何訊息，只在 log 留紀錄；名單外的人則會收到「沒有權限」。</p></div></li>
+    </ul>
+  </section>
+
+  <section id="index">
+    <div class="section-head">
+      <span class="num">§6</span>
+      <h2>程式碼索引</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <tr><th>環節</th><th>位置（backend/app/…）</th></tr>
+        <tr><td>Router 順序與中介層</td><td><code>bot/dispatcher.py:41</code>（中介層）、<code>:51</code>（router 註冊順序，models_menu :52）</td></tr>
+        <tr><td>Webhook 入口與密鑰比對</td><td><code>api/webhook.py:14</code></td></tr>
+        <tr><td>白名單 / 服務注入</td><td><code>bot/dependencies.py:54</code>、<code>bot/dependencies.py:115</code></td></tr>
+        <tr><td>自訂狀態與過期</td><td><code>bot/state.py:41</code>（UserState）、<code>bot/state.py:62</code>（UserStateManager）</td></tr>
+        <tr><td>/start 與 Deep Link 分派</td><td><code>bot/handlers/commands.py:57</code>（recording :187、add_audio :216）</td></tr>
+        <tr><td>/help、/sync、/setconfig</td><td><code>bot/handlers/commands.py:403</code>、<code>:443</code>、<code>:478</code></td></tr>
+        <tr><td>/models 選單</td><td><code>bot/handlers/models_menu.py:493</code>（指令）、<code>:513</code>（關閉 lr:x）、<code>:533</code>（其餘按鈕 handle_menu）；callback data 組裝 / 解析與版本核對 <code>:199</code> / <code>:211</code>、版本雜湊 <code>:112</code>、管理員檢查 <code>:466</code>、儲存 <code>:679</code>、恢復預設 <code>:706</code></td></tr>
+        <tr><td>/models 的讀寫服務</td><td><code>services/llm_route_service.py</code>（<code>set_route</code> :426、<code>delete_route</code> :519、<code>refresh_global_client</code> :591）</td></tr>
+        <tr><td>/newcard 選單</td><td><code>bot/handlers/newcard_menu.py:138</code>（分派 :189）</td></tr>
+        <tr><td>外語糾錯 FSM</td><td><code>bot/handlers/fsm/expression_fsm.py:45</code>（重複檢查 :341、生成預覽 :490、返回 :876）</td></tr>
+        <tr><td>對話卡 FSM</td><td><code>bot/handlers/fsm/speaking_fsm.py:81</code>（建卡 :396、返回 :509）</td></tr>
+        <tr><td>單字卡 FSM</td><td><code>bot/handlers/fsm/vocabulary_fsm.py:33</code>（建卡 :98）；實際建卡 <code>services/task_handlers/vocabulary_mining_handler.py:81</code>（未呼叫 LLM）</td></tr>
+        <tr><td>語音（評分 / 上傳）</td><td><code>bot/handlers/voice.py:59</code>（recording :224、add_audio :339）</td></tr>
+        <tr><td>頭像按鈕與最終寫回</td><td><code>bot/handlers/callbacks.py:172</code>、<code>_execute_final_update :63</code></td></tr>
+        <tr><td>自訂頭像圖片</td><td><code>bot/handlers/media.py:28</code></td></tr>
+        <tr><td>說話者名稱 / 兜底回覆</td><td><code>bot/handlers/messages.py:79</code>、<code>:138</code></td></tr>
+        <tr><td>設定選單回呼</td><td><code>bot/handlers/callbacks_config.py:24</code>、<code>:84</code>、<code>:114</code></td></tr>
+      </table>
+    </div>
+  </section>
+
+  <footer>依 main 分支 1f76ef7 的程式碼盤點，2026-10-15；2026-10-18 依分支 feat/llm-model-routing（含未提交的工作區）更新 router 順序、/models 選單、§4.3 更正與程式碼索引的行號。程式碼變動後請以實際行為為準。圖表由 mermaid 11.4.1（jsDelivr CDN）在瀏覽器端繪製，離線開啟時會顯示圖的原始碼。</footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script>
+  // 每張圖的縮放與全螢幕。圖（svg）畫好後才掛上工具列；縮放以 svg 的原始寬度為 100%。
+  // 全螢幕先試瀏覽器的 Fullscreen API，被擋（嵌入式檢視器等）時仍以鋪滿視窗的覆蓋層呈現。
+  function setupDiagram(box) {
+    var svg = box.querySelector("svg");
+    if (!svg || box.dataset.zoomReady) return;
+    box.dataset.zoomReady = "1";
+
+    var view = document.createElement("div");
+    view.className = "diagram-view";
+    while (box.firstChild) view.appendChild(box.firstChild);
+
+    var bar = document.createElement("div");
+    bar.className = "diagram-bar";
+    bar.innerHTML =
+      '<span class="hint">Ctrl＋滾輪縮放・放大後可拖曳</span>' +
+      '<button type="button" data-act="out" aria-label="縮小">－</button>' +
+      '<span class="zoom-level" aria-live="polite"></span>' +
+      '<button type="button" data-act="in" aria-label="放大">＋</button>' +
+      '<button type="button" data-act="fit">符合大小</button>' +
+      '<button type="button" data-act="full" aria-pressed="false">全螢幕</button>';
+    box.appendChild(bar);
+    box.appendChild(view);
+
+    var vb = svg.viewBox && svg.viewBox.baseVal;
+    var rect = svg.getBoundingClientRect();
+    var naturalW = vb && vb.width ? vb.width : rect.width;
+    var naturalH = vb && vb.height ? vb.height : rect.height;
+    svg.removeAttribute("width");
+    svg.removeAttribute("height");
+    svg.style.maxWidth = "none";
+    svg.style.height = "auto";
+
+    var levelEl = bar.querySelector(".zoom-level");
+    var fullBtn = bar.querySelector('[data-act="full"]');
+    var scale = 1;
+    var fitted = true;
+
+    function apply(next) {
+      scale = Math.min(4, Math.max(0.2, next));
+      svg.style.width = naturalW * scale + "px";
+      levelEl.textContent = Math.round(scale * 100) + "%";
+      view.classList.toggle("can-pan", view.scrollWidth > view.clientWidth + 1 || view.scrollHeight > view.clientHeight + 1);
+    }
+
+    function fit() {
+      var full = box.classList.contains("is-full");
+      var next = (view.clientWidth - 8) / naturalW;
+      next = full ? Math.min(next, (view.clientHeight - 8) / naturalH, 3) : Math.min(next, 1);
+      fitted = true;
+      apply(next);
+      view.scrollLeft = 0;
+      view.scrollTop = 0;
+    }
+
+    function zoomBy(factor, px, py) {
+      var x = px === undefined ? view.clientWidth / 2 : px;
+      var y = py === undefined ? view.clientHeight / 2 : py;
+      var fx = (view.scrollLeft + x) / view.scrollWidth;
+      var fy = (view.scrollTop + y) / view.scrollHeight;
+      fitted = false;
+      apply(scale * factor);
+      view.scrollLeft = fx * view.scrollWidth - x;
+      view.scrollTop = fy * view.scrollHeight - y;
+    }
+
+    function setFull(on) {
+      box.classList.toggle("is-full", on);
+      document.body.classList.toggle("has-full", on);
+      fullBtn.textContent = on ? "關閉全螢幕" : "全螢幕";
+      fullBtn.setAttribute("aria-pressed", String(on));
+      if (on && box.requestFullscreen) {
+        box.requestFullscreen().catch(function () {});
+      } else if (!on && document.fullscreenElement === box) {
+        document.exitFullscreen().catch(function () {});
+      }
+      requestAnimationFrame(fit);
+    }
+
+    bar.addEventListener("click", function (e) {
+      var act = e.target.closest("button") && e.target.closest("button").dataset.act;
+      if (act === "in") zoomBy(1.25);
+      else if (act === "out") zoomBy(0.8);
+      else if (act === "fit") fit();
+      else if (act === "full") setFull(!box.classList.contains("is-full"));
+    });
+
+    view.addEventListener("wheel", function (e) {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      var r = view.getBoundingClientRect();
+      zoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX - r.left, e.clientY - r.top);
+    }, { passive: false });
+
+    var drag = null;
+    view.addEventListener("pointerdown", function (e) {
+      if (e.button !== 0 || !view.classList.contains("can-pan")) return;
+      drag = { x: e.clientX, y: e.clientY, left: view.scrollLeft, top: view.scrollTop };
+      view.classList.add("dragging");
+      view.setPointerCapture(e.pointerId);
+    });
+    view.addEventListener("pointermove", function (e) {
+      if (!drag) return;
+      view.scrollLeft = drag.left - (e.clientX - drag.x);
+      view.scrollTop = drag.top - (e.clientY - drag.y);
+    });
+    function endDrag() { drag = null; view.classList.remove("dragging"); }
+    view.addEventListener("pointerup", endDrag);
+    view.addEventListener("pointercancel", endDrag);
+
+    document.addEventListener("fullscreenchange", function () {
+      if (!document.fullscreenElement && box.classList.contains("is-full")) setFull(false);
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && box.classList.contains("is-full")) setFull(false);
+    });
+    window.addEventListener("resize", function () { if (fitted) fit(); });
+
+    fit();
+  }
+
+  function setupAllDiagrams() {
+    document.querySelectorAll(".diagram").forEach(setupDiagram);
+  }
+
+  // 依系統深淺色選 mermaid 主題；字型沿用頁面的正文字型
+  (function () {
+    if (typeof mermaid === "undefined") {
+      document.getElementById("offline").classList.add("show");
+      return;
+    }
+    var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: dark ? "dark" : "default",
+      themeVariables: { fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--font-body") },
+      flowchart: { htmlLabels: true },
+    });
+    mermaid.run({ querySelector: "pre.mermaid" }).then(setupAllDiagrams, function (error) {
+      console.error("mermaid 繪圖失敗", error);
+      setupAllDiagrams();
+    });
+  })();
+</script>
+</body>
+</html>

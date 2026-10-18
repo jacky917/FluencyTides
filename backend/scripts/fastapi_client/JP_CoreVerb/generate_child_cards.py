@@ -392,10 +392,11 @@ async def _generate_from_report(
     Returns:
         int: 本動詞實際新增的卡片數。Number of cards actually added.
     """
-    # 本機推導的標籤只作兩用:①失敗紀錄(無回應可取)②回應缺欄時的
-    # fallback。成功紀錄一律取後端回應的 llm_model(單一事實來源),
+    # 失敗紀錄(無回應可取)與回應缺 llm_model 欄時用的標籤:向後端查詢此用途生效的
+    # 標籤(/models 改過也正確),查不到才退回本機推算並警告(見 scripts/common/llm_label.py)。
+    # 成功紀錄一律取後端回應的 llm_model(單一事實來源),
     # 詳見 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。
-    llm_model_name = build_llm_model_label()
+    llm_model_name = build_llm_model_label("jp_core_verb")
 
     new_generated = 0
     for item in report.selected:

@@ -16,6 +16,11 @@ CardService.generate_card, and imports the results into Anki.
 用法：
     cd backend
     python -m scripts.import_cards_with_llm --file scripts/samples/llm_import_sample.json
+
+模型：在本機以本機 ``.env`` 的 ``LLM_PROVIDER`` / ``LLM_MODEL_NAME`` 建立客戶端，後端 TG ``/models``
+（DB）的用途設定對這支腳本無效（模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D9）。
+Model: built locally from this machine's ``.env``; the backend's ``/models``
+route settings do not apply to this script.
 """
 
 import argparse

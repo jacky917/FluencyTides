@@ -3,12 +3,13 @@
 Reading-judgment service for Japanese verbs whose kanji surface has
 multiple readings.
 
-渲染 ``JP_VerbReading_Judge.j2``、以（可覆寫模型/深度的）請求範圍 LLM client
+渲染 ``JP_VerbReading_Judge.j2``、以用途鍵 ``jp_verb_reading`` 生效的 LLM client
 呼叫，並把輸出收斂成安全的結果：讀音不在該句候選內、或缺漏的句子，一律視為
-「無法判定」（空字串），寧缺勿錯。
-Renders the judge template, calls a request-scoped LLM client (model /
-effort overridable), and normalizes the output: readings outside the
-item's candidates, or missing items, become "" (undetermined).
+「無法判定」（空字串），寧缺勿錯。要換模型請用 TG ``/models`` 設定這個用途
+（模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D8：請求不再能覆寫模型 / effort）。
+Renders the judge template, calls the client of the ``jp_verb_reading``
+route, and normalizes the output: readings outside the item's
+candidates, or missing items, become "" (undetermined).
 
 對應計畫 docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.2。
 """
@@ -16,9 +17,7 @@ item's candidates, or missing items, become "" (undetermined).
 import logging
 
 from app.core.dependencies import get_template_engine
-from app.core.dynamic_config import get_modifiable_configs
-from app.core.exceptions.infrastructure import LLMServiceError
-from app.infrastructure.llm.factory import create_llm_client
+from app.infrastructure.llm.routing import llm_route
 from app.schemas.llm.jp_verb_reading import (
     JudgeReadingItem,
     JudgeReadingsResponse,
@@ -28,41 +27,15 @@ from app.schemas.llm.jp_verb_reading import (
 
 logger = logging.getLogger(__name__)
 
+# LLM 用途鍵（生效設定的解析見 app.infrastructure.llm.routing）
+JUDGE_LLM = llm_route("jp_verb_reading", "讀音判斷")
+
 TEMPLATE_PATH = "prompts/anki/JP_VerbReading_Judge.j2"
 SYSTEM_PROMPT = (
     "你是精通日語語音與語用的專家，任務是依語境判定多讀漢字動詞的實際讀音。"
     "只能從給定的候選讀音中選擇；無法確定時回空字串，絕不猜測。"
     "請嚴格依指定的 JSON 格式輸出。"
 )
-
-
-class InvalidOverrideError(ValueError):
-    """模型 / effort 覆寫值不合法（呼叫端可修正的輸入問題）。
-
-    Invalid model / effort override — a caller-correctable input error.
-    """
-
-
-def validate_model_override(model: str | None) -> None:
-    """模型覆寫值須在 ``MODIFY_LLM_MODEL_NAME`` 白名單內（未設白名單則不限）。
-
-    Validate a model override against the LLM_MODEL_NAME whitelist when one
-    is configured; unrestricted when no whitelist exists.
-
-    Args:
-        model: 覆寫值；None 表示沿用設定。Override value, or None.
-
-    Raises:
-        InvalidOverrideError: 值不在白名單內。When outside the whitelist.
-    """
-    if model is None:
-        return
-    options = get_modifiable_configs().get("LLM_MODEL_NAME")
-    if options and model not in options:
-        raise InvalidOverrideError(
-            f"model '{model}' 不在可用清單內。可選：{', '.join(options)}"
-            "（清單來自後端 .env 的 MODIFY_LLM_MODEL_NAME；provider 為 claude-code / antigravity 時請在其中加入對應模型名，antigravity 用基底名）"
-        )
 
 
 def normalize_results(
@@ -104,40 +77,20 @@ def normalize_results(
 class JpVerbReadingService:
     """讀音判讀服務。Reading-judgment service."""
 
-    async def judge(
-        self,
-        items: list[JudgeReadingItem],
-        *,
-        model: str | None = None,
-        effort: str | None = None,
-    ) -> JudgeReadingsResponse:
+    async def judge(self, items: list[JudgeReadingItem]) -> JudgeReadingsResponse:
         """判讀一批台詞。Judge one batch of lines.
 
         Args:
             items: 待判句子（≤ 40）。Items to judge.
-            model: 覆寫模型；None 沿用設定。Model override.
-            effort: 覆寫思考深度；None 沿用設定。Effort override.
 
         Returns:
             JudgeReadingsResponse: 實際模型標籤與逐句結果。
 
         Raises:
-            InvalidOverrideError: 模型覆寫不在白名單，或 effort 覆寫非法 /
-                provider 不支援（client 建立階段被拒）。
-            LLMServiceError: 未帶覆寫時的 client 建立失敗，或 LLM 呼叫失敗。
+            LLMServiceError: client 建立失敗（伺服器設定問題），或 LLM 呼叫失敗。
         """
-        validate_model_override(model)
-        # 每次請求建立自己的 client（與生成 handler 相同的既有模式）；有覆寫
-        # 時不動 app.state.llm_client、不寫回設定。帶覆寫時的建立失敗
-        # （effort 不在白名單、provider 不支援 effort）是呼叫端的輸入問題，
-        # 轉成 InvalidOverrideError 讓端點回 422；未帶覆寫的失敗則是伺服器
-        # 設定問題，原樣拋出。
-        try:
-            llm_client = create_llm_client(model=model, effort=effort)
-        except LLMServiceError as e:
-            if model is not None or effort is not None:
-                raise InvalidOverrideError(str(e)) from e
-            raise
+        # 每次請求建立自己的 client（與生成 handler 相同的既有模式）
+        llm_client = await JUDGE_LLM.client()
 
         prompt_text = get_template_engine().render(TEMPLATE_PATH, items=items)
         raw = await llm_client.generate_structured_data(

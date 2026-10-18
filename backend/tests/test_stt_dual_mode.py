@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.core.exceptions import AnkiFieldCorruptedError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.stt.whisper_client import WhisperClient
+from app.infrastructure.audio_evaluator.base import AudioNotScoredError
 from app.infrastructure.audio_evaluator.stt_diff_evaluator import (
     STTDiffEvaluator,
     _normalize_with_map,
@@ -139,17 +140,18 @@ class TestDiffEvaluator(unittest.TestCase):
         self.assertNotIn("<b>", result.feedback)
 
     def test_no_references_guard(self) -> None:
-        """無參考答案應回 0 分並提示。No references → score 0 + hint."""
-        result = self._evaluate("テスト", [])
-        self.assertEqual(result.score, 0)
-        self.assertIn("stt_diff", result.feedback)
-        self.assertEqual(result.transcript, "テスト")
+        """無參考答案：不是 0 分而是無法評分，拋 AudioNotScoredError（呼叫端不寫入紀錄）。
+
+        No references: not a zero score but no score at all."""
+        with self.assertRaises(AudioNotScoredError) as ctx:
+            self._evaluate("テスト", [])
+        self.assertIn("沒有參考答案", ctx.exception.reason)
 
     def test_empty_transcript_guard(self) -> None:
-        """空逐字稿應回 0 分。Empty transcript → score 0."""
-        result = self._evaluate("   ", ["何か"])
-        self.assertEqual(result.score, 0)
-        self.assertEqual(result.transcript, "（無語音）")
+        """空逐字稿：無法評分，拋 AudioNotScoredError。Empty transcript: not scored."""
+        with self.assertRaises(AudioNotScoredError) as ctx:
+            self._evaluate("   ", ["何か"])
+        self.assertEqual(ctx.exception.reason, "沒有偵測到語音。")
 
     def test_html_escape_in_tg_output(self) -> None:
         """原文含 < 與 & 時 TG 輸出必須轉義。TG output escapes < and &."""

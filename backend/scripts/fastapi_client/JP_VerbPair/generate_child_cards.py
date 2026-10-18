@@ -435,11 +435,12 @@ async def process_verb_group(
                     
                 logger.info(f"🚀 發送生成請求 (script_id: {script_id})...")
 
-                # 本機推導的標籤只作兩用:①失敗紀錄(無回應可取)②回應缺欄
-                # 時的 fallback。成功紀錄一律取後端回應的 llm_model——後端與
-                # 腳本 .env 是兩份檔案,本機推導曾造成 190 筆錯標(2026-08-28),
+                # 失敗紀錄(無回應可取)與回應缺 llm_model 欄時用的標籤:向後端查詢此
+                # 用途生效的標籤(/models 改過也正確),查不到才退回本機推算並警告
+                # (見 scripts/common/llm_label.py)。成功紀錄一律取後端回應的 llm_model——
+                # 後端與腳本 .env 是兩份檔案,本機推導曾造成 190 筆錯標(2026-08-28),
                 # 詳見 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。
-                llm_model_name = build_llm_model_label()
+                llm_model_name = build_llm_model_label("jp_verb_pair")
 
                 try:
                     response_json = await api_client.invoke_generation_pipeline(payload)

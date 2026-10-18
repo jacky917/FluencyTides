@@ -58,7 +58,8 @@ from app.core.exceptions import (
     LLMRetryExhaustedError,
     LLMServiceError,
 )
-from app.infrastructure.llm.base import BaseLLMClient
+from app.infrastructure.llm.base import BaseLLMClient, EffortArg
+from app.infrastructure.llm.endpoints import TYPE_GEMINI_NATIVE, Endpoint
 from app.infrastructure.llm.schema_utils import resolve_json_schema, strip_markdown_fences
 from app.schemas.llm.base import LLMGenerateResult
 
@@ -203,6 +204,7 @@ class GeminiNativeLLMClient(BaseLLMClient):
     """
 
     PROVIDER_NAME: ClassVar[str] = "gemini-native"
+    ENDPOINT_TYPES: ClassVar[frozenset[str]] = frozenset({TYPE_GEMINI_NATIVE})
 
     # 內容層重試（空內容 / 截斷 / 壞 JSON / 拒答）：與 LLMClient 相同
     MAX_RETRIES = 3
@@ -217,33 +219,48 @@ class GeminiNativeLLMClient(BaseLLMClient):
     # 這裡以 asyncio.timeout 包住整次呼叫
     REQUEST_TIMEOUT_SECONDS = 120.0
 
-    def __init__(self, *, model: str | None = None, effort: str | None = None) -> None:
-        """以 ``LLM_API_KEY`` 建立 google-genai Client。
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        effort: EffortArg = None,
+        endpoint: Endpoint | None = None,
+    ) -> None:
+        """以端點的金鑰（或 ``LLM_API_KEY``）建立 google-genai Client。
 
-        Create the google-genai client from ``LLM_API_KEY``.
+        Create the google-genai client from the endpoint's key, or from
+        ``LLM_API_KEY`` when no endpoint is given.
 
-        金鑰沿用 ``LLM_API_KEY``：Google 原生與 OpenAI 相容端點共用同一把 key。
-        ``LLM_BASE_URL`` 對此 provider 無意義，忽略。
+        未指定端點時金鑰沿用 ``LLM_API_KEY``（Google 原生與 OpenAI 相容端點共用
+        同一把 key）；網址對此 provider 無意義，忽略。
 
         Args:
             model: 覆寫模型名；None 沿用 ``LLM_MODEL_NAME``。Model override.
             effort: 本 provider 不支援；給值即拋錯。Unsupported; rejected.
+            endpoint: 端點；None 讀 ``LLM_API_KEY``。The endpoint, or None.
 
         Raises:
-            LLMServiceError: effort 給值、``LLM_API_KEY`` 未設定、模型名為空，
+            LLMServiceError: 端點類型不符、effort 給值、金鑰未設定、模型名為空，
                 或 SDK Client 建立失敗時。
         """
+        self._check_endpoint_type(endpoint)
+        if endpoint is not None:
+            api_key = endpoint.api_key.get_secret_value() if endpoint.api_key else None
+            key_setting = endpoint.api_key_setting
+        else:
+            api_key, key_setting = settings.LLM_API_KEY, "LLM_API_KEY"
+
         # 檢查順序與 LLMClient 一致：effort → API 金鑰 → 模型名
         self._reject_unsupported_effort(effort)
-        if not settings.LLM_API_KEY:
-            raise LLMServiceError("LLM_API_KEY 未設定，無法初始化 Gemini 原生客戶端。")
-        super().__init__(model=model, effort=effort)
+        if not api_key:
+            raise LLMServiceError(f"{key_setting} 未設定，無法初始化 Gemini 原生客戶端。")
+        super().__init__(model=model, effort=effort, endpoint=endpoint)
 
-        if settings.LLM_BASE_URL:
+        if endpoint is None and settings.LLM_BASE_URL:
             logger.debug("gemini-native 不使用 LLM_BASE_URL（%s），已忽略。", settings.LLM_BASE_URL)
 
         try:
-            self._client = genai.Client(api_key=settings.LLM_API_KEY)
+            self._client = genai.Client(api_key=api_key)
         except Exception as error:  # noqa: BLE001 - 契約：建構失敗一律以 LLMServiceError 拋出
             logger.exception("google-genai Client 建立失敗")
             raise LLMServiceError(

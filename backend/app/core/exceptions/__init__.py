@@ -36,6 +36,10 @@ from .services import (
     AuthenticationError,
     LLMGenerationError,
     ClozePositioningError,
+    LLMRouteError,
+    LLMRouteNotFoundError,
+    InvalidLLMRouteError,
+    LLMRouteStoreUnavailableError,
 )
 
 __all__ = [
@@ -62,4 +66,8 @@ __all__ = [
     "AuthenticationError",
     "LLMGenerationError",
     "ClozePositioningError",
+    "LLMRouteError",
+    "LLMRouteNotFoundError",
+    "InvalidLLMRouteError",
+    "LLMRouteStoreUnavailableError",
 ]
