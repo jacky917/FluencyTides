@@ -268,3 +268,60 @@ def test_get_shows_skipped_layer_and_effective_effort(client, llm_route_db):
     assert "retired-model" in route["rejected"][0]["reason"]
     assert route["effective"] == {"endpoint": "claude-code", "model": "claude-opus-5", "effort": "high"}
     assert route["label"] == "(claude-code)opus-5@high"
+
+
+def test_writing_the_global_key_rebuilds_the_global_client(client):
+    """PUT / DELETE 全域 * 之後重建 app.state.llm_client（診斷端點的標籤跟著全域設定）；改其他用途不重建。"""
+    state = client.app.state
+    state.llm_client = None
+
+    client.put(f"/api/v1/llm-routes/{KEY}", json={"endpoint": "yinli", "model": "m1"})
+    assert state.llm_client is None
+
+    client.put("/api/v1/llm-routes/*", json={"endpoint": "yinli", "model": "m2"})
+    assert state.llm_client.model_label == "(yinli)m2"
+
+    client.delete("/api/v1/llm-routes/*")
+    assert state.llm_client.model_label == "gemini-3.5-flash"
+
+
+def test_unauthenticated_requests_are_rejected_on_every_method(real_app_client):
+    """設定了 API_SECRET_KEY 時，GET / PUT / DELETE 沒帶金鑰都是 401，且不會改到設定。"""
+    with mock.patch.object(settings, "API_SECRET_KEY", "s3cret"):
+        real_app_client.put(
+            "/api/v1/llm-routes/*", json={"endpoint": "yinli", "model": "m1"}, headers={"X-API-Key": "s3cret"}
+        )
+        responses = [
+            real_app_client.get("/api/v1/llm-routes"),
+            real_app_client.put("/api/v1/llm-routes/*", json={"endpoint": "yinli", "model": "m2"}),
+            real_app_client.delete("/api/v1/llm-routes/*"),
+        ]
+        listing = real_app_client.get("/api/v1/llm-routes", headers={"X-API-Key": "s3cret"})
+
+    assert [response.status_code for response in responses] == [401, 401, 401]
+    assert _route(listing.json(), "*")["stored"]["model"] == "m1"
+
+
+def test_delete_global_key_falls_back_to_env(client):
+    """DELETE 全域 *：刪掉後其他用途退回 .env。"""
+    client.put("/api/v1/llm-routes/*", json={"endpoint": "yinli", "model": "m2"})
+    assert _route(client.get("/api/v1/llm-routes").json(), KEY)["source"] == "global"
+
+    response = client.delete("/api/v1/llm-routes/*")
+
+    assert (response.json()["deleted"], response.json()["route"]["source"]) == (True, "env")
+    assert asyncio.run(routing.resolve(KEY)).source == "env"
+
+
+def test_failed_global_write_still_rebuilds_the_global_client(client):
+    """寫入 * 回 503（結果未知，DB 可能已改）時也重建全域客戶端，不留著可能已過時的那一個。"""
+    from app.services import llm_route_service
+
+    state = client.app.state
+    state.llm_client = None
+    error = OperationalError("INSERT ...", {}, Exception("database is locked"))
+    with mock.patch.object(llm_route_service, "_session_factory", side_effect=error):
+        response = client.put("/api/v1/llm-routes/*", json={"endpoint": "yinli", "model": "m2"})
+
+    assert response.status_code == 503
+    assert state.llm_client is not None  # 已依目前讀得到的設定（此時是 .env）重建

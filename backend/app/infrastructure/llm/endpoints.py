@@ -568,6 +568,14 @@ def skip_reason(endpoint_id: str) -> str | None:
     return _load()[1].get(endpoint_id.strip().lower())
 
 
+def skipped_endpoints() -> dict[str, str]:
+    """所有因設定有誤被跳過的自訂端點與原因（診斷端點用）。
+
+    Every custom endpoint skipped as invalid, with the reason.
+    """
+    return dict(_load()[1])
+
+
 def get_endpoint(endpoint_id: str | None = None) -> Endpoint | None:
     """取得端點；None 取「.env 那一層」的端點。
 

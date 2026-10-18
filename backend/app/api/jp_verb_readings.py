@@ -6,12 +6,14 @@ kanji surface has multiple readings.
 路徑帶 ``jp``：本服務同時承載 TOEIC/英語等模組，「同表層多讀」是日文特有
 的問題，語言專屬能力不該看起來像通用的
 （docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.4）。
+
+使用的模型由用途鍵 ``jp_verb_reading`` 決定（TG ``/models``），請求不能覆寫。
 """
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, status
 
 from app.schemas.llm.jp_verb_reading import JudgeReadingsRequest, JudgeReadingsResponse
-from app.services.jp_verb_reading_service import InvalidOverrideError, JpVerbReadingService
+from app.services.jp_verb_reading_service import JpVerbReadingService
 
 router = APIRouter(prefix="/jp/verb-readings", tags=["JP Verb Readings"])
 
@@ -23,19 +25,13 @@ async def judge_readings(request: JudgeReadingsRequest) -> JudgeReadingsResponse
     Judge the actual reading of a multi-reading verb in a batch of lines.
 
     Args:
-        request: 待判句子（≤ 40）與可選的模型/深度覆寫。Items and optional
-            model / effort overrides.
+        request: 待判句子（≤ 40）。帶已移除的 ``model`` / ``effort`` 等多餘欄位時，由
+            FastAPI 回 422。Items to judge; unknown fields are rejected.
 
     Returns:
         JudgeReadingsResponse: 實際使用的模型標籤與逐句結果；無法判定為空字串。
 
     Raises:
-        HTTPException: 422 —— 模型 / effort 覆寫值不合法（呼叫端可修正的
-            輸入問題）；其餘 LLM 呼叫失敗交由全域例外處理。
+        LLMServiceError: client 建立或 LLM 呼叫失敗，交由全域例外處理。
     """
-    try:
-        return await JpVerbReadingService().judge(
-            request.items, model=request.model, effort=request.effort,
-        )
-    except InvalidOverrideError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    return await JpVerbReadingService().judge(request.items)

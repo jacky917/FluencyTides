@@ -170,18 +170,6 @@ class TestServiceNormalize:
         raw2 = ReadingJudgmentLLMOutput(results=[ReadingJudgment(script_id=1, reading="きたなす")])
         assert svc_mod.normalize_results(_items()[:1], raw2)[0].reading == ""
 
-    def test_model_whitelist(self):
-        with mock.patch.object(svc_mod, "get_modifiable_configs", return_value={"LLM_MODEL_NAME": ["a", "b"]}):
-            svc_mod.validate_model_override(None)
-            svc_mod.validate_model_override("a")
-            try:
-                svc_mod.validate_model_override("zzz")
-                assert False, "should raise"
-            except svc_mod.InvalidOverrideError as e:
-                assert "a, b" in str(e)
-        with mock.patch.object(svc_mod, "get_modifiable_configs", return_value={}):
-            svc_mod.validate_model_override("anything")  # 無白名單 → 不限
-
 
 def _app():
     app = FastAPI()
@@ -190,36 +178,39 @@ def _app():
 
 
 class TestEndpoint:
-    def test_judge_ok_passes_overrides_and_returns_model(self):
+    def test_judge_ok_returns_model(self):
         captured = {}
 
-        async def fake_judge(self, items, *, model=None, effort=None):
-            captured.update(model=model, effort=effort, n=len(items))
+        async def fake_judge(self, items):
+            captured.update(n=len(items))
             return JudgeReadingsResponse(llm_model="(claude-code)haiku-4-5@medium",
                                          results=[ReadingJudgment(script_id=i.script_id, reading="よごす") for i in items])
 
         with mock.patch.object(svc_mod.JpVerbReadingService, "judge", fake_judge):
             resp = TestClient(_app()).post("/api/v1/jp/verb-readings/judge", json={
-                "items": [i.model_dump() for i in _items()], "model": "claude-haiku-4-5", "effort": "medium",
+                "items": [i.model_dump() for i in _items()],
             })
         assert resp.status_code == 200
         assert resp.json()["llm_model"] == "(claude-code)haiku-4-5@medium"
-        assert captured == {"model": "claude-haiku-4-5", "effort": "medium", "n": 2}
+        assert captured == {"n": 2}
 
     def test_more_than_40_items_rejected(self):
         item = _items()[0].model_dump()
         resp = TestClient(_app()).post("/api/v1/jp/verb-readings/judge", json={"items": [item] * 41})
         assert resp.status_code == 422
 
-    def test_invalid_override_is_422(self):
-        async def bad(self, items, *, model=None, effort=None):
-            raise svc_mod.InvalidOverrideError("model 'x' 不在可用清單內")
-
-        with mock.patch.object(svc_mod.JpVerbReadingService, "judge", bad):
-            resp = TestClient(_app()).post("/api/v1/jp/verb-readings/judge",
-                                           json={"items": [_items()[0].model_dump()], "model": "x"})
-        assert resp.status_code == 422
-        assert "不在可用清單" in resp.json()["detail"]
+    def test_removed_override_fields_are_rejected(self):
+        """舊版腳本帶 model / effort（已移除的覆寫）：明確 422，不默默忽略、讓人以為用了指定的模型。"""
+        judge = mock.AsyncMock()
+        with mock.patch.object(svc_mod.JpVerbReadingService, "judge", judge):
+            for extra in ({"model": "claude-opus-5"}, {"effort": "high"}):
+                resp = TestClient(_app()).post(
+                    "/api/v1/jp/verb-readings/judge", json={"items": [_items()[0].model_dump()], **extra}
+                )
+                assert resp.status_code == 422
+                [field] = extra
+                assert any(error["loc"][-1] == field for error in resp.json()["detail"])
+        judge.assert_not_awaited()
 
 
 # ============================================================
@@ -258,7 +249,7 @@ class TestClientOverrides:
 
 
 # ============================================================
-# 服務層的客戶端選擇（模型路由 P1：無覆寫走用途鍵，有覆寫沿用舊行為）
+# 服務層的客戶端選擇（模型路由：一律走用途鍵 jp_verb_reading）
 # ============================================================
 
 def _fake_llm():
@@ -269,67 +260,37 @@ def _fake_llm():
     return llm
 
 
-def _judge(**overrides):
+def _judge():
     engine = mock.MagicMock()
     engine.render.return_value = "PROMPT"
-    with mock.patch.object(svc_mod, "get_template_engine", return_value=engine), \
-         mock.patch.object(svc_mod, "get_modifiable_configs", return_value={}):
-        return asyncio.run(svc_mod.JpVerbReadingService().judge(_items(), **overrides))
+    with mock.patch.object(svc_mod, "get_template_engine", return_value=engine):
+        return asyncio.run(svc_mod.JpVerbReadingService().judge(_items()))
 
 
 class TestServiceClientSelection:
-    def test_no_override_uses_route(self):
-        """不帶覆寫：走用途鍵 jp_verb_reading 的路由，不呼叫 create_llm_client。"""
+    def test_uses_route(self):
+        """走用途鍵 jp_verb_reading 的路由；回應的 llm_model 取自實際呼叫的客戶端。"""
         route = mock.MagicMock()
         route.client = mock.AsyncMock(return_value=_fake_llm())
-        with mock.patch.object(svc_mod, "JUDGE_LLM", route), \
-             mock.patch.object(svc_mod, "create_llm_client") as create:
+        with mock.patch.object(svc_mod, "JUDGE_LLM", route):
             response = _judge()
         route.client.assert_awaited_once_with()
-        create.assert_not_called()
         assert response.llm_model == "(x)m"
 
-    def test_override_bypasses_route(self):
-        """只帶 model：沿用舊行為（.env provider + 覆寫），不看路由設定。"""
-        route = mock.MagicMock()
-        route.client = mock.AsyncMock()
-        with mock.patch.object(svc_mod, "JUDGE_LLM", route), \
-             mock.patch.object(svc_mod, "create_llm_client", return_value=_fake_llm()) as create:
-            _judge(model="a")
-        create.assert_called_once_with(model="a", effort=None)
-        route.client.assert_not_awaited()
-
-    def test_override_construction_failure_is_input_error(self):
-        """帶覆寫時 client 建立失敗：呼叫端的輸入問題，轉 InvalidOverrideError（端點回 422）。"""
-        with mock.patch.object(svc_mod, "create_llm_client", side_effect=LLMServiceError("effort 無效")):
-            try:
-                _judge(effort="ultra")
-                assert False
-            except svc_mod.InvalidOverrideError as e:
-                assert "effort 無效" in str(e)
+    def test_route_is_the_declared_reading_key(self):
+        """用途鍵是 jp_verb_reading：/models 設定的就是這個鍵。"""
+        assert svc_mod.JUDGE_LLM.key == "jp_verb_reading"
 
     def test_route_construction_failure_is_raised_as_is(self):
-        """不帶覆寫時 client 建立失敗：伺服器設定問題，原樣拋出，不轉成 422。"""
+        """client 建立失敗：伺服器設定問題，原樣拋出（交給全域 handler），不包裝成輸入錯誤。"""
         route = mock.MagicMock()
         route.client = mock.AsyncMock(side_effect=LLMServiceError("找不到 claude 執行檔"))
         with mock.patch.object(svc_mod, "JUDGE_LLM", route):
             try:
                 _judge()
                 assert False
-            except svc_mod.InvalidOverrideError:
-                assert False, "伺服器設定錯誤不可報成輸入錯誤"
             except LLMServiceError as e:
                 assert "claude" in str(e)
-
-    def test_empty_effort_string_is_rejected(self):
-        """effort 空字串照舊是非法覆寫（422），不會被當成「不傳 effort」。"""
-        with mock.patch.object(settings, "LLM_PROVIDER", "google"), \
-             mock.patch.object(settings, "LLM_ENDPOINTS", {}):
-            try:
-                _judge(effort="")
-                assert False
-            except svc_mod.InvalidOverrideError:
-                pass
 
 
 # ============================================================
@@ -403,3 +364,25 @@ class TestCompoundVerbSpacing:
         from scripts.fastapi_client.JP_CoreVerb.pipeline_components.funnel import strip_furigana
         assert strip_furigana("「ハッ！？　す、すまん」") == "「ハッ！？　す、すまん」"
         assert strip_furigana("見[み]る と 分[わ]かる") == "見る と 分かる"
+
+
+def test_judge_script_sends_no_model_override():
+    """判讀腳本的請求只有 items（模型由後端 jp_verb_reading 用途決定，已無 --model / --effort）。"""
+    import json
+
+    import httpx
+
+    from scripts.fastapi_client.JP_Common.judge_verb_readings import _call_judge
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"llm_model": "(x)m", "results": []})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await _call_judge(client, "http://backend.test/judge", [{"script_id": 1}])
+
+    assert asyncio.run(run())["llm_model"] == "(x)m"
+    assert seen["body"] == {"items": [{"script_id": 1}]}

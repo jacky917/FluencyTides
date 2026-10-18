@@ -107,6 +107,8 @@ CREATE TABLE IF NOT EXISTS jp_verb_reading_judgments (
 
 用途是在花錢前看清楚規模,並可搭配 `--surface` / `--max-surfaces` / `--limit` 調整到可接受的批次再正式跑。
 
+> **2026-10-18 更新(模型路由 P3,`llm_model_routing_FEAT_2026-10-15.md` D8)**:`--model` / `--effort` 與端點的 `model` / `effort` 覆寫已移除。判讀一律用後端用途鍵 `jp_verb_reading` 的設定;要換模型或深度,先在 TG `/models` 設定 `jp_verb_reading`,跑完再「恢復預設」。端點收到 `model` / `effort` 欄位會回 422,舊版腳本不會被默默忽略。下表與 §3.2 中關於覆寫的段落保留為歷史紀錄。
+
 **參數**(全部可選;模型與深度不給時沿用後端 .env 的設定,回應仍帶實際使用的 `llm_model`):
 
 | 參數 | 說明 | 預設 |
@@ -137,7 +139,7 @@ CREATE TABLE IF NOT EXISTS jp_verb_reading_judgments (
 
 - 請求:`{items: [{script_id, surface, candidates: [讀音…], line, context_before: [..], context_after: [..]}], model?: str, effort?: str}`,`items` 單次 ≤ 40 筆(超過回 422)。
 - 回應:`{llm_model, results: [{script_id, reading}]}`,`reading` ∈ candidates 或 `""`;`llm_model` 為**實際使用**的模型標籤(含覆寫後的值),腳本寫入表時以此為準。
-- **模型/深度覆寫**:`model` / `effort` 任一有給時,後端以該組合建立**請求範圍**的 LLM client(不動 `app.state.llm_client`、不寫回設定);兩者皆缺則用既有 client。覆寫值的合法性由後端驗證(不在白名單 → 422 並列出可選值),腳本只負責傳遞。
+- **模型/深度覆寫(已移除,見 §3.1 開頭的更新說明)**:`model` / `effort` 任一有給時,後端以該組合建立**請求範圍**的 LLM client(不動 `app.state.llm_client`、不寫回設定);兩者皆缺則用既有 client。覆寫值的合法性由後端驗證(不在白名單 → 422 並列出可選值),腳本只負責傳遞。
 - **模型白名單的耦合**:`model` 覆寫值以後端 .env 的 `MODIFY_LLM_MODEL_NAME` 為白名單(有設才限制)。該清單是 Telegram 動態設定的既有機制,內容隨 provider 而異——provider 為 claude-code 時須在其中加入 claude 模型名,否則覆寫一律 422(錯誤訊息已附此提示;2026-09-03 本機實測即因清單只列 Gemini 模型而被擋)。`effort` 由 client 自身的白名單驗證,不經此清單。
 - 新模板 `JP_VerbReading_Judge.j2`:給上下文與候選讀音,要求逐句判定;無法確定時明確回 `""`,**不猜**。模板只做這一件事,生成模板不動。
 - 為什麼不讓腳本直連 LLM:專案原則是腳本不自組 LLM client、不讀 LLM 的 .env、標籤以後端回應為準(2026-08-28 曾因腳本自行推導標籤錯標 190 筆);claude-code 的認證也只在後端/容器配置。覆寫參數走端點,既保留單一事實來源,又給了每次執行指定模型的自由。

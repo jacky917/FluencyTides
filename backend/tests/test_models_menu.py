@@ -586,3 +586,103 @@ def test_models_router_runs_before_catch_all_text_router():
     finally:
         for sub_router in dispatcher.sub_routers:
             sub_router._parent_router = None
+
+
+def test_saving_the_global_key_rebuilds_the_global_client(llm_route_db, llm_whitelist):
+    """在選單儲存全域 * 後，重建 app.state.llm_client（與 API 相同，診斷端點跟著全域設定）。"""
+    from types import SimpleNamespace
+
+    app = SimpleNamespace(state=SimpleNamespace(llm_client=None))
+    _, markup = _open_menu()
+    _, markup, _ = _click(_button_starting(markup, "*："))
+    _, markup, _ = _click(_button_starting(markup, "⚙️ 設定"))
+    _, markup, _ = _click(_button_starting(markup, "yinli"))
+    _, markup, _ = _click(_button_starting(markup, "m2"))
+    query = _callback_query(_button_starting(markup, "✅ 儲存"))
+    asyncio.run(models_menu.handle_menu(query, app=app))
+
+    query.answer.assert_awaited_once_with()
+    assert app.state.llm_client.model_label == "(yinli)m2"
+
+
+def test_long_error_alert_fits_telegram_limit(llm_route_db, llm_whitelist):
+    """非預期錯誤的訊息很長：彈出提示截在 Telegram 的 200 字元上限內（超過會被拒收、管理員什麼都看不到）。"""
+    _, markup = _open_menu()
+    button = _button_starting(markup, f"{KEY}：")
+    with mock.patch.object(models_menu.llm_route_service, "describe", side_effect=RuntimeError("x" * 500)):
+        _, _, query = _click(button)
+
+    assert len(query.answer.await_args.args[0]) <= 200
+
+
+def test_close_failure_is_logged_at_warning(llm_route_db, llm_whitelist, caplog):
+    """關閉時訊息已無法編輯（例如超過 48 小時）：記 WARNING（預設等級看得到），不是 DEBUG。"""
+    import logging
+
+    query = _callback_query(CLOSE_DATA)
+    query.message.edit_text.side_effect = TelegramBadRequest(
+        method=mock.MagicMock(), message="Bad Request: message can't be edited"
+    )
+    with caplog.at_level(logging.WARNING, logger=models_menu.__name__):
+        asyncio.run(models_menu.handle_close(query))
+
+    assert "關閉時無法更新訊息" in caplog.text
+
+
+def test_saved_but_alert_also_fails_is_not_reported_as_failure(llm_route_db, llm_whitelist, caplog):
+    """已儲存、畫面更新失敗、連提示也送不出去（回呼查詢逾時）：不往外拋，也不再記一次「操作失敗」。"""
+    _, markup, _ = _to_model_screen("haiku")
+    query = _callback_query(_button_starting(markup, "✅ 儲存"))
+    query.message.edit_text.side_effect = TelegramBadRequest(
+        method=mock.MagicMock(), message="Bad Request: message to edit not found"
+    )
+    query.answer.side_effect = TelegramBadRequest(method=mock.MagicMock(), message="Bad Request: query is too old")
+    asyncio.run(models_menu.handle_menu(query))
+
+    assert "連提示都送不出去" in caplog.text
+    assert "選單操作失敗" not in caplog.text
+    assert len(_stored_rows(llm_route_db)) == 1
+
+
+def test_restoring_the_global_key_rebuilds_the_global_client(llm_route_db, llm_whitelist):
+    """在選單恢復全域 * 的預設後，重建 app.state.llm_client，改回 .env 那一層。"""
+    from types import SimpleNamespace
+
+    asyncio.run(llm_route_service.set_route("*", "yinli", "m2", None, updated_by="api"))
+    app = SimpleNamespace(state=SimpleNamespace(llm_client=None))
+    _, markup = _open_menu()
+    _, markup, _ = _click(_button_starting(markup, "*："))
+    query = _callback_query(_button_starting(markup, "↩️ 恢復預設"))
+    asyncio.run(models_menu.handle_menu(query, app=app))
+
+    assert app.state.llm_client.model_label == "gemini-3.5-flash"
+    assert _stored_rows(llm_route_db) == []
+
+
+def test_global_change_without_app_is_logged(llm_route_db, llm_whitelist, caplog):
+    """改了全域 * 卻沒有注入 app（dispatcher 組法變了）：無法重建，但要記 WARNING，不是無聲略過。"""
+    _, markup = _open_menu()
+    _, markup, _ = _click(_button_starting(markup, "*："))
+    _, markup, _ = _click(_button_starting(markup, "⚙️ 設定"))
+    _, markup, _ = _click(_button_starting(markup, "yinli"))
+    _, markup, _ = _click(_button_starting(markup, "m2"))
+    _click(_button_starting(markup, "✅ 儲存"))
+
+    assert "沒有注入 app" in caplog.text
+
+
+def test_saved_but_alert_fails_on_network_error_is_not_reported_as_failure(llm_route_db, llm_whitelist, caplog):
+    """已儲存、畫面更新失敗、連提示也因網路錯誤送不出去：同樣不往外拋、不記「操作失敗」。"""
+    from aiogram.exceptions import TelegramNetworkError
+
+    _, markup, _ = _to_model_screen("haiku")
+    query = _callback_query(_button_starting(markup, "✅ 儲存"))
+    query.message.edit_text.side_effect = TelegramBadRequest(
+        method=mock.MagicMock(), message="Bad Request: message to edit not found"
+    )
+    query.answer.side_effect = TelegramNetworkError(method=mock.MagicMock(), message="connection reset")
+    asyncio.run(models_menu.handle_menu(query))
+
+    assert "連提示都送不出去" in caplog.text
+    assert "選單操作失敗" not in caplog.text
+    assert len(_stored_rows(llm_route_db)) == 1

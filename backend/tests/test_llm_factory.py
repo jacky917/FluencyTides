@@ -106,19 +106,20 @@ def test_anthropic_stub_without_overrides_has_no_echo_suffix():
 @pytest.mark.parametrize(
     "provider", factory.providers_supporting_effort(), ids=factory.providers_supporting_effort()
 )
-def test_effort_setting_requires_rebuild(provider):
-    """支援 effort 的 CLI provider，其 effort 設定鍵必須列在 REQUIRES_REBUILD_KEYS。
+def test_effort_setting_cannot_be_changed_through_setconfig(provider):
+    """支援 effort 的 CLI provider，其 effort 設定鍵必須以 LLM_ 開頭，才會被 /setconfig 排除。
 
-    TG /setconfig 改了 effort 卻不重建 singleton，診斷端點回報的標籤就會停在舊值
-    （計畫 §D12）。由註冊表推導，下一個 provider 忘了加會在這裡被擋下。
+    LLM 模型與 effort 一律由 /models 依用途設定（模型路由計畫 D8）；/setconfig 改了 effort 卻
+    不經路由，各用途與診斷端點的標籤就會和實際不符。由註冊表推導，下一個 provider 的設定鍵
+    若不是 LLM_ 開頭，會在這裡被擋下。
     """
-    from app.services.runtime_config_service import REQUIRES_REBUILD_KEYS
+    from app.core import dynamic_config
 
     client_cls = factory.resolve_client_class(provider)
     prefix = getattr(client_cls, "SETTINGS_PREFIX", None)
     if prefix is None:  # 非 CLI 型（如 anthropic 實作後）的 effort 設定鍵另行約定
         pytest.skip(f"{provider} 沒有 SETTINGS_PREFIX")
-    assert f"{prefix}_EFFORT" in REQUIRES_REBUILD_KEYS
+    assert f"{prefix}_EFFORT".startswith(dynamic_config._RESERVED_PREFIX)
 
 
 # ----------------------------------------------------------------------
@@ -349,3 +350,32 @@ def test_omit_effort_accepted_by_providers_without_effort():
         client = create_llm_client(endpoint="yinli", model="m1", effort=OMIT_EFFORT)
 
     assert client.effort is None
+
+
+def test_routes_use_three_endpoints_at_once(declare_route_key):
+    """驗收：同一模組宣告的多個用途鍵可各自指定不同端點；兩家 openai 類端點與一個 gemini-native
+    端點同時被不同用途使用，各自用自己的網址與金鑰，標籤前綴為各自的 ID。"""
+    import asyncio
+
+    from app.infrastructure.llm import routing
+    from app.infrastructure.llm.routing import RouteChoice
+
+    first = declare_route_key("test.multi.first")
+    second = declare_route_key("test.multi.second")
+    third = declare_route_key("test.multi.third")
+    rows = {
+        first.key: RouteChoice("yinli", "m1", None),
+        second.key: RouteChoice("or2", "m2", None),
+        third.key: RouteChoice("gem", "gemini-3.5-flash", None),
+    }
+    with _endpoint_env(), \
+         mock.patch.object(routing, "_fetch_choices", mock.AsyncMock(return_value=rows)), \
+         mock.patch("app.infrastructure.llm.gemini_native_client.genai.Client") as fake_sdk:
+        routing.invalidate_cache()
+        yinli, or2, gem = (asyncio.run(route.client()) for route in (first, second, third))
+
+    assert (str(yinli._client.base_url), yinli._client.api_key) == ("https://yinli.example/v1/", "yinli-key")
+    assert (str(or2._client.base_url), or2._client.api_key) == ("https://or2.example/v1/", "or2-key")
+    assert isinstance(gem, GeminiNativeLLMClient)
+    assert fake_sdk.call_args.kwargs["api_key"] == "gem-key"
+    assert [client.model_label for client in (yinli, or2, gem)] == ["(yinli)m1", "(or2)m2", "(gem)gemini-3.5-flash"]

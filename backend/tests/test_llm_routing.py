@@ -410,6 +410,37 @@ def test_db_layer_construction_failure_raises_with_context(whitelist, caplog):
     assert any("test.fail" in note for note in getattr(exc_info.value, "__notes__", []))
 
 
+@pytest.mark.parametrize(
+    ("rows", "layer"),
+    [({"test.pkg": RouteChoice("claude-code", "opus", "high")}, "route"), ({}, "env")],
+    ids=["db-layer", "env-layer"],
+)
+def test_missing_third_party_package_becomes_llm_error_with_context(whitelist, caplog, rows, layer):
+    """端點需要的第三方套件沒裝：不論哪一層都轉成 LLMServiceError，訊息帶用途、層與套件名，
+    生成端看得出是哪個設定、能怎麼修（原本是裸的 ModuleNotFoundError，沒有路由脈絡）。"""
+    route = llm_route("test.pkg", "測試")
+    error = ModuleNotFoundError("No module named 'jsonschema'", name="jsonschema")
+    with _rows(**rows), \
+         mock.patch.object(routing.factory, "create_llm_client", side_effect=error), \
+         caplog.at_level(logging.ERROR, logger=routing.__name__), \
+         pytest.raises(LLMServiceError) as exc_info:
+        asyncio.run(route.client())
+
+    message = str(exc_info.value)
+    assert f"LLM 用途 'test.pkg' 依 {layer} 層設定" in message and "套件未安裝（jsonschema）" in message
+    assert exc_info.value.__cause__ is error
+    assert message in caplog.text
+
+
+def test_missing_internal_module_is_not_disguised(whitelist):
+    """import 失敗的是專案自己的模組：程式錯誤，照常拋出原本的例外。"""
+    route = llm_route("test.internal", "測試")
+    error = ModuleNotFoundError("No module named 'app.infrastructure.llm.nope'", name="app.infrastructure.llm.nope")
+    with mock.patch.object(routing.factory, "create_llm_client", side_effect=error), \
+         pytest.raises(ModuleNotFoundError):
+        asyncio.run(route.client())
+
+
 # ----------------------------------------------------------------------
 # 真實資料表（Real table, in-memory SQLite）
 # ----------------------------------------------------------------------
@@ -501,3 +532,33 @@ def test_db_choice_without_effort_omits_cli_flag(whitelist, tmp_path):
 
     assert "--effort" not in command
     assert client.model_label == "(claude-code)haiku"
+
+
+def test_env_layer_construction_failure_is_raised_unchanged(whitelist):
+    """.env 那一層建立失敗（金鑰沒設、找不到 CLI）：與導入路由前相同，原樣拋出同一個 LLMServiceError，
+    不加路由脈絡（沒有 DB 設定可改），也不會因為沒有選擇而變成 AttributeError。"""
+    route = llm_route("test.envfail", "測試")
+    error = LLMServiceError("API_KEY 未設定")
+    with _rows(), \
+         mock.patch.object(routing.factory, "create_llm_client", side_effect=error), \
+         pytest.raises(LLMServiceError) as exc_info:
+        asyncio.run(route.client())
+
+    assert exc_info.value is error
+    assert not getattr(exc_info.value, "__notes__", [])
+
+
+def test_cli_workdir_failure_becomes_llm_error_with_context(whitelist, caplog):
+    """CLI 工作目錄建不起來（掛載或權限有誤，OSError）：轉成帶用途與層的 LLMServiceError，
+    不是沒有脈絡的 500。"""
+    route = llm_route("test.workdir", "測試")
+    error = PermissionError(13, "Permission denied", "/app/.claude_code_workdir")
+    with _rows(**{"test.workdir": RouteChoice("claude-code", "opus", "high")}), \
+         mock.patch.object(routing.factory, "create_llm_client", side_effect=error), \
+         caplog.at_level(logging.ERROR, logger=routing.__name__), \
+         pytest.raises(LLMServiceError) as exc_info:
+        asyncio.run(route.client())
+
+    message = str(exc_info.value)
+    assert "LLM 用途 'test.workdir' 依 route 層設定" in message and "無法建立 CLI 工作目錄" in message
+    assert exc_info.value.__cause__ is error

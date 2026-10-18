@@ -6,8 +6,10 @@ Query which LLM model the backend is currently using via the config API
 呼叫 ``GET /api/v1/config``(計畫
 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5 的唯讀切片),
 顯示:
-- runtime 對帳區塊:``llm_label``(後端活 client 算好的顯示標籤,
-  即生成時會寫進 Anki tag 的值)、``llm_provider``、``anki_connect_url``
+- runtime 對帳區塊:``llm_label``(全域 ``*`` 生效設定的標籤)、``llm_provider``、
+  ``anki_connect_url``
+- 各用途的模型(``llm_routes``):每個用途鍵生效的標籤與來源(用途 / 全域 / .env),
+  即該用途生成時寫進 Anki tag 的值;被略過的層與無法使用的原因一併列出
 - claude-code 環境診斷:CLI 路徑/版本、effort、token 設定狀態、認證實測,
   以及登入帳號的訂閱方案(``max`` / ``pro``;CLI 不區分 5x 與 20x)
 - 白名單設定清單(當前值/可選項/是否觸發重建)
@@ -87,14 +89,19 @@ async def main() -> None:
     print("\n========== 後端執行期狀態 ==========")
     label = runtime.get("llm_label")
     if label:
-        print(f"🤖 當前模型標籤 : {label}")
-        print("   (= 生成時寫入 Anki tag 的值;寫 DB 請取生成回應的 llm_model)")
+        print(f"🤖 全域模型標籤 : {label}")
+        print("   (全域 * 生效的設定;各用途實際寫入 Anki tag 的值見下方「各用途的模型」)")
     else:
-        print("🤖 當前模型標籤 : (LLM 客戶端未初始化——後端啟動時 LLM 初始化失敗?)")
-    print(f"🔌 LLM Provider  : {runtime.get('llm_provider')}")
+        print("🤖 全域模型標籤 : (全域 LLM 客戶端未建立——金鑰、CLI 或 effort 設定有誤?見後端 log)")
+    if runtime.get("llm_client_matches_global") is False:
+        print("🚨 全域客戶端與全域 * 目前的設定不一致(上方標籤與 CLI 診斷可能是舊的);")
+        print("   在 /models 重存一次全域 * 或重啟後端即可重建")
+    print(f"🔌 全域端點     : {runtime.get('llm_provider')}")
     print(f"🃏 後端 Anki 端點: {runtime.get('anki_connect_url')}")
 
-    # claude-code 環境診斷(provider 非 claude-code 時後端回 null)
+    _print_llm_routes(runtime)
+
+    # claude-code 環境診斷(全域端點不是 CLI 型時後端回 null)
     cc = runtime.get("claude_code")
     if cc is not None:
         print("\n========== claude-code 環境診斷 ==========")
@@ -159,12 +166,41 @@ async def main() -> None:
             options = entry.get("options")
             options_str = " / ".join(options) if options else "(不限)"
             # requires_rebuild 是資訊性標記:改「值」時後端會自動重建對應
-            # 元件(LLM client 等),與容器/映像無關,呼叫端無需任何動作
-            rebuild_mark = "  🔁(改值時後端自動重建 client)" if entry.get("requires_rebuild") else ""
+            # 元件(語音評分器等),與容器/映像無關,呼叫端無需任何動作
+            rebuild_mark = "  🔁(改值時後端自動重建對應元件)" if entry.get("requires_rebuild") else ""
             print(f"  {entry['key']} = {entry['current_value']}{rebuild_mark}")
             print(f"      可選: {options_str}")
     else:
         print("\n(白名單為空:.env 未設任何 MODIFY_* 變數)")
+
+
+def _print_llm_routes(runtime: dict) -> None:
+    """列出各用途的模型與來源(模型路由計畫 D9;舊版後端沒有這一塊時略過)。
+
+    Print each route's effective model and source, when the backend has them.
+    """
+    block = runtime.get("llm_routes")
+    if block is None:
+        print("\n(後端版本不含 llm_routes:各用途的模型請用 TG /models 查看)")
+        return
+    print("\n========== 各用途的模型(TG /models 設定)==========")
+    if "error" in block:
+        print(f"❌ 後端組不出清單:{block['error']}(詳見後端 log)")
+        return
+    if block.get("db_unavailable"):
+        print("🚨 後端讀不到資料庫:以下皆為 .env 預設,實際存的設定未知")
+    source_names = {"route": "用途", "global": "全域", "env": ".env"}
+    for route in block.get("routes", []):
+        marker = "⚠️ " if route.get("rejected") or route.get("problem") or not route.get("declared") else ""
+        source = source_names.get(route.get("source"), route.get("source"))
+        print(f"  {marker}{route['route_key']}: {route['label']} [{source}]")
+        for layer in route.get("rejected") or []:
+            print(f"      已略過 {layer['route_key']}:{layer['reason']}")
+        if route.get("problem"):
+            print(f"      {route['problem']}")
+    skipped = (runtime.get("llm_endpoints") or {}).get("skipped") or {}
+    for endpoint_id, reason in sorted(skipped.items()):
+        print(f"  🚨 端點 {endpoint_id} 設定有誤已被跳過:{reason}")
 
 
 if __name__ == "__main__":

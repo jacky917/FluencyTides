@@ -60,7 +60,7 @@ from app.infrastructure.database.database import (
 )
 from app.infrastructure.database.corpus_database import dispose_corpus_engine
 from app.infrastructure.llm.endpoints import log_endpoint_summary
-from app.infrastructure.llm.factory import create_llm_client
+from app.services import llm_route_service
 from app.infrastructure.storage.minio_client import MinioClient
 from app.schemas.card import ErrorResponse
 
@@ -116,20 +116,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # LLM 端點與白名單（.env）載入一次：設定寫錯的端點在此記 ERROR、不會讓啟動失敗
     log_endpoint_summary()
 
-    # LLM 客戶端由 create_llm_client() 依 LLM_PROVIDER 選型，初始化可能因
-    # 缺少 API Key（API 模式）或找不到 CLI／effort 設定錯誤（CLI 模式：claude-code / antigravity）
-    # 而失敗，但不應阻止整個應用啟動（其他端點仍可使用）。
-    try:
-        app.state.llm_client = create_llm_client()
-        logger.info(
-            "✅ LLM 客戶端 Singleton 已初始化 (%s)。",
-            type(app.state.llm_client).__name__,
-        )
-    except Exception as e:
-        logger.warning(
-            "⚠️ LLM 客戶端初始化失敗（LLM 相關端點將不可用）: %s", e
-        )
-        app.state.llm_client = None
+    # 全域 LLM 客戶端依「全域 *（DB）→ .env」建立，只給診斷端點用（標籤與 CLI 探測，
+    # 模型路由計畫 D9）；各用途的生成每次依自己的用途鍵建立。建立失敗（缺金鑰、找不到 CLI、
+    # effort 設定錯誤）不阻止啟動：設為 None 並記 WARNING
+    await llm_route_service.refresh_global_client(app.state)
 
     # MinioClient 初始化同理，不應阻止應用啟動。
     try:

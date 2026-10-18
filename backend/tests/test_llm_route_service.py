@@ -187,7 +187,7 @@ def test_internal_module_detection(name, internal):
     """只有 app 本身或 app.* 算專案內部；appdirs 這類同前綴的第三方套件、手動拋出（name 為 None）
     的例外都當成部署問題。"""
     for error_type in (ModuleNotFoundError, ImportError):
-        assert llm_route_service._is_internal_module(error_type("x", name=name)) is internal
+        assert routing.is_internal_import(error_type("x", name=name)) is internal
 
 
 def _commit_then_fail(session_factory):
@@ -597,3 +597,89 @@ def test_read_in_flight_during_a_write_does_not_cache_stale_rows(llm_route_db, l
         return await routing.resolve(KEY)
 
     assert _run(scenario()).source == "route"
+
+
+def test_concurrent_first_write_updates_instead_of_failing(llm_route_db, llm_whitelist, caplog):
+    """同一用途鍵的第一次寫入同時發生：查的時候還沒有、提交時另一筆剛插入（撞唯一鍵）。結果是確定的：
+    改成更新那一列並回報成功，不說成「資料庫異常、結果未知」。"""
+    calls = 0
+
+    def racing_factory():
+        nonlocal calls
+        calls += 1
+        session = llm_route_db()
+        if calls == 1:
+            real_commit = session.commit
+
+            async def commit():
+                # 本次的 SELECT 已查過（沒有這一列），另一個請求搶先插入後才提交
+                async with llm_route_db() as other:
+                    other.add(LLMRouteSetting(route_key=KEY, endpoint="yinli", model="m2", updated_by="other"))
+                    await other.commit()
+                await real_commit()
+
+            session.commit = commit
+        return session
+
+    import logging
+
+    with mock.patch.object(llm_route_service, "_session_factory", return_value=racing_factory), \
+         caplog.at_level(logging.INFO, logger=llm_route_service.__name__):
+        view = _run(llm_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
+
+    assert view.stored.model == "m1"
+    [row] = _rows(llm_route_db)
+    assert (row.model, row.updated_by) == ("m1", "api")
+    assert "改為更新該列" in caplog.text
+
+
+def test_model_name_is_trimmed_but_case_sensitive(llm_route_db, llm_whitelist):
+    """模型名去前後空白；但區分大小寫（白名單是 m1，M1 不是同一個模型）。"""
+    _run(llm_route_service.set_route(KEY, "yinli", " m1 ", None, updated_by="api"))
+    [row] = _rows(llm_route_db)
+    assert row.model == "m1"
+
+    with pytest.raises(InvalidLLMRouteError, match="模型 'M1' 不在端點 'yinli' 的白名單"):
+        _run(llm_route_service.set_route(KEY, "yinli", "M1", None, updated_by="api"))
+
+
+def test_non_duplicate_integrity_error_is_not_retried(llm_route_db, llm_whitelist):
+    """撞到的不是唯一鍵（那一列並不存在：NOT NULL、schema 沒跑 migration…）：不重做、不說成「剛被另一筆
+    寫入建立」，照一般資料庫錯誤回 503 並記 traceback。"""
+    from sqlalchemy.exc import IntegrityError
+
+    error = IntegrityError("INSERT ...", {}, Exception("NOT NULL constraint failed: llm_routes.model"))
+    upsert = mock.AsyncMock(side_effect=error)
+    with mock.patch.object(llm_route_service, "_upsert", upsert), \
+         pytest.raises(LLMRouteStoreUnavailableError):
+        _run(llm_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
+
+    assert upsert.await_count == 1
+
+
+def test_refresh_global_client_logs_unexpected_errors_as_errors(llm_route_db, llm_whitelist, caplog):
+    """全域客戶端建立時的非預期例外（程式或環境錯誤）：不拋出，但記 ERROR 附 traceback，不與「金鑰沒設」這類
+    設定問題（WARNING）混在同一個等級。"""
+    import logging
+    from types import SimpleNamespace
+
+    state = SimpleNamespace(llm_client=object())
+    with mock.patch.object(routing, "client_for", side_effect=RuntimeError("註冊表與類別宣告不一致")):
+        _run(llm_route_service.refresh_global_client(state))
+
+    assert state.llm_client is None
+    [record] = [r for r in caplog.records if "全域 LLM 客戶端" in r.getMessage()]
+    assert record.levelno == logging.ERROR and record.exc_info
+
+
+def test_refresh_global_client_config_errors_are_warnings(llm_route_db, llm_whitelist, caplog):
+    """設定問題（LLMServiceError）記 WARNING。"""
+    import logging
+    from types import SimpleNamespace
+
+    state = SimpleNamespace(llm_client=object())
+    with mock.patch.object(routing, "client_for", side_effect=LLMServiceError("API_KEY 未設定")):
+        _run(llm_route_service.refresh_global_client(state))
+
+    [record] = [r for r in caplog.records if "全域 LLM 客戶端" in r.getMessage()]
+    assert record.levelno == logging.WARNING and "API_KEY 未設定" in record.getMessage()

@@ -17,7 +17,11 @@ surface has multiple readings.
    交人工複核。
 
 它不做什麼：不生成卡片、不動 ``generated_sentences_log``、不直連 LLM
-（模型/深度覆寫透過端點參數傳給後端；標籤以後端回應為準）。
+（標籤以後端回應為準）。
+
+用哪個模型由後端用途鍵 ``jp_verb_reading`` 決定：要換模型或思考深度，先在 TG
+``/models`` 設定 ``jp_verb_reading``，跑完再「恢復預設」。腳本不再有 ``--model`` /
+``--effort``（模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D8）。
 
 快取規則：是否跳過只看 ``(script_id, 表層)`` 是否已有紀錄，**不比對模型**；
 重判必須用 ``--rejudge*`` 明確指定（三者互斥）。
@@ -25,13 +29,13 @@ surface has multiple readings.
 ``--batch-size`` 建議值 **20**、硬上限 40：每句附前後各 2 行，20 句約 100 行
 對話、數千 token，模型仍能逐句對照；超過 40 句後逐項注意力下降、遺漏或
 串位的機率上升；低於 10 句則呼叫次數翻倍、省不到什麼。判讀是「看上下文
-選讀音」的分類任務，推薦 ``--effort medium``——難判的句子模型應回空字串
-而不是硬猜，深度加大不會讓它更誠實。
+選讀音」的分類任務，推薦把 ``jp_verb_reading`` 設成 effort ``medium``——難判的句子
+模型應回空字串而不是硬猜，深度加大不會讓它更誠實。
 
 Usage:
     python judge_verb_readings.py --project jp_verb_pair --dry-run
     python judge_verb_readings.py --project jp_verb_pair --surface 汚す 止める
-    python judge_verb_readings.py --project jp_verb_pair --rejudge-empty --model claude-opus-5 --effort high
+    python judge_verb_readings.py --project jp_verb_pair --rejudge-empty   # 先在 /models 換成較強的模型
 """
 
 import argparse
@@ -191,13 +195,8 @@ async def _fetch_lines_with_context(session, script_ids: list[int]) -> dict[int,
     return out
 
 
-async def _call_judge(client: httpx.AsyncClient, url: str, items: list[dict], model: str | None, effort: str | None) -> dict:
-    payload: dict = {"items": items}
-    if model:
-        payload["model"] = model
-    if effort:
-        payload["effort"] = effort
-    resp = await client.post(url, json=payload)
+async def _call_judge(client: httpx.AsyncClient, url: str, items: list[dict]) -> dict:
+    resp = await client.post(url, json={"items": items})
     if resp.status_code == 404:
         raise SystemExit("❌ 後端回 404：此後端版本尚未包含 /jp/verb-readings/judge 端點，請先部署新映像。")
     if resp.status_code == 422:
@@ -217,8 +216,6 @@ async def _run() -> None:
     parser.add_argument("--max-surfaces", type=int, default=None, help="本次最多處理幾個表層（順序固定）")
     parser.add_argument("--limit", type=int, default=200, help="每表層 ES 候選上限")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help=f"每次請求送幾句（推薦 {DEFAULT_BATCH_SIZE}，上限 {MAX_BATCH_SIZE}）")
-    parser.add_argument("--model", default=None, help="覆寫後端模型（傳給後端驗證，腳本不解析）")
-    parser.add_argument("--effort", default=None, help="覆寫思考深度 low/medium/high/xhigh/max（僅 claude-code / antigravity；合法值由後端驗證）")
     parser.add_argument("--dry-run", action="store_true", help="只列待判數量與分批計畫，不呼叫 LLM")
     parser.add_argument("--rejudge", action="store_true", help="整個表層砍掉重判（須配 --surface）")
     parser.add_argument("--rejudge-empty", action="store_true", help="只重判上次判不出來（空字串）的紀錄")
@@ -277,7 +274,7 @@ async def _run() -> None:
         for p in plans:
             logger.info("  " + p.summary(args.batch_size))
         logger.info(f"  合計 {len(plans)} 個表層、待判 {total_pending} 句、{total_batches} 次呼叫"
-                    + (f"（model={args.model or '後端設定'}, effort={args.effort or '後端設定'}）"))
+                    "（模型依後端 /models 的 jp_verb_reading 設定）")
 
         if args.dry_run:
             logger.info("\n🧪 dry-run 結束，未呼叫 LLM、未寫入。")
@@ -315,7 +312,7 @@ async def _run() -> None:
                     if not items:
                         continue
                     logger.info(f"🧠 '{p.surface}' 第 {i // args.batch_size + 1}/{p.batches(args.batch_size)} 批：{len(items)} 句")
-                    data = await _call_judge(client, url, items, args.model, args.effort)
+                    data = await _call_judge(client, url, items)
                     rows = [
                         ReadingJudgmentRow(int(r["script_id"]), p.surface, r.get("reading") or "", data.get("llm_model"))
                         for r in data.get("results", [])

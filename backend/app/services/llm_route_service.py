@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from typing import Any, NamedTuple, cast
 
 from sqlalchemy import CursorResult, delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
@@ -57,7 +58,15 @@ from app.infrastructure.llm import factory, routing
 from app.infrastructure.llm.base import OMIT_EFFORT
 from app.infrastructure.llm.endpoints import env_endpoint_id, env_endpoint_is_custom, get_endpoint, skip_reason
 from app.infrastructure.llm.labels import build_model_label
-from app.infrastructure.llm.routing import DATABASE_ERRORS, GLOBAL_ROUTE_KEY, ResolvedRoute, RouteChoice
+from app.infrastructure.llm.routing import (
+    DATABASE_ERRORS,
+    GLOBAL_ROUTE_KEY,
+    ResolvedRoute,
+    RouteChoice,
+    describe_import_error,
+    is_internal_import,
+)
+from app.schemas.llm_route import LLMRouteRead, RejectedLayerRead, RouteChoiceRead
 
 logger = logging.getLogger(__name__)
 
@@ -149,32 +158,6 @@ def _session_factory() -> Callable[[], AsyncSession]:
     from app.infrastructure.database.database import async_session_factory
 
     return async_session_factory
-
-
-def _is_internal_module(error: ImportError) -> bool:
-    """import 失敗的是專案自己的模組（``app.*``）：那是程式錯誤（註冊表模組名、import 名稱打錯、
-    provider 改名），不是部署少裝套件或版本不符。
-
-    ``name`` 由 import 機制填入（缺的模組，或 ``from X import Y`` 失敗時的 ``X``）；為 None 表示
-    例外是手動拋出的——通常是第三方套件自己說「缺某個依賴」，視為部署問題。
-
-    Whether the failed import belongs to this project, i.e. a bug rather
-    than a missing or incompatible dependency. ``name`` is None only for a
-    hand-raised error, usually from a third-party package.
-    """
-    return (error.name or "").split(".")[0] == "app"
-
-
-def _describe_import_error(endpoint_id: str, error: ImportError) -> str:
-    """第三方套件 import 失敗的說明：沒裝（``ModuleNotFoundError``），或版本不符、無法載入
-    （其他 ``ImportError``，例如 ``cannot import name 'X' from 'google.genai'``）。
-
-    Describe a third-party import failure: not installed, or an
-    incompatible / unloadable version.
-    """
-    if isinstance(error, ModuleNotFoundError):
-        return f"端點 '{endpoint_id}' 需要的套件未安裝（{error.name or error}）"
-    return f"端點 '{endpoint_id}' 需要的套件版本不符或無法載入（{error}）"
 
 
 def _client_class_for(endpoint_id: str) -> Any:
@@ -281,10 +264,11 @@ def _label_for(resolved: ResolvedRoute) -> tuple[str | None, str, str | None]:
             None,
         )
     except ImportError as error:
-        if _is_internal_module(error):
+        if is_internal_import(error):
             raise
-        reason = _describe_import_error(resolved.endpoint, error)
-        logger.warning("LLM 用途 '%s'：%s，清單中的標籤可能不準確", resolved.route_key, reason)
+        reason = describe_import_error(resolved.endpoint, error)
+        # 每次列清單、每一列都會走到這裡：同一個原因只記一次（設定改過、快取失效後才會再提醒）
+        routing.warn_once(f"{reason}，清單中使用這個端點的用途標籤可能不準確。")
         label = build_model_label(resolved.endpoint, resolved.model, resolved.effort)
         return resolved.effort, label, f"{reason}，這組設定目前無法建立客戶端"
 
@@ -374,7 +358,7 @@ def validate_choice(choice: RouteChoice, *, route_key: str = "?", updated_by: st
     試建會攔下的部署問題：CLI 找不到、金鑰沒設（``LLMServiceError``）、端點需要的第三方套件
     沒裝或版本不符（``ImportError``）、CLI 工作目錄無法建立（``OSError``）。import 失敗的若是
     專案自己的 ``app.*`` 模組（註冊表模組名、provider 內 import 名稱打錯、provider 改名）則是
-    程式錯誤，照常拋出——裝套件解決不了（見 :func:`_is_internal_module`）。
+    程式錯誤，照常拋出——裝套件解決不了（見 :func:`~app.infrastructure.llm.routing.is_internal_import`）。
 
     Args:
         choice: 要檢查的選擇。The choice.
@@ -394,10 +378,10 @@ def validate_choice(choice: RouteChoice, *, route_key: str = "?", updated_by: st
             effort=choice.effort if choice.effort is not None else OMIT_EFFORT,
         )
     except (LLMServiceError, ImportError, OSError) as error:
-        if isinstance(error, ImportError) and _is_internal_module(error):
+        if isinstance(error, ImportError) and is_internal_import(error):
             raise
         if isinstance(error, ImportError):
-            reason = _describe_import_error(choice.endpoint, error)
+            reason = describe_import_error(choice.endpoint, error)
         elif isinstance(error, OSError):
             reason = f"無法建立 CLI 工作目錄或檔案（{error}）"
         else:
@@ -408,6 +392,48 @@ def validate_choice(choice: RouteChoice, *, route_key: str = "?", updated_by: st
             exc_info=not isinstance(error, LLMServiceError),
         )
         raise InvalidLLMRouteError(f"試建客戶端失敗：{reason}") from error
+
+
+async def _row_exists(route_key: str) -> bool:
+    """該用途鍵是否已有一列。Whether a row exists for the route key.
+
+    Raises:
+        DBAPIError / sqlalchemy.exc.TimeoutError / OSError: 資料庫異常。
+    """
+    async with _session_factory()() as session:
+        result = await session.execute(
+            select(LLMRouteSetting.route_key).where(col(LLMRouteSetting.route_key) == route_key)
+        )
+        return result.first() is not None
+
+
+async def _upsert(route_key: str, choice: RouteChoice, updated_by: str) -> None:
+    """有就更新、沒有就新增一列（先查再寫，不是原子操作：並發的第一次寫入可能撞唯一鍵）。
+
+    Update the row if present, insert it otherwise.
+
+    Raises:
+        IntegrityError: 查的時候還沒有、提交時已被另一筆寫入建立。
+        DBAPIError / sqlalchemy.exc.TimeoutError / OSError: 其他資料庫異常。
+    """
+    async with _session_factory()() as session:
+        result = await session.execute(
+            select(LLMRouteSetting).where(col(LLMRouteSetting.route_key) == route_key)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            session.add(LLMRouteSetting(
+                route_key=route_key,
+                endpoint=choice.endpoint,
+                model=choice.model,
+                effort=choice.effort,
+                updated_by=updated_by,
+            ))
+        else:
+            row.endpoint, row.model, row.effort, row.updated_by = (
+                choice.endpoint, choice.model, choice.effort, updated_by,
+            )
+        await session.commit()
 
 
 async def set_route(
@@ -456,24 +482,20 @@ async def set_route(
     )
 
     try:
-        async with _session_factory()() as session:
-            result = await session.execute(
-                select(LLMRouteSetting).where(col(LLMRouteSetting.route_key) == route_key)
+        try:
+            await _upsert(route_key, choice, updated_by)
+        except IntegrityError as first_error:
+            # 同一用途鍵的第一次寫入同時發生（API 與 TG 同時、連按兩下）：查的時候還沒有、提交時
+            # 另一筆剛插入而撞到唯一鍵。先確認那一列真的存在了才重做（會走「更新那一列」）；不存在
+            # 就是別的約束（NOT NULL、schema 沒跑 migration…），原樣往外拋。重做或往外拋的 IntegrityError
+            # 都是 DBAPIError，由外層 DATABASE_ERRORS 照一般資料庫錯誤處理（記 traceback、回 503）
+            if not await _row_exists(route_key):
+                raise
+            logger.info(
+                "寫入 llm_routes 時 %s 剛被另一筆寫入建立，改為更新該列（%s）：%s",
+                route_key, updated_by, first_error.orig,
             )
-            row = result.scalar_one_or_none()
-            if row is None:
-                session.add(LLMRouteSetting(
-                    route_key=route_key,
-                    endpoint=choice.endpoint,
-                    model=choice.model,
-                    effort=choice.effort,
-                    updated_by=updated_by,
-                ))
-            else:
-                row.endpoint, row.model, row.effort, row.updated_by = (
-                    choice.endpoint, choice.model, choice.effort, updated_by,
-                )
-            await session.commit()
+            await _upsert(route_key, choice, updated_by)
     except DATABASE_ERRORS as error:
         logger.exception(
             "寫入 llm_routes 失敗：%s → %s / %s（%s）", route_key, choice.endpoint, choice.model, updated_by
@@ -562,3 +584,65 @@ async def delete_route(route_key: str, *, updated_by: str) -> DeleteResult:
         logger.exception("llm_routes 已刪除 %s，但組出刪除後的狀態失敗", route_key)
         return DeleteResult(deleted, None, view_unavailable=True)
     return DeleteResult(deleted, view)
+
+
+def to_read(view: RouteView) -> LLMRouteRead:
+    """服務層的狀態轉成對外的回應模型（API 與診斷端點共用）。Convert a view into the response model."""
+    resolved = view.resolved
+    return LLMRouteRead(
+        route_key=view.route_key,
+        description=view.description,
+        declared=view.declared,
+        source=resolved.source,
+        effective=RouteChoiceRead(endpoint=resolved.endpoint, model=resolved.model, effort=view.effective_effort),
+        label=view.label,
+        stored=(
+            RouteChoiceRead(endpoint=view.stored.endpoint, model=view.stored.model, effort=view.stored.effort)
+            if view.stored is not None
+            else None
+        ),
+        rejected=[RejectedLayerRead(route_key=layer.route_key, reason=layer.reason) for layer in resolved.rejected],
+        db_unavailable=resolved.db_unavailable,
+        problem=view.problem,
+    )
+
+
+async def refresh_global_client(app_state: Any) -> None:
+    """依「全域 ``*``（DB）→ ``.env``」重建 ``app_state.llm_client``（模型路由計畫 D9）。
+
+    Rebuild ``app_state.llm_client`` from the global route, so the
+    diagnostics endpoint's label and CLI probe match the actual global
+    setting.
+
+    啟動時、以及寫入或刪除全域 ``*`` 之後呼叫——不論寫入成敗（結果未知時 DB 可能已改）。
+    這個客戶端只給診斷端點用（標籤、CLI 探測）；各用途生成時仍每次依自己的用途鍵建立。
+    診斷端點另會比對它與全域設定是否一致（``llm_client_matches_global``），例如啟動時讀不到
+    DB 而用了 ``.env``、之後 DB 恢復的情況。
+
+    建立失敗不拋出（與啟動時相同，其他功能不受影響），設為 None：設定問題
+    （``LLMServiceError``，例如金鑰沒設、找不到 CLI）記 WARNING；其他例外可能是程式或環境
+    錯誤，記 ERROR 附 traceback。DB 層設定或套件問題時 ``client_for`` 會先另記一次 ERROR。
+
+    Called at startup and after any write to the global row. Failures leave
+    ``None``: configuration errors are warnings, anything else is logged as
+    an error with its traceback.
+    """
+    try:
+        resolved = await routing.resolve(GLOBAL_ROUTE_KEY)
+        client = await routing.client_for(GLOBAL_ROUTE_KEY)
+        label = client.model_label
+    except LLMServiceError as error:
+        logger.warning(
+            "全域 LLM 客戶端建立失敗（設定問題；診斷端點將顯示沒有客戶端，各用途的生成不受影響）：%s", error
+        )
+        app_state.llm_client = None
+        return
+    except Exception:  # noqa: BLE001 - 不中斷啟動或寫入，但這可能是程式或環境錯誤
+        logger.exception("全域 LLM 客戶端建立時發生非預期錯誤（可能是程式或環境錯誤；診斷端點將顯示沒有客戶端）")
+        app_state.llm_client = None
+        return
+    app_state.llm_client = client
+    logger.info(
+        "全域 LLM 客戶端已建立：%s（%s，來源：%s%s）",
+        label, type(client).__name__, resolved.source, "，讀不到 DB、暫用 .env" if resolved.db_unavailable else "",
+    )

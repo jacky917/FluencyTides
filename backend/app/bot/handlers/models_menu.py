@@ -36,9 +36,10 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
@@ -523,12 +524,21 @@ async def handle_close(callback_query: CallbackQuery) -> None:
     try:
         await message.edit_text("已關閉 LLM 模型設定。")
     except TelegramBadRequest as error:
-        logger.debug("/models 關閉時無法更新訊息：%s", error)
+        if "message is not modified" in str(error):
+            return
+        # 例如訊息超過 48 小時已不能編輯：管理員按了沒反應，至少要在預設等級的 log 裡看得到
+        logger.warning("/models 關閉時無法更新訊息（user=%s）：%s", callback_query.from_user.id, error)
 
 
 @router.callback_query(F.data.startswith(f"{PREFIX}:") & (F.data != CLOSE_DATA))
-async def handle_menu(callback_query: CallbackQuery) -> None:
-    """處理選單中的所有按鈕（關閉鈕除外）。Handle every menu button except close."""
+async def handle_menu(callback_query: CallbackQuery, app: Any = None) -> None:
+    """處理選單中的所有按鈕（關閉鈕除外）。Handle every menu button except close.
+
+    Args:
+        callback_query: 回呼查詢。The callback query.
+        app: dispatcher 注入的 FastAPI app（寫入或刪除全域 ``*`` 後重建診斷用的全域客戶端；
+            沒有時略過重建）。The FastAPI app injected by the dispatcher.
+    """
     denial = admin_denial(callback_query.from_user)
     if denial is not None:
         await callback_query.answer(denial, show_alert=True)
@@ -551,7 +561,7 @@ async def handle_menu(callback_query: CallbackQuery) -> None:
             await callback_query.answer(_DB_ALERT, show_alert=True)
             return
         action, args = parse_callback(callback_query.data, ctx)
-        await _dispatch(callback_query, ctx, views, action, args)
+        await _dispatch(callback_query, ctx, views, action, args, app)
     except _AlreadyAnswered:
         return
     except (StaleMenuError, LLMRouteNotFoundError) as error:
@@ -590,7 +600,12 @@ def _target_key(ctx: MenuContext | None, data: str) -> str | None:
 
 
 async def _dispatch(
-    callback_query: CallbackQuery, ctx: MenuContext, views: list[RouteView], action: Action, args: list[str]
+    callback_query: CallbackQuery,
+    ctx: MenuContext,
+    views: list[RouteView],
+    action: Action,
+    args: list[str],
+    app: Any = None,
 ) -> None:
     """依動作切換畫面或寫入（參數個數已由 :func:`parse_callback` 檢查）。
 
@@ -615,9 +630,9 @@ async def _dispatch(
     elif action is Action.CONFIRM:
         await _edit(callback_query, render_confirm(ctx, numbers[0], numbers[1], numbers[2], args[3]))
     elif action is Action.SAVE:
-        await _save(callback_query, ctx, numbers[0], numbers[1], numbers[2], args[3])
+        await _save(callback_query, ctx, numbers[0], numbers[1], numbers[2], args[3], app)
     elif action is Action.DELETE:
-        await _delete(callback_query, ctx, numbers[0])
+        await _delete(callback_query, ctx, numbers[0], app)
 
 
 async def _show_after_write(
@@ -641,11 +656,33 @@ async def _show_after_write(
             "/models：%s 已%s，但更新選單訊息失敗（user=%s, data=%s）",
             key, done, callback_query.from_user.id, callback_query.data,
         )
-        await callback_query.answer(
-            f"✅ 已{done}，但選單無法更新（{type(error).__name__}）；請重新輸入 /models 查看。"[:ALERT_TEXT_LIMIT],
-            show_alert=True,
-        )
+        try:
+            await callback_query.answer(
+                f"✅ 已{done}，但選單無法更新（{type(error).__name__}）；請重新輸入 /models 查看。"[:ALERT_TEXT_LIMIT],
+                show_alert=True,
+            )
+        except TelegramAPIError as answer_error:
+            # 回呼查詢可能已逾時、或網路錯誤：寫入仍已完成，不讓外層再記一次「操作失敗」
+            logger.warning("/models：%s 已%s，但連提示都送不出去：%s", key, done, answer_error)
         raise _AlreadyAnswered from error
+
+
+async def _refresh_global_client_if(key: str, app: Any) -> None:
+    """改的是全域 ``*`` 時重建診斷用的全域客戶端（與 API 相同，模型路由計畫 D9）。
+
+    寫入或刪除後不論成敗都呼叫（結果未知時 DB 可能已改）。``app`` 由 dispatcher 注入
+    （``main.py`` 的 ``dp["app"]``）；沒有時無法重建，記 WARNING——不然診斷端點會一直停在舊的
+    全域設定，卻沒有任何線索。
+
+    Rebuild the diagnostics' global client after any attempt to change the
+    global row; warn when the app was not injected.
+    """
+    if key != GLOBAL_ROUTE_KEY:
+        return
+    if app is None:
+        logger.warning("/models 改了全域 *，但 dispatcher 沒有注入 app，無法重建診斷用的全域客戶端")
+        return
+    await llm_route_service.refresh_global_client(app.state)
 
 
 async def _save(
@@ -655,6 +692,7 @@ async def _save(
     endpoint_index: int,
     model_index: int,
     effort_token: str,
+    app: Any = None,
 ) -> None:
     key = ctx.key_at(key_index)
     endpoint, model, effort = resolve_selection(ctx, endpoint_index, model_index, effort_token)
@@ -665,6 +703,9 @@ async def _save(
     except InvalidLLMRouteError as error:
         await _edit(callback_query, render_error(ctx, key_index, error.message))
         return
+    finally:
+        await _refresh_global_client_if(key, app)
+
     async def screen() -> tuple[str, InlineKeyboardMarkup]:
         # 寫入只接受已宣告的鍵，不會改變用途清單（只有刪除孤兒鍵才會），沿用同一個選單版本
         return render_result(ctx, key_index, "✅ 已儲存", view)
@@ -672,9 +713,12 @@ async def _save(
     await _show_after_write(callback_query, screen, "儲存", key)
 
 
-async def _delete(callback_query: CallbackQuery, ctx: MenuContext, key_index: int) -> None:
+async def _delete(callback_query: CallbackQuery, ctx: MenuContext, key_index: int, app: Any = None) -> None:
     key = ctx.key_at(key_index)
-    result = await llm_route_service.delete_route(key, updated_by=f"tg:{callback_query.from_user.id}")
+    try:
+        result = await llm_route_service.delete_route(key, updated_by=f"tg:{callback_query.from_user.id}")
+    finally:
+        await _refresh_global_client_if(key, app)
     title = "↩️ 已恢復預設" if result.deleted else "ℹ️ 這個用途本來就沒有設定"
 
     async def screen() -> tuple[str, InlineKeyboardMarkup]:

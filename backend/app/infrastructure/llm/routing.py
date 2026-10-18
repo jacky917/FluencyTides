@@ -239,8 +239,11 @@ def invalidate_cache() -> None:
     _reported.clear()
 
 
-def _warn_once(message: str) -> None:
-    """同一則警告只記一次。Log a warning once per message."""
+def warn_once(message: str) -> None:
+    """同一則警告只記一次（快取失效時重置，設定改過後會再提醒）。
+
+    Log a warning once per message; reset whenever the cache is invalidated.
+    """
     if message in _reported:
         return
     _reported.add(message)
@@ -354,6 +357,37 @@ async def stored_choices_strict() -> dict[str, RouteChoice]:
 
 
 # ----------------------------------------------------------------------
+# 客戶端模組 import 失敗的分類（Import failures；生成路徑與管理介面共用）
+# ----------------------------------------------------------------------
+
+
+def is_internal_import(error: ImportError) -> bool:
+    """import 失敗的是專案自己的模組（``app.*``）：那是程式錯誤（註冊表模組名、import 名稱打錯、
+    provider 改名），不是部署少裝套件或版本不符。
+
+    ``name`` 由 import 機制填入（缺的模組，或 ``from X import Y`` 失敗時的 ``X``）；為 None 表示
+    例外是手動拋出的——通常是第三方套件自己說「缺某個依賴」，視為部署問題。
+
+    Whether the failed import belongs to this project, i.e. a bug rather
+    than a missing or incompatible dependency. ``name`` is None only for a
+    hand-raised error, usually from a third-party package.
+    """
+    return (error.name or "").split(".")[0] == "app"
+
+
+def describe_import_error(endpoint_id: str, error: ImportError) -> str:
+    """第三方套件 import 失敗的說明：沒裝（``ModuleNotFoundError``），或版本不符、無法載入
+    （其他 ``ImportError``，例如 ``cannot import name 'X' from 'google.genai'``）。
+
+    Describe a third-party import failure: not installed, or an
+    incompatible / unloadable version.
+    """
+    if isinstance(error, ModuleNotFoundError):
+        return f"端點 '{endpoint_id}' 需要的套件未安裝（{error.name or error}）"
+    return f"端點 '{endpoint_id}' 需要的套件版本不符或無法載入（{error}）"
+
+
+# ----------------------------------------------------------------------
 # 解析（Resolution）
 # ----------------------------------------------------------------------
 
@@ -426,7 +460,7 @@ def resolve_with(route_key: str, choices: dict[str, RouteChoice], read_ok: bool)
             continue
         problem = check_choice(choice)
         if problem is not None:
-            _warn_once(f"LLM 用途設定 '{key}' 已不在白名單（{problem}），改用下一層。")
+            warn_once(f"LLM 用途設定 '{key}' 已不在白名單（{problem}），改用下一層。")
             rejected.append(RejectedLayer(key, problem))
             continue
         return ResolvedRoute(route_key, source, choice, tuple(rejected))
@@ -442,8 +476,15 @@ async def client_for(route_key: str) -> BaseLLMClient:
     建立失敗時不退回下一層（那會把設定錯誤藏起來）：記 ERROR，並以 ``add_note`` 把
     路由脈絡附在例外上，型別與訊息不變地拋出。
 
+    端點需要的第三方套件沒裝或版本不符（``ImportError``）、CLI 工作目錄建不起來（``OSError``）
+    時，不論哪一層都轉成 ``LLMServiceError``，訊息帶用途、層與原因——生成端才看得出是哪個
+    設定、能怎麼修，也走與其他 LLM 錯誤相同的處理。import 失敗的若是專案自己的模組（程式
+    錯誤）照常拋出。
+
     Raises:
-        LLMServiceError: 客戶端初始化失敗時。When client construction fails.
+        LLMServiceError: 客戶端初始化失敗、端點需要的第三方套件無法載入，或 CLI 工作目錄
+            建不起來。When client construction fails, a third-party package cannot
+            be imported, or the CLI working directory cannot be created.
     """
     resolved = await resolve(route_key)
     logger.debug(
@@ -452,15 +493,17 @@ async def client_for(route_key: str) -> BaseLLMClient:
         resolved.rejected or "無", resolved.db_unavailable,
     )
     choice = resolved.choice
-    if choice is None:
-        return factory.create_llm_client()
     try:
+        if choice is None:
+            return factory.create_llm_client()
         return factory.create_llm_client(
             endpoint=choice.endpoint,
             model=choice.model,
             effort=choice.effort if choice.effort is not None else OMIT_EFFORT,
         )
     except LLMServiceError as error:
+        if choice is None:
+            raise
         context = (
             f"LLM 用途 '{route_key}' 依 {resolved.source} 層設定（{choice.endpoint} / {choice.model} / "
             f"{choice.effort}）建立客戶端失敗；可到管理介面改設或恢復預設。"
@@ -468,3 +511,21 @@ async def client_for(route_key: str) -> BaseLLMClient:
         logger.error(context)
         error.add_note(context)
         raise
+    except ImportError as error:
+        if is_internal_import(error):
+            raise
+        context = (
+            f"LLM 用途 '{route_key}' 依 {resolved.source} 層設定（{resolved.endpoint} / {resolved.model}）"
+            f"無法建立客戶端：{describe_import_error(resolved.endpoint, error)}；"
+            "請補裝套件，或到管理介面改用其他端點。"
+        )
+        logger.error(context, exc_info=True)
+        raise LLMServiceError(context) from error
+    except OSError as error:
+        # CLI 類客戶端建構時會建立工作目錄（cli_base），掛載或權限有誤時拋 OSError
+        context = (
+            f"LLM 用途 '{route_key}' 依 {resolved.source} 層設定（{resolved.endpoint} / {resolved.model}）"
+            f"無法建立客戶端：無法建立 CLI 工作目錄或檔案（{error}）；請檢查工作目錄的路徑與權限。"
+        )
+        logger.error(context, exc_info=True)
+        raise LLMServiceError(context) from error

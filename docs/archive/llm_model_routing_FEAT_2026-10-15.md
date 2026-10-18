@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-10-15 |
 | **性質** | 新增機能設計 + 實作工作項（含移除既有的兩種暫時性覆蓋） |
-| **狀態** | 🚧 實作中（P1、P2 完成） |
+| **狀態** | ✅ 實作完成（P1–P4）；部署後的實機驗收見 §7 未勾選項 |
 | **範圍** | `app/infrastructure/llm/`（端點設定、工廠依端點建立客戶端、新增路由模組）、`app/infrastructure/database/models.py`（新資料表）、`app/services/task_handlers/`（呼叫點宣告用途鍵並改走路由）、`app/services/jp_verb_reading_service.py`、`app/api/`（路由管理端點）、`app/bot/handlers/`（新增 `/models` 選單、`/setconfig` 移除 LLM 設定）、`app/services/runtime_config_service.py`（診斷）、`scripts/common/llm_label.py` 與 `scripts/fastapi_client/JP_Common/judge_verb_readings.py`、`.env.example` |
 | **不動** | `generate_structured_data` 簽名與 `LLMGenerateResult`；各客戶端的生成邏輯（只改金鑰、網址的來源）；DB 沒有任何設定時的行為（全部照 `.env`，與現在逐位元一致）；語音評分的設定（`AUDIO_*`、`STT_LLM_MODEL_NAME`）與其 `/setconfig` |
-| **PR / 進度** | P1（`fdb98ab`）、P2 完成（分支 `feat/llm-model-routing`，PR 待開）；P3、P4 未開始 |
+| **PR / 進度** | P1（`fdb98ab`）、P2（`5dd79c6`）：PR #24；P3、P4：2026-10-18 完成（見 §9） |
 | **關聯文件** | `docs/archive/llm_provider_hierarchy_FEAT_2026-09-06.md`（工廠註冊表與 `BaseLLMClient` 的由來）、`docs/archive/runtime_config_service_FEAT_2026-08-29.md`（`/setconfig` 與診斷端點） |
 
 ---
@@ -439,21 +439,21 @@ cd ~/FluencyTides && docker compose -f backend/docker-compose.yml up -d --force-
 
 ## 7. 驗收標準
 
-- [ ] DB 沒有任何設定時，全套測試通過，四種 `LLM_PROVIDER` 的啟動、標籤與 main 相同
-- [ ] 解析順序：用途有設定用用途、否則用全域、否則用 `.env`，且診斷端點顯示的來源正確
-- [ ] 一個模組宣告兩個用途鍵時，兩個鍵可分別指定不同端點與模型
-- [ ] `.env` 定義兩家 `openai` 類端點與一個 `gemini-native` 端點，三者可同時被不同用途使用，各自用自己的網址與金鑰，標籤前綴為各自的 ID
-- [ ] 現有 `.env`（只有舊式單組設定）不改即可運作
-- [ ] 依 D11 步驟新增一家中轉站，不改程式、不重新 build 映像即可在 `/models` 選到
-- [ ] 新宣告一個鍵（測試用）不做任何設定，自動出現在 `/models`、生成走全域；不合規或重複的鍵在 import 時拋錯
-- [ ] 從 TG `/models` 設定後重啟後端，設定仍生效
-- [ ] 寫入時各項檢查擋得住對應的錯誤（不在白名單、該帶 effort 卻沒帶、不該帶卻帶）；試建失敗不寫入
-- [ ] 白名單拿掉某個端點、模型或 effort 並重建容器後，指向它的設定退回下一層，`/models` 與診斷端點標示出來
-- [ ] `/models` 每一層只列白名單允許的選項
-- [ ] `/setconfig` 不再出現任何 `LLM_` 設定
-- [ ] 讀音判斷改走 `jp_verb_reading` 用途；腳本不再有 `--model` / `--effort`
-- [ ] 生成腳本的失敗紀錄標籤與後端實際使用的一致
-- [ ] ruff、mypy（`app/infrastructure/llm`）零錯誤
+- [x] DB 沒有任何設定時，全套測試通過，四種 `LLM_PROVIDER` 的啟動、標籤與 main 相同（P1 以 main worktree 比對）
+- [x] 解析順序：用途有設定用用途、否則用全域、否則用 `.env`，且診斷端點顯示的來源正確
+- [x] 一個模組宣告兩個用途鍵時，兩個鍵可分別指定不同端點與模型
+- [x] `.env` 定義兩家 `openai` 類端點與一個 `gemini-native` 端點，三者可同時被不同用途使用，各自用自己的網址與金鑰，標籤前綴為各自的 ID
+- [x] 現有 `.env`（只有舊式單組設定）不改即可運作
+- [ ] 依 D11 步驟新增一家中轉站，不改程式、不重新 build 映像即可在 `/models` 選到（待部署後實測）
+- [x] 新宣告一個鍵（測試用）不做任何設定，自動出現在 `/models`、生成走全域；不合規或重複的鍵在 import 時拋錯
+- [ ] 從 TG `/models` 設定後重啟後端，設定仍生效（待部署後實測；DB 持久化已由測試覆蓋）
+- [x] 寫入時各項檢查擋得住對應的錯誤（不在白名單、該帶 effort 卻沒帶、不該帶卻帶）；試建失敗不寫入
+- [x] 白名單拿掉某個端點、模型或 effort 並重建容器後，指向它的設定退回下一層，`/models` 與診斷端點標示出來（以測試驗證，未在容器實測）
+- [x] `/models` 每一層只列白名單允許的選項
+- [x] `/setconfig` 不再出現任何 `LLM_` 設定
+- [x] 讀音判斷改走 `jp_verb_reading` 用途；腳本不再有 `--model` / `--effort`
+- [x] 生成腳本的失敗紀錄標籤與後端實際使用的一致（向後端查詢；以 mock 後端驗證，未對真實後端實跑）
+- [x] ruff（`app` / `tests` / `scripts`）、mypy（`app/infrastructure/llm`）零錯誤
 
 ## 8. 後續事項（不屬本計畫範圍）
 
@@ -504,6 +504,37 @@ cd ~/FluencyTides && docker compose -f backend/docker-compose.yml up -d --force-
   - 補測試：`.env` 那一層缺套件且 DB 沒有設定、退化標籤確實不去前綴、恢復預設後讀回失敗與退回層有問題時的結果畫面、`_is_internal_module` 的邊界（`appdirs`、name 為 None）、提交後才出錯時快取仍會清掉
 - **測試**：`test_llm_route_service.py`（57）、`test_llm_routes_api.py`（18，含以真實 app 驗證 API 金鑰與路由掛載）、`test_models_menu.py`（48，含從 /models 一路點到儲存、孤兒鍵刪除、分頁、壞掉的按鈕、DB 故障時舊的儲存／恢復預設按鈕不會寫入、關閉鈕的過濾條件、/models 掛在接住所有文字的 router 之前）；`conftest.py` 新增共用的 `llm_route_db`（暫存 SQLite）、`llm_whitelist`、`declare_route_key`；全套 705 passed（`tests/`）
 - **煙霧測試**：本機以暫存資料庫啟動後端（關閉 TG bot），經 HTTP 寫入用途與全域設定、讀回清單、恢復預設，資料表內容與回應一致
+
+### P3 移除暫時性覆蓋與診斷（2026-10-18 完成）
+
+- **D8 `/setconfig`**：`get_modifiable_configs()` 一律不列 `LLM_` 開頭的設定，`.env` 還留著 `MODIFY_LLM_*` 時忽略並記一次 WARNING（指向 `/models`）；`REQUIRES_REBUILD_KEYS` 只剩 `AUDIO_EVALUATOR_PROVIDER`；`/help` 的「模型切換」拿掉 `LLM_MODEL_NAME`
+- **D8 讀音判斷**：`JudgeReadingsRequest` 拿掉 `model` / `effort` 並設 `extra="forbid"`——舊版腳本帶這兩個欄位會得到 422，不會被默默忽略、讓人以為用了指定的模型；服務一律走 `jp_verb_reading`，`InvalidOverrideError`、`validate_model_override` 與端點的 422 分支移除；`judge_verb_readings.py` 拿掉 `--model` / `--effort`，說明改為「先在 `/models` 設定 `jp_verb_reading`」
+- **D9 診斷端點**：`GET /api/v1/config` 的 `runtime` 新增 `llm_routes`（與 `GET /api/v1/llm-routes` 的 `routes` 同格式，含來源、被略過的層、`problem`）與 `llm_endpoints`（端點、類型、網址、白名單、是否可選，不含金鑰；另列 `skipped` 的端點與原因）；`llm_provider` 與 CLI 探測改看全域 `*` 生效的端點。組清單時發生非預期錯誤只讓這一塊帶錯誤說明，其餘照常回報
+- **D9 全域客戶端**：`app.state.llm_client` 改由 `llm_route_service.refresh_global_client()` 依「全域 `*` → `.env`」建立，啟動時、以及 API 或 TG 寫入／刪除 `*` 之後重建；建立失敗設為 None 並記 WARNING，不影響啟動與寫入。這個客戶端只給診斷端點用，沒有人用的 `get_llm_client` 依賴移除（避免有人拿全域客戶端生成而略過各用途的設定）
+- **D9 腳本標籤**：`scripts/common/llm_label.build_llm_model_label(route_key)` 改向後端 `GET /api/v1/llm-routes` 查該用途生效的標籤（帶 Cloudflare Access 與 `X-API-Key`），同一用途一次執行只查一次；查不到時退回本機推算並警告。三個呼叫點分別傳 `jp_core_verb` / `jp_verb_pair`。`query_backend_model.py` 另列出各用途的模型與來源。本機直接建立客戶端的 3 支腳本在說明中寫明 `/models` 對它們無效
+- **前兩輪審查留下的低優先項目**：
+  - 生成路徑缺第三方套件時，`client_for` 不論哪一層都轉成 `LLMServiceError`，訊息帶用途、層與套件名（原本是沒有路由脈絡的裸 `ModuleNotFoundError`）；`is_internal_import` / `describe_import_error` 移到 `routing.py`，管理介面與生成路徑共用
+  - 同一用途鍵並發的第一次寫入撞唯一鍵時，改為重做一次（走更新），不再報成「資料庫異常、結果未知」
+  - 缺套件的警告同一個原因只記一次（快取失效後才會再提醒），不再每次列清單、每一列各記一則
+  - `handle_close` 編輯失敗（不是「內容沒變」）改記 WARNING；`_show_after_write` 連提示都送不出去時只記 WARNING，不再讓外層多記一次「操作失敗」
+  - API 在 OpenAPI 宣告 404 / 422 / 503 的錯誤格式（`ErrorResponse`）
+  - 補測試：GET / PUT / DELETE 沒帶金鑰都是 401、刪除全域 `*`、彈出提示不超過 200 字元、模型名去空白但區分大小寫
+- **測試**：新增 `test_dynamic_config.py`；`test_jp_verb_reading_judgments.py` 覆寫相關案例改為驗證路由與 422；`test_runtime_config_read.py` 的白名單案例改用非 LLM 設定、新增診斷與全域客戶端案例；`test_llm_factory.py` 的「effort 設定鍵要列在 REQUIRES_REBUILD_KEYS」改為「必須以 `LLM_` 開頭才會被 `/setconfig` 排除」，並新增三個端點同時被不同用途使用的驗收案例；`test_llm_labels.py` 改測本機推算並新增向後端查詢的案例；全套 728 passed（`tests/`）
+- **P3 審查後修正（2026-10-18）**：
+  - 全域客戶端同步：API 與 TG 寫入或刪除 `*` 後不論成敗都重建（503 結果未知時 DB 可能已改）；診斷端點新增 `llm_client_matches_global`，與全域 `*` 目前的設定不一致時為 false 並記 WARNING（例如啟動時讀不到 DB 而用了 `.env`、之後 DB 恢復），`query_backend_model.py` 一併提示；重建的 log 帶來源
+  - `refresh_global_client` 分級：設定問題（`LLMServiceError`）記 WARNING，其他例外記 ERROR 附 traceback；`model_label` 移進 try
+  - `client_for` 的 CLI 工作目錄 `OSError` 同樣轉成帶脈絡的 `LLMServiceError`；`IntegrityError` 先確認那一列真的被另一筆寫入建立才重做，否則照一般資料庫錯誤處理
+  - `_show_after_write` 改攔 `TelegramAPIError`（含網路錯誤）；TG 沒注入 `app` 時記 WARNING
+  - 診斷端點依鍵找全域那一列，不依賴清單順序
+  - 補測試：`.env` 層建立失敗原樣拋出、TG 恢復全域預設後重建、腳本寫死的用途鍵必須是後端宣告的鍵（`test_script_route_keys.py`）等；全套 740 passed（`tests/`）
+
+### P4 文件（2026-10-18 完成）
+
+- `backend/.env.example`：第 1 區移除 `MODIFY_LLM_*` 並指向 `/models`；第 10 區說明解析順序，新增 10-B「端點與白名單」（欄位、ID 規則、白名單寫法、中轉站與 gemini-native 範例、CLI 白名單、D11 新增／拿掉一家的步驟）；第 11 / 11-B 區改為「使用該端點時讀取」
+- `README.md` 的核心功能加上「依用途選 LLM 模型」
+- `docs/bk/02_Backend_Architecture.md` 的 LLM 段、`docs/bk/16_TG_Bot_State_Machine.html`（加入 `/models` router 與無狀態選單、更新行號與 §4.3）
+- `docs/wip/verb_reading_judgments_FEAT_2026-09-02.md` 標註 `--model` / `--effort` 與端點覆寫已移除
+- 本計畫歸檔到 `docs/archive/`
 
 ### 部署注意：第一次部署本分支前先搬資料
 

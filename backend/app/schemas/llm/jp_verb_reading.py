@@ -7,7 +7,7 @@ Japanese verb whose kanji surface has multiple readings.
 端點與專案無關：請求只含台詞、上下文、表層與候選讀音。
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # 單次請求的句數上限。20 句（含前後各 2 行）約 100 行對話，模型仍能逐句對照；
 # 超過 40 句後逐項注意力下降、串位機率上升，故硬性拒收。
@@ -27,11 +27,19 @@ class JudgeReadingItem(BaseModel):
 
 
 class JudgeReadingsRequest(BaseModel):
-    """判讀請求。Judge request."""
+    """判讀請求。Judge request.
+
+    模型由用途鍵 ``jp_verb_reading`` 的路由設定決定（TG ``/models`` 或 ``/api/v1/llm-routes``），
+    請求不能覆寫。多餘欄位一律拒收（422）：舊版腳本帶 ``model`` / ``effort`` 時會明確失敗，
+    不會被默默忽略、讓人以為用了指定的模型。
+
+    The model comes from the ``jp_verb_reading`` route; unknown fields
+    (including the removed ``model`` / ``effort`` overrides) are rejected.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     items: list[JudgeReadingItem] = Field(..., min_length=1, max_length=MAX_ITEMS_PER_REQUEST)
-    model: str | None = Field(None, description="覆寫後端模型（缺省沿用 .env）")
-    effort: str | None = Field(None, description="覆寫思考深度（僅支援 effort 的 provider 有效：claude-code / antigravity）")
 
 
 class ReadingJudgment(BaseModel):
@@ -50,5 +58,5 @@ class ReadingJudgmentLLMOutput(BaseModel):
 class JudgeReadingsResponse(BaseModel):
     """端點回應。Endpoint response."""
 
-    llm_model: str = Field(..., description="實際使用的模型標籤（含覆寫後的值）")
+    llm_model: str = Field(..., description="實際使用的模型標籤（用途鍵 jp_verb_reading 生效的設定）")
     results: list[ReadingJudgment]
