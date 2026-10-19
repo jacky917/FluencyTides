@@ -247,7 +247,7 @@ CREATE = route("expression_correction.create", "外語糾錯：寫入子卡", ca
 
 | 層 | 現在 | 改為 |
 |---|---|---|
-| TG 指令 | `/models`、`/setconfig`（暫時設定） | 合併為 **`/setconfig`**（存資料庫）；`/models` 移除，不留別名 |
+| TG 指令 | `/models`、`/setconfig`（暫時設定） | 合併為 **`/setconfig`**（存資料庫）；`/models` 移除，不留別名。舊 `/setconfig` 在 R2 才移除，所以指令改名也在 R2 做 |
 | 資料表 | `llm_routes` | `capability_routes` |
 | 宣告函式 | `llm_route(key, description)` | `route(key, description, capabilities=...)`，宣告這個鍵會用到的能力 |
 | service | `llm_route_service` | `capability_route_service` |
@@ -280,8 +280,8 @@ CREATE = route("expression_correction.create", "外語糾錯：寫入子卡", ca
 
 | 階段 | 內容 | 驗收 |
 |---|---|---|
-| **R1 改名與資料表**（行為不變） | §6 的新表與遷移、§7 的改名、`route(...)` 宣告；只有 `llm` 能力 | 現有 `/models` 設定遷移後結果相同；全部既有測試通過；TG `/setconfig`（新）與網頁的功能與現在的 `/models` 相同 |
-| **R2 語音能力** | `audio_llm`、`stt`、`audio_eval` 的白名單與解析；宣告 `recording_eval`（三語卡另宣告分支）；TG 錄音評分改依設定建立評分器；移除舊 `/setconfig` 與 `MODIFY_*` | 三種策略都能經設定切換、重啟後仍在；三語卡與對話卡可以設不同策略；TG 錄音評分照常運作 |
+| **R1 改名與資料表**（行為不變） | §6 的新表與遷移、§7 的改名（TG 指令除外）、`route(...)` 宣告；只有 `llm` 能力 | 現有 `/models` 設定遷移後結果相同；全部既有測試通過；TG `/models` 與網頁「Tool Settings」頁的功能與原本相同 |
+| **R2 語音能力** | `audio_llm`、`stt`、`audio_eval` 的白名單與解析；宣告 `recording_eval`（三語卡另宣告分支）；TG 錄音評分改依設定建立評分器；移除舊 `/setconfig` 與 `MODIFY_*`；TG `/models` 改名為 `/setconfig` | 三種策略都能經設定切換、重啟後仍在；三語卡與對話卡可以設不同策略；TG 錄音評分照常運作 |
 
 R2 完成後再進行網頁版計畫的**階段 C（錄音評分）**：`RecordingService` 依卡片的 handler 解析能力，TG 與網頁共用。口說提案的新練法（例如跟讀卡）各自新增筆記類型與 handler 時，順帶宣告自己的 `recording_eval.<handler>`。
 

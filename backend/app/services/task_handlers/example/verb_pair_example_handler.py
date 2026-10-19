@@ -18,7 +18,7 @@ from app.services.task_handlers.base import BaseHandler
 from app.services.task_handlers.registry import register_handler
 from app.infrastructure.utils.id_generator import generate_unique_card_id
 from app.core.dependencies import get_template_engine
-from app.infrastructure.llm.routing import llm_route
+from app.infrastructure.llm.routing import route
 from app.schemas.llm.example.verb_pair import VerbPairGenerationResult
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # LLM 用途鍵（生效設定的解析見 app.infrastructure.llm.routing）
-EXAMPLE_LLM = llm_route("verb_pair_example", "範例 handler 生成")
+EXAMPLE_LLM = route("verb_pair_example", "範例 handler 生成", capabilities={"llm"})
 
 @register_handler
 class VerbPairExampleHandler(BaseHandler):

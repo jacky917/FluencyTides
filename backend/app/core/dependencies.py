@@ -91,8 +91,8 @@ def get_anki_client(request: Request) -> AnkiClient:
     return request.app.state.anki_client
 
 
-# LLM 客戶端不經依賴注入：各用途以宣告的用途鍵（app.infrastructure.llm.routing.llm_route）
-# 每次取得自己的客戶端。app.state.llm_client 只給診斷端點用（全域設定，見 llm_route_service.
+# LLM 客戶端不經依賴注入：各用途以宣告的用途鍵（app.infrastructure.llm.routing.route）
+# 每次取得自己的客戶端。app.state.llm_client 只給診斷端點用（全域設定，見 capability_route_service.
 # refresh_global_client），不可拿來生成——那會略過各用途的設定。
 
 

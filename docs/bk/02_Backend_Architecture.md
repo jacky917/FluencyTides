@@ -37,7 +37,7 @@ backend/
 │   │   ├── relations.py            #   /api/v1/relations：知識圖譜關聯 CRUD + /graph + /sync
 │   │   ├── storage.py              #   /api/v1/storage：媒體上傳/列表/預簽名/刪除
 │   │   ├── health.py              #   /api/health：無認證存活探針
-│   │   ├── llm_routes.py           #   /api/v1/llm-routes：LLM 用途設定 GET/PUT/DELETE（2026-10 模型路由）
+│   │   ├── capability_routes.py    #   /api/v1/capability-routes：能力路由設定 GET/PUT/DELETE（2026-10；前身為 llm_routes.py）
 │   │   └── webhook.py              #   Telegram webhook：驗證 secret → 背景 ACK（第二輪改）
 │   ├── bot/                        # Controller（Bot）：aiogram 3 寄生於同一進程
 │   │   ├── dispatcher.py           #   create_bot（token 驗證）+ setup_dispatcher（註冊 router/middleware）
@@ -54,7 +54,7 @@ backend/
 │   ├── schemas/                    # 跨層 Pydantic v2 合約（第三輪刪多個死 schema）
 │   │   ├── anki.py card.py common.py relation.py speaking.py
 │   │   ├── storage.py storage_api.py voice.py llm.py deep_link.py
-│   │   └── llm_route.py            #   LLM 用途設定 API 的請求／回應模型（2026-10）
+│   │   └── capability_route.py     #   能力路由設定 API 的請求／回應模型（2026-10；前身為 llm_route.py）
 │   ├── services/                   # 業務邏輯（每請求/每 update 建立）
 │   │   ├── card_service.py         #   生成編排 + 卡片 CRUD
 │   │   ├── speaking_service.py     #   語音評估全流程（第一輪自 CardService 拆出）
@@ -62,27 +62,27 @@ backend/
 │   │   ├── relation_service.py     #   關聯 CRUD + get_graph_data + sync 防護 + N+1 消除
 │   │   ├── prompt_manager.py       #   Jinja2 System Prompt 載入
 │   │   ├── storage_service.py      #   MinioClient 業務封裝
-│   │   ├── llm_route_service.py    #   LLM 用途設定讀寫與驗證（API 與 TG /models 共用）＋全域客戶端重建（2026-10）
+│   │   ├── capability_route_service.py  # 能力路由設定讀寫與驗證（API 與 TG /models 共用）＋全域客戶端重建（2026-10）
 │   │   ├── anki_model/             #   {manager, repository, note_builder}.py（第一輪自 617 行拆的三職責套件）
 │   │   ├── anki_model_manager.py   #   24 行相容 shim（re-export anki_model 套件）
 │   │   └── prompts/*.j2            #   5 個 System Prompt 模板
 │   ├── infrastructure/             # 外部系統客戶端（lifespan 單例，DB session 除外）
 │   │   ├── anki/                   #   client.py（組合類）+ transport.py + 6 領域 Mixin + utils.py（查詢跳脫）
 │   │   ├── audio_evaluator/        #   base(Template Method) + factory + gemini/openai_client + prompts
-│   │   ├── database/               #   database.py + models.py（CardRelation/RelationType，2026-10 加 LLMRouteSetting）+ conventions.py
+│   │   ├── database/               #   database.py + models.py（CardRelation/RelationType，2026-10 加 CapabilityRouteSetting）+ conventions.py
 │   │   ├── llm/                    #   LLM 客戶端（2026-10 現狀，見 §5.3）
 │   │   │   ├── base.py client.py gemini_native_client.py claude_code_client.py antigravity_client.py …
 │   │   │   │                       #     BaseLLMClient 與各 provider 客戶端（client.py：AsyncOpenAI + 重試分類）
 │   │   │   ├── factory.py          #     create_llm_client(endpoint=, model=, effort=)：依端點類型選客戶端
 │   │   │   ├── endpoints.py        #     端點與白名單（全部來自 .env：LLM_ENDPOINTS__<ID>__*、內建 CLI、舊式單組設定）
-│   │   │   └── routing.py          #     llm_route() 用途鍵宣告與解析（用途 → 全域 * → .env）＋程序內快取
+│   │   │   └── routing.py          #     route() 用途鍵與能力宣告、解析（用途 → 全域 * → .env）＋程序內快取
 │   │   ├── storage/minio_client.py #   同步 minio SDK 以 asyncio.to_thread 包裝
 │   │   ├── ffmpeg/ffmpeg_merger.py #   未接線（F042）
 │   │   └── voice/voicepeak_runner.py  # 未接線（F042）
 │   └── anki_models/*.json          # 9 個 Anki 模型定義（json + front/back html + css）
 ├── alembic/
 │   ├── env.py                      # async 模式，URL 由 Settings 注入
-│   └── versions/                   # 7f3d1a2b4c5e（baseline）→ 9bbc72f7c470（relation_types）→ a01287171364（llm_routes，2026-10）
+│   └── versions/                   # 7f3d1a2b4c5e（baseline）→ 9bbc72f7c470（relation_types）→ a01287171364（llm_routes，2026-10）→ c3a9e5d1f7b2（llm_routes 搬到 capability_routes，2026-10）
 ├── tests/                          # 第三輪新增：conftest + 7 個 test_*.py（48 個 pytest）
 └── scripts/                        # _bootstrap.py + 3 支匯入/維運腳本
 ```
@@ -203,7 +203,7 @@ Web API 與 Telegram Bot **共用同一層 Service**——這是本專案分層�
 - 三個 Infrastructure getter 從 `app.state` 讀單例；五個 Service 工廠按請求組裝。`get_card_service` 是最深的依賴鏈：注入 AnkiClient、LLMClient、AnkiModelManager、PromptManager、RelationService（後者又注入 AsyncSession）。**（2026-10-18 註：已過時）** 現行 `dependencies.py` 的 Infrastructure getter 只剩 `get_anki_client` / `get_minio_client`（另有 `get_db_session` re-export）；`get_card_service` 只注入 AnkiClient 與 AnkiModelManager（Phase 9 後 CardService 為純 CRUD，LLM 與 Prompt 依賴移至 task handlers）。
 - `_ANKI_MODELS_DIR`（`app/anki_models/`）與 `_PROMPTS_DIR`（`app/services/prompts/`）兩個資源目錄路徑在此定義。
 - **LLM 依賴分寬鬆／嚴格兩版（2026-07-09，Bug 1 回歸修復）**：`get_llm_client`（`dependencies.py:88`）在 `LLMClient` 為 None 時 raise `ServiceUnavailableError`(503)（F006 統一契約），供真正需要 LLM 的鏈使用；但 `get_card_service` 改注入**寬鬆版 `get_llm_client_optional`（`dependencies.py:71`，None 時回 None 不 raise）**。原因：第二輪 F006 的 503 與第一輪「CardService 容忍 `llm=None`」設計直接衝突——LLM 未設定時連 `/cards/models`、`/cards/decks` 這類唯讀端點都被誤擋 503。改用寬鬆版後，唯讀操作在無 LLM 時照常運作，只有實際觸發生成才回錯誤。`get_minio_client`（`dependencies.py:120`）維持嚴格版 503。**runtime 實測 `/cards/models` 已由 503 恢復為 200**。**（已被取代，2026-10-18）**：`get_llm_client` / `get_llm_client_optional` 均已不存在——LLM 模型路由分支移除了最後一個 `get_llm_client`。
-- **LLM 客戶端不經依賴注入（2026-10，模型路由）**：每個用到 LLM 的模組在模組層以 `llm_route("<用途鍵>", "<說明>")` 宣告用途鍵，呼叫時 `await XXX_LLM.client()` 依該用途的設定建立客戶端（見 §5.3）。`app.state.llm_client` 仍存在，但只是依全域設定建立、供診斷端點使用的客戶端，**不可拿來生成**（會略過各用途的設定）；`dependencies.py:94-96` 的註解寫明此規則。
+- **LLM 客戶端不經依賴注入（2026-10，模型路由）**：每個用到 LLM 的模組在模組層以 `route("<用途鍵>", "<說明>", capabilities={"llm"})` 宣告用途鍵，呼叫時 `await XXX_LLM.client()` 依該用途的設定建立客戶端（見 §5.3）。`app.state.llm_client` 仍存在，但只是依全域設定建立、供診斷端點使用的客戶端，**不可拿來生成**（會略過各用途的設定）；`dependencies.py:94-96` 的註解寫明此規則。
 
 #### exceptions.py — 業務異常階層
 
@@ -217,7 +217,7 @@ Web API 與 Telegram Bot **共用同一層 Service**——這是本專案分層�
 | cards.py | `/api/v1/cards` | X-API-Key | POST /generate、GET /models、GET /models/{file}、GET /decks、GET/PUT/DELETE /{note_id} |
 | relations.py | `/api/v1/relations` | X-API-Key | GET /graph、POST /、GET /types、POST /delete、DELETE /by-note/{id}、POST /sync |
 | storage.py | `/api/v1/storage` | X-API-Key | POST /upload、GET /files、GET /presign/{object:path}、DELETE /files/{object:path} |
-| llm_routes.py（2026-10） | `/api/v1/llm-routes` | X-API-Key（`verify_api_key`） | GET（全部用途的生效設定＋可選端點白名單，不含金鑰）、PUT /{route_key}、DELETE /{route_key}（恢復預設；全域鍵為 `*`） |
+| capability_routes.py（2026-10） | `/api/v1/capability-routes` | X-API-Key（`verify_api_key`） | GET（全部用途鍵各能力的生效設定＋各能力可選的 provider 白名單，不含金鑰）、PUT /{route_key}/{capability}、DELETE /{route_key}/{capability}（恢復預設；全域鍵為 `*`，URL 中寫成 `%2A`；目前只有 `llm` 能力） |
 | health.py | `/api/health` | 無（刻意） | GET / |
 | webhook.py | `TG_WEBHOOK_PATH`（預設 `/api/webhook`） | Telegram secret token（可選） | POST |
 
@@ -240,7 +240,7 @@ Web API 與 Telegram Bot **共用同一層 Service**——這是本專案分層�
 | storage.py / storage_api.py | Infra 層（MinioUploadResult/MinioObjectInfo/MinioBucketPolicy）與 API 回應模型（StorageUpload/List/PresignedUrlResponse）刻意分離 | **F081 已修復**：刪 MinioPresignedUrlRequest 與未用的 `timedelta` import |
 | speaking.py | RecordingItem、ReferenceAudioItem/ReferenceItem、NewCardPayload（TG /newcard）、AudioEvaluationResult | **F082 已修復**：刪與 ReferenceAudioItem 重複的 PromptAudioItem。服務 Bot 語音流程 |
 | voice.py / llm.py / deep_link.py | VOICEPEAK/FFmpeg 請求與結果模型、LLMGenerateResult、DeepLinkAction（RecordAudio/DeleteEntry/GenerateCard 子類） | 服務 Infrastructure 與 Bot 層 |
-| llm_route.py（2026-10） | `LLMRouteUpdate`（PUT 請求）、`LLMRouteRead`（每個用途的生效設定、來源、被略過的層、`problem`）、`EndpointOptionRead` / `ModelOptionRead`（白名單）、`LLMRoutesResponse`、`LLMRouteDeleteResponse` | 服務 `/api/v1/llm-routes` |
+| capability_route.py（2026-10） | `RouteUpdate`（PUT 請求：provider / model / effort）、`RouteRead`（用途鍵與各能力的 `CapabilityStateRead`：生效設定、來源、被略過的層、`problem`）、`ProviderOptionRead` / `ModelOptionRead`（白名單）、`CapabilityRoutesResponse`、`RouteDeleteResponse` | 服務 `/api/v1/capability-routes` |
 
 ### 2.4 Services 層（`app/services/`）
 
@@ -268,13 +268,13 @@ Web API 與 Telegram Bot **共用同一層 Service**——這是本專案分層�
 
 包裝 MinioClient：確保 bucket 存在、檔名規範化（日期+UUID）、上傳後產生預簽名 URL、列表與刪除。**尚未接入生卡流程**——目前僅由 `/api/v1/storage` 端點使用。第三輪修復：預簽名 URL 為 None 時拋 502 而非靜默回空字串（F073）；`ensure_bucket_exists` 捕捉 `BucketAlreadyExists` 使並發建立冪等（F092）。
 
-#### llm_route_service（`llm_route_service.py`，2026-10 模型路由新增）
+#### capability_route_service（`capability_route_service.py`，2026-10；前身為 `llm_route_service.py`）
 
-LLM 用途設定的讀寫服務，`/api/v1/llm-routes` 與 TG `/models` 共用同一層（不各自實作驗證）：
+能力路由設定的讀寫服務，`/api/v1/capability-routes` 與 TG `/models` 共用同一層（不各自實作驗證）。每個操作針對「用途鍵 × 能力」，目前只有 `llm` 能力（計畫書 [capability_routing_FEAT_2026-10-19.md](../wip/capability_routing_FEAT_2026-10-19.md)）：
 
-- **寫入**（`set_route`）依序檢查：用途鍵已宣告（或為全域 `*`）→ `(端點, 模型, effort)` 在 `.env` 白名單內（與讀取端同一個 `routing.check_choice`）→ 試建一次客戶端（CLI 找不找得到、金鑰與套件是否就緒；不打 API）；通過後以「有就更新、沒有就新增」寫入 `llm_routes`，不論成敗都清空路由快取。**刪除**（`delete_route`）＝恢復預設，孤兒鍵（程式已不再宣告的用途）也可刪。
+- **寫入**（`set_route`）依序檢查：用途鍵已宣告（或為全域 `*`）且宣告了這個能力 → `(端點, 模型, effort)` 在 `.env` 白名單內（與讀取端同一個 `routing.check_choice`）→ 試建一次客戶端（CLI 找不找得到、金鑰與套件是否就緒；不打 API）；通過後以「有就更新、沒有就新增」寫入 `capability_routes`，不論成敗都清空路由快取。**刪除**（`delete_route`）＝恢復預設，孤兒鍵（程式已不再宣告的用途）也可刪。
 - **讀取**（`list_routes` / `describe`）每個請求只讀一次 DB、所有列由同一份快照解析；回傳每個用途的生效設定、來源、被略過的層與 `problem`。管理路徑不沿用生成路徑的「讀不到 DB＝沒有設定」：查單一用途、刪除在讀不到時回 503，清單則照常回傳並標 `db_unavailable`。
-- 錯誤皆為 `FluencyTidesError` 子類：`LLMRouteNotFoundError`(404)、`InvalidLLMRouteError`(422)、`LLMRouteStoreUnavailableError`(503)。
+- 錯誤皆為 `FluencyTidesError` 子類：`RouteNotFoundError`(404，`ROUTE_NOT_FOUND`)、`InvalidRouteError`(422，`INVALID_ROUTE`；含不支援的能力、用途鍵沒有宣告這個能力)、`RouteStoreUnavailableError`(503，`ROUTE_STORE_UNAVAILABLE`)。
 - `refresh_global_client(app.state)`：依「全域 `*`（DB）→ `.env`」重建 `app.state.llm_client`；啟動時與寫入／刪除 `*` 之後（API 與 TG 皆然）呼叫，失敗時設為 None 並記 WARNING，不影響各用途的生成。
 
 #### PromptManager（`prompt_manager.py`）
@@ -294,7 +294,7 @@ Jinja2（`StrictUndefined`）從 `services/prompts/*.j2` 載入 System Prompt。
 | WhitelistMiddleware | `bot/dependencies.py:35` | outer update middleware，依 `TG_ALLOWED_USER_IDS` 白名單攔截；**空名單=封鎖所有人**（安全預設） |
 | ServiceInjectionMiddleware | `bot/dependencies.py` | inner middleware，經 `dp["app"]` 取 `app.state` 單例注入服務。2026-07-08 更新（F046）：`llm_client=None` 時不再 raise 全滅，改為仍注入全部服務並在生成流程回覆友善錯誤；`AnkiModelManager` / `PromptManager` / `SpeakingService` 以 `anki_client` 為鍵做實例級快取，不再每 update 重建（`RelationService` 因綁定 DB session 維持逐 update 建立） |
 | commands router | `bot/handlers/commands.py` | /start（Deep Link 分派 rec_/del_/gen_）、/help、/sync |
-| models_menu router（2026-10） | `bot/handlers/models_menu.py` | `/models`：各用途的 LLM 模型設定（限 `TG_ADMIN_CHAT_ID`）。不使用狀態機，callback data 自帶位置（`lr:<動作>:<版本>:<序號…>`），寫入經 `llm_route_service`；註冊在 commands 之後、newcard_menu 之前。流程見 16 號文檔 |
+| models_menu router（2026-10） | `bot/handlers/models_menu.py` | `/models`：各用途的 LLM 模型設定（限 `TG_ADMIN_CHAT_ID`）。不使用狀態機，callback data 自帶位置（`lr:<動作>:<版本>:<序號…>`），寫入經 `capability_route_service`；註冊在 commands 之後、newcard_menu 之前。流程見 16 號文檔 |
 | fsm 套件 | `bot/handlers/fsm/` | **全面狀態機化**：包含 `vocabulary_fsm.py`, `speaking_fsm.py`, `expression_fsm.py`，負責所有卡片新增的互動問答流程。 |
 | voice router | `bot/handlers/voice.py` | recording 狀態下下載 ogg → `SpeakingService.process_voice_evaluation`（2026-07-08 自 CardService 遷出） |
 | messages router | `bot/handlers/messages.py` | **嚴格防呆兜底**：攔截無狀態的任意文字並直接拒絕，不再執行單字查閱。 |
@@ -435,7 +435,7 @@ sequenceDiagram
 
 **relation_types**（`models.py:108`）— 關聯類型字典表：`id`（PK）、`name`（str(50)，unique+index）、`created_at`（同上）。
 
-**llm_routes**（`LLMRouteSetting`，2026-10 模型路由新增，Alembic `a01287171364`）— 每個 LLM 用途「目前選了哪一組」：`id`（PK）、`route_key`（str(64)，unique+index；`*` 為全域）、`endpoint`（str(32)，端點 ID）、`model`（str(128)）、`effort`（str(16)，可空＝該模型不使用 effort）、`updated_by`（`tg:<user id>` 或 `api`）、`created_at` / `updated_at`。只存選擇，**不存網址與金鑰**——可選項目（端點與白名單）一律在 `.env`；不留歷史紀錄表。因此本節開頭「共兩張表、只存關聯資料」的描述自 2026-10 起應讀作三張表。
+**capability_routes**（`CapabilityRouteSetting`，2026-10；Alembic `c3a9e5d1f7b2` 由 `a01287171364` 的 `llm_routes` 搬來）— 每個用途鍵在每種能力上「目前選了哪一組」：`id`（PK）、`route_key`（str(64)，index；`*` 為全域）、`capability`（str(32)，目前只有 `llm`）、`provider`（str(64)，`llm` 為端點 ID）、`model`（str(128)，可空：不需要模型的能力）、`effort`（str(16)，可空＝該模型不使用 effort），`(route_key, capability)` 唯一、`updated_by`（`tg:<user id>` 或 `api`）、`created_at` / `updated_at`。只存選擇，**不存網址與金鑰**——可選項目（端點與白名單）一律在 `.env`；不留歷史紀錄表。因此本節開頭「共兩張表、只存關聯資料」的描述自 2026-10 起應讀作三張表。
 
 兩項為 MySQL 遷移預留的設計：
 
@@ -525,7 +525,7 @@ graph LR
 **用途鍵宣告**（`infrastructure/llm/routing.py`）：用到 LLM 的模組在模組層宣告一次，呼叫時取客戶端：
 
 ```python
-CHILD_CARD_LLM = llm_route("jp_verb_pair", "自他動詞子卡生成")
+CHILD_CARD_LLM = route("jp_verb_pair", "自他動詞子卡生成", capabilities={"llm"})
 ...
 llm = await CHILD_CARD_LLM.client()
 ```
@@ -535,7 +535,7 @@ llm = await CHILD_CARD_LLM.client()
 **解析順序**：
 
 ```text
-用途鍵的列（DB llm_routes）→ 全域 * 的列（DB）→ .env（LLM_PROVIDER 端點 / LLM_MODEL_NAME / 預設 effort）
+用途鍵的列（DB capability_routes，capability = llm）→ 全域 * 的列（DB）→ .env（LLM_PROVIDER 端點 / LLM_MODEL_NAME / 預設 effort）
 ```
 
 - 每列是完整的一組「端點 + 模型 + effort」，不做欄位層級合併。DB 為空時行為與導入路由前逐位元一致（`.env` 那一層以不帶參數的 `create_llm_client()` 建立）。
@@ -554,19 +554,20 @@ llm = await CHILD_CARD_LLM.client()
 - 白名單每項寫成標籤形式 `模型@effort`（如 `"opus@low|high"`；不帶 `@` 表示不使用 effort）。設定寫錯只跳過該端點或該項並記 ERROR，不讓後端起不來；lifespan 以 `log_endpoint_summary()` 載入一次，錯誤出現在啟動 log。卡片標籤的 `(前綴)` 即端點 ID（`google` / `openai` 不加前綴）。
 - 工廠 `create_llm_client(*, endpoint=None, model=None, effort=None)` 依端點類型選客戶端類別並把端點交給建構子；網址、金鑰、`safety_settings` 取自端點。
 
-**管理入口**（寫入一律經 `services/llm_route_service.py`，見 §2.4）：
+**管理入口**（寫入一律經 `services/capability_route_service.py`，見 §2.4）：
 
-- API：`GET / PUT / DELETE /api/v1/llm-routes`（`api/llm_routes.py`，掛在 `verify_api_key` 之下）。
+- API：`GET /api/v1/capability-routes`、`PUT / DELETE /api/v1/capability-routes/{route_key}/{capability}`（`api/capability_routes.py`，掛在 `verify_api_key` 之下）。
+- 網頁：「Tool Settings」頁（`frontend/src/pages/ToolSettings.tsx`）。
 - TG：`/models` 選單（`bot/handlers/models_menu.py`，限管理員、不使用狀態機、讀不到 DB 時唯讀）；流程見 [16_TG_Bot_State_Machine.html](16_TG_Bot_State_Machine.html)。
 
-**全域客戶端 `app.state.llm_client`**：lifespan 啟動時與寫入／刪除全域 `*` 之後，由 `llm_route_service.refresh_global_client` 依「`*`（DB）→ `.env`」建立，**只給診斷端點用**（標籤與 CLI 探測）；各用途的生成每次依自己的用途鍵建立，不經這個客戶端，也不經 DI（`get_llm_client` 已移除）。
+**全域客戶端 `app.state.llm_client`**：lifespan 啟動時與寫入／刪除全域 `*` 之後，由 `capability_route_service.refresh_global_client` 依「`*`（DB）→ `.env`」建立，**只給診斷端點用**（標籤與 CLI 探測）；各用途的生成每次依自己的用途鍵建立，不經這個客戶端，也不經 DI（`get_llm_client` 已移除）。
 
 **移除的暫時性覆蓋**：
 
 - `/setconfig`（`core/dynamic_config.py`）不再處理任何 `LLM_` 開頭的鍵；`.env` 若還留著 `MODIFY_LLM_*` 會被忽略並記一次 WARNING（提示改用 `/models`）。
 - 讀音判斷 API `POST /api/v1/jp/verb-readings/judge` 不再接受 `model` / `effort` 覆寫（請求 schema `extra="forbid"`，多餘欄位回 422），一律使用用途鍵 `jp_verb_reading`；回應的 `llm_model` 為實際生效的標籤。
 
-**診斷**：`GET /api/v1/config` 的 `runtime` 區塊新增 `llm_routes`（每個用途的生效設定、來源 route / global / env、標籤、被略過的層 `rejected`、`problem`）與 `llm_endpoints`（每個端點的 ID、類型、`base_url`、白名單，**不含金鑰**，另列設定有誤而被跳過的 `skipped`）。
+**診斷**：`GET /api/v1/config` 的 `runtime` 區塊新增 `capability_routes`（每個用途鍵各能力的生效設定、來源 route / global / env、標籤、被略過的層 `rejected`、`problem`）與 `llm_endpoints`（每個端點的 ID、類型、`base_url`、白名單，**不含金鑰**，另列設定有誤而被跳過的 `skipped`）。
 
 ### 5.4 語音評分（Audio Evaluator）— `infrastructure/audio_evaluator/`
 

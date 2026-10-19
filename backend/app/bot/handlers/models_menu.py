@@ -10,7 +10,7 @@ Telegram ``/models`` menu for managing the LLM model of each route key.
                              └ [恢復預設] → 刪除該筆設定，顯示退回後生效的設定
 
 每一層只列 ``.env`` 白名單允許的選項；effort 只有一個時自動選上，模型不使用 effort 時
-跳過這一層。寫入一律經 :mod:`app.services.llm_route_service`（白名單＋試建客戶端），
+跳過這一層。寫入一律經 :mod:`app.services.capability_route_service`（白名單＋試建客戶端），
 與 API 相同。
 
 **不使用狀態機**：每個按鈕的 callback data 自帶目前選到哪一步，格式為
@@ -51,12 +51,12 @@ from aiogram.types import (
 )
 
 from app.core.config import settings
-from app.core.exceptions import InvalidLLMRouteError, LLMRouteNotFoundError, LLMRouteStoreUnavailableError
+from app.core.exceptions import InvalidRouteError, RouteNotFoundError, RouteStoreUnavailableError
 from app.infrastructure.llm import routing
 from app.infrastructure.llm.endpoints import Endpoint, ModelOption, list_endpoints
 from app.infrastructure.llm.routing import GLOBAL_ROUTE_KEY
-from app.services import llm_route_service
-from app.services.llm_route_service import RouteKeyEntry, RouteView
+from app.services import capability_route_service
+from app.services.capability_route_service import RouteKeyEntry, RouteView
 
 logger = logging.getLogger(__name__)
 
@@ -187,8 +187,8 @@ async def load_menu() -> tuple[MenuContext, list[RouteView]]:
     version and the rows can never disagree.
     """
     stored, read_ok = await routing.stored_choices()
-    ctx = build_context(llm_route_service.ordered_route_keys(stored), list_endpoints(), db_ok=read_ok)
-    return ctx, llm_route_service.views_from(stored, read_ok)
+    ctx = build_context(capability_route_service.ordered_route_keys(stored), list_endpoints(), db_ok=read_ok)
+    return ctx, capability_route_service.views_from(stored, read_ok)
 
 
 async def load_context() -> MenuContext:
@@ -412,7 +412,7 @@ def render_confirm(
     """儲存前確認，顯示將寫進卡片的標籤。Confirm before saving."""
     key = ctx.key_at(key_index)
     endpoint, model, effort = resolve_selection(ctx, endpoint_index, model_index, effort_token)
-    label = llm_route_service.preview_label(endpoint.id, model, effort)
+    label = capability_route_service.preview_label(endpoint.id, model, effort)
     option = ctx.model_at(endpoint_index, model_index)
     back = (
         callback(ctx, Action.EFFORTS, key_index, endpoint_index, model_index)
@@ -565,7 +565,7 @@ async def handle_menu(callback_query: CallbackQuery, app: Any = None) -> None:
         await _dispatch(callback_query, ctx, views, action, args, app)
     except _AlreadyAnswered:
         return
-    except (StaleMenuError, LLMRouteNotFoundError) as error:
+    except (StaleMenuError, RouteNotFoundError) as error:
         # NotFound 也算過期：孤兒鍵在選單顯示後被 API 或另一個選單刪掉，等同清單已變
         logger.info(
             "/models 按鈕已過期（user=%s, data=%s, 目前版本=%s, %s）",
@@ -573,7 +573,7 @@ async def handle_menu(callback_query: CallbackQuery, app: Any = None) -> None:
         )
         await callback_query.answer(_STALE_ALERT, show_alert=True)
         return
-    except LLMRouteStoreUnavailableError as error:
+    except RouteStoreUnavailableError as error:
         # 讀不到（無法判斷）與寫入時出錯（結果未知、請重新查看）的訊息由服務層區分，原樣轉達
         await callback_query.answer(f"⚠️ {error.message}"[:ALERT_TEXT_LIMIT], show_alert=True)
         return
@@ -620,7 +620,7 @@ async def _dispatch(
     if action is Action.LIST:
         await _edit(callback_query, render_list(ctx, views, numbers[0]))
     elif action is Action.DETAIL:
-        view = await llm_route_service.describe(ctx.key_at(numbers[0]))
+        view = await capability_route_service.describe(ctx.key_at(numbers[0]))
         await _edit(callback_query, render_detail(ctx, numbers[0], view))
     elif action is Action.ENDPOINTS:
         await _edit(callback_query, render_endpoints(ctx, numbers[0]))
@@ -683,7 +683,7 @@ async def _refresh_global_client_if(key: str, app: Any) -> None:
     if app is None:
         logger.warning("/models 改了全域 *，但 dispatcher 沒有注入 app，無法重建診斷用的全域客戶端")
         return
-    await llm_route_service.refresh_global_client(app.state)
+    await capability_route_service.refresh_global_client(app.state)
 
 
 async def _save(
@@ -698,10 +698,10 @@ async def _save(
     key = ctx.key_at(key_index)
     endpoint, model, effort = resolve_selection(ctx, endpoint_index, model_index, effort_token)
     try:
-        view = await llm_route_service.set_route(
+        view = await capability_route_service.set_route(
             key, endpoint.id, model, effort, updated_by=f"tg:{callback_query.from_user.id}"
         )
-    except InvalidLLMRouteError as error:
+    except InvalidRouteError as error:
         await _edit(callback_query, render_error(ctx, key_index, error.message))
         return
     finally:
@@ -717,7 +717,7 @@ async def _save(
 async def _delete(callback_query: CallbackQuery, ctx: MenuContext, key_index: int, app: Any = None) -> None:
     key = ctx.key_at(key_index)
     try:
-        result = await llm_route_service.delete_route(key, updated_by=f"tg:{callback_query.from_user.id}")
+        result = await capability_route_service.delete_route(key, updated_by=f"tg:{callback_query.from_user.id}")
     finally:
         await _refresh_global_client_if(key, app)
     if not result.deleted:

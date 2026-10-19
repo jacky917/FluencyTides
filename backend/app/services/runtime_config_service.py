@@ -28,8 +28,8 @@ from app.core.dynamic_config import get_modifiable_configs
 from app.infrastructure.llm.endpoints import get_endpoint, load_endpoints, skipped_endpoints
 from app.infrastructure.llm.factory import CLAUDE_CODE_PROVIDER, is_cli_provider
 from app.infrastructure.llm.labels import normalize_provider
-from app.infrastructure.llm.routing import GLOBAL_ROUTE_KEY
-from app.services import llm_route_service
+from app.infrastructure.llm.routing import CAPABILITY_LLM, GLOBAL_ROUTE_KEY
+from app.services import capability_route_service
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +133,7 @@ class RuntimeConfigService:
             清單時退回 .env 的 ``LLM_PROVIDER``)、
             ``anki_connect_url``(後端實際連線的 Anki 端點,供腳本啟動對帳)、
             全域端點為 CLI 型時的 ``claude_code`` 環境診斷區塊(其他為 None),
-            以及模型路由計畫 D9 的 ``llm_routes``(每個用途生效的設定與來源)
+            以及能力路由的 ``capability_routes``(每個用途各能力生效的設定與來源)
             與 ``llm_endpoints``(端點與白名單,不含金鑰)。
         """
         llm_client = getattr(app_state, "llm_client", None)
@@ -143,8 +143,8 @@ class RuntimeConfigService:
             getattr(llm_client, "model_label", None)
             or getattr(llm_client, "_formatted_model_name", None)
         )
-        llm_routes, global_route = await self._llm_routes()
-        global_endpoint_id = global_route["effective"]["endpoint"] if global_route is not None else None
+        capability_routes, global_route = await self._capability_routes()
+        global_endpoint_id = global_route["effective"]["provider"] if global_route is not None else None
         # 全域客戶端是啟動時或最後一次改 * 時建立的；之後全域設定的解析結果可能變了（例如啟動時
         # 讀不到 DB 而用了 .env、之後 DB 恢復）。比對兩者的標籤，不一致就明說，不讓標籤與端點互相矛盾
         matches_global = llm_label == global_route["label"] if global_route is not None else None
@@ -170,30 +170,31 @@ class RuntimeConfigService:
             "llm_provider": provider,
             "anki_connect_url": settings.ANKI_CONNECT_URL,
             "claude_code": claude_code,
-            "llm_routes": llm_routes,
+            "capability_routes": capability_routes,
             "llm_endpoints": self._llm_endpoints(),
         }
 
     @staticmethod
-    async def _llm_routes() -> tuple[dict[str, Any], dict[str, Any] | None]:
-        """各用途生效的設定(與 ``GET /api/v1/llm-routes`` 的 ``routes`` 同格式)。
+    async def _capability_routes() -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """各用途生效的設定(與 ``GET /api/v1/capability-routes`` 的 ``routes`` 同格式)。
 
-        Every route's effective setting, plus the global row itself.
+        Every route's effective setting, plus the global ``llm`` state itself.
 
         Returns:
-            ``({"routes": [...], "db_unavailable": bool}, 全域 * 那一列)``。組不出清單時
+            ``({"routes": [...], "db_unavailable": bool}, 全域 * 的 llm 狀態)``。組不出清單時
             (非預期錯誤,含清單裡找不到全域 *)回 ``({"error": "<型別>: <訊息>"}, None)`` 並記下
             traceback——診斷端點要能帶病回報,不因這一塊整個失敗。
         """
         try:
-            views, read_ok = await llm_route_service.list_routes()
-            routes = [llm_route_service.to_read(view).model_dump() for view in views]
+            views, read_ok = await capability_route_service.list_routes()
+            routes = [capability_route_service.to_read(view).model_dump() for view in views]
             # 依鍵找全域那一列，不依賴清單順序
             global_route = next(route for route in routes if route["route_key"] == GLOBAL_ROUTE_KEY)
+            global_llm = global_route["capabilities"][CAPABILITY_LLM]
         except Exception as error:  # noqa: BLE001 - 診斷端點：其餘區塊照常回報，錯誤寫進回應並記錄
-            logger.exception("診斷端點組 llm_routes 失敗")
+            logger.exception("診斷端點組 capability_routes 失敗")
             return {"error": f"{type(error).__name__}: {error}"}, None
-        return {"routes": routes, "db_unavailable": not read_ok}, global_route
+        return {"routes": routes, "db_unavailable": not read_ok}, global_llm
 
     @staticmethod
     def _llm_endpoints() -> dict[str, Any]:

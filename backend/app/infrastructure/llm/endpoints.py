@@ -95,7 +95,7 @@ NO_SAFETY_SETTINGS_IDS: frozenset[str] = frozenset({"google", "openai", ""})
 ENDPOINT_ID_MAX_LENGTH = 32
 _ID_PATTERN = re.compile(rf"(?!.*__)[a-z0-9_]{{1,{ENDPOINT_ID_MAX_LENGTH}}}")
 
-# 與 llm_routes.endpoint / model / effort 欄位長度一致（ENDPOINT_ID_MAX_LENGTH 見上）
+# 與 capability_routes.provider / model / effort 欄位長度上限相容（ENDPOINT_ID_MAX_LENGTH 見上）
 MODEL_NAME_MAX_LENGTH = 128
 EFFORT_MAX_LENGTH = 16
 

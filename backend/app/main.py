@@ -48,7 +48,7 @@ from app.api.example.verb_pair import router as example_verb_pair_router
 from app.api.webhook import router as webhook_router
 from app.api.config import router as config_router
 from app.api.jp_tokenizer import router as jp_tokenizer_router
-from app.api.llm_routes import router as llm_routes_router
+from app.api.capability_routes import router as capability_routes_router
 from app.api.cards import router as cards_router
 from app.api.jp_verb_readings import router as jp_verb_readings_router
 from app.bot.dispatcher import create_bot, setup_dispatcher
@@ -61,7 +61,7 @@ from app.infrastructure.database.database import (
 )
 from app.infrastructure.database.corpus_database import dispose_corpus_engine
 from app.infrastructure.llm.endpoints import log_endpoint_summary
-from app.services import llm_route_service
+from app.services import capability_route_service
 from app.infrastructure.storage.minio_client import MinioClient
 from app.schemas.card import ErrorResponse
 
@@ -120,7 +120,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 全域 LLM 客戶端依「全域 *（DB）→ .env」建立，只給診斷端點用（標籤與 CLI 探測，
     # 模型路由計畫 D9）；各用途的生成每次依自己的用途鍵建立。建立失敗（缺金鑰、找不到 CLI、
     # effort 設定錯誤）不阻止啟動：設為 None 並記 WARNING
-    await llm_route_service.refresh_global_client(app.state)
+    await capability_route_service.refresh_global_client(app.state)
 
     # MinioClient 初始化同理，不應阻止應用啟動。
     try:
@@ -371,7 +371,7 @@ app.include_router(example_verb_pair_router, prefix="/api/v1/example")
 app.include_router(config_router, prefix="/api/v1")
 app.include_router(jp_verb_readings_router, prefix="/api/v1")
 app.include_router(jp_tokenizer_router, prefix="/api/v1")
-app.include_router(llm_routes_router, prefix="/api/v1")
+app.include_router(capability_routes_router, prefix="/api/v1")
 app.include_router(cards_router, prefix="/api/v1")
 
 # 註冊 Webhook Router路由 (不受 prefix 限制，完全依照 TG_WEBHOOK_PATH 設定)

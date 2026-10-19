@@ -1,4 +1,4 @@
-import { Routes, Route, Link, useLocation } from 'react-router-dom'
+import { Routes, Route, Link, Navigate, useLocation } from 'react-router-dom'
 import { LayoutDashboard, PlusCircle, Network, Bot, Layers } from 'lucide-react'
 import { cn } from './lib/utils'
 import { Toaster } from './components/ui/sonner'
@@ -7,7 +7,7 @@ import { Toaster } from './components/ui/sonner'
 import Dashboard from './pages/Dashboard'
 import CardGenerator from './pages/CardGenerator'
 import KnowledgeGraph from './pages/KnowledgeGraph'
-import LlmRoutes from './pages/LlmRoutes'
+import ToolSettings from './pages/ToolSettings'
 import Cards from './pages/Cards'
 
 /**
@@ -23,7 +23,7 @@ function App() {
     { name: 'Cards', path: '/cards', icon: Layers },
     { name: 'Card Generator', path: '/generate', icon: PlusCircle },
     { name: 'Knowledge Graph', path: '/graph', icon: Network },
-    { name: 'LLM Models', path: '/llm-models', icon: Bot },
+    { name: 'Tool Settings', path: '/tools', icon: Bot },
   ]
 
   return (
@@ -71,7 +71,9 @@ function App() {
             <Route path="/cards" element={<Cards />} />
             <Route path="/generate" element={<CardGenerator />} />
             <Route path="/graph" element={<KnowledgeGraph />} />
-            <Route path="/llm-models" element={<LlmRoutes />} />
+            <Route path="/tools" element={<ToolSettings />} />
+            {/* 舊網址（LLM 模型設定頁）。The former LLM settings URL. */}
+            <Route path="/llm-models" element={<Navigate to="/tools" replace />} />
           </Routes>
         </div>
       </main>

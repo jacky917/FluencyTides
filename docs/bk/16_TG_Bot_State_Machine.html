@@ -417,7 +417,7 @@ flowchart LR
 
       <div class="flow" id="models">
         <div class="flow-head"><h3>4.6 LLM 模型選單 /models</h3><span class="chip tg">不使用狀態，按鈕自帶位置</span></div>
-        <p class="prose">管理每個 LLM 用途（例如 <code>jp_verb_pair</code>、<code>jp_verb_reading</code>）與全域 <code>*</code> 該用哪個端點、模型與思考深度（effort）。選項只來自 <code>.env</code> 的白名單，寫入與 API <code>/api/v1/llm-routes</code> 共用同一個服務（白名單檢查＋試建一次客戶端），存在資料庫的 <code>llm_routes</code> 表，下一次生成即生效、重啟後仍在。<b>沒有任何 FSM 或 UserStateManager 狀態</b>：每個按鈕的 callback data 寫成 <code>lr:&lt;動作&gt;:&lt;版本&gt;:&lt;序號…&gt;</code>，自帶目前選到哪一步，以序號代替名稱以符合 Telegram 的 64 位元組上限。</p>
+        <p class="prose">管理每個 LLM 用途（例如 <code>jp_verb_pair</code>、<code>jp_verb_reading</code>）與全域 <code>*</code> 該用哪個端點、模型與思考深度（effort）。選項只來自 <code>.env</code> 的白名單，寫入與 API <code>/api/v1/capability-routes</code> 共用同一個服務（白名單檢查＋試建一次客戶端），存在資料庫的 <code>capability_routes</code> 表（<code>llm</code> 能力），下一次生成即生效、重啟後仍在。<b>沒有任何 FSM 或 UserStateManager 狀態</b>：每個按鈕的 callback data 寫成 <code>lr:&lt;動作&gt;:&lt;版本&gt;:&lt;序號…&gt;</code>，自帶目前選到哪一步，以序號代替名稱以符合 Telegram 的 64 位元組上限。</p>
         <div class="diagram">
 <pre class="mermaid">
 flowchart TD
@@ -491,8 +491,8 @@ flowchart TD
         <tr><td>自訂狀態與過期</td><td><code>bot/state.py:41</code>（UserState）、<code>bot/state.py:62</code>（UserStateManager）</td></tr>
         <tr><td>/start 與 Deep Link 分派</td><td><code>bot/handlers/commands.py:57</code>（recording :187、add_audio :216）</td></tr>
         <tr><td>/help、/sync、/setconfig</td><td><code>bot/handlers/commands.py:403</code>、<code>:443</code>、<code>:478</code></td></tr>
-        <tr><td>/models 選單</td><td><code>bot/handlers/models_menu.py:493</code>（指令）、<code>:513</code>（關閉 lr:x）、<code>:533</code>（其餘按鈕 handle_menu）；callback data 組裝 / 解析與版本核對 <code>:199</code> / <code>:211</code>、版本雜湊 <code>:112</code>、管理員檢查 <code>:466</code>、儲存 <code>:679</code>、恢復預設 <code>:706</code></td></tr>
-        <tr><td>/models 的讀寫服務</td><td><code>services/llm_route_service.py</code>（<code>set_route</code> :426、<code>delete_route</code> :519、<code>refresh_global_client</code> :591）</td></tr>
+        <tr><td>/models 選單</td><td><code>bot/handlers/models_menu.py:494</code>（指令）、<code>:514</code>（關閉 lr:x）、<code>:534</code>（其餘按鈕 handle_menu）；callback data 組裝 / 解析與版本核對 <code>:200</code> / <code>:212</code>、版本雜湊 <code>:113</code>、管理員檢查 <code>:467</code>、儲存 <code>:689</code>、恢復預設 <code>:717</code></td></tr>
+        <tr><td>/models 的讀寫服務</td><td><code>services/capability_route_service.py</code>（<code>set_route</code> :464、<code>delete_route</code> :575、<code>refresh_global_client</code> :661）</td></tr>
         <tr><td>/newcard 選單</td><td><code>bot/handlers/newcard_menu.py:138</code>（分派 :189）</td></tr>
         <tr><td>外語糾錯 FSM</td><td><code>bot/handlers/fsm/expression_fsm.py:45</code>（重複檢查 :341、生成預覽 :490、返回 :876）</td></tr>
         <tr><td>對話卡 FSM</td><td><code>bot/handlers/fsm/speaking_fsm.py:81</code>（建卡 :396、返回 :509）</td></tr>

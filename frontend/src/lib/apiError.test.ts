@@ -3,7 +3,7 @@ import { describeApiError, failureTitle, isBackendError, readErrorBody, retryTra
 
 describe('describeApiError', () => {
   it('keeps the backend message verbatim with its status', () => {
-    const error = { error_code: 'INVALID_LLM_ROUTE', message: "模型 'x' 不在端點 'yinli' 的白名單", status: 422 }
+    const error = { error_code: 'INVALID_ROUTE', message: "模型 'x' 不在端點 'yinli' 的白名單", status: 422 }
     expect(describeApiError(error)).toEqual({ status: 422, message: "模型 'x' 不在端點 'yinli' 的白名單" })
     expect(isBackendError(error)).toBe(true)
   })

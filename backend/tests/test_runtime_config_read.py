@@ -276,15 +276,15 @@ class TestConfigApi:
 
 def test_runtime_info_lists_routes_and_endpoints_without_secrets(llm_route_db, llm_whitelist, declare_route_key):
     """runtime 列出各用途生效的設定與來源、端點與白名單（不含金鑰）；全域端點取自全域 * 的設定。"""
-    from app.services import llm_route_service
+    from app.services import capability_route_service
 
     declare_route_key("test.diag", "診斷測試")
-    asyncio.run(llm_route_service.set_route("*", "yinli", "m1", None, updated_by="api"))
+    asyncio.run(capability_route_service.set_route("*", "yinli", "m1", None, updated_by="api"))
 
     info = asyncio.run(RuntimeConfigService().get_runtime_info(SimpleNamespace(llm_client=None)))
 
-    routes = {route["route_key"]: route for route in info["llm_routes"]["routes"]}
-    assert info["llm_routes"]["db_unavailable"] is False
+    routes = {route["route_key"]: route["capabilities"]["llm"] for route in info["capability_routes"]["routes"]}
+    assert info["capability_routes"]["db_unavailable"] is False
     assert (routes["*"]["source"], routes["*"]["label"]) == ("global", "(yinli)m1")
     assert (routes["test.diag"]["source"], routes["test.diag"]["label"]) == ("global", "(yinli)m1")
     assert info["llm_provider"] == "yinli"
@@ -298,9 +298,9 @@ def test_runtime_info_lists_routes_and_endpoints_without_secrets(llm_route_db, l
 
 def test_runtime_info_probes_the_global_cli_endpoint(llm_route_db, llm_whitelist):
     """全域 * 設成 CLI 型端點時，claude-code 診斷跟著全域設定（不是 .env 的 LLM_PROVIDER）。"""
-    from app.services import llm_route_service
+    from app.services import capability_route_service
 
-    asyncio.run(llm_route_service.set_route("*", "claude-code", "haiku", None, updated_by="api"))
+    asyncio.run(capability_route_service.set_route("*", "claude-code", "haiku", None, updated_by="api"))
     probe = mock.AsyncMock(return_value={"client_initialized": True})
     with mock.patch.object(RuntimeConfigService, "_probe_claude_code", probe):
         info = asyncio.run(RuntimeConfigService().get_runtime_info(SimpleNamespace(llm_client=None)))
@@ -312,15 +312,15 @@ def test_runtime_info_probes_the_global_cli_endpoint(llm_route_db, llm_whitelist
 
 def test_runtime_info_still_reports_when_routes_fail(llm_route_db, llm_whitelist, caplog):
     """組各用途清單時發生非預期錯誤：該區塊帶錯誤說明並記 traceback，其餘照常回報（帶病回報）。"""
-    from app.services import llm_route_service
+    from app.services import capability_route_service
 
-    with mock.patch.object(llm_route_service, "list_routes", side_effect=RuntimeError("boom")):
+    with mock.patch.object(capability_route_service, "list_routes", side_effect=RuntimeError("boom")):
         info = asyncio.run(RuntimeConfigService().get_runtime_info(SimpleNamespace(llm_client=None)))
 
-    assert info["llm_routes"] == {"error": "RuntimeError: boom"}
+    assert info["capability_routes"] == {"error": "RuntimeError: boom"}
     assert info["anki_connect_url"] == settings.ANKI_CONNECT_URL
     assert info["llm_endpoints"]["endpoints"]
-    assert "診斷端點組 llm_routes 失敗" in caplog.text
+    assert "診斷端點組 capability_routes 失敗" in caplog.text
 
 
 def test_runtime_info_lists_skipped_endpoints(llm_route_db, llm_whitelist):
@@ -336,14 +336,14 @@ def test_runtime_info_lists_skipped_endpoints(llm_route_db, llm_whitelist):
 
 def test_refresh_global_client_follows_the_global_route(llm_route_db, llm_whitelist):
     """全域客戶端依全域 * 建立：設了 * 就用它，沒設就用 .env。"""
-    from app.services import llm_route_service
+    from app.services import capability_route_service
 
     state = SimpleNamespace()
-    asyncio.run(llm_route_service.refresh_global_client(state))
+    asyncio.run(capability_route_service.refresh_global_client(state))
     assert state.llm_client.model_label == "gemini-3.5-flash"
 
-    asyncio.run(llm_route_service.set_route("*", "yinli", "m2", None, updated_by="api"))
-    asyncio.run(llm_route_service.refresh_global_client(state))
+    asyncio.run(capability_route_service.set_route("*", "yinli", "m2", None, updated_by="api"))
+    asyncio.run(capability_route_service.refresh_global_client(state))
     assert state.llm_client.model_label == "(yinli)m2"
 
 
@@ -351,11 +351,11 @@ def test_refresh_global_client_failure_leaves_none_and_logs(llm_route_db, llm_wh
     """全域客戶端建不起來（例如金鑰沒設）：不拋出（不影響啟動與寫入），設為 None 並記 WARNING。"""
     from app.core.exceptions import LLMServiceError
     from app.infrastructure.llm import routing
-    from app.services import llm_route_service
+    from app.services import capability_route_service
 
     state = SimpleNamespace(llm_client=object())
     with mock.patch.object(routing, "client_for", side_effect=LLMServiceError("API_KEY 未設定")):
-        asyncio.run(llm_route_service.refresh_global_client(state))
+        asyncio.run(capability_route_service.refresh_global_client(state))
 
     assert state.llm_client is None
     assert "全域 LLM 客戶端建立失敗" in caplog.text and "API_KEY 未設定" in caplog.text
@@ -364,14 +364,14 @@ def test_refresh_global_client_failure_leaves_none_and_logs(llm_route_db, llm_wh
 def test_runtime_info_flags_a_global_client_out_of_sync(llm_route_db, llm_whitelist, caplog):
     """全域客戶端與全域 * 目前的設定不一致（例如啟動時讀不到 DB 而用了 .env、之後 DB 恢復）：
     llm_client_matches_global 為 False 並記 WARNING，不讓標籤與端點互相矛盾而沒有提示。"""
-    from app.services import llm_route_service
+    from app.services import capability_route_service
 
     state = SimpleNamespace(llm_client=None)
-    asyncio.run(llm_route_service.refresh_global_client(state))  # 依 .env 建立
+    asyncio.run(capability_route_service.refresh_global_client(state))  # 依 .env 建立
     info = asyncio.run(RuntimeConfigService().get_runtime_info(state))
     assert info["llm_client_matches_global"] is True
 
-    asyncio.run(llm_route_service.set_route("*", "yinli", "m1", None, updated_by="api"))  # 沒有重建
+    asyncio.run(capability_route_service.set_route("*", "yinli", "m1", None, updated_by="api"))  # 沒有重建
     info = asyncio.run(RuntimeConfigService().get_runtime_info(state))
 
     assert info["llm_client_matches_global"] is False
@@ -381,9 +381,9 @@ def test_runtime_info_flags_a_global_client_out_of_sync(llm_route_db, llm_whitel
 
 def test_runtime_info_cannot_compare_when_routes_fail(llm_route_db, llm_whitelist):
     """組不出清單時無法比對：llm_client_matches_global 為 None，llm_provider 退回 .env 的 LLM_PROVIDER。"""
-    from app.services import llm_route_service
+    from app.services import capability_route_service
 
-    with mock.patch.object(llm_route_service, "list_routes", side_effect=RuntimeError("boom")):
+    with mock.patch.object(capability_route_service, "list_routes", side_effect=RuntimeError("boom")):
         info = asyncio.run(RuntimeConfigService().get_runtime_info(SimpleNamespace(llm_client=None)))
 
     assert info["llm_client_matches_global"] is None

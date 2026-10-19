@@ -8,7 +8,7 @@ docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5 的唯讀切片),
 顯示:
 - runtime 對帳區塊:``llm_label``(全域 ``*`` 生效設定的標籤)、``llm_provider``、
   ``anki_connect_url``
-- 各用途的模型(``llm_routes``):每個用途鍵生效的標籤與來源(用途 / 全域 / .env),
+- 各用途的模型(``capability_routes``):每個用途鍵生效的標籤與來源(用途 / 全域 / .env),
   即該用途生成時寫進 Anki tag 的值;被略過的層與無法使用的原因一併列出
 - claude-code 環境診斷:CLI 路徑/版本、effort、token 設定狀態、認證實測,
   以及登入帳號的訂閱方案(``max`` / ``pro``;CLI 不區分 5x 與 20x)
@@ -99,7 +99,7 @@ async def main() -> None:
     print(f"🔌 全域端點     : {runtime.get('llm_provider')}")
     print(f"🃏 後端 Anki 端點: {runtime.get('anki_connect_url')}")
 
-    _print_llm_routes(runtime)
+    _print_capability_routes(runtime)
 
     # claude-code 環境診斷(全域端點不是 CLI 型時後端回 null)
     cc = runtime.get("claude_code")
@@ -174,14 +174,14 @@ async def main() -> None:
         print("\n(白名單為空:.env 未設任何 MODIFY_* 變數)")
 
 
-def _print_llm_routes(runtime: dict) -> None:
+def _print_capability_routes(runtime: dict) -> None:
     """列出各用途的模型與來源(模型路由計畫 D9;舊版後端沒有這一塊時略過)。
 
     Print each route's effective model and source, when the backend has them.
     """
-    block = runtime.get("llm_routes")
+    block = runtime.get("capability_routes")
     if block is None:
-        print("\n(後端版本不含 llm_routes:各用途的模型請用 TG /models 查看)")
+        print("\n(後端版本不含 capability_routes:各用途的模型請用 TG /models 查看)")
         return
     print("\n========== 各用途的模型(TG /models 設定)==========")
     if "error" in block:
@@ -191,13 +191,14 @@ def _print_llm_routes(runtime: dict) -> None:
         print("🚨 後端讀不到資料庫:以下皆為 .env 預設,實際存的設定未知")
     source_names = {"route": "用途", "global": "全域", "env": ".env"}
     for route in block.get("routes", []):
-        marker = "⚠️ " if route.get("rejected") or route.get("problem") or not route.get("declared") else ""
-        source = source_names.get(route.get("source"), route.get("source"))
-        print(f"  {marker}{route['route_key']}: {route['label']} [{source}]")
-        for layer in route.get("rejected") or []:
-            print(f"      已略過 {layer['route_key']}:{layer['reason']}")
-        if route.get("problem"):
-            print(f"      {route['problem']}")
+        for capability, state in (route.get("capabilities") or {}).items():
+            marker = "⚠️ " if state.get("rejected") or state.get("problem") or not route.get("declared") else ""
+            source = source_names.get(state.get("source"), state.get("source"))
+            print(f"  {marker}{route['route_key']} [{capability}]: {state['label']} [{source}]")
+            for layer in state.get("rejected") or []:
+                print(f"      已略過 {layer['route_key']}:{layer['reason']}")
+            if state.get("problem"):
+                print(f"      {state['problem']}")
     skipped = (runtime.get("llm_endpoints") or {}).get("skipped") or {}
     for endpoint_id, reason in sorted(skipped.items()):
         print(f"  🚨 端點 {endpoint_id} 設定有誤已被跳過:{reason}")

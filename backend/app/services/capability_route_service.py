@@ -1,10 +1,12 @@
 """
-LLM 用途設定的讀寫服務（模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D6）。
+能力路由設定的讀寫服務（能力路由計畫 capability_routing_FEAT_2026-10-19.md；前身為模型路由計畫
+llm_model_routing_FEAT_2026-10-15.md D6）。
 
-API（``/api/v1/llm-routes``）與 TG ``/models`` 選單共用這一層：列出每個用途目前
-生效的設定、寫入一組選擇、恢復預設。寫入前依序檢查：
+API（``/api/v1/capability-routes``）與 TG ``/models`` 選單共用這一層：列出每個用途目前
+生效的設定、寫入一組選擇、恢復預設。每個操作都針對「用途鍵 × 能力」；目前只有 ``llm``
+能力。寫入前依序檢查：
 
-1. 用途鍵已宣告（或為全域 ``*``）
+1. 用途鍵已宣告（或為全域 ``*``），且宣告了這個能力
 2. ``(端點, 模型, effort)`` 在 ``.env`` 白名單內——與讀取端同一個
    :func:`~app.infrastructure.llm.routing.check_choice`
 3. 試建一次客戶端：CLI 找不找得到、金鑰有沒有設定、套件有沒有裝，在存檔當下就擋下。
@@ -15,9 +17,9 @@ API（``/api/v1/llm-routes``）與 TG ``/models`` 選單共用這一層：列出
 錯誤分三種（都是 :class:`~app.core.exceptions.FluencyTidesError`，API 由全域 handler
 轉成對應狀態碼）：
 
-- :class:`~app.core.exceptions.LLMRouteNotFoundError`（404）：用途鍵不存在（寫入時：未宣告）
-- :class:`~app.core.exceptions.InvalidLLMRouteError`（422）：設定不合格（呼叫端可修正）
-- :class:`~app.core.exceptions.LLMRouteStoreUnavailableError`（503）：讀不到 DB，或寫入／刪除時
+- :class:`~app.core.exceptions.RouteNotFoundError`（404）：用途鍵不存在（寫入時：未宣告）
+- :class:`~app.core.exceptions.InvalidRouteError`（422）：設定不合格，或用途鍵沒有宣告這個能力（呼叫端可修正）
+- :class:`~app.core.exceptions.RouteStoreUnavailableError`（503）：讀不到 DB，或寫入／刪除時
   資料庫異常（結果未知）
 
 **讀取不沿用生成路徑的退回**：路由層讀不到 DB 時會回「沒有設定」好讓生成不中斷，但
@@ -31,9 +33,11 @@ API（``/api/v1/llm-routes``）與 TG ``/models`` 選單共用這一層：列出
 設定改到能用的端點。``.env`` 那一層的端點設定有誤被跳過時同樣標在 ``problem``。
 
 English summary:
-    Read/write service for LLM route settings, shared by the HTTP API and the
-    Telegram ``/models`` menu. Writes are validated against declared keys,
-    the ``.env`` whitelist and a trial client build. Reads use one snapshot
+    Read/write service for capability route settings, shared by the HTTP API
+    and the Telegram ``/models`` menu. Every operation targets a route key
+    and a capability (only ``llm`` so far). Writes are validated against
+    declared keys and capabilities, the ``.env`` whitelist and a trial
+    client build. Reads use one snapshot
     per request and never mistake an unreadable database for "not found".
 """
 
@@ -48,17 +52,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from app.core.exceptions import (
-    InvalidLLMRouteError,
-    LLMRouteNotFoundError,
-    LLMRouteStoreUnavailableError,
+    InvalidRouteError,
     LLMServiceError,
+    RouteNotFoundError,
+    RouteStoreUnavailableError,
 )
-from app.infrastructure.database.models import LLMRouteSetting
+from app.infrastructure.database.models import CapabilityRouteSetting
 from app.infrastructure.llm import factory, routing
 from app.infrastructure.llm.base import OMIT_EFFORT
 from app.infrastructure.llm.endpoints import env_endpoint_id, env_endpoint_is_custom, get_endpoint, skip_reason
 from app.infrastructure.llm.labels import build_model_label
 from app.infrastructure.llm.routing import (
+    CAPABILITIES,
+    CAPABILITY_LLM,
     DATABASE_ERRORS,
     GLOBAL_ROUTE_KEY,
     ResolvedRoute,
@@ -66,7 +72,7 @@ from app.infrastructure.llm.routing import (
     describe_import_error,
     is_internal_import,
 )
-from app.schemas.llm_route import LLMRouteRead, RejectedLayerRead, RouteChoiceRead
+from app.schemas.capability_route import CapabilityStateRead, ChoiceRead, RejectedLayerRead, RouteRead
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +80,10 @@ logger = logging.getLogger(__name__)
 GLOBAL_DESCRIPTION = "全域預設（各用途沒有設定時使用）"
 
 _STORE_UNAVAILABLE_MESSAGE = (
-    "讀不到 LLM 用途設定（llm_routes），無法判斷這個用途的設定；詳見後端 log 的 WARNING，DB 恢復後再試。"
+    "讀不到能力路由設定（capability_routes），無法判斷這個用途的設定；詳見後端 log 的 WARNING，DB 恢復後再試。"
 )
 _WRITE_FAILED_MESSAGE = (
-    "寫入 LLM 用途設定（llm_routes）時資料庫異常，結果未知；請重新查看設定後再試，詳見後端 log。"
+    "寫入能力路由設定（capability_routes）時資料庫異常，結果未知；請重新查看設定後再試，詳見後端 log。"
 )
 
 
@@ -89,11 +95,14 @@ class RouteKeyEntry(NamedTuple):
         description: 說明；孤兒鍵為 None。Description, None for orphans.
         declared: 是否為程式中宣告的鍵（或全域）；False＝DB 裡的孤兒列。
             False for orphan rows whose key is no longer declared.
+        capabilities: 這個鍵可設定的能力：宣告的鍵為它宣告的能力，全域為所有能力，孤兒鍵為空。
+            The capabilities that may be set for the key; empty for orphans.
     """
 
     key: str
     description: str | None
     declared: bool
+    capabilities: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -218,9 +227,11 @@ def ordered_route_keys(stored: dict[str, RouteChoice]) -> list[RouteKeyEntry]:
 
     Display order: ``*``, declared keys, then orphan keys found in the DB.
     """
-    declared = {route.key: route.description for route in routing.list_route_keys()}
-    entries = [RouteKeyEntry(GLOBAL_ROUTE_KEY, GLOBAL_DESCRIPTION, True)]
-    entries += [RouteKeyEntry(key, declared[key], True) for key in sorted(declared)]
+    declared = {route.key: route for route in routing.list_route_keys()}
+    entries = [RouteKeyEntry(GLOBAL_ROUTE_KEY, GLOBAL_DESCRIPTION, True, CAPABILITIES)]
+    entries += [
+        RouteKeyEntry(key, declared[key].description, True, declared[key].capabilities) for key in sorted(declared)
+    ]
     entries += [
         RouteKeyEntry(key, None, False)
         for key in sorted(stored)
@@ -297,13 +308,13 @@ async def _strict_snapshot() -> dict[str, RouteChoice]:
     calls are rare, so this does not flood the log).
 
     Raises:
-        LLMRouteStoreUnavailableError: 讀不到 DB 時。
+        RouteStoreUnavailableError: 讀不到 DB 時。
     """
     try:
         return await routing.stored_choices_strict()
     except DATABASE_ERRORS as error:
-        logger.warning("管理操作讀取 llm_routes 失敗：%s: %s", type(error).__name__, error, exc_info=True)
-        raise LLMRouteStoreUnavailableError(_STORE_UNAVAILABLE_MESSAGE) from error
+        logger.warning("管理操作讀取 capability_routes 失敗：%s: %s", type(error).__name__, error, exc_info=True)
+        raise RouteStoreUnavailableError(_STORE_UNAVAILABLE_MESSAGE) from error
 
 
 def views_from(stored: dict[str, RouteChoice], read_ok: bool) -> list[RouteView]:
@@ -332,24 +343,34 @@ async def describe(route_key: str) -> RouteView:
     """單一用途鍵的狀態。The state of one route key.
 
     Raises:
-        LLMRouteNotFoundError: 用途鍵既未宣告、DB 中也沒有。
-        LLMRouteStoreUnavailableError: 讀不到 DB（無法判斷孤兒鍵是否存在、本身存了什麼）。
+        RouteNotFoundError: 用途鍵既未宣告、DB 中也沒有。
+        RouteStoreUnavailableError: 讀不到 DB（無法判斷孤兒鍵是否存在、本身存了什麼）。
     """
     stored = await _strict_snapshot()
     for entry in ordered_route_keys(stored):
         if entry.key == route_key:
             return _view(entry, stored, True)
-    raise LLMRouteNotFoundError(f"用途鍵 '{route_key}' 不存在")
+    raise RouteNotFoundError(f"用途鍵 '{route_key}' 不存在")
 
 
 def _declared_entry(route_key: str) -> RouteKeyEntry | None:
     """已宣告的鍵（或全域）的清單項目；未宣告時為 None。The entry for a declared key."""
     if route_key == GLOBAL_ROUTE_KEY:
-        return RouteKeyEntry(GLOBAL_ROUTE_KEY, GLOBAL_DESCRIPTION, True)
-    for route in routing.list_route_keys():
-        if route.key == route_key:
-            return RouteKeyEntry(route.key, route.description, True)
+        return RouteKeyEntry(GLOBAL_ROUTE_KEY, GLOBAL_DESCRIPTION, True, CAPABILITIES)
+    for declared in routing.list_route_keys():
+        if declared.key == route_key:
+            return RouteKeyEntry(declared.key, declared.description, True, declared.capabilities)
     return None
+
+
+def _check_capability(capability: str) -> None:
+    """能力必須是程式支援的。The capability must be a known one.
+
+    Raises:
+        InvalidRouteError: 不支援的能力。Unknown capability.
+    """
+    if capability not in CAPABILITIES:
+        raise InvalidRouteError(f"不支援的能力 '{capability}'（可用：{', '.join(sorted(CAPABILITIES))}）")
 
 
 def validate_choice(choice: RouteChoice, *, route_key: str = "?", updated_by: str = "?") -> None:
@@ -366,11 +387,11 @@ def validate_choice(choice: RouteChoice, *, route_key: str = "?", updated_by: st
         updated_by: 修改者（只用於 log）。Who asked, for logging.
 
     Raises:
-        InvalidLLMRouteError: 不在白名單，或試建失敗（訊息含原因）。
+        InvalidRouteError: 不在白名單，或試建失敗（訊息含原因）。
     """
     problem = routing.check_choice(choice)
     if problem is not None:
-        raise InvalidLLMRouteError(problem)
+        raise InvalidRouteError(problem)
     try:
         factory.create_llm_client(
             endpoint=choice.endpoint,
@@ -391,23 +412,28 @@ def validate_choice(choice: RouteChoice, *, route_key: str = "?", updated_by: st
             route_key, choice.endpoint, choice.model, choice.effort, updated_by, reason,
             exc_info=not isinstance(error, LLMServiceError),
         )
-        raise InvalidLLMRouteError(f"試建客戶端失敗：{reason}") from error
+        raise InvalidRouteError(f"試建客戶端失敗：{reason}") from error
 
 
-async def _row_exists(route_key: str) -> bool:
-    """該用途鍵是否已有一列。Whether a row exists for the route key.
+def _row_filter(route_key: str, capability: str) -> Any:
+    """``(用途鍵, 能力)`` 這一列的查詢條件。The filter for one key and capability."""
+    return (col(CapabilityRouteSetting.route_key) == route_key) & (col(CapabilityRouteSetting.capability) == capability)
+
+
+async def _row_exists(route_key: str, capability: str) -> bool:
+    """該用途鍵在該能力上是否已有一列。Whether a row exists for the key and capability.
 
     Raises:
         DBAPIError / sqlalchemy.exc.TimeoutError / OSError: 資料庫異常。
     """
     async with _session_factory()() as session:
         result = await session.execute(
-            select(LLMRouteSetting.route_key).where(col(LLMRouteSetting.route_key) == route_key)
+            select(CapabilityRouteSetting.route_key).where(_row_filter(route_key, capability))
         )
         return result.first() is not None
 
 
-async def _upsert(route_key: str, choice: RouteChoice, updated_by: str) -> None:
+async def _upsert(route_key: str, capability: str, choice: RouteChoice, updated_by: str) -> None:
     """有就更新、沒有就新增一列（先查再寫，不是原子操作：並發的第一次寫入可能撞唯一鍵）。
 
     Update the row if present, insert it otherwise.
@@ -417,32 +443,37 @@ async def _upsert(route_key: str, choice: RouteChoice, updated_by: str) -> None:
         DBAPIError / sqlalchemy.exc.TimeoutError / OSError: 其他資料庫異常。
     """
     async with _session_factory()() as session:
-        result = await session.execute(
-            select(LLMRouteSetting).where(col(LLMRouteSetting.route_key) == route_key)
-        )
+        result = await session.execute(select(CapabilityRouteSetting).where(_row_filter(route_key, capability)))
         row = result.scalar_one_or_none()
         if row is None:
-            session.add(LLMRouteSetting(
+            session.add(CapabilityRouteSetting(
                 route_key=route_key,
-                endpoint=choice.endpoint,
+                capability=capability,
+                provider=choice.endpoint,
                 model=choice.model,
                 effort=choice.effort,
                 updated_by=updated_by,
             ))
         else:
-            row.endpoint, row.model, row.effort, row.updated_by = (
+            row.provider, row.model, row.effort, row.updated_by = (
                 choice.endpoint, choice.model, choice.effort, updated_by,
             )
         await session.commit()
 
 
 async def set_route(
-    route_key: str, endpoint: str, model: str, effort: str | None, *, updated_by: str
+    route_key: str,
+    endpoint: str,
+    model: str,
+    effort: str | None,
+    *,
+    updated_by: str,
+    capability: str = CAPABILITY_LLM,
 ) -> RouteView:
-    """驗證並寫入一個用途鍵的選擇（有就更新、沒有就新增），寫入後立即生效。
+    """驗證並寫入一個用途鍵在一種能力上的選擇（有就更新、沒有就新增），寫入後立即生效。
 
-    Validate and store the choice for a route key (update or insert), then
-    invalidate the routing cache so the next call uses it.
+    Validate and store the choice for a route key and capability (update or
+    insert), then invalidate the routing cache so the next call uses it.
 
     回傳的狀態在寫入**之前**就由要寫的值組好、不再讀 DB：提交之後只剩清快取與記 log，
     寫入一旦提交就一定回報成功，不會因為讀回或組狀態失敗而被說成「操作失敗」。用途層的
@@ -453,23 +484,28 @@ async def set_route(
 
     Args:
         route_key: 用途鍵或 ``*``。Route key or ``*``.
-        endpoint: 端點 ID（去空白、不分大小寫）。Endpoint ID, case-insensitive.
+        endpoint: provider；``llm`` 為端點 ID（去空白、不分大小寫）。The provider; the
+            endpoint ID for ``llm``, case-insensitive.
         model: 模型名（去空白、區分大小寫）。Model name, case-sensitive.
         effort: 思考深度（去空白、不分大小寫）；模型不使用 effort 時為 None，空字串視同
             None。Effort, case-insensitive; None or "" when the model takes none.
         updated_by: 修改者（``tg:<user id>`` 或 ``api``）。Who made the change.
+        capability: 能力；目前只有 ``llm``。The capability; only ``llm`` so far.
 
     Returns:
         寫入後的狀態。The state after the write.
 
     Raises:
-        LLMRouteNotFoundError: 用途鍵未宣告（DB 中有孤兒列也一樣：孤兒鍵只能刪除）。
-        InvalidLLMRouteError: 不在白名單，或試建客戶端失敗。
-        LLMRouteStoreUnavailableError: 寫入時資料庫異常（結果未知，請重新查看）。
+        RouteNotFoundError: 用途鍵未宣告（DB 中有孤兒列也一樣：孤兒鍵只能刪除）。
+        InvalidRouteError: 不支援的能力、用途鍵沒有宣告這個能力、不在白名單，或試建客戶端失敗。
+        RouteStoreUnavailableError: 寫入時資料庫異常（結果未知，請重新查看）。
     """
     entry = _declared_entry(route_key)
     if entry is None:
-        raise LLMRouteNotFoundError(f"用途鍵 '{route_key}' 未在程式中宣告，不能設定")
+        raise RouteNotFoundError(f"用途鍵 '{route_key}' 未在程式中宣告，不能設定")
+    _check_capability(capability)
+    if capability not in entry.capabilities:
+        raise InvalidRouteError(f"用途鍵 '{route_key}' 沒有宣告能力 '{capability}'，不能設定")
     choice = RouteChoice(endpoint.strip().lower(), model.strip(), (effort or "").strip().lower() or None)
     validate_choice(choice, route_key=route_key, updated_by=updated_by)
     source: routing.RouteSource = "global" if route_key == GLOBAL_ROUTE_KEY else "route"
@@ -483,31 +519,32 @@ async def set_route(
 
     try:
         try:
-            await _upsert(route_key, choice, updated_by)
+            await _upsert(route_key, capability, choice, updated_by)
         except IntegrityError as first_error:
             # 同一用途鍵的第一次寫入同時發生（API 與 TG 同時、連按兩下）：查的時候還沒有、提交時
             # 另一筆剛插入而撞到唯一鍵。先確認那一列真的存在了才重做（會走「更新那一列」）；不存在
             # 就是別的約束（NOT NULL、schema 沒跑 migration…），原樣往外拋。重做或往外拋的 IntegrityError
             # 都是 DBAPIError，由外層 DATABASE_ERRORS 照一般資料庫錯誤處理（記 traceback、回 503）
-            if not await _row_exists(route_key):
+            if not await _row_exists(route_key, capability):
                 raise
             logger.info(
-                "寫入 llm_routes 時 %s 剛被另一筆寫入建立，改為更新該列（%s）：%s",
-                route_key, updated_by, first_error.orig,
+                "寫入 capability_routes 時 %s / %s 剛被另一筆寫入建立，改為更新該列（%s）：%s",
+                route_key, capability, updated_by, first_error.orig,
             )
-            await _upsert(route_key, choice, updated_by)
+            await _upsert(route_key, capability, choice, updated_by)
     except DATABASE_ERRORS as error:
         logger.exception(
-            "寫入 llm_routes 失敗：%s → %s / %s（%s）", route_key, choice.endpoint, choice.model, updated_by
+            "寫入 capability_routes 失敗：%s / %s → %s / %s（%s）",
+            route_key, capability, choice.endpoint, choice.model, updated_by,
         )
-        raise LLMRouteStoreUnavailableError(_WRITE_FAILED_MESSAGE) from error
+        raise RouteStoreUnavailableError(_WRITE_FAILED_MESSAGE) from error
     finally:
         # 不論成敗都清：提交後才出錯（例如關閉 session 時被取消、非 DBAPI 的 SQLAlchemy 錯誤）時
         # DB 可能已寫入，不能留著舊快取讓生成一直用舊設定
         routing.invalidate_cache()
     logger.info(
-        "LLM 用途設定已更新：%s → %s / %s / %s（%s）",
-        route_key, choice.endpoint, choice.model, choice.effort, updated_by,
+        "能力路由設定已更新：%s / %s → %s / %s / %s（%s）",
+        route_key, capability, choice.endpoint, choice.model, choice.effort, updated_by,
     )
     return view
 
@@ -535,11 +572,11 @@ class DeleteResult:
             raise ValueError("view_unavailable 時不應有 view")
 
 
-async def delete_route(route_key: str, *, updated_by: str) -> DeleteResult:
-    """刪除一個用途鍵的設定（恢復預設：退回全域，或 ``.env``）。孤兒鍵也可以刪（清理用）。
+async def delete_route(route_key: str, *, updated_by: str, capability: str = CAPABILITY_LLM) -> DeleteResult:
+    """刪除一個用途鍵在一種能力上的設定（恢復預設：退回全域，或 ``.env``）。孤兒鍵也可以刪（清理用）。
 
-    Delete a route key's row so it falls back to the next layer; orphan keys
-    may be deleted too.
+    Delete a route key's row for one capability so it falls back to the next
+    layer; orphan keys may be deleted too.
 
     刪除後的狀態要再讀一次 DB（才知道退回到哪一層）；那次讀不到時不拋錯（刪除已提交），
     狀態標上 ``db_unavailable``。
@@ -547,63 +584,77 @@ async def delete_route(route_key: str, *, updated_by: str) -> DeleteResult:
     Args:
         route_key: 用途鍵或 ``*``。Route key or ``*``.
         updated_by: 操作者（只寫進 log，該列已刪除）。Who did it; logged only.
+        capability: 能力；目前只有 ``llm``。The capability; only ``llm`` so far.
 
     Raises:
-        LLMRouteNotFoundError: 用途鍵既未宣告、DB 中也沒有。
-        LLMRouteStoreUnavailableError: 讀不到 DB（無法判斷孤兒鍵是否存在），或刪除時資料庫
+        RouteNotFoundError: 用途鍵既未宣告、DB 中也沒有。
+        InvalidRouteError: 不支援的能力。Unknown capability.
+        RouteStoreUnavailableError: 讀不到 DB（無法判斷孤兒鍵是否存在），或刪除時資料庫
             異常（結果未知，請重新查看）。
     """
+    _check_capability(capability)
     entry = _declared_entry(route_key)
     if entry is None:
         stored = await _strict_snapshot()
         if route_key not in stored:
-            raise LLMRouteNotFoundError(f"用途鍵 '{route_key}' 不存在")
+            raise RouteNotFoundError(f"用途鍵 '{route_key}' 不存在")
 
     try:
         async with _session_factory()() as session:
             # aiosqlite / aiomysql 的 DELETE 都回報實際刪除的列數（不會是 -1）
             result = cast(
                 CursorResult[Any],
-                await session.execute(delete(LLMRouteSetting).where(col(LLMRouteSetting.route_key) == route_key)),
+                await session.execute(delete(CapabilityRouteSetting).where(_row_filter(route_key, capability))),
             )
             await session.commit()
     except DATABASE_ERRORS as error:
-        logger.exception("刪除 llm_routes 失敗：%s（%s）", route_key, updated_by)
-        raise LLMRouteStoreUnavailableError(_WRITE_FAILED_MESSAGE) from error
+        logger.exception("刪除 capability_routes 失敗：%s / %s（%s）", route_key, capability, updated_by)
+        raise RouteStoreUnavailableError(_WRITE_FAILED_MESSAGE) from error
     finally:
         routing.invalidate_cache()  # 理由同 set_route：提交後才出錯時 DB 可能已刪除
     deleted = bool(result.rowcount)
     if deleted:
-        logger.info("LLM 用途設定已刪除（恢復預設）：%s（%s）", route_key, updated_by)
+        logger.info("能力路由設定已刪除（恢復預設）：%s / %s（%s）", route_key, capability, updated_by)
     if entry is None:
         return DeleteResult(deleted, None)
     try:
         stored_after, read_ok = await routing.stored_choices()
         view = _view(entry, stored_after, read_ok)
     except Exception:  # noqa: BLE001 - 刪除已提交：組不出刪除後狀態時只少回報狀態，不報成失敗
-        logger.exception("llm_routes 已刪除 %s，但組出刪除後的狀態失敗", route_key)
+        logger.exception("capability_routes 已刪除 %s / %s，但組出刪除後的狀態失敗", route_key, capability)
         return DeleteResult(deleted, None, view_unavailable=True)
     return DeleteResult(deleted, view)
 
 
-def to_read(view: RouteView) -> LLMRouteRead:
-    """服務層的狀態轉成對外的回應模型（API 與診斷端點共用）。Convert a view into the response model."""
+def _state_read(view: RouteView) -> CapabilityStateRead:
+    """一個能力的狀態轉成回應模型。Convert one capability's state."""
     resolved = view.resolved
-    return LLMRouteRead(
-        route_key=view.route_key,
-        description=view.description,
-        declared=view.declared,
+    return CapabilityStateRead(
         source=resolved.source,
-        effective=RouteChoiceRead(endpoint=resolved.endpoint, model=resolved.model, effort=view.effective_effort),
+        effective=ChoiceRead(provider=resolved.endpoint, model=resolved.model, effort=view.effective_effort),
         label=view.label,
         stored=(
-            RouteChoiceRead(endpoint=view.stored.endpoint, model=view.stored.model, effort=view.stored.effort)
+            ChoiceRead(provider=view.stored.endpoint, model=view.stored.model, effort=view.stored.effort)
             if view.stored is not None
             else None
         ),
         rejected=[RejectedLayerRead(route_key=layer.route_key, reason=layer.reason) for layer in resolved.rejected],
         db_unavailable=resolved.db_unavailable,
         problem=view.problem,
+    )
+
+
+def to_read(view: RouteView) -> RouteRead:
+    """服務層的狀態轉成對外的回應模型（API 與診斷端點共用）。Convert a view into the response model.
+
+    目前每個用途鍵只有 ``llm`` 一種能力，``capabilities`` 只有這一項。
+    Only the ``llm`` capability exists, so ``capabilities`` has one entry.
+    """
+    return RouteRead(
+        route_key=view.route_key,
+        description=view.description,
+        declared=view.declared,
+        capabilities={CAPABILITY_LLM: _state_read(view)},
     )
 
 

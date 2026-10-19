@@ -1,26 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import {
+  capabilityLabel,
   defaultEffort,
   encodeRouteKey,
   formatChoice,
   initialSelection,
   previewLabel,
-} from './llmRoutes'
-import type { LLMEndpointOption } from '../types/api'
+} from './capabilityRoutes'
+import type { ProviderOption } from '../types/api'
 
-const endpoint = (id: string, type: string, models: LLMEndpointOption['models'] = []): LLMEndpointOption => ({
+const provider = (id: string, type: string, models: ProviderOption['models'] = []): ProviderOption => ({
   id,
   type,
   models,
 })
 
-const WHITELIST: LLMEndpointOption[] = [
-  endpoint('claude-code', 'claude-code', [
+const WHITELIST: ProviderOption[] = [
+  provider('claude-code', 'claude-code', [
     { name: 'claude-opus-5', efforts: ['low', 'high'] },
     { name: 'claude-sonnet-5', efforts: ['high'] },
     { name: 'claude-haiku-5', efforts: [] },
   ]),
-  endpoint('yinli', 'openai', [{ name: 'gemini-3.5-flash', efforts: [] }]),
+  provider('yinli', 'openai', [{ name: 'gemini-3.5-flash', efforts: [] }]),
 ]
 
 describe('previewLabel', () => {
@@ -33,14 +34,14 @@ describe('previewLabel', () => {
     ['yinli', 'openai', 'deepseek/deepseek-v4', null, '(yinli)deepseek/deepseek-v4'],
     ['antigravity', 'antigravity', 'claude-opus-4', 'MAX', '(antigravity)claude-opus-4@max'],
   ])('%s (%s) %s @%s → %s', (id, type, model, effort, expected) => {
-    expect(previewLabel(endpoint(id, type), model, effort)).toBe(expected)
+    expect(previewLabel(provider(id, type), model, effort)).toBe(expected)
   })
 })
 
 describe('formatChoice', () => {
   it('omits the effort when there is none', () => {
-    expect(formatChoice({ endpoint: 'yinli', model: 'm1', effort: null })).toBe('yinli / m1')
-    expect(formatChoice({ endpoint: 'claude-code', model: 'opus', effort: 'high' })).toBe('claude-code / opus @high')
+    expect(formatChoice({ provider: 'yinli', model: 'm1', effort: null })).toBe('yinli / m1')
+    expect(formatChoice({ provider: 'claude-code', model: 'opus', effort: 'high' })).toBe('claude-code / opus @high')
   })
 })
 
@@ -61,30 +62,43 @@ describe('defaultEffort', () => {
 
 describe('initialSelection', () => {
   it('starts empty without a stored choice', () => {
-    expect(initialSelection(null, WHITELIST)).toEqual({ endpoint: '', model: '', effort: '' })
+    expect(initialSelection(null, WHITELIST)).toEqual({ provider: '', model: '', effort: '' })
   })
 
   it('pre-fills a stored choice that is still whitelisted', () => {
-    const stored = { endpoint: 'claude-code', model: 'claude-opus-5', effort: 'low' }
-    expect(initialSelection(stored, WHITELIST)).toEqual({ endpoint: 'claude-code', model: 'claude-opus-5', effort: 'low' })
+    const stored = { provider: 'claude-code', model: 'claude-opus-5', effort: 'low' }
+    expect(initialSelection(stored, WHITELIST)).toEqual({ provider: 'claude-code', model: 'claude-opus-5', effort: 'low' })
   })
 
   it('keeps only the still-whitelisted part', () => {
-    expect(initialSelection({ endpoint: 'gone', model: 'm', effort: null }, WHITELIST)).toEqual({
-      endpoint: '',
+    expect(initialSelection({ provider: 'gone', model: 'm', effort: null }, WHITELIST)).toEqual({
+      provider: '',
       model: '',
       effort: '',
     })
-    expect(initialSelection({ endpoint: 'yinli', model: 'removed', effort: null }, WHITELIST)).toEqual({
-      endpoint: 'yinli',
+    expect(initialSelection({ provider: 'yinli', model: 'removed', effort: null }, WHITELIST)).toEqual({
+      provider: 'yinli',
       model: '',
       effort: '',
     })
     // effort 已不在白名單：只有一個 effort 時改選它
-    expect(initialSelection({ endpoint: 'claude-code', model: 'claude-sonnet-5', effort: 'max' }, WHITELIST)).toEqual({
-      endpoint: 'claude-code',
+    expect(initialSelection({ provider: 'claude-code', model: 'claude-sonnet-5', effort: 'max' }, WHITELIST)).toEqual({
+      provider: 'claude-code',
       model: 'claude-sonnet-5',
       effort: 'high',
     })
+  })
+})
+
+describe('capabilityLabel', () => {
+  it('names known capabilities and falls back to the code', () => {
+    expect(capabilityLabel('llm')).toBe('文字生成（LLM）')
+    expect(capabilityLabel('stt')).toBe('stt')
+  })
+})
+
+describe('formatChoice without a model', () => {
+  it('shows only the provider for model-less capabilities', () => {
+    expect(formatChoice({ provider: 'stt_diff', model: null, effort: null })).toBe('stt_diff')
   })
 })

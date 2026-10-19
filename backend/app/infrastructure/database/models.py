@@ -33,7 +33,7 @@ English summary:
 
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, func
+from sqlalchemy import Column, DateTime, UniqueConstraint, func
 from sqlmodel import Field, SQLModel
 
 # 確保 conventions 已載入（此 import 是防禦性的，database.py 也會 import）
@@ -179,33 +179,35 @@ class RelationType(SQLModel, table=True):
     )
 
 
-class LLMRouteSetting(SQLModel, table=True):
-    """LLM 用途設定表（模型路由）。
+class CapabilityRouteSetting(SQLModel, table=True):
+    """能力路由設定表：每個用途鍵在每種能力上選用的工具（能力路由計畫 capability_routing_FEAT_2026-10-19.md）。
 
-    LLM route settings table (model routing).
+    Capability route settings: the tool each route key uses for each
+    capability.
 
-    每列記錄一個用途鍵（或全域 ``*``）目前選用的「端點 + 模型 + effort」。
-    可選的組合由 ``.env`` 的白名單決定（見 ``app/infrastructure/llm/endpoints.py``），
-    這裡只存選擇；讀取時逐次比對白名單，不在白名單內的列不使用、退回下一層。
-    刪除一列＝退回下一層（用途列退回全域列，全域列退回 .env）。
+    每列記錄一個用途鍵（或全域 ``*``）在一種能力（目前只有 ``llm``）上選用的
+    「provider + 模型 + effort」。可選的組合由 ``.env`` 的白名單決定（見
+    ``app/infrastructure/llm/endpoints.py``），這裡只存選擇；讀取時逐次比對白名單，不在白名單內的
+    列不使用、退回下一層。刪除一列＝退回下一層（用途列退回全域列，全域列退回 .env）。
 
     注意：SQLModel 的 ``table=True`` 模型建構時不執行 pydantic 驗證器，不要在這裡加
-    驗證——寫入前的檢查放在服務層（鍵格式、白名單、effort 空字串存成 NULL）。
+    驗證——寫入前的檢查放在服務層（鍵格式、能力、白名單、effort 空字串存成 NULL）。
 
-    Stores the endpoint + model + effort currently chosen for one route key
-    (or the global ``*``). The whitelist lives in ``.env``; rows outside it
-    are ignored at read time and fall back to the next layer. Deleting a row
-    falls back to the next layer. Table models skip pydantic validators, so
-    write-time checks live in the service layer.
+    Stores the provider + model + effort chosen for one route key (or the
+    global ``*``) and one capability. The whitelist lives in ``.env``; rows
+    outside it are ignored at read time and fall back to the next layer.
+    Table models skip pydantic validators, so write-time checks live in the
+    service layer.
 
     Attributes:
         id (int | None): 自增主鍵（單一 PK，MySQL 相容）；程式一律以
-            route_key 查詢。Auto-increment primary key; lookups use
-            route_key.
-        route_key (str): 用途鍵，唯一；``*`` 為全域。Route key, unique;
-            ``*`` is the global default.
-        endpoint (str): 端點 ID。Endpoint ID.
-        model (str): 模型名（CLI 類為基底名）。Model name.
+            ``(route_key, capability)`` 查詢。Auto-increment primary key.
+        route_key (str): 用途鍵；``*`` 為全域。Route key; ``*`` is global.
+        capability (str): 能力，例如 ``llm``。Capability, e.g. ``llm``.
+        provider (str): 由誰提供：``llm`` 為端點 ID。Who provides it; the
+            endpoint ID for ``llm``.
+        model (str | None): 模型名（CLI 類為基底名）；不需要模型的能力為 None。
+            Model name, or None for capabilities without one.
         effort (str | None): 思考深度；只有該模型在白名單中不帶 effort 時為
             None。Effort; None only when the model takes no effort.
         updated_by (str): 最後修改者（``tg:<user id>`` 或 ``api``）。Last
@@ -214,7 +216,9 @@ class LLMRouteSetting(SQLModel, table=True):
         updated_at (datetime | None): 最後修改時間。Last update timestamp.
     """
 
-    __tablename__ = "llm_routes"
+    __tablename__ = "capability_routes"
+    # 一個用途鍵在每種能力上最多一列
+    __table_args__ = (UniqueConstraint("route_key", "capability"),)
 
     id: int | None = Field(
         default=None,
@@ -224,19 +228,24 @@ class LLMRouteSetting(SQLModel, table=True):
 
     route_key: str = Field(
         max_length=64,
-        unique=True,
         index=True,
         description="用途鍵；* 為全域",
     )
 
-    endpoint: str = Field(
+    capability: str = Field(
         max_length=32,
-        description="端點 ID",
+        description="能力，例如 llm",
     )
 
-    model: str = Field(
+    provider: str = Field(
+        max_length=64,
+        description="由誰提供；llm 為端點 ID",
+    )
+
+    model: str | None = Field(
+        default=None,
         max_length=128,
-        description="模型名",
+        description="模型名；不需要模型的能力為空",
     )
 
     effort: str | None = Field(

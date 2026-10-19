@@ -34,12 +34,12 @@ from app.bot.handlers.models_menu import (
 )
 from app.core.config import settings
 from app.core.exceptions import LLMServiceError
-from app.infrastructure.database.models import LLMRouteSetting
+from app.infrastructure.database.models import CapabilityRouteSetting
 from app.infrastructure.llm import routing
 from app.infrastructure.llm.claude_code_client import ClaudeCodeLLMClient
 from app.infrastructure.llm.endpoints import Endpoint, ModelOption
-from app.services import llm_route_service
-from app.services.llm_route_service import RouteKeyEntry
+from app.services import capability_route_service
+from app.services.capability_route_service import RouteKeyEntry
 
 ADMIN_ID = 42
 KEY = "test.menu"
@@ -180,7 +180,7 @@ def _open_menu():
 def _stored_rows(session_factory):
     async def fetch():
         async with session_factory() as session:
-            return list((await session.execute(select(LLMRouteSetting))).scalars())
+            return list((await session.execute(select(CapabilityRouteSetting))).scalars())
 
     return asyncio.run(fetch())
 
@@ -188,7 +188,7 @@ def _stored_rows(session_factory):
 def _insert(session_factory, **fields) -> None:
     async def insert():
         async with session_factory() as session:
-            session.add(LLMRouteSetting(updated_by="test", **fields))
+            session.add(CapabilityRouteSetting(updated_by="test", capability="llm", **fields))
             await session.commit()
 
     asyncio.run(insert())
@@ -218,7 +218,7 @@ def test_full_flow_saves_choice(llm_route_db, llm_whitelist):
     assert "已儲存" in text and "(claude-code)opus@low" in text
     query.answer.assert_awaited_once_with()
     [row] = _stored_rows(llm_route_db)
-    assert (row.route_key, row.endpoint, row.model, row.effort, row.updated_by) == (
+    assert (row.route_key, row.provider, row.model, row.effort, row.updated_by) == (
         KEY, "claude-code", "opus", "low", f"tg:{ADMIN_ID}",
     )
 
@@ -234,7 +234,7 @@ def test_single_effort_model_skips_effort_and_back_returns_to_models(llm_route_d
 
 def test_restore_default_deletes_row(llm_route_db, llm_whitelist):
     """恢復預設：刪掉該列並顯示退回後生效的設定。"""
-    asyncio.run(llm_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
+    asyncio.run(capability_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
     _, markup = _open_menu()
     text, markup, _ = _click(_button_starting(markup, f"{KEY}："))
     assert "本用途的設定" in text
@@ -246,7 +246,7 @@ def test_restore_default_deletes_row(llm_route_db, llm_whitelist):
 
 def test_orphan_delete_then_back_to_list(llm_route_db, llm_whitelist):
     """孤兒鍵：詳情沒有「設定」只有「恢復預設」；刪除後清單變短，「返回清單」仍可用。"""
-    _insert(llm_route_db, route_key="zz.orphan", endpoint="yinli", model="m1")
+    _insert(llm_route_db, route_key="zz.orphan", provider="yinli", model="m1")
     _, markup = _open_menu()
     _, markup, _ = _click(_button_starting(markup, "⚠️ zz.orphan"))
     assert not any(text.startswith("⚙️ 設定") for text in _buttons(markup))
@@ -341,7 +341,7 @@ def test_db_failure_while_saving_says_outcome_unknown(llm_route_db, llm_whitelis
     _, markup, _ = _to_model_screen("haiku")
     save = _button_starting(markup, "✅ 儲存")
     error = OperationalError("INSERT ...", {}, Exception("database is locked"))
-    with mock.patch.object(llm_route_service, "_session_factory", side_effect=error):
+    with mock.patch.object(capability_route_service, "_session_factory", side_effect=error):
         _, _, query = _click(save)
 
     alert = query.answer.await_args.args[0]
@@ -393,7 +393,7 @@ def test_message_without_user_is_blocked(llm_route_db, llm_whitelist):
 def test_command_error_is_reported(llm_route_db, llm_whitelist, caplog):
     """開啟 /models 時發生非預期錯誤：回覆錯誤訊息並記錄 traceback（不是一片沉默）。"""
     message = _message()
-    with mock.patch.object(models_menu.llm_route_service, "views_from", side_effect=RuntimeError("boom")):
+    with mock.patch.object(models_menu.capability_route_service, "views_from", side_effect=RuntimeError("boom")):
         asyncio.run(models_menu.command_models_handler(message))
 
     assert "無法開啟 LLM 模型設定" in message.answer.await_args.args[0]
@@ -403,7 +403,7 @@ def test_command_error_is_reported(llm_route_db, llm_whitelist, caplog):
 def test_command_error_reply_is_valid_html(llm_route_db, llm_whitelist):
     """錯誤訊息很長且含特殊字元：先截斷再跳脫，回覆裡不會留下截一半的 HTML 實體。"""
     message = _message()
-    with mock.patch.object(models_menu.llm_route_service, "views_from", side_effect=RuntimeError("'" * 400)):
+    with mock.patch.object(models_menu.capability_route_service, "views_from", side_effect=RuntimeError("'" * 400)):
         asyncio.run(models_menu.command_models_handler(message))
 
     reply = message.answer.await_args.args[0]
@@ -414,7 +414,7 @@ def test_unexpected_error_is_reported_with_context(llm_route_db, llm_whitelist, 
     """服務層拋出非預期例外：彈出錯誤訊息，log 帶 user id 與用途鍵。"""
     _, markup = _open_menu()
     button = _button_starting(markup, f"{KEY}：")
-    with mock.patch.object(models_menu.llm_route_service, "describe", side_effect=RuntimeError("boom")):
+    with mock.patch.object(models_menu.capability_route_service, "describe", side_effect=RuntimeError("boom")):
         _, _, query = _click(button)
 
     message = query.answer.await_args.args[0]
@@ -461,7 +461,7 @@ def test_db_down_blocks_writes_from_old_buttons(llm_route_db, llm_whitelist, tar
 
     這兩個動作在服務層不先讀 DB（已宣告鍵的刪除、寫入），只靠選單的唯讀防線擋下：DB 間歇故障
     時，版本相同的舊按鈕不能真的改到設定。"""
-    asyncio.run(llm_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
+    asyncio.run(capability_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
     if target == "restore":
         _, markup = _open_menu()
         _, markup, _ = _click(_button_starting(markup, f"{KEY}："))
@@ -477,12 +477,12 @@ def test_db_down_blocks_writes_from_old_buttons(llm_route_db, llm_whitelist, tar
     assert text is None
     assert "讀不到資料庫" in query.answer.await_args.args[0]
     [row] = _stored_rows(llm_route_db)
-    assert (row.endpoint, row.model) == ("yinli", "m1")
+    assert (row.provider, row.model) == ("yinli", "m1")
 
 
 def test_detail_shows_skipped_layer(llm_route_db, llm_whitelist):
     """DB 中已不在白名單的設定：清單標 ⚠️、詳情列出被略過的原因。"""
-    _insert(llm_route_db, route_key=KEY, endpoint="yinli", model="retired-model")
+    _insert(llm_route_db, route_key=KEY, provider="yinli", model="retired-model")
     _, markup = _open_menu()
     text, _, _ = _click(_button_starting(markup, f"⚠️ {KEY}："))
 
@@ -494,7 +494,7 @@ def test_missing_package_does_not_lock_the_menu(llm_route_db, llm_whitelist):
     （管理員才能把設定改到能用的端點）。"""
     from app.infrastructure.llm import factory
 
-    _insert(llm_route_db, route_key=KEY, endpoint="claude-code", model="opus", effort="low")
+    _insert(llm_route_db, route_key=KEY, provider="claude-code", model="opus", effort="low")
     real = factory.resolve_client_class
 
     def resolve(provider=None):
@@ -513,7 +513,7 @@ def test_missing_package_does_not_lock_the_menu(llm_route_db, llm_whitelist):
 
 def _restore_default_screen(patch) -> str:
     """設好本用途後，從 /models 點到「恢復預設」；按下時套用 ``patch``，回傳結果畫面文字。"""
-    asyncio.run(llm_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
+    asyncio.run(capability_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
     _, markup = _open_menu()
     _, markup, _ = _click(_button_starting(markup, f"{KEY}："))
     button = _button_starting(markup, "↩️ 恢復預設")
@@ -551,13 +551,13 @@ def test_restore_default_shows_problem_of_the_next_layer(llm_route_db, llm_white
 
 def test_restore_default_says_when_state_is_unavailable(llm_route_db, llm_whitelist):
     """恢復預設已完成、但組不出之後的狀態：結果畫面明說無法顯示，而不是只有標題（與孤兒鍵
-    刪除後沒有狀態區分；服務層如何產生這個結果見 test_llm_route_service）。"""
-    asyncio.run(llm_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
+    刪除後沒有狀態區分；服務層如何產生這個結果見 test_capability_route_service）。"""
+    asyncio.run(capability_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
     _, markup = _open_menu()
     _, markup, _ = _click(_button_starting(markup, f"{KEY}："))
     button = _button_starting(markup, "↩️ 恢復預設")
-    unavailable = llm_route_service.DeleteResult(True, None, view_unavailable=True)
-    with mock.patch.object(llm_route_service, "delete_route", mock.AsyncMock(return_value=unavailable)):
+    unavailable = capability_route_service.DeleteResult(True, None, view_unavailable=True)
+    with mock.patch.object(capability_route_service, "delete_route", mock.AsyncMock(return_value=unavailable)):
         text, _, _ = _click(button)
 
     assert "已恢復預設" in text and "無法顯示目前生效的設定" in text
@@ -609,7 +609,7 @@ def test_long_error_alert_fits_telegram_limit(llm_route_db, llm_whitelist):
     """非預期錯誤的訊息很長：彈出提示截在 Telegram 的 200 字元上限內（超過會被拒收、管理員什麼都看不到）。"""
     _, markup = _open_menu()
     button = _button_starting(markup, f"{KEY}：")
-    with mock.patch.object(models_menu.llm_route_service, "describe", side_effect=RuntimeError("x" * 500)):
+    with mock.patch.object(models_menu.capability_route_service, "describe", side_effect=RuntimeError("x" * 500)):
         _, _, query = _click(button)
 
     assert len(query.answer.await_args.args[0]) <= 200
@@ -648,7 +648,7 @@ def test_restoring_the_global_key_rebuilds_the_global_client(llm_route_db, llm_w
     """在選單恢復全域 * 的預設後，重建 app.state.llm_client，改回 .env 那一層。"""
     from types import SimpleNamespace
 
-    asyncio.run(llm_route_service.set_route("*", "yinli", "m2", None, updated_by="api"))
+    asyncio.run(capability_route_service.set_route("*", "yinli", "m2", None, updated_by="api"))
     app = SimpleNamespace(state=SimpleNamespace(llm_client=None))
     _, markup = _open_menu()
     _, markup, _ = _click(_button_starting(markup, "*："))

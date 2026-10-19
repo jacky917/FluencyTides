@@ -1,18 +1,35 @@
 /**
- * LLM 用途設定頁面用的純函式（來源名稱、標籤預覽、編輯區的選擇等）。
- * Pure helpers for the LLM routes page.
+ * 工具設定頁面用的純函式（來源與能力的名稱、標籤預覽、編輯區的選擇等）。
+ * Pure helpers for the tool settings (capability routes) page.
  */
 
-import type { LLMEndpointOption, LLMRouteChoice, LLMRouteSource } from '../types/api'
+import type { ProviderOption, RouteChoice, RouteSource } from '../types/api'
 
 /** 全域設定的用途鍵。The route key of the global setting. */
 export const GLOBAL_ROUTE_KEY = '*'
 
+/** 文字生成能力。The text-generation capability. */
+export const CAPABILITY_LLM = 'llm'
+
 /** 來源的顯示名稱（與 TG `/models` 相同）。Source display names, same as TG `/models`. */
-export const SOURCE_LABELS: Record<LLMRouteSource, string> = {
+export const SOURCE_LABELS: Record<RouteSource, string> = {
   route: '用途',
   global: '全域',
   env: '.env',
+}
+
+/** 能力的顯示名稱；不在表中的能力直接顯示代號。Capability display names. */
+const CAPABILITY_LABELS: Record<string, string> = {
+  [CAPABILITY_LLM]: '文字生成（LLM）',
+}
+
+/**
+ * 能力的顯示名稱。The display name of a capability.
+ * @param capability - 能力代號，例如 `llm`。Capability, e.g. `llm`.
+ * @returns 顯示名稱；沒有對應時為代號本身。The display name, or the code itself.
+ */
+export function capabilityLabel(capability: string): string {
+  return CAPABILITY_LABELS[capability] ?? capability
 }
 
 /**
@@ -30,23 +47,23 @@ const STRIP_PREFIX_BY_TYPE: Record<string, string> = {
 }
 
 /**
- * 算出這組選擇會寫進卡片的標籤，規則與後端 `build_model_label` 相同；
+ * 算出 `llm` 能力的這組選擇會寫進卡片的標籤，規則與後端 `build_model_label` 相同；
  * 僅供儲存前預覽，實際標籤以 PUT 回傳的 `label` 為準。
  *
- * Computes the card label a choice would produce, mirroring the backend's
- * `build_model_label`. Preview only — the `label` returned by PUT is
- * authoritative.
+ * Computes the card label an `llm` choice would produce, mirroring the
+ * backend's `build_model_label`. Preview only — the `label` returned by PUT
+ * is authoritative.
  *
- * @param endpoint - 選定的端點。The chosen endpoint.
+ * @param provider - 選定的端點。The chosen endpoint.
  * @param model - 模型名。Model name.
  * @param effort - effort，或 null（不使用）。The effort, or null.
  * @returns 例如 `(yinli)gemini-3.5-flash`、`(claude-code)opus-5@high`。The label.
  */
-export function previewLabel(endpoint: LLMEndpointOption, model: string, effort: string | null): string {
-  const provider = endpoint.id.trim().toLowerCase()
-  const prefix = STRIP_PREFIX_BY_TYPE[endpoint.type] ?? ''
+export function previewLabel(provider: ProviderOption, model: string, effort: string | null): string {
+  const providerId = provider.id.trim().toLowerCase()
+  const prefix = STRIP_PREFIX_BY_TYPE[provider.type] ?? ''
   const shownModel = prefix && model.startsWith(prefix) ? model.slice(prefix.length) : model
-  let label = NO_PREFIX_ENDPOINTS.has(provider) ? shownModel : `(${provider})${shownModel}`
+  let label = NO_PREFIX_ENDPOINTS.has(providerId) ? shownModel : `(${providerId})${shownModel}`
   const shownEffort = (effort ?? '').trim().toLowerCase()
   if (shownEffort) {
     label = `${label}@${shownEffort}`
@@ -55,13 +72,14 @@ export function previewLabel(endpoint: LLMEndpointOption, model: string, effort:
 }
 
 /**
- * 一組選擇的簡短寫法：`端點 / 模型 @effort`（與 TG 詳情畫面相同）。
- * Short form of a choice: `endpoint / model @effort`, as on the TG detail screen.
+ * 一組選擇的簡短寫法：`provider / 模型 @effort`（與 TG 詳情畫面相同）；沒有模型時只有 provider。
+ * Short form of a choice, as on the TG detail screen.
  * @param choice - 選擇。The choice.
  * @returns 顯示用字串。Display string.
  */
-export function formatChoice(choice: LLMRouteChoice): string {
-  return `${choice.endpoint} / ${choice.model}${choice.effort ? ` @${choice.effort}` : ''}`
+export function formatChoice(choice: RouteChoice): string {
+  const model = choice.model ? ` / ${choice.model}` : ''
+  return `${choice.provider}${model}${choice.effort ? ` @${choice.effort}` : ''}`
 }
 
 /**
@@ -87,7 +105,7 @@ export function defaultEffort(efforts: string[]): string {
 
 /** 編輯區的選擇（空字串＝未選）。Picker state ('' = unset). */
 export interface Selection {
-  endpoint: string
+  provider: string
   model: string
   effort: string
 }
@@ -96,20 +114,20 @@ export interface Selection {
  * 編輯區的初始選擇：本用途已存的設定中仍在白名單內的部分，其餘留空。
  * Initial picker state: the stored choice, as far as it is still whitelisted.
  * @param stored - 已存的設定。The stored choice.
- * @param endpoints - 白名單。The whitelist.
+ * @param providers - 白名單。The whitelist.
  * @returns 初始選擇。The initial selection.
  */
-export function initialSelection(stored: LLMRouteChoice | null, endpoints: LLMEndpointOption[]): Selection {
-  const endpoint = stored ? endpoints.find((item) => item.id === stored.endpoint) : undefined
-  if (!stored || !endpoint) {
-    return { endpoint: '', model: '', effort: '' }
+export function initialSelection(stored: RouteChoice | null, providers: ProviderOption[]): Selection {
+  const provider = stored ? providers.find((item) => item.id === stored.provider) : undefined
+  if (!stored || !provider) {
+    return { provider: '', model: '', effort: '' }
   }
-  const model = endpoint.models.find((item) => item.name === stored.model)
+  const model = provider.models.find((item) => item.name === stored.model)
   if (!model) {
-    return { endpoint: endpoint.id, model: '', effort: '' }
+    return { provider: provider.id, model: '', effort: '' }
   }
   if (stored.effort && model.efforts.includes(stored.effort)) {
-    return { endpoint: endpoint.id, model: model.name, effort: stored.effort }
+    return { provider: provider.id, model: model.name, effort: stored.effort }
   }
-  return { endpoint: endpoint.id, model: model.name, effort: defaultEffort(model.efforts) }
+  return { provider: provider.id, model: model.name, effort: defaultEffort(model.efforts) }
 }

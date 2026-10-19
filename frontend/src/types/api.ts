@@ -75,69 +75,85 @@ export interface ErrorResponse {
 }
 
 // ============================================================================
-// LLM 用途設定 (LLM Routes)
+// 能力路由 (Capability Routes)
 // ============================================================================
 
 /** 生效的層：用途自己的設定、全域 `*`、`.env` 預設。The winning layer. */
-export type LLMRouteSource = 'route' | 'global' | 'env';
+export type RouteSource = 'route' | 'global' | 'env';
 
-/** 一組選擇。A choice of endpoint / model / effort. */
-export interface LLMRouteChoice {
-  endpoint: string;
+/** 一組選擇。A choice of provider / model / effort. */
+export interface RouteChoice {
+  /** 由誰提供；`llm` 能力為端點 ID。Who provides it; the endpoint ID for `llm`. */
+  provider: string;
+  /** 模型名；不需要模型的能力為 null。Model name, or null. */
+  model: string | null;
+  effort: string | null;
+}
+
+/** 寫入用的選擇（`PUT /capability-routes/{key}/{capability}`）。A choice to store. */
+export interface RouteUpdate {
+  provider: string;
   model: string;
   effort: string | null;
 }
 
 /** 解析時被跳過的一層與原因。A skipped layer and why. */
-export interface LLMRejectedLayer {
+export interface RejectedLayer {
   route_key: string;
   reason: string;
 }
 
-/** 一個用途鍵的狀態（`*` 為全域）。The state of one route key (`*` is global). */
-export interface LLMRoute {
-  route_key: string;
-  description: string | null;
-  /** false＝DB 中的孤兒鍵，只能刪除。false for orphan rows, which can only be deleted. */
-  declared: boolean;
-  source: LLMRouteSource;
-  effective: LLMRouteChoice;
-  /** 生效設定對應的卡片標籤。The card label of the effective setting. */
+/** 一個用途鍵在一種能力上的狀態。The state of one key for one capability. */
+export interface CapabilityState {
+  source: RouteSource;
+  effective: RouteChoice;
+  /** 生效設定的顯示標籤（`llm` 為寫進卡片的模型標籤）。The display label. */
   label: string;
-  stored: LLMRouteChoice | null;
-  rejected: LLMRejectedLayer[];
+  stored: RouteChoice | null;
+  rejected: RejectedLayer[];
   db_unavailable: boolean;
   /** 生效設定目前無法使用的原因。Why the effective setting is unusable right now. */
   problem: string | null;
 }
 
+/** 一個用途鍵與它各能力的狀態（`*` 為全域）。One route key and its capabilities. */
+export interface CapabilityRoute {
+  route_key: string;
+  description: string | null;
+  /** false＝DB 中的孤兒鍵，只能刪除。false for orphan rows, which can only be deleted. */
+  declared: boolean;
+  /** 能力 → 狀態。Capability to state. */
+  capabilities: Record<string, CapabilityState>;
+}
+
 /** 白名單中的模型；efforts 為空＝不使用 effort。A whitelisted model; empty efforts = no effort. */
-export interface LLMModelOption {
+export interface ModelOption {
   name: string;
   efforts: string[];
 }
 
-/** 可選的端點與白名單。A selectable endpoint and its whitelist. */
-export interface LLMEndpointOption {
+/** 可選的 provider 與白名單。A selectable provider and its whitelist. */
+export interface ProviderOption {
   id: string;
   type: string;
-  models: LLMModelOption[];
+  models: ModelOption[];
 }
 
-/** `GET /llm-routes` 的回應。Response of `GET /llm-routes`. */
-export interface LLMRoutesResponse {
-  routes: LLMRoute[];
-  endpoints: LLMEndpointOption[];
+/** `GET /capability-routes` 的回應。Response of `GET /capability-routes`. */
+export interface CapabilityRoutesResponse {
+  routes: CapabilityRoute[];
+  /** 能力 → 可選的 provider。Capability to its selectable providers. */
+  providers: Record<string, ProviderOption[]>;
   /** 讀不到資料庫：各列為 `.env` 預設，暫時無法修改。DB unreadable; rows show `.env` defaults. */
   db_unavailable: boolean;
 }
 
-/** `DELETE /llm-routes/{key}` 的回應。Response of `DELETE /llm-routes/{key}`. */
-export interface LLMRouteDeleteResponse {
+/** `DELETE /capability-routes/{key}/{capability}` 的回應。The delete response. */
+export interface RouteDeleteResponse {
   /** 是否真的刪了一列。Whether a row was removed. */
   deleted: boolean;
   /** 刪除後的狀態；孤兒鍵刪除後或組不出狀態時為 null。The state afterwards, or null. */
-  route: LLMRoute | null;
+  route: CapabilityRoute | null;
   /** 刪除已提交但組不出之後的狀態。The delete committed but the state could not be built. */
   route_unavailable: boolean;
 }

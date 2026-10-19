@@ -77,7 +77,7 @@ def get_modifiable_configs(env_path: str = ".env") -> dict[str, list[str] | None
                 if key not in _warned_reserved:
                     _warned_reserved.add(key)
                     logger.warning(
-                        "%s 已不再生效：LLM 模型請改用 TG 的 /models（或 /api/v1/llm-routes）依用途設定，"
+                        "%s 已不再生效：LLM 模型請改用 TG 的 /models（或 /api/v1/capability-routes）依用途設定，"
                         "可從 .env 移除這一行。",
                         key,
                     )

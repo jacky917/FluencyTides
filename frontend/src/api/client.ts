@@ -25,13 +25,13 @@ import type {
   HandlerCreateResponse,
   HandlerActionResponse,
   HandlerUpdatePayload,
-  LLMRouteChoice,
-  LLMRouteDeleteResponse,
-  LLMRoute,
-  LLMRoutesResponse,
+  CapabilityRoute,
+  CapabilityRoutesResponse,
+  RouteDeleteResponse,
+  RouteUpdate,
 } from '../types/api';
 import { readErrorBody } from '../lib/apiError';
-import { encodeRouteKey } from '../lib/llmRoutes';
+import { encodeRouteKey } from '../lib/capabilityRoutes';
 
 /**
  * Axios 實例，baseURL 對應後端 `/api/v1`。
@@ -40,7 +40,7 @@ import { encodeRouteKey } from '../lib/llmRoutes';
  * The Vite proxy automatically forwards requests to the backend.
  *
  * 認證設計（S009）：後端的 `/api/v1/*`（`/handlers`、`/relations`、`/cards`、`/anki-media`、
- * `/llm-routes` 等）需要 `X-API-Key`，
+ * `/capability-routes` 等）需要 `X-API-Key`，
  * 但此處**刻意不設定**該 header——金鑰由 nginx 於反向代理層注入
  * （見 `frontend/nginx.conf.template`）。若改在前端帶金鑰，它會被打包進 JS
  * bundle，任何人開 DevTools 都看得到。請勿在此加入 API 金鑰。
@@ -293,35 +293,37 @@ export const FluencyTidesAPI = {
     apiClient.get(`/anki-media/${encodeURIComponent(filename)}`, { responseType: 'blob' }),
 
   // ======================================================================
-  // LLM 用途設定 (LLM Routes)
+  // 能力路由 (Capability Routes)
   // ======================================================================
 
   /**
-   * 列出全部用途鍵的生效設定，以及白名單內可選的端點與模型。
-   * Lists every route key's effective setting plus the selectable endpoints.
-   * @returns 用途清單、可選端點與 DB 是否可讀。Routes, endpoints, and DB availability.
+   * 列出全部用途鍵各能力的生效設定，以及各能力可選的 provider 與模型。
+   * Lists every route key's per-capability state plus the selectable providers.
+   * @returns 用途清單、可選項目與 DB 是否可讀。Routes, providers, and DB availability.
    */
-  listLLMRoutes: (): Promise<LLMRoutesResponse> =>
-    apiClient.get('/llm-routes'),
+  listCapabilityRoutes: (): Promise<CapabilityRoutesResponse> =>
+    apiClient.get('/capability-routes'),
 
   /**
-   * 為一個用途（或全域 `*`）設定端點、模型與 effort。
-   * Stores the endpoint / model / effort for a route key (or the global `*`).
+   * 為一個用途（或全域 `*`）在一種能力上設定 provider、模型與 effort。
+   * Stores the provider / model / effort of a route key (or `*`) for one capability.
    * @param routeKey - 用途鍵。Route key.
-   * @param choice - 選擇；模型不使用 effort 時 effort 為 null。The choice; effort is null when unused.
-   * @returns 寫入後的狀態。The state after the write.
+   * @param capability - 能力，例如 `llm`。Capability, e.g. `llm`.
+   * @param choice - 選擇；模型不使用 effort 時 effort 為 null。The choice.
+   * @returns 寫入後這個用途鍵的狀態。The key's state after the write.
    */
-  putLLMRoute: (routeKey: string, choice: LLMRouteChoice): Promise<LLMRoute> =>
-    apiClient.put(`/llm-routes/${encodeRouteKey(routeKey)}`, choice),
+  putCapabilityRoute: (routeKey: string, capability: string, choice: RouteUpdate): Promise<CapabilityRoute> =>
+    apiClient.put(`/capability-routes/${encodeRouteKey(routeKey)}/${encodeURIComponent(capability)}`, choice),
 
   /**
-   * 恢復一個用途的預設（刪除其設定；孤兒鍵也可刪除）。
-   * Restores a route key's default by deleting its row (orphan keys included).
+   * 恢復一個用途在一種能力上的預設（刪除該列；孤兒鍵也可刪除）。
+   * Restores a route key's default for one capability (orphan keys included).
    * @param routeKey - 用途鍵。Route key.
+   * @param capability - 能力。Capability.
    * @returns 刪除結果與之後的狀態。The delete result and the state afterwards.
    */
-  deleteLLMRoute: (routeKey: string): Promise<LLMRouteDeleteResponse> =>
-    apiClient.delete(`/llm-routes/${encodeRouteKey(routeKey)}`),
+  deleteCapabilityRoute: (routeKey: string, capability: string): Promise<RouteDeleteResponse> =>
+    apiClient.delete(`/capability-routes/${encodeRouteKey(routeKey)}/${encodeURIComponent(capability)}`),
 
   // ======================================================================
   // Health

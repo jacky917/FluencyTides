@@ -3,7 +3,7 @@ pytest 共用設定。Shared pytest configuration.
 
 - 確保 backend 根目錄在 sys.path 中
 - 預設隔離 LLM 路由：不讀開發機 .env 的自訂端點、不讀真實 DB
-- 共用 fixture：``llm_route_db``（暫存 ``llm_routes`` 表）、``llm_whitelist``（常用白名單）、
+- 共用 fixture：``llm_route_db``（暫存 ``capability_routes`` 表）、``llm_whitelist``（常用白名單）、
   ``declare_route_key``（測試期間宣告用途鍵）
 
 Ensures the backend root is on sys.path, isolates LLM routing from the
@@ -71,11 +71,11 @@ def _no_real_llm_routes_db():
 
 @pytest.fixture
 def llm_route_db(tmp_path):
-    """建一個只有 ``llm_routes`` 表的暫存 SQLite，讓路由與寫入服務都讀寫它。
+    """建一個只有 ``capability_routes`` 表的暫存 SQLite，讓路由與寫入服務都讀寫它。
 
     以 ``NullPool`` 每次操作都開新連線，可跨 ``asyncio.run`` 與 TestClient 的事件迴圈使用。
 
-    A temporary SQLite database holding only ``llm_routes``, used by both the
+    A temporary SQLite database holding only ``capability_routes``, used by both the
     resolver and the write service; ``NullPool`` lets it span event loops.
 
     Yields:
@@ -85,14 +85,14 @@ def llm_route_db(tmp_path):
     from sqlalchemy.pool import NullPool
     from sqlmodel import SQLModel
 
-    from app.infrastructure.database.models import LLMRouteSetting
+    from app.infrastructure.database.models import CapabilityRouteSetting
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{(tmp_path / 'routes.db').as_posix()}", poolclass=NullPool)
 
     async def create_table() -> None:
         async with engine.begin() as conn:
             await conn.run_sync(
-                lambda sync_conn: SQLModel.metadata.create_all(sync_conn, tables=[LLMRouteSetting.__table__])
+                lambda sync_conn: SQLModel.metadata.create_all(sync_conn, tables=[CapabilityRouteSetting.__table__])
             )
 
     asyncio.run(create_table())
@@ -154,7 +154,7 @@ def declare_route_key():
     added: list[str] = []
 
     def declare(key: str, description: str = "測試用途"):
-        route = _routing.llm_route(key, description)
+        route = _routing.route(key, description, {"llm"})
         added.append(key)
         return route
 

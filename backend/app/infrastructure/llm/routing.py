@@ -1,15 +1,16 @@
 """
-LLM 模型路由：依用途鍵取得客戶端（模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D1 / D2 / D4）。
+能力路由：依用途鍵取得工具（能力路由計畫 capability_routing_FEAT_2026-10-19.md；前身為模型路由計畫
+llm_model_routing_FEAT_2026-10-15.md D1 / D2 / D4）。
 
-用到 LLM 的模組在模組層宣告用途鍵，呼叫時以它取客戶端::
+會用到工具的模組在模組層宣告用途鍵與它用到的能力，呼叫時以它取客戶端::
 
-    CHILD_CARD_LLM = llm_route("jp_verb_pair", "自他動詞子卡生成")
+    CHILD_CARD = route("jp_verb_pair", "自他動詞子卡生成", capabilities={"llm"})
     ...
-    llm = await CHILD_CARD_LLM.client()
+    llm = await CHILD_CARD.client()
 
-用途鍵由寫程式的人自由命名（英數字與 ``. _ -``，長度 ≤ 64；``.`` 只是名字的一部分，
-沒有階層語意），與 handler 脫鉤：一個模組可宣告多個鍵，不用 LLM 的模組什麼都不必寫。
-宣告時即登記，:func:`list_route_keys` 就是管理介面的合法鍵清單。
+用途鍵的命名規範見計畫書 §4（英數字與 ``. _ -``，長度 ≤ 64）。宣告時即登記，
+:func:`list_route_keys` 就是管理介面的合法鍵清單。設定存在 ``capability_routes``，每列是一個
+用途鍵在一種能力上的選擇；目前只有 ``llm`` 能力（文字生成），本模組只解析它。
 
 解析順序::
 
@@ -26,9 +27,9 @@ DB 的兩層必須在 ``.env`` 白名單內，否則跳過並記 WARNING；.env 
 逾時與網路錯誤；ORM 設定錯誤、import 錯誤、屬性錯誤等程式問題不攔截，照常往上拋。
 
 English summary:
-    Route-key based LLM client resolution. Modules declare free-form route
-    keys with :func:`llm_route` and obtain clients through the returned
-    handle. Resolution goes route row → global ``*`` row → ``.env``; rows
+    Route-key based tool resolution. Modules declare route keys and the
+    capabilities they use with :func:`route` and obtain clients through the
+    returned handle (only the ``llm`` capability exists so far). Resolution goes route row → global ``*`` row → ``.env``; rows
     outside the ``.env`` whitelist are skipped with a warning. With no rows
     the client is built exactly as before routing existed. Only database
     errors fall back to ``.env``; programming errors propagate.
@@ -53,7 +54,11 @@ logger = logging.getLogger(__name__)
 # 全域設定的用途鍵
 GLOBAL_ROUTE_KEY = "*"
 
-# 用途鍵規則；長度與 llm_routes.route_key 欄位一致
+# 能力：文字生成。目前唯一的能力（計畫書 §3.1）
+CAPABILITY_LLM = "llm"
+CAPABILITIES: frozenset[str] = frozenset({CAPABILITY_LLM})
+
+# 用途鍵規則；長度與 capability_routes.route_key 欄位一致
 ROUTE_KEY_MAX_LENGTH = 64
 _ROUTE_KEY_PATTERN = re.compile(rf"^[A-Za-z0-9._-]{{1,{ROUTE_KEY_MAX_LENGTH}}}$")
 
@@ -148,26 +153,36 @@ class ResolvedRoute:
 
 
 @dataclass(frozen=True)
-class LLMRoute:
-    """已宣告的用途鍵；以 :meth:`client` 取得該用途的客戶端。
+class Route:
+    """已宣告的用途鍵與它用到的能力；以 :meth:`client` 取得該用途的 LLM 客戶端。
 
-    A declared route key; :meth:`client` returns the client for it. Create
-    through :func:`llm_route` so the key is registered; the format is also
-    checked here, so a direct construction cannot hold an invalid key.
+    A declared route key and the capabilities it uses; :meth:`client`
+    returns its LLM client. Create through :func:`route` so the key is
+    registered; the format is also checked here, so a direct construction
+    cannot hold an invalid key.
 
     Attributes:
         key: 用途鍵。The route key.
         description: 給人看的說明（管理介面顯示）。Human-readable purpose.
+        capabilities: 這個用途會用到的能力；設定只接受這些能力。The capabilities
+            it uses; settings for other capabilities are refused.
     """
 
     key: str
     description: str
+    capabilities: frozenset[str] = frozenset({CAPABILITY_LLM})
 
     def __post_init__(self) -> None:
         if self.key == GLOBAL_ROUTE_KEY or not _ROUTE_KEY_PATTERN.fullmatch(self.key):
             raise ValueError(
-                f"LLM 用途鍵 {self.key!r} 不合規：只能用英數字與 . _ -、長度 1–{ROUTE_KEY_MAX_LENGTH}，"
+                f"用途鍵 {self.key!r} 不合規：只能用英數字與 . _ -、長度 1–{ROUTE_KEY_MAX_LENGTH}，"
                 "且 * 保留給全域。"
+            )
+        object.__setattr__(self, "capabilities", frozenset(self.capabilities))
+        unknown = self.capabilities - CAPABILITIES
+        if not self.capabilities or unknown:
+            raise ValueError(
+                f"用途鍵 {self.key!r} 的能力不合規：{sorted(unknown) or '（空）'}；可用：{sorted(CAPABILITIES)}。"
             )
 
     async def resolve(self) -> ResolvedRoute:
@@ -175,19 +190,23 @@ class LLMRoute:
         return await resolve(self.key)
 
     async def client(self) -> BaseLLMClient:
-        """依目前生效的設定建立客戶端。Build the client for this route.
+        """依目前生效的設定建立 LLM 客戶端。Build the LLM client for this route.
 
         Raises:
+            ValueError: 這個用途沒有宣告 ``llm`` 能力（程式錯誤）。The route does
+                not declare the ``llm`` capability.
             LLMServiceError: 客戶端初始化失敗時（與 ``create_llm_client`` 相同）。
         """
+        if CAPABILITY_LLM not in self.capabilities:
+            raise ValueError(f"用途鍵 {self.key!r} 沒有宣告 llm 能力，不能取 LLM 客戶端。")
         return await client_for(self.key)
 
 
-_DECLARED: dict[str, LLMRoute] = {}
+_DECLARED: dict[str, Route] = {}
 
 
-def llm_route(key: str, description: str) -> LLMRoute:
-    """宣告並登記一個用途鍵。Declare and register a route key.
+def route(key: str, description: str, capabilities: set[str] | frozenset[str]) -> Route:
+    """宣告並登記一個用途鍵與它用到的能力。Declare and register a route key.
 
     在模組層呼叫：import 時即登記，格式不合規或重複宣告當場拋錯（拼錯但格式合規的鍵
     只會多登記一個新鍵，對應的 DB 設定不會生效——管理介面會列出它）。重新 import
@@ -196,21 +215,23 @@ def llm_route(key: str, description: str) -> LLMRoute:
     Args:
         key: 用途鍵（英數字與 ``. _ -``，長度 ≤ 64，不可為 ``*``）。Route key.
         description: 給人看的說明。Human-readable purpose.
+        capabilities: 用到的能力（:data:`CAPABILITIES` 的非空子集）。The capabilities used.
 
     Returns:
         用途鍵物件。The route handle.
 
     Raises:
-        ValueError: 鍵不合規或已被宣告。When the key is invalid or taken.
+        ValueError: 鍵或能力不合規，或鍵已被宣告。When the key or capabilities are
+            invalid, or the key is taken.
     """
-    route = LLMRoute(key, description)
+    declared = Route(key, description, frozenset(capabilities))
     if key in _DECLARED:
-        raise ValueError(f"LLM 用途鍵 {key!r} 重複宣告。")
-    _DECLARED[key] = route
-    return route
+        raise ValueError(f"用途鍵 {key!r} 重複宣告。")
+    _DECLARED[key] = declared
+    return declared
 
 
-def list_route_keys() -> list[LLMRoute]:
+def list_route_keys() -> list[Route]:
     """所有已宣告的用途鍵，依鍵排序。All declared route keys, sorted."""
     return [_DECLARED[key] for key in sorted(_DECLARED)]
 
@@ -251,19 +272,25 @@ def warn_once(message: str) -> None:
 
 
 async def _fetch_choices() -> dict[str, RouteChoice]:
-    """從 ``llm_routes`` 讀出全部設定。Read every row of ``llm_routes``.
+    """從 ``capability_routes`` 讀出 ``llm`` 能力的全部設定。Read every ``llm`` row.
+
+    ``provider`` 對 ``llm`` 能力就是端點 ID。``model`` 欄位可為空（給不需要模型的能力用），
+    ``llm`` 列若是空的就當成空字串，比對白名單時會被跳過。
 
     延遲 import 資料庫模組：只在第一次需要時才建立引擎，LLM 層本身不依賴 DB。
     """
     from sqlalchemy import select
+    from sqlmodel import col
 
     from app.infrastructure.database.database import async_session_factory
-    from app.infrastructure.database.models import LLMRouteSetting
+    from app.infrastructure.database.models import CapabilityRouteSetting
 
     async with async_session_factory() as session:
-        result = await session.execute(select(LLMRouteSetting))
+        result = await session.execute(
+            select(CapabilityRouteSetting).where(col(CapabilityRouteSetting.capability) == CAPABILITY_LLM)
+        )
         rows = result.scalars().all()
-    return {row.route_key: RouteChoice(row.endpoint, row.model, row.effort) for row in rows}
+    return {row.route_key: RouteChoice(row.provider, row.model or "", row.effort) for row in rows}
 
 
 async def _fetch_and_cache() -> dict[str, RouteChoice]:
@@ -280,7 +307,7 @@ async def _fetch_and_cache() -> dict[str, RouteChoice]:
     generation = _cache_generation
     choices = await _fetch_choices()
     if _db_failing:
-        logger.info("LLM 用途設定（llm_routes）已恢復讀取，DB 設定重新生效。")
+        logger.info("能力路由設定（capability_routes）已恢復讀取，DB 設定重新生效。")
         _db_failing = False
     if generation == _cache_generation:
         _choices_cache = choices
@@ -308,7 +335,7 @@ async def _load_choices() -> tuple[dict[str, RouteChoice], bool]:
     except DATABASE_ERRORS as error:  # D4：只有 DB 異常才退回 .env
         if not _db_failing:
             logger.warning(
-                "讀取 LLM 用途設定（llm_routes）失敗，改用 .env 設定直到 DB 恢復：%s: %s",
+                "讀取能力路由設定（capability_routes）失敗，改用 .env 設定直到 DB 恢復：%s: %s",
                 type(error).__name__,
                 error,
                 exc_info=True,

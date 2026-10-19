@@ -74,9 +74,17 @@ def test_script_wrapper_bare_for_google():
 
 
 def _backend_routes(routes: list[dict] | None = None, status: int = 200):
-    """讓 httpx.get 回一份假的 GET /api/v1/llm-routes 回應，並記下呼叫。"""
+    """讓 httpx.get 回一份假的 GET /api/v1/capability-routes 回應，並記下呼叫。
+
+    ``routes`` 每項寫成 ``{route_key, label, problem}``，這裡包成 API 的「用途鍵 × 能力」形狀。
+    """
     response = mock.MagicMock(status_code=status)
-    response.json.return_value = {"routes": routes or []}
+    response.json.return_value = {
+        "routes": [
+            {"route_key": route["route_key"], "capabilities": {"llm": {"label": route["label"], "problem": route["problem"]}}}
+            for route in routes or []
+        ]
+    }
     if status >= 400:
         import httpx
 
@@ -104,11 +112,11 @@ def test_script_label_comes_from_the_backend_route():
 
     assert first == second == "(claude-code)opus-5@low"
     assert get.call_count == 1
-    assert get.call_args.args[0].endswith("/api/v1/llm-routes")
+    assert get.call_args.args[0].endswith("/api/v1/capability-routes")
 
 
 def test_script_label_sends_api_key_when_configured():
-    """後端設了 API 金鑰時，查詢要帶上 X-API-Key（/api/v1/llm-routes 受 verify_api_key 保護）。"""
+    """後端設了 API 金鑰時，查詢要帶上 X-API-Key（/api/v1/capability-routes 受 verify_api_key 保護）。"""
     with _backend_routes([{"route_key": "jp_verb_pair", "label": "m", "problem": None}]) as get, \
          mock.patch.object(settings, "API_SECRET_KEY", "s3cret"):
         llm_label.build_llm_model_label("jp_verb_pair")
