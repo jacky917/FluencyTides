@@ -176,7 +176,7 @@ export default function KnowledgeGraph() {
   }, [formattedGraphData]);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-6rem)]">
+    <div className="flex flex-col h-[calc(100svh-8rem)] md:h-[calc(100svh-9rem)]">
       <div className="flex justify-between items-end mb-4">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Knowledge Graph</h2>

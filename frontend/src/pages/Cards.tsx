@@ -9,7 +9,12 @@
  *
  * 卡面上的「查看母卡片」「查看情境卡」等按鈕在 Anki 中會打開另一張筆記；這裡改成在右側切換到
  * 那張卡片（左側的牌組與清單不變），並記下跳轉紀錄，可以一路「返回」到原本的卡片。跳轉會新增
- * 一筆瀏覽器歷史，所以瀏覽器的上一頁也能返回。
+ * 一筆瀏覽器歷史，所以瀏覽器的上一頁也能返回。點正面空白處翻到背面（與 Anki 審閱相同）。
+ *
+ * 版面依內容區實際寬度（左側選單收合後會變寬）分三種，見 `lib/cardLayout.ts`：三欄並排、
+ * 牌組與清單並排而卡面在下方、全部疊成一欄。並排的面板之間可以拖曳調整寬度，寬度存在
+ * localStorage（只存使用者拖曳的那一個）；雙擊分隔線恢復預設。切換模式會重新掛載面板，
+ * 所以面板的狀態（牌組展開、搜尋草稿、筆記欄位視窗）放在頁面這一層。
  *
  * Left: the deck tree; middle: the cards of the selected deck (sub-decks
  * included); right: the Anki-rendered face and the note fields. Selection
@@ -17,28 +22,43 @@
  * viewer to it, keeping a trail to go back along.
  */
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type MutableRefObject } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate, useSearchParams, type NavigateOptions } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ArrowLeft, ChevronDown, ChevronRight, FolderTree, RefreshCw, Search } from 'lucide-react'
+import { usePanelRef, type Layout, type LayoutChangedMeta, type PanelSize } from 'react-resizable-panels'
 import { FluencyTidesAPI } from '../api/client'
 import { CardDetailModal } from '../components/CardDetailModal'
 import { CardFrame } from '../components/CardFrame'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Input } from '../components/ui/input'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../components/ui/resizable'
 import { Skeleton } from '../components/ui/skeleton'
+import { useElementWidth } from '../hooks/useElementWidth'
+import { useLocalStorage } from '../hooks/useLocalStorage'
 import { describeApiError, retryTransient } from '../lib/apiError'
 import { parseBrowseParams, pickNoteCard, pushTrail, type CardSide } from '../lib/cardBrowse'
+import {
+  DECK_MAX,
+  DECK_MIN,
+  DEFAULT_PANEL_WIDTHS,
+  LIST_MIN,
+  VIEWER_MAX,
+  VIEWER_MIN,
+  layoutMode,
+  sanitizePanelWidths,
+  type PanelWidths,
+} from '../lib/cardLayout'
 import { cardPreview } from '../lib/cardFields'
 import { buildDeckTree, deckAncestors, relativeDeckPath, type DeckNode } from '../lib/deckTree'
 import { cn } from '../lib/utils'
 
 const PAGE_SIZE = 50
 
-/** 卡面與清單並排的最小寬度（Tailwind `xl`）；更窄時卡面在清單下方。Width where the viewer sits beside the list. */
-const SIDE_BY_SIDE_QUERY = '(min-width: 1280px)'
+/** 存面板寬度的 localStorage 鍵。localStorage key of the panel widths. */
+const PANEL_WIDTHS_KEY = 'cards_panel_widths'
 
 /** 跳轉時放進瀏覽器歷史的狀態：從哪張卡片跳過來。History state of a jump. */
 interface JumpState {
@@ -139,6 +159,103 @@ export default function Cards() {
     }
   }
 
+  const layoutRef = useRef<HTMLDivElement>(null)
+  const mode = layoutMode(useElementWidth(layoutRef))
+  // 版面模式改變（例如收合選單、縮放視窗）會重新掛載面板；面板的狀態放在這裡才不會遺失
+  const [deckToggled, setDeckToggled] = useState<Record<string, boolean>>({})
+  const [searchDraft, setSearchDraft] = useState(search)
+  const [fieldsOpen, setFieldsOpen] = useState(false)
+  const scrolledCardRef = useRef<number | null>(null)
+
+  const [storedWidths, setStoredWidths] = useLocalStorage<PanelWidths>(PANEL_WIDTHS_KEY, DEFAULT_PANEL_WIDTHS)
+  const widths = sanitizePanelWidths(storedWidths)
+  const deckRef = usePanelRef()
+  const viewerRef = usePanelRef()
+  // 面板目前的寬度（含程式為了放得下而縮小的）；只存使用者正在拖曳的那一個，
+  // 被動縮小的寬度不會蓋掉偏好
+  const liveWidths = useRef<PanelWidths>(widths)
+  const activeHandle = useRef<keyof PanelWidths | null>(null)
+  const trackWidth = (key: keyof PanelWidths) => (size: PanelSize) => {
+    liveWidths.current = { ...liveWidths.current, [key]: size.inPixels }
+  }
+  const saveWidths = (_layout: Layout, meta: LayoutChangedMeta) => {
+    const key = activeHandle.current
+    if (!meta.isUserInteraction || key === null) return
+    setStoredWidths(sanitizePanelWidths({ ...widths, [key]: liveWidths.current[key] }))
+  }
+  const resetWidth = (key: keyof PanelWidths) => {
+    const value = DEFAULT_PANEL_WIDTHS[key]
+    ;(key === 'deck' ? deckRef : viewerRef).current?.resize(value)
+    setStoredWidths({ ...widths, [key]: value })
+  }
+  /** 調整某個面板寬度的分隔線。The separator that resizes one panel. */
+  const handleFor = (key: keyof PanelWidths) => (
+    <ResizableHandle
+      withHandle
+      className="mx-2"
+      title="拖曳調整寬度，雙擊恢復預設"
+      disableDoubleClick
+      onPointerDown={() => (activeHandle.current = key)}
+      onKeyDown={() => (activeHandle.current = key)}
+      onDoubleClick={() => resetWidth(key)}
+    />
+  )
+
+  const deckPanel = (className?: string) => (
+    <DeckPanel
+      className={className}
+      toggled={deckToggled}
+      onToggled={setDeckToggled}
+      selected={deck}
+      onSelect={(name) => update({ deck: name, page: null, card: null, trail: null })}
+    />
+  )
+  const listPanel = (className?: string) => (
+    <CardListPanel
+      className={className}
+      draft={searchDraft}
+      onDraft={setSearchDraft}
+      deck={deck}
+      search={search}
+      page={page}
+      selectedCardId={cardId}
+      onSearch={(q) => update({ q, page: null, card: null, trail: null })}
+      onPage={(next) => update({ page: next > 1 ? String(next) : null })}
+      onSelect={(id) => update({ card: String(id), trail: null })}
+    />
+  )
+  const viewerPanel = (className?: string) => (
+    <CardViewPanel
+      className={className}
+      sideBySide={mode === 'three'}
+      fieldsOpen={fieldsOpen}
+      onFieldsOpen={setFieldsOpen}
+      scrolledCardRef={scrolledCardRef}
+      cardId={cardId}
+      deck={deck}
+      side={side}
+      trailLength={trail.length}
+      // 保留這筆歷史的跳轉狀態，翻面後「返回」仍能直接退回上一頁
+      onSide={(value) => update({ side: value === 'answer' ? value : null }, { replace: true, state: location.state })}
+      onBrowse={openNotes}
+      onBack={goBack}
+      onDeleted={() => update({ card: null, trail: null })}
+    />
+  )
+  const deckResizable = (
+    <ResizablePanel
+      id="deck"
+      panelRef={deckRef}
+      defaultSize={widths.deck}
+      minSize={DECK_MIN}
+      maxSize={DECK_MAX}
+      groupResizeBehavior="preserve-pixel-size"
+      onResize={trackWidth('deck')}
+    >
+      {deckPanel('h-full overflow-auto')}
+    </ResizablePanel>
+  )
+
   return (
     <div className="space-y-6">
       <div>
@@ -148,29 +265,46 @@ export default function Cards() {
         </p>
       </div>
 
-      {/* 卡面固定約寬螢幕手機的寬度，清單吃剩下的寬度；比 xl 窄時卡面移到下方 */}
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[17rem_minmax(0,1fr)] xl:grid-cols-[17rem_minmax(0,1fr)_26rem] 2xl:grid-cols-[20rem_minmax(0,1fr)_27rem]">
-        <DeckPanel selected={deck} onSelect={(name) => update({ deck: name, page: null, card: null, trail: null })} />
-        <CardListPanel
-          deck={deck}
-          search={search}
-          page={page}
-          selectedCardId={cardId}
-          onSearch={(q) => update({ q, page: null, card: null, trail: null })}
-          onPage={(next) => update({ page: next > 1 ? String(next) : null })}
-          onSelect={(id) => update({ card: String(id), trail: null })}
-        />
-        <CardViewPanel
-          cardId={cardId}
-          deck={deck}
-          side={side}
-          trailLength={trail.length}
-          // 保留這筆歷史的跳轉狀態，翻面後「返回」仍能直接退回上一頁
-          onSide={(value) => update({ side: value === 'answer' ? value : null }, { replace: true, state: location.state })}
-          onBrowse={openNotes}
-          onBack={goBack}
-          onDeleted={() => update({ card: null, trail: null })}
-        />
+      <div ref={layoutRef}>
+        {mode === 'three' ? (
+          // 牌組與卡面拖曳後保持像素寬度，清單吃剩下的寬度
+          <ResizablePanelGroup className="h-[calc(100svh-12rem)] min-h-[30rem]" onLayoutChanged={saveWidths}>
+            {deckResizable}
+            {handleFor('deck')}
+            <ResizablePanel id="list" minSize={LIST_MIN}>
+              {listPanel('h-full overflow-auto')}
+            </ResizablePanel>
+            {handleFor('viewer')}
+            <ResizablePanel
+              id="viewer"
+              panelRef={viewerRef}
+              defaultSize={widths.viewer}
+              minSize={VIEWER_MIN}
+              maxSize={VIEWER_MAX}
+              groupResizeBehavior="preserve-pixel-size"
+              onResize={trackWidth('viewer')}
+            >
+              {viewerPanel('h-full overflow-auto')}
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        ) : mode === 'two' ? (
+          <div className="space-y-4">
+            <ResizablePanelGroup className="h-[min(65svh,36rem)]" onLayoutChanged={saveWidths}>
+              {deckResizable}
+              {handleFor('deck')}
+              <ResizablePanel id="list" minSize={LIST_MIN}>
+                {listPanel('h-full overflow-auto')}
+              </ResizablePanel>
+            </ResizablePanelGroup>
+            {viewerPanel('mx-auto w-full')}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {deckPanel()}
+            {listPanel()}
+            {viewerPanel()}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -182,19 +316,31 @@ export default function Cards() {
  * @param props.onSelect - 選取牌組。Selects a deck.
  * @returns 面板 JSX。Panel JSX.
  */
-function DeckPanel({ selected, onSelect }: { selected: string | null; onSelect: (deck: string | null) => void }) {
+function DeckPanel({
+  className,
+  toggled,
+  onToggled,
+  selected,
+  onSelect,
+}: {
+  className?: string
+  /** 使用者手動展開或收合過的節點。Nodes the user toggled by hand. */
+  toggled: Record<string, boolean>
+  onToggled: (update: (prev: Record<string, boolean>) => Record<string, boolean>) => void
+  selected: string | null
+  onSelect: (deck: string | null) => void
+}) {
   const { data, isPending, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['decks'],
     queryFn: FluencyTidesAPI.listDecks,
   })
   const tree = useMemo(() => buildDeckTree((data ?? []).map((item) => item.deck_name)), [data])
   // 使用者手動切換過的節點以手動為準；沒動過的，目前選取牌組的上層預設展開
-  const [toggled, setToggled] = useState<Record<string, boolean>>({})
   const ancestors = useMemo(() => new Set(selected ? deckAncestors(selected).slice(0, -1) : []), [selected])
   const isOpen = (node: DeckNode) => toggled[node.fullName] ?? ancestors.has(node.fullName)
 
   return (
-    <Card className="lg:max-h-[calc(100vh-10rem)] lg:overflow-auto">
+    <Card className={className}>
       <CardHeader className="pb-2 flex-row items-center justify-between space-y-0">
         <CardTitle className="text-base flex items-center gap-2">
           <FolderTree className="h-4 w-4" />
@@ -228,7 +374,7 @@ function DeckPanel({ selected, onSelect }: { selected: string | null; onSelect: 
                 depth={0}
                 selected={selected}
                 isOpen={isOpen}
-                onToggle={(name, open) => setToggled((prev) => ({ ...prev, [name]: open }))}
+                onToggle={(name, open) => onToggled((prev) => ({ ...prev, [name]: open }))}
                 onSelect={onSelect}
               />
             ))}
@@ -315,6 +461,10 @@ function DeckButton({ label, active, onClick }: { label: string; active: boolean
 
 /** {@link CardListPanel} 的 props。Props of {@link CardListPanel}. */
 interface CardListPanelProps {
+  className?: string
+  /** 搜尋框中還沒送出的文字。The unsubmitted search text. */
+  draft: string
+  onDraft: (draft: string) => void
   deck: string | null
   search: string
   page: number
@@ -328,8 +478,18 @@ interface CardListPanelProps {
  * 卡片清單面板（含 Anki 搜尋與分頁）。The card list panel.
  * @returns 面板 JSX。Panel JSX.
  */
-function CardListPanel({ deck, search, page, selectedCardId, onSearch, onPage, onSelect }: CardListPanelProps) {
-  const [draft, setDraft] = useState(search)
+function CardListPanel({
+  className,
+  draft,
+  onDraft: setDraft,
+  deck,
+  search,
+  page,
+  selectedCardId,
+  onSearch,
+  onPage,
+  onSelect,
+}: CardListPanelProps) {
   const { data, isPending, isError, error, isFetching } = useQuery({
     queryKey: ['cards', deck, search, page],
     queryFn: () => FluencyTidesAPI.browseCards({ deck: deck ?? undefined, q: search, page, pageSize: PAGE_SIZE }),
@@ -345,7 +505,7 @@ function CardListPanel({ deck, search, page, selectedCardId, onSearch, onPage, o
   }
 
   return (
-    <Card className="lg:max-h-[calc(100vh-10rem)] lg:overflow-auto">
+    <Card className={className}>
       <CardHeader className="pb-2 space-y-3">
         <CardTitle className="text-base break-all">{deck ?? '全部牌組'}</CardTitle>
         <form onSubmit={submit} className="flex gap-2">
@@ -433,6 +593,14 @@ function CardListPanel({ deck, search, page, selectedCardId, onSearch, onPage, o
 
 /** {@link CardViewPanel} 的 props。Props of {@link CardViewPanel}. */
 interface CardViewPanelProps {
+  className?: string
+  /** 與清單並排（有自己的捲軸）。Sits beside the list with its own scrollbar. */
+  sideBySide: boolean
+  /** 筆記欄位視窗是否打開。Whether the note fields dialog is open. */
+  fieldsOpen: boolean
+  onFieldsOpen: (open: boolean) => void
+  /** 已經為哪張卡片捲動過（重新掛載時不再捲一次）。The card already scrolled to. */
+  scrolledCardRef: MutableRefObject<number | null>
   /** 選取的卡片；null 時顯示提示。The selected card. */
   cardId: number | null
   /** 目前選取的牌組。The selected deck. */
@@ -453,19 +621,39 @@ interface CardViewPanelProps {
  * 卡面與筆記欄位面板。The card face and note fields panel.
  * @returns 面板 JSX。Panel JSX.
  */
-function CardViewPanel({ cardId, deck, side, trailLength, onSide, onBrowse, onBack, onDeleted }: CardViewPanelProps) {
-  const [fieldsOpen, setFieldsOpen] = useState(false)
+function CardViewPanel({
+  className,
+  sideBySide,
+  fieldsOpen,
+  onFieldsOpen: setFieldsOpen,
+  scrolledCardRef,
+  cardId,
+  deck,
+  side,
+  trailLength,
+  onSide,
+  onBrowse,
+  onBack,
+  onDeleted,
+}: CardViewPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null)
 
   // 窄畫面卡面在清單下方：選卡時捲過去。瀏覽器也不會更新畫面外的跨來源 iframe，卡面要進到
   // 畫面內才會回報高度。並排時卡面有自己的捲軸，換卡時捲回頂端。
   useEffect(() => {
-    if (cardId === null) return
-    if (window.matchMedia(SIDE_BY_SIDE_QUERY).matches) {
+    // 版面模式改變而重新掛載時，卡片沒換就不捲動
+    if (cardId === null || scrolledCardRef.current === cardId) {
+      if (cardId === null) scrolledCardRef.current = null
+      return
+    }
+    scrolledCardRef.current = cardId
+    if (sideBySide) {
       panelRef.current?.scrollTo({ top: 0 })
     } else {
       panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
+    // 只在換卡時捲動；版面模式改變不算
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardId])
   const { data, isPending, isError, error } = useQuery({
     queryKey: ['card-view', cardId],
@@ -485,9 +673,8 @@ function CardViewPanel({ cardId, deck, side, trailLength, onSide, onBrowse, onBa
     retry: retryTransient,
   })
 
-  // 卡面約寬螢幕手機的寬度：窄畫面置中，並排時填滿第三欄並有自己的捲軸
-  const panelClass =
-    'w-full max-w-[27rem] justify-self-center lg:col-span-2 xl:col-span-1 xl:max-w-none xl:max-h-[calc(100vh-10rem)] xl:overflow-auto'
+  // 不並排時卡面最寬 768px（與並排時的預設寬度相同）並置中
+  const panelClass = cn(!sideBySide && 'max-w-[48rem]', className)
 
   if (cardId === null) {
     return (
@@ -552,6 +739,8 @@ function CardViewPanel({ cardId, deck, side, trailLength, onSide, onBrowse, onBa
             ord={data.ord}
             title={`${data.model_name} ${side === 'question' ? '正面' : '背面'}`}
             onBrowse={onBrowse}
+            // 點正面翻到背面（與 Anki 審閱相同）；背面不會翻回正面
+            onFaceClick={side === 'question' ? () => onSide('answer') : undefined}
           />
         )}
       </CardContent>

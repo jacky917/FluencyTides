@@ -1,7 +1,20 @@
 import { Routes, Route, Link, Navigate, useLocation } from 'react-router-dom'
 import { LayoutDashboard, PlusCircle, Network, Bot, Layers } from 'lucide-react'
-import { cn } from './lib/utils'
 import { Toaster } from './components/ui/sonner'
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+  useSidebar,
+} from './components/ui/sidebar'
 
 // Pages (will create these next)
 import Dashboard from './pages/Dashboard'
@@ -10,62 +23,66 @@ import KnowledgeGraph from './pages/KnowledgeGraph'
 import ToolSettings from './pages/ToolSettings'
 import Cards from './pages/Cards'
 
+const navItems = [
+  { name: 'Dashboard', path: '/', icon: LayoutDashboard },
+  { name: 'Cards', path: '/cards', icon: Layers },
+  { name: 'Card Generator', path: '/generate', icon: PlusCircle },
+  { name: 'Knowledge Graph', path: '/graph', icon: Network },
+  { name: 'Tool Settings', path: '/tools', icon: Bot },
+]
+
+/**
+ * 左側的頁面選單（可收合；手機上是滑出的 Sheet）。
+ * The page menu on the left (collapsible; a sliding sheet on mobile).
+ * @returns 側邊欄 JSX。Sidebar JSX.
+ */
+function AppSidebar() {
+  const location = useLocation()
+  const { isMobile, setOpenMobile } = useSidebar()
+
+  return (
+    <Sidebar>
+      <SidebarHeader className="p-6">
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">FluencyTides</h1>
+        <p className="text-sm text-muted-foreground">Intelligent Anki</p>
+      </SidebarHeader>
+      <SidebarContent>
+        <SidebarGroup className="px-3">
+          <SidebarMenu>
+            {navItems.map((item) => (
+              <SidebarMenuItem key={item.path}>
+                <SidebarMenuButton asChild isActive={location.pathname === item.path}>
+                  {/* 手機上選了頁面就收起選單 */}
+                  <Link to={item.path} onClick={() => isMobile && setOpenMobile(false)}>
+                    <item.icon />
+                    <span>{item.name}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </SidebarGroup>
+      </SidebarContent>
+      <SidebarRail />
+    </Sidebar>
+  )
+}
+
 /**
  * 應用程式根元件：提供側邊欄導覽、路由切換與全域 Toast。
  * Application root component: provides sidebar navigation, routing, and global toasts.
  * @returns 應用程式版面 JSX。Application layout JSX.
  */
 function App() {
-  const location = useLocation()
-
-  const navItems = [
-    { name: 'Dashboard', path: '/', icon: LayoutDashboard },
-    { name: 'Cards', path: '/cards', icon: Layers },
-    { name: 'Card Generator', path: '/generate', icon: PlusCircle },
-    { name: 'Knowledge Graph', path: '/graph', icon: Network },
-    { name: 'Tool Settings', path: '/tools', icon: Bot },
-  ]
-
   return (
-    <div className="flex min-h-screen bg-background">
-      {/* Sidebar */}
-      <aside className="w-64 border-r bg-card hidden md:block">
-        <div className="p-6">
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">
-            FluencyTides
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Intelligent Anki
-          </p>
-        </div>
-        <nav className="space-y-1 px-3 mt-4">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.path
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                )}
-              >
-                <item.icon className="h-4 w-4" />
-                {item.name}
-              </Link>
-            )
-          })}
-        </nav>
-      </aside>
-
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col min-h-screen overflow-hidden">
-        <header className="h-14 border-b flex items-center px-6 md:hidden">
-          <h1 className="font-bold">FluencyTides</h1>
+    <SidebarProvider>
+      <AppSidebar />
+      <SidebarInset className="min-h-screen">
+        <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
+          <SidebarTrigger title="展開／收起選單（Ctrl+B）" />
+          <span className="font-bold md:hidden">FluencyTides</span>
         </header>
-        <div className="flex-1 overflow-auto p-6">
+        <div className="flex-1 p-4 md:p-6">
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/cards" element={<Cards />} />
@@ -76,13 +93,12 @@ function App() {
             <Route path="/llm-models" element={<Navigate to="/tools" replace />} />
           </Routes>
         </div>
-      </main>
+      </SidebarInset>
 
       {/* Global Toast Provider */}
       <Toaster />
-    </div>
+    </SidebarProvider>
   )
 }
 
 export default App
-

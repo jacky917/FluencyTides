@@ -111,6 +111,7 @@ describe('createFrameMessageHandler', () => {
       onFrameError: vi.fn(),
       onBrowse: vi.fn(),
       onNotice: vi.fn(),
+      onFaceClick: vi.fn(),
       isActive: () => true,
       ...overrides,
     }
@@ -146,6 +147,15 @@ describe('createFrameMessageHandler', () => {
     send({ type: 'anki-frame-error', nonce: 'n1', message: 'TypeError: x' })
 
     expect(deps.onFrameError).toHaveBeenCalledWith('TypeError: x')
+  })
+
+  it('forwards clicks on the face', () => {
+    const { deps, send } = setup()
+
+    send({ type: 'anki-face-click', nonce: 'n1' })
+    send({ type: 'anki-face-click', nonce: 'old' })
+
+    expect(deps.onFaceClick).toHaveBeenCalledOnce()
   })
 
   it('opens the notes of a nid: search and explains other searches', () => {

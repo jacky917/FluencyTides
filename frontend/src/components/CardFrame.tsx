@@ -24,6 +24,7 @@ const newNonce = () => Math.random().toString(36).slice(2) + Date.now().toString
  * @param props.ord - 卡片模板序號。Template ordinal.
  * @param props.title - iframe 的無障礙名稱。Accessible name.
  * @param props.onBrowse - 卡面要打開這些筆記（「查看母卡片」等按鈕）。Opens the notes a template asks for.
+ * @param props.onFaceClick - 點了卡面上不是按鈕的地方；不給時不理會。A click outside any control.
  * @returns iframe，以及媒體或腳本錯誤的提示。The frame and any errors.
  */
 export function CardFrame({
@@ -31,11 +32,13 @@ export function CardFrame({
   ord,
   title,
   onBrowse,
+  onFaceClick,
 }: {
   html: string
   ord: number
   title: string
   onBrowse: (noteIds: number[]) => void
+  onFaceClick?: () => void
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(MIN_HEIGHT)
@@ -44,9 +47,11 @@ export function CardFrame({
   const [notices, setNotices] = useState<string[]>([])
   // 用 ref 取最新的 onBrowse：不必因為父元件重新渲染就重掛訊息處理函式
   const onBrowseRef = useRef(onBrowse)
+  const onFaceClickRef = useRef(onFaceClick)
   useEffect(() => {
     onBrowseRef.current = onBrowse
-  }, [onBrowse])
+    onFaceClickRef.current = onFaceClick
+  }, [onBrowse, onFaceClick])
   // 內容一變就換 nonce：舊文件還在進行中的下載不會被新文件誤收
   const { srcDoc, nonce } = useMemo(() => {
     const documentNonce = newNonce()
@@ -74,6 +79,7 @@ export function CardFrame({
       },
       onFrameError: (message) => setFrameErrors((prev) => (prev.includes(message) ? prev : [...prev, message])),
       onBrowse: (noteIds) => onBrowseRef.current(noteIds),
+      onFaceClick: () => onFaceClickRef.current?.(),
       onNotice: (message) => setNotices((prev) => (prev.includes(message) ? prev : [...prev, message])),
     })
     window.addEventListener('message', onMessage)

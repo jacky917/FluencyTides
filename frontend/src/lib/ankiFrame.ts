@@ -72,6 +72,15 @@ export interface BrowseRequestMessage {
   query: string
 }
 
+/**
+ * iframe → 網頁：使用者點了卡面上不是按鈕的地方（網頁顯示正面時據此翻到背面）。
+ * Frame → parent: a click on the face outside any control.
+ */
+export interface FaceClickMessage {
+  type: 'anki-face-click'
+  nonce: string
+}
+
 /** iframe → 網頁：模板呼叫了網頁版不支援的 AnkiConnect 動作。Frame → parent: an unsupported call. */
 export interface FrameNoticeMessage {
   type: 'anki-frame-notice'
@@ -184,6 +193,9 @@ export function isBareMediaName(name: string): boolean {
  * - 攔下對 AnkiConnect 的 `fetch`、`XMLHttpRequest`、`sendBeacon`（見模組說明）；`guiBrowse`
  *   只在使用者剛點過時才請網頁切換卡片，卡面載入時自己呼叫的不會跳走。
  * - 點擊 `data-anki-sound` 播放鈕時播放該檔案；這些檔案在卡面載入時就先下載。
+ * - 點擊卡面上不是控制項的地方時通知網頁（`anki-face-click`）。控制項：連結、按鈕、表單元件、
+ *   播放鈕，以及游標是手指（`cursor: pointer`）的元素——模板的按鈕多半是設了 `onclick` 的
+ *   `div`，只能從樣式判斷；選取文字時不算。等一下雙擊的時間才通知，雙擊選字不會翻面。
  * - 回報內容高度，並把 iframe 內的腳本錯誤轉給網頁顯示。
  *
  * The bridge script, injected before the template scripts.
@@ -297,6 +309,29 @@ export const FRAME_BRIDGE_SCRIPT = String.raw`(() => {
       if (!button) return;
       event.preventDefault();
       new window.Audio(button.getAttribute('data-anki-sound')).play().catch(() => undefined);
+    });
+    // 點卡面空白處：通知網頁。播放鈕的處理在前面，已 preventDefault，這裡會略過
+    const controlSelector = 'a, button, input, textarea, select, label, summary, audio, video, [onclick], [role=button], [contenteditable], [data-anki-sound]';
+    const hasSelection = () => {
+      const selection = window.getSelection ? window.getSelection() : null;
+      return Boolean(selection && !selection.isCollapsed);
+    };
+    let faceClickTimer = null;
+    document.addEventListener('click', (event) => {
+      if (faceClickTimer !== null) {
+        clearTimeout(faceClickTimer);
+        faceClickTimer = null;
+      }
+      if (event.defaultPrevented || event.button !== 0 || event.detail > 1 || hasSelection()) return;
+      let node = event.target instanceof Element ? event.target : null;
+      if (node && node.closest(controlSelector)) return;
+      for (; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
+        if (getComputedStyle(node).cursor === 'pointer') return;
+      }
+      faceClickTimer = setTimeout(() => {
+        faceClickTimer = null;
+        if (!hasSelection()) post({ type: 'anki-face-click' });
+      }, 250);
     });
     // 播放鈕的檔案先下載，第一次點擊就能同步播放
     document.addEventListener('DOMContentLoaded', () => {
@@ -451,6 +486,8 @@ export interface FrameMessageDeps {
   onBrowse: (noteIds: number[]) => void
   /** 模板呼叫了網頁版不支援的功能。The template used something the web viewer lacks. */
   onNotice: (message: string) => void
+  /** 使用者點了卡面上不是控制項的地方。A click on the face outside any control. */
+  onFaceClick: () => void
   /** 這份文件是否仍是目前顯示的那份（換文件後，進行中的下載不再回覆）。Still current? */
   isActive: () => boolean
 }
@@ -496,6 +533,10 @@ export function createFrameMessageHandler(deps: FrameMessageDeps): (event: Messa
     }
     if (data.type === 'anki-frame-notice') {
       deps.onNotice(String(data.message ?? ''))
+      return
+    }
+    if (data.type === 'anki-face-click') {
+      deps.onFaceClick()
       return
     }
     if (data.type === 'anki-browse') {
