@@ -75,6 +75,19 @@ export interface ErrorResponse {
 }
 
 // ============================================================================
+// 關聯同步 (Relation Sync)
+// ============================================================================
+
+/** `POST /relations/sync` 的回應。Response of the relation sync. */
+export interface RelationSyncResponse {
+  deleted_count: number;
+  scanned_notes: number;
+  orphan_notes: number;
+  /** false＝清理前與 AnkiWeb 同步失敗，以本機收藏為準。False when the AnkiWeb sync before cleanup failed. */
+  ankiweb_synced: boolean;
+}
+
+// ============================================================================
 // 能力路由 (Capability Routes)
 // ============================================================================
 

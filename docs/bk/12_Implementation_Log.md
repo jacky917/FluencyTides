@@ -20,6 +20,9 @@
 前兩輪雖做了 runtime 驗證，但那是臨時 venv 裡的一次性檢查。本輪把它**沉澱為 repo 內的自動化測試**：
 
 - **後端 `backend/tests/`（48 個測試，全綠）**：`test_api_smoke`（全端點 + F001/Bug1 的 `/cards/models=200`）、`test_config`（F004/F005 fail-closed validator）、`test_anki_escape`（F071/F085/F086/F112 查詢跳脫）、`test_relation_sync`（F002 空列表防護）、`test_llm_client`（圍欄清理 + F041 重試分類）、`test_schema_composer`、`test_alembic`（F009 baseline 遷移）。
+
+> **更正（2026-10-19）**：抽查發現這裡列的測試檔（`test_api_smoke`、`test_config`、`test_anki_escape`、`test_relation_sync`、`test_llm_client`…）都不在版本控制中，多項修復也不在程式裡；見 `docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md` §6.1。`test_relation_sync.py` 於 2026-10-19 重新建立。
+
 - **前端 `frontend/tests/`（11 個測試）+ vitest 基線**：`cn`、`ApiError`、`useLocalStorage`（含 F055 stale closure 驗證）。
 - 這些測試對應 [11_Implementation_Log.md](11_Implementation_Log.md) §1 的 runtime 驗證清單——現在每次 CI 都能自動攔截同類回歸（F001 那種「方法定義損壞仍過 CI」不會再發生）。
 

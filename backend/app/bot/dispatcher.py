@@ -62,6 +62,11 @@ def setup_dispatcher() -> Dispatcher:
     
     dp.include_router(messages.router)
 
+    # 3. 全域錯誤處理：handler 沒攔下的例外也要通知使用者，不能只留在 log
+    from app.bot.handlers.errors import on_unhandled_error
+
+    dp.errors.register(on_unhandled_error)
+
     logger.info("Telegram Bot Dispatcher 初始化完成。")
     return dp
 

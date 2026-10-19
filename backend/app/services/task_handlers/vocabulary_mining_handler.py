@@ -15,6 +15,7 @@ import re
 
 from typing import override, TYPE_CHECKING
 
+from app.infrastructure.anki.search import note_types_query
 from app.services.task_handlers.base import BaseHandler
 from app.services.task_handlers.registry import register_handler
 
@@ -140,9 +141,7 @@ class VocabularyMiningHandler(BaseHandler):
         Returns:
             經過清洗的卡片資訊列表。Sanitized list of card info dicts.
         """
-        query = " OR ".join([f'"note:{m}"' for m in self.supported_models])
-        if deck_name:
-            query = f'"deck:{deck_name}" ({query})'
+        query = note_types_query(self.supported_models, deck_name)
 
         note_ids = await card_service.find_notes(query)
         notes_info = await card_service.get_notes_info(note_ids)
@@ -178,9 +177,7 @@ class VocabularyMiningHandler(BaseHandler):
             dict with "nodes" and "links".
         """
         # 1. 取得符合此任務的所有 Anki 卡片
-        query = " OR ".join([f'"note:{m}"' for m in self.supported_models])
-        if deck_name:
-            query = f'"deck:{deck_name}" ({query})'
+        query = note_types_query(self.supported_models, deck_name)
 
         note_ids = await card_service.find_notes(query)
         notes_info_objs = []

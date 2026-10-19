@@ -226,9 +226,10 @@ class TestClientOverrides:
              mock.patch.object(ClaudeCodeLLMClient, "_resolve_cli_path", return_value="/fake/claude"):
             default = ClaudeCodeLLMClient()
             override = ClaudeCodeLLMClient(model="claude-haiku-4-5", effort="high")
+            # 在 patch 區塊內比對：覆寫只作用在實例上，沒有改到設定（區塊外比對的會是開發者 .env 的值）
+            assert settings.LLM_MODEL_NAME == "claude-opus-5"  # 設定未被改動
         assert default._formatted_model_name == "(claude-code)opus-5@medium"
         assert override._formatted_model_name == "(claude-code)haiku-4-5@high"
-        assert settings.LLM_MODEL_NAME == "claude-opus-5"  # 設定未被改動
 
     def test_invalid_effort_override_rejected(self):
         with mock.patch.object(settings, "LLM_CLAUDE_CODE_EFFORT", "medium"), \

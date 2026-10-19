@@ -137,7 +137,7 @@ def real_app_client(anki):
 @pytest.mark.parametrize(
     ("deck", "expected"),
     [
-        ("日本語::外語糾錯", 'deck:"日本語::外語糾錯"'),
+        ("日本語::外語糾錯", 'deck:"日本語\\:\\:外語糾錯"'),
         ("A_B*C", 'deck:"A\\_B\\*C"'),
         ('say "hi"\\', 'deck:"say \\"hi\\"\\\\"'),
     ],

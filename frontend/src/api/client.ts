@@ -29,6 +29,7 @@ import type {
   CapabilityRoutesResponse,
   RouteDeleteResponse,
   RouteUpdate,
+  RelationSyncResponse,
 } from '../types/api';
 import { readErrorBody } from '../lib/apiError';
 import { encodeRouteKey } from '../lib/capabilityRoutes';
@@ -222,12 +223,12 @@ export const FluencyTidesAPI = {
     apiClient.get('/relations/types'),
 
   /**
-   * 與 Anki 同步並清除孤兒關聯。
-   * Syncs with Anki and cleans up orphaned relations.
-   * @returns 清除筆數。Number of deleted relations.
+   * 同步清理孤兒關聯。後端拒絕時回 409：`RELATION_SYNC_EMPTY_ANKI`（不能強制）或
+   * `RELATION_SYNC_NEEDS_FORCE`（確認後帶 force 重送）。
+   * Syncs relations with Anki; pass `force` only after the user confirmed.
    */
-  syncRelations: (): Promise<{ deleted_count: number }> =>
-    apiClient.post('/relations/sync'),
+  syncRelations: (force = false): Promise<RelationSyncResponse> =>
+    apiClient.post('/relations/sync', null, { params: { force } }),
 
   // ======================================================================
   // Anki 基礎查詢 (透過 Handler 或直接端點)

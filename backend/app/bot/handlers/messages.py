@@ -26,6 +26,7 @@ import logging
 from aiogram import F, Router
 from aiogram.types import Message
 
+from app.infrastructure.anki.search import field_term
 from app.core.exceptions import FluencyTidesError
 from app.services.card_service import CardService
 from app.services.relation_service import RelationService
@@ -86,7 +87,7 @@ async def process_word_handler(
             await anki_client.sync(raise_errors=False)
 
             card_id = state.card_id
-            note_ids = await anki_client.find_notes(f"Card_ID:{card_id}")
+            note_ids = await anki_client.find_notes(field_term("Card_ID", card_id))
             if not note_ids:
                 await status_msg.edit_text(CARD_NOT_FOUND)
                 user_state_manager.clear_state(chat_id)

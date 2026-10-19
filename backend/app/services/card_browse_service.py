@@ -29,14 +29,12 @@ from app.core.exceptions import (
     MediaFileNotFoundError,
 )
 from app.infrastructure.anki.client import AnkiActionError, AnkiClient
+from app.infrastructure.anki.search import deck_term
 from app.schemas.anki import AnkiCardInfo
 from app.schemas.card_browse import CardPage, CardSummary, CardView
 
 logger = logging.getLogger(__name__)
 
-# Anki 搜尋語法在引號內仍有意義的字元：\ 要先處理，否則會重複跳脫
-# Characters still special inside a quoted Anki search term; backslash first.
-_SEARCH_SPECIALS = ("\\", '"', "*", "_")
 
 # 媒體回應允許的類型（依副檔名，不用 mimetypes：Windows 會讀登錄檔，結果隨機器而異）。
 # 只列音訊、影片與不能執行腳本的圖片；SVG 可以內嵌腳本，故不列入。
@@ -68,21 +66,19 @@ _TEMPLATE_REF = re.compile(r"\{\{(.*?)\}\}", re.S)
 
 
 def deck_search_term(deck: str) -> str:
-    """組出只比對這個牌組（含子牌組）的搜尋條件，名稱中的萬用字元照字面比對。
+    """組出只比對這個牌組（含子牌組）的搜尋條件，名稱中的萬用字元與冒號照字面比對。
 
-    Build a search term matching exactly this deck and its sub-decks; ``*``
-    and ``_`` in the name are matched literally.
+    Build a search term matching exactly this deck and its sub-decks; ``*``,
+    ``_`` and ``:`` in the name are escaped and matched literally. Delegates to
+    the shared :func:`app.infrastructure.anki.search.deck_term`.
 
     Args:
         deck: 牌組完整名稱，例如 ``日本語::外語糾錯``。Full deck name.
 
     Returns:
-        例如 ``deck:"日本語::外語糾錯"``。The search term.
+        例如 ``deck:"日本語\\:\\:外語糾錯"``（跳脫後的 ``::`` 照常比對子牌組）。The search term.
     """
-    escaped = deck
-    for char in _SEARCH_SPECIALS:
-        escaped = escaped.replace(char, f"\\{char}")
-    return f'deck:"{escaped}"'
+    return deck_term(deck)
 
 
 def build_query(deck: str | None, search: str | None) -> str:

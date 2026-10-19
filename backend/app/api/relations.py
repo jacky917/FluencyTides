@@ -14,11 +14,17 @@ import logging
 
 from fastapi import APIRouter, Depends
 
+from app.infrastructure.anki.search import deck_term
 from app.core.auth import verify_api_key
 from app.core.dependencies import get_anki_client, get_relation_service
 from app.infrastructure.anki.client import AnkiClient
 from app.schemas.card import ErrorResponse
-from app.schemas.relation import CardRelationCreate, CardRelationRead, CardRelationDelete
+from app.schemas.relation import (
+    CardRelationCreate,
+    CardRelationDelete,
+    CardRelationRead,
+    RelationSyncResponse,
+)
 from app.services.relation_service import RelationService
 
 logger = logging.getLogger(__name__)
@@ -55,7 +61,7 @@ async def get_graph_data(
         圖譜資料字典: {"nodes": [...], "links": [...]}。
         Graph data dict: {"nodes": [...], "links": [...]}.
     """
-    query = f'deck:"{deck_name}"' if deck_name else "deck:*"
+    query = deck_term(deck_name) if deck_name else "deck:*"
     note_ids = await anki_client.find_notes(query)
     
     notes_info = []
@@ -175,35 +181,51 @@ async def delete_relations_by_note_id(
 
 @router.post(
     "/sync",
-    response_model=dict[str, int],
+    response_model=RelationSyncResponse,
     responses={
+        409: {
+            "model": ErrorResponse,
+            "description": (
+                "已停止清理、未刪除任何資料：`RELATION_SYNC_EMPTY_ANKI`（Anki 回傳 0 張筆記，force 也無效）、"
+                "`RELATION_SYNC_NEEDS_FORCE`（要刪超過一半，確認後帶 force=true 重送）"
+            ),
+        },
         502: {"model": ErrorResponse, "description": "Anki 服務異常"},
     },
     summary="同步清理孤兒關聯",
-    description="向 Anki 查詢目前所有存在的筆記 ID，並刪除資料庫中已經不存在於 Anki 的孤兒關聯記錄。",
+    description=(
+        "向 Anki 查詢目前所有存在的筆記 ID，刪除資料庫中引用已不存在筆記的關聯。"
+        "Anki 回傳 0 張筆記時一律拒絕；要刪超過一半（且超過 20 筆）時需帶 force=true。"
+    ),
 )
 async def sync_relations(
+    force: bool = False,
     anki_client: AnkiClient = Depends(get_anki_client),
     relation_service: RelationService = Depends(get_relation_service),
-) -> dict[str, int]:
+) -> RelationSyncResponse:
     """同步清理孤兒關聯的 Controller 端點。
 
     Controller endpoint that syncs with Anki and prunes orphan relations.
 
     Args:
+        force: 要刪超過一半時仍執行（Anki 回傳 0 張筆記時照樣拒絕）。Delete even
+            when more than half would go; an empty Anki answer is still refused.
         anki_client: 注入的 AnkiClient 實例。Injected AnkiClient instance.
         relation_service: 注入的 RelationService 實例。
             Injected RelationService instance.
 
     Returns:
-        刪除結果摘要，例如 {"deleted_count": 2}。
-        Deletion summary, e.g. {"deleted_count": 2}.
+        結果摘要。The summary.
+
+    Raises:
+        RelationSyncEmptyAnkiError: 409——Anki 回傳 0 張筆記（``force`` 也無效）。
+        RelationSyncNeedsForceError: 409——要刪超過一半且未帶 ``force``。
+        AnkiConnectError: 502——連不上 Anki 或 Anki 回報錯誤（不刪任何資料）。
     """
-    # 查詢所有 Anki 筆記，取得所有有效的 Note ID
-    # 註解: 'deck:*' 可涵蓋所有牌組內的卡片
-    valid_note_ids = await anki_client.find_notes("deck:*")
-    
-    # 交由 RelationService 進行比對與刪除
-    deleted_count = await relation_service.sync_with_anki(valid_note_ids)
-    
-    return {"deleted_count": deleted_count}
+    result = await relation_service.sync_with_anki(anki_client, force=force)
+    return RelationSyncResponse(
+        deleted_count=result.deleted,
+        scanned_notes=result.scanned_notes,
+        orphan_notes=result.orphan_notes,
+        ankiweb_synced=result.ankiweb_synced,
+    )

@@ -10,6 +10,7 @@ from pathlib import Path
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
+from app.infrastructure.anki.search import field_term
 from app.bot.state import UserState, UserStateManager
 from app.bot.utils.formatting import escape_tg
 from app.bot.utils.texts import CARD_NOT_FOUND, UPLOAD_EXPIRED_ALERT, UPLOAD_RETRY, error_detail, upload_done_text
@@ -101,7 +102,7 @@ async def _execute_final_update(
         await anki_client.sync(raise_errors=False)
 
         card_id = state.card_id
-        note_ids = await anki_client.find_notes(f"Card_ID:{card_id}")
+        note_ids = await anki_client.find_notes(field_term("Card_ID", card_id))
         if not note_ids:
             await callback.message.edit_text(CARD_NOT_FOUND)
             user_state_manager.clear_state(chat_id)
