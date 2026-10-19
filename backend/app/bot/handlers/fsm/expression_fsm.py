@@ -438,9 +438,12 @@ async def _check_duplicate_before_generate(
         2. 確保 Anki 牌組中的資料不會出現意外的重複。
 
     處理邏輯：
-        1. 使用 Anki 搜尋語法 `deck:... note:... "My_Original:..."` 尋找完全一致的原文。
-        2. 若無重複：直接呼叫 `_generate_and_preview` 進入 LLM 預覽流程。
-        3. 若有重複：攔截流程，將狀態切換至 `waiting_for_duplicate_decision`，
+        1. 流程狀態裡沒有原文（重啟、逾時）：當成流程失效，清除狀態並請使用者重新開始。
+        2. 使用 Anki 搜尋語法 `deck:... note:... "My_Original:..."` 尋找完全一致的原文（值照字面跳脫）。
+        3. 查詢失敗（只限 `AnkiConnectError`）：告訴使用者跳過了重複檢查，再直接生成；
+           其他例外照常往上拋，由全域錯誤處理通知使用者。
+        4. 若無重複：直接呼叫 `_generate_and_preview` 進入 LLM 預覽流程。
+        5. 若有重複：攔截流程，將狀態切換至 `waiting_for_duplicate_decision`，
            並將舊卡片的資訊展示給使用者，提供覆蓋、允許重複或取消的選項。
 
     Args:
@@ -455,6 +458,7 @@ async def _check_duplicate_before_generate(
     original_text = data.get("original_text")
     if not original_text:
         # 原文是第一步就存的；沒有代表流程狀態已遺失（重啟、逾時），用空字串去查會比對到錯的卡
+        logger.warning("外語糾錯：流程狀態缺少原文，當成流程失效（state=%s）", await state.get_state())
         await message_or_query_msg.answer(_FLOW_EXPIRED)
         await state.clear()
         return
@@ -474,7 +478,7 @@ async def _check_duplicate_before_generate(
         notes_info = await card_service.get_notes_info([found_note_ids[0]]) if found_note_ids else []
     except AnkiConnectError as e:
         # 只有 Anki 查詢失敗（連不上、搜尋被拒）才退回直接生成，並明講跳過了檢查；
-        # 程式錯誤照常往上拋，不被當成「查不到」而默默略過
+        # 程式錯誤照常往上拋（由 bot/handlers/errors.py 通知使用者），不被當成「查不到」而默默略過
         logger.warning("檢查重複卡片失敗，略過檢查直接生成：%s（query=%s）", e, query)
         await message_or_query_msg.answer(
             f"⚠️ 無法確認 Anki 是否已有相同原文的卡（{error_detail(e)}），將直接生成；若之後發現重複請手動刪除。"

@@ -16,7 +16,7 @@ described in the Phase 5 plan.
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -53,17 +53,18 @@ class RelationSyncResult:
     Attributes:
         scanned_notes: Anki 回傳的筆記數。Notes Anki returned.
         orphan_notes: 關聯引用、但 Anki 已沒有的筆記數。Referenced notes missing in Anki.
-        deleted: 刪除的關聯數。Relations deleted.
-        considered: 考慮範圍內（掃描開始前建立）的關聯數。Relations considered.
-        ankiweb_synced: 取筆記前與 AnkiWeb 的同步是否成功；失敗時以本機收藏為準。Whether the
-            AnkiWeb sync before scanning succeeded.
+        deleted: 刪除的關聯數；資料庫驅動未回報筆數時為預估值。Relations deleted (the estimate
+            when the driver reports no row count).
+        considered: 考慮範圍內（掃描開始前 2 秒以上建立）的關聯數。Relations considered.
+        ankiweb_synced: 取筆記前與 AnkiWeb 的同步是否成功；失敗時以本機收藏為準。必填，不給預設值：
+            忘了傳時不能靜默地報成「同步成功」。Whether the AnkiWeb sync before scanning succeeded.
     """
 
     scanned_notes: int
     orphan_notes: int
     deleted: int
     considered: int
-    ankiweb_synced: bool = True
+    ankiweb_synced: bool
 
 
 class RelationService:
@@ -187,7 +188,7 @@ class RelationService:
         return deleted_count
 
     async def sync_with_anki(self, anki_client: "AnkiClient", *, force: bool = False) -> "RelationSyncResult":
-        """依 Anki 現存的筆記清理資料庫中的孤兒關聯（`docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md` §3）。
+        """依 Anki 現存的筆記清理資料庫中的孤兒關聯（設計書 ``relation_sync_and_search_escape_FIX_2026-10-19.md`` §3）。
 
         Remove relations whose notes no longer exist in Anki, refusing when
         Anki's answer looks incomplete.
@@ -200,10 +201,11 @@ class RelationService:
            建立的關聯才會被考慮——掃描期間剛生成的子卡，筆記不在掃描結果裡，它的關聯不能被當成孤兒。
            ``created_at`` 由資料庫填入（SQLite 只到秒），所以同樣用資料庫的時鐘、並留 2 秒餘裕。
         2. Anki 回傳 0 張筆記：拒絕（不刪任何資料）。
-        3. 讀出這些關聯引用的筆記 ID，與 Anki 的清單做差集得到孤兒 ID；只以孤兒 ID 當參數分批刪除，
-           不會因為筆記數上萬而超過 SQLite 的參數上限。
+        3. 讀出考慮範圍內的關聯引用的筆記 ID，與 Anki 的清單做差集得到孤兒 ID，算出要刪幾筆。
         4. 要刪的關聯超過考慮範圍內的一半、且超過 :data:`SYNC_GUARD_MIN_ROWS` 列時，除非 ``force``
            否則拒絕：清單可能不完整（例如收藏只載入了一部分）。
+        5. 只以孤兒 ID 當參數分批刪除（不會因為筆記數上萬而超過 SQLite 的參數上限），刪除條件同樣限定
+           考慮範圍；全部批次在同一個 transaction，最後才提交。
 
         Args:
             anki_client: Anki 客戶端（取全部筆記 ID）。The Anki client.
@@ -215,7 +217,7 @@ class RelationService:
         Raises:
             RelationSyncEmptyAnkiError: Anki 回傳 0 張筆記（``force`` 也無效）。
             RelationSyncNeedsForceError: 要刪的比例過高且未指定 ``force``。
-            AnkiConnectError: 連不上 Anki（不刪任何資料）。
+            AnkiConnectError: 連不上 Anki，或 Anki 回報錯誤（``AnkiActionError``）；不刪任何資料。
             sqlalchemy.exc.SQLAlchemyError: 資料庫錯誤；所有刪除在同一個 transaction，未提交即不生效。
         """
         ankiweb_synced = True
@@ -230,8 +232,14 @@ class RelationService:
         valid_note_ids = set(await anki_client.find_notes("deck:*"))
         if not valid_note_ids:
             logger.warning("同步清理被拒絕：Anki 回傳 0 張筆記（AnkiWeb 同步%s）", "成功" if ankiweb_synced else "失敗")
+            # 同步也失敗時很可能就是原因（換了設定檔、需要完整同步），一併說出來
+            next_step = (
+                "清理前與 AnkiWeb 同步也失敗，請先在 Anki 處理同步後再試"
+                if not ankiweb_synced
+                else "請確認 Anki 已開啟並載入收藏後再試"
+            )
             raise RelationSyncEmptyAnkiError(
-                "Anki 回傳 0 張筆記，為避免誤刪已停止清理（強制清理也不會執行）；請確認 Anki 已開啟並載入收藏後再試。"
+                f"Anki 回傳 0 張筆記，為避免誤刪已停止清理（強制清理也不會執行）；{next_step}。"
             )
 
         considered = col(CardRelation.created_at) < cutoff
@@ -262,6 +270,7 @@ class RelationService:
             )
 
         deleted = 0
+        unreported = False
         orphan_list = sorted(orphan_ids)
         for start in range(0, len(orphan_list), SYNC_DELETE_BATCH):
             batch = orphan_list[start:start + SYNC_DELETE_BATCH]
@@ -276,22 +285,23 @@ class RelationService:
             )
             count = outcome.rowcount
             if count is None or count < 0:
-                logger.warning("同步清理：資料庫未回報刪除筆數（本批 %d 個孤兒筆記 ID）", len(batch))
-                count = 0
-            deleted += count
+                unreported = True
+            else:
+                deleted += count
         await self._db_session.commit()
 
-        if deleted != to_delete:
+        if unreported:
+            # 資料已刪除並提交，只是驅動沒回報筆數：顯示「移除 0 筆」會誤導，改用同一個 transaction 裡算出的預估值
+            logger.warning("同步清理：資料庫未回報刪除筆數，改用預估值 %d", to_delete)
+            deleted = to_delete
+        elif deleted != to_delete:
             logger.warning("同步清理：預估刪除 %d 筆，實際刪除 %d 筆", to_delete, deleted)
         logger.info(
             "同步清理完成：刪除 %d 筆孤兒關聯（孤兒筆記 %d 張，Anki %d 張筆記%s，AnkiWeb 同步%s）",
             deleted, len(orphan_ids), len(valid_note_ids), "，強制" if force else "",
             "成功" if ankiweb_synced else "失敗",
         )
-        return RelationSyncResult(
-            scanned_notes=len(valid_note_ids), orphan_notes=len(orphan_ids), deleted=deleted, considered=len(rows),
-            ankiweb_synced=ankiweb_synced,
-        )
+        return replace(result, deleted=deleted)
 
     async def delete_relations_for_note(self, note_id: int) -> int:
         """刪除指定筆記的所有關聯（無論是來源或目標）。

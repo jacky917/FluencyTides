@@ -1,4 +1,4 @@
-"""Anki 搜尋跳脫的測試（docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md §4）。
+"""Anki 搜尋跳脫的測試（設計書 relation_sync_and_search_escape_FIX_2026-10-19.md §4）。
 
 Tests for escaping values placed into Anki search queries. The rules were
 verified against the real Anki with read-only queries (design doc §4.1).

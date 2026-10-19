@@ -698,7 +698,7 @@ graph LR
 | `test_api_smoke.py` | API 層（F001/Bug1） | lifespan 無真實服務可跑通；`/api/health`=200；`/api/v1/cards/models`=200（驗證 LLM 未配置時**不得**被 503 誤擋）；`/api/v1/relations/graph`=200（空圖譜）；OpenAPI schema 生成；未知路徑=404 |
 | `test_config.py` | Core config（F004/F005） | 生產模式缺 `API_SECRET_KEY` → `ValidationError` 拒啟；已設 webhook URL 但缺 `TG_WEBHOOK_SECRET` → 拒啟；開發模式寬鬆；`is_production` 判定。全部以 `_env_file=None` 建構避免讀到專案 `.env` |
 | `test_anki_escape.py` | Infrastructure anki/utils（F071/F085/F086/F112） | `escape_anki_search_value` 對反斜線/雙引號/空白/冒號/萬用字元的跳脫正確性（查詢注入防護） |
-| `test_relation_sync.py` | Service relation（F002） | `sync_with_anki` 空列表防護：`valid_note_ids` 為空一律回 0 且不刪任何資料。以 in-memory SQLite（StaticPool）真實建表寫入後驅動 RelationService **更正（2026-10-19）**：當時並未修正，2026-10-19 才實作（見 `docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md`）。 |
+| `test_relation_sync.py` | Service relation（F002） | `sync_with_anki` 空列表防護：`valid_note_ids` 為空一律回 0 且不刪任何資料。以 in-memory SQLite（StaticPool）真實建表寫入後驅動 RelationService **更正（2026-10-19）**：當時並未修正；2026-10-19 才實作，行為也不是 return 0，而是拒絕清理（API 回 409、TG 說明原因，見 `docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md`）。 |
 | `test_llm_client.py` | Infrastructure llm（F041） | `strip_markdown_fences` 圍欄清理；`_is_retryable_error` 分類（429/連線/逾時/5xx 可重試，401/400 不可重試） |
 | `test_schema_composer.py` | Service schema_composer（F031） | `compose_graph_relations` 正確注入 Graph_Relations 欄位、加入 required、以深拷貝運作不汙染共用快取 Schema |
 | `test_alembic.py` | Alembic（F009） | 以 subprocess 對臨時 SQLite 跑 `alembic upgrade head`，驗證 baseline 鏈建立 `card_relations`/`relation_types`/`alembic_version` 三表 |

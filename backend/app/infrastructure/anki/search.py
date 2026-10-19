@@ -1,5 +1,5 @@
 """
-組 Anki 搜尋語句時的跳脫（`docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md` §4）。
+組 Anki 搜尋語句時的跳脫（設計書 `relation_sync_and_search_escape_FIX_2026-10-19.md` §4）。
 
 Escaping for values put into Anki search queries.
 

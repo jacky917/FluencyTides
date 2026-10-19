@@ -63,7 +63,7 @@ flowchart LR
 實作於 `backend/app/core/auth.py`。
 
 - **方式**：HTTP Header `X-API-Key`，透過 `fastapi.security.APIKeyHeader`（`auto_error=False`，`backend/app/core/auth.py:27-31`）+ `Security` 依賴注入實現。
-- **掛載點**：`verify_api_key`（`backend/app/core/auth.py:34-72`）以 **router 層級** `dependencies=[Depends(verify_api_key)]` 掛載於 cards（`backend/app/api/cards.py:32-36`）、relations（`backend/app/api/relations.py:21-25`）、storage（`backend/app/api/storage.py:31-35`）三個 Router，因此這三個 Router 下的**每一個端點**都受保護。
+- **掛載點**：`verify_api_key`（`backend/app/core/auth.py:34-72`）以 **router 層級** `dependencies=[Depends(verify_api_key)]` 掛載於 cards（`backend/app/api/cards.py:32-36`）、relations（`backend/app/api/relations.py:32-36`）、storage（`backend/app/api/storage.py:31-35`）三個 Router，因此這三個 Router 下的**每一個端點**都受保護。
 - **金鑰來源**：環境變數 `API_SECRET_KEY`（`backend/app/core/config.py:74-77`，預設 `None`）。
 - **驗證邏輯**（依代碼順序）：
   1. 若 `API_SECRET_KEY` **未設定或為空**：**條件式 fail-closed（2026-07-09，F004）**——生產模式（`ENVIRONMENT=production`）下此情況根本無法啟動：`config.py` 的 `enforce_production_security` validator 會在啟動階段拋 `ValueError` 中止；只有**開發模式**才維持原本「記 warning 後直接放行、回傳 `"dev-mode-no-auth"`」的行為以方便本地 Swagger UI。換言之生產漏設密鑰不再是靜默無認證，而是拒絕啟動。
@@ -127,12 +127,12 @@ flowchart LR
 | 7 | GET | `/api/v1/cards/{note_id}` | 取得單一卡片詳情 | X-API-Key | `cards.py:149` |
 | 8 | PUT | `/api/v1/cards/{note_id}` | 更新卡片欄位 | X-API-Key | `cards.py:167` |
 | 9 | DELETE | `/api/v1/cards/{note_id}` | 刪除卡片並連動清理關聯 | X-API-Key | `cards.py:187` |
-| 10 | GET | `/api/v1/relations/graph` | 取得知識圖譜資料 | X-API-Key | `relations.py:28` |
-| 11 | POST | `/api/v1/relations/` | 手動建立卡片關聯 | X-API-Key | `relations.py:66` |
-| 12 | GET | `/api/v1/relations/types` | 列出所有關聯類型 | X-API-Key | `relations.py:88` |
-| 13 | POST | `/api/v1/relations/delete` | 刪除指定關聯（含反向） | X-API-Key | `relations.py:101` |
-| 14 | DELETE | `/api/v1/relations/by-note/{note_id}` | 清除某卡片的所有關聯 | X-API-Key | `relations.py:115` |
-| 15 | POST | `/api/v1/relations/sync` | 同步清理孤兒關聯 | X-API-Key | `relations.py:138` |
+| 10 | GET | `/api/v1/relations/graph` | 取得知識圖譜資料 | X-API-Key | `relations.py:39` |
+| 11 | POST | `/api/v1/relations/` | 手動建立卡片關聯 | X-API-Key | `relations.py:81` |
+| 12 | GET | `/api/v1/relations/types` | 列出所有關聯類型 | X-API-Key | `relations.py:106` |
+| 13 | POST | `/api/v1/relations/delete` | 刪除指定關聯（含反向） | X-API-Key | `relations.py:129` |
+| 14 | DELETE | `/api/v1/relations/by-note/{note_id}` | 清除某卡片的所有關聯 | X-API-Key | `relations.py:155` |
+| 15 | POST | `/api/v1/relations/sync` | 同步清理孤兒關聯 | X-API-Key | `relations.py:182` |
 | 16 | POST | `/api/v1/storage/upload` | 上傳媒體檔案至 MinIO | X-API-Key | `storage.py:38` |
 | 17 | GET | `/api/v1/storage/files` | 列出儲存桶內檔案 | X-API-Key | `storage.py:77` |
 | 18 | GET | `/api/v1/storage/presign/{object_name:path}` | 取得預簽名下載 URL | X-API-Key | `storage.py:109` |
@@ -308,7 +308,7 @@ Router 定義於 `backend/app/api/relations.py`（`prefix="/relations"`、`tags=
 
 ### 7.1 GET /api/v1/relations/graph
 
-- **定義**：`backend/app/api/relations.py:28-63`
+- **定義**：`backend/app/api/relations.py:39-78`
 - **用途**：取得知識圖譜資料（節點 + 連線），供前端 `react-force-graph-2d` 渲染。`RelationService.get_graph_data` 向 Anki 查詢筆記（`deck:"{deck_name}"` 或 `deck:*`）與對應卡片狀態，再與 SQLite 關聯紀錄合成（2026-07-08 起邏輯位於 Service 層）。
 - **Query 參數**：
 
@@ -350,7 +350,7 @@ Anki 實體節點（`relation_service.py:326-335`）：
 
 ### 7.2 POST /api/v1/relations/
 
-- **定義**：`backend/app/api/relations.py:66-85`
+- **定義**：`backend/app/api/relations.py:81-103`
 - **用途**：手動新增一筆有向關聯。允許 `target_note_id` 為 `null`，代表建立「懸空關係」（目標單字尚未建卡）。
 - **請求 Body**：`CardRelationCreate`（見 [§10.5](#105-relation-dto)）
 
@@ -382,7 +382,7 @@ Anki 實體節點（`relation_service.py:326-335`）：
 
 ### 7.3 GET /api/v1/relations/types
 
-- **定義**：`backend/app/api/relations.py:88-98`
+- **定義**：`backend/app/api/relations.py:106-126`
 - **用途**：取得系統中已註冊的所有關聯類型名稱，供前端下拉選單使用（資料來源為 `relation_types` 字典表）。
 - **請求參數**：無。
 - **成功回應**（200）：`list[str]`，例如 `["synonym", "antonym", "collocation", "parent"]`。
@@ -390,7 +390,7 @@ Anki 實體節點（`relation_service.py:326-335`）：
 
 ### 7.4 POST /api/v1/relations/delete
 
-- **定義**：`backend/app/api/relations.py:101-112`
+- **定義**：`backend/app/api/relations.py:129-152`
 - **用途**：精準刪除兩個節點之間指定類型的關係。實作上以 label 比對並**同時刪除 A→B 與 B→A 兩個方向**的紀錄（`backend/app/services/relation_service.py:239-255`）。使用 POST 而非 DELETE 是因為需要 Body。
 - **請求 Body**：`CardRelationDelete`
 
@@ -412,7 +412,7 @@ Anki 實體節點（`relation_service.py:326-335`）：
 
 ### 7.5 DELETE /api/v1/relations/by-note/{note_id}
 
-- **定義**：`backend/app/api/relations.py:115-135`
+- **定義**：`backend/app/api/relations.py:155-179`
 - **用途**：清除資料庫中所有與指定 Anki 筆記相關的關聯（無論該筆記是起點還是終點）。設計用於 Anki 端卡片被刪除後的死連結清理。
 - **路徑參數**：`note_id: int`。
 - **成功回應**（200）：`{"deleted_count": 2}`。
@@ -420,10 +420,10 @@ Anki 實體節點（`relation_service.py:326-335`）：
 
 ### 7.6 POST /api/v1/relations/sync
 
-- **定義**：`backend/app/api/relations.py:138-167`
+- **定義**：`backend/app/api/relations.py:182-230`
 - **用途**：向 Anki 查詢目前所有存在的筆記 ID（搜尋式 `deck:*`），刪除資料庫中已不存在於 Anki 的孤兒關聯。
 - **請求參數**：查詢參數 `force: bool = false`（2026-10-19 新增）：要刪的關聯超過一半（且超過 20 筆）時仍執行。Anki 回傳 0 張筆記時即使 `force` 也拒絕。
-- **成功回應**（200）：`{"deleted_count": 5, "scanned_notes": 17394, "orphan_notes": 2, "ankiweb_synced": true}`（後三個欄位 2026-10-19 新增；`ankiweb_synced` 為 false 表示清理前與 AnkiWeb 同步失敗、以本機收藏為準）。
+- **成功回應**（200，`RelationSyncResponse`）：`{"deleted_count": 5, "scanned_notes": 17394, "orphan_notes": 2, "ankiweb_synced": true}`（後三個欄位 2026-10-19 新增；`ankiweb_synced` 為 false 表示清理前與 AnkiWeb 同步失敗、以本機收藏為準）。
 - **錯誤情況**（2026-10-19 新增 409，皆未刪除任何資料）：409 `RELATION_SYNC_EMPTY_ANKI`（Anki 回傳 0 張筆記，`force` 也無效）；409 `RELATION_SYNC_NEEDS_FORCE`（要刪超過一半且超過 20 筆，確認後帶 `force=true` 重送）；502 `ANKI_SERVICE_ERROR`；401 認證失敗。所有刪除在同一個 transaction，失敗時不會留下刪到一半的結果。
 - **只處理掃描開始前建立的關聯**（2026-10-19）：掃描期間剛生成的子卡，其關聯不會被當成孤兒。
 - **注意（2026-07-09 已修，F002）**：原本若 Anki 集合為空（`find_notes("deck:*")` 回傳空列表），`sync_with_anki` 會把**所有**關聯視為孤兒而清空整個關聯資料庫。現在 `sync_with_anki` 開頭加空列表防護：`valid_note_ids` 為空時記 warning 並 return 0（不執行任何刪除），杜絕「一句 /sync 清空整表」的不可逆資料遺失。
@@ -696,7 +696,7 @@ Router 定義於 `backend/app/api/storage.py:31-35`（`prefix="/storage"`、`tag
 | 3 | 高 | ✅ 已於 2026-07-09 修復（F005，見 11 號文檔） | ~~`TG_WEBHOOK_SECRET` 未設定時 Webhook 完全無認證~~：改 fail-closed，未設即 403；比對改 `hmac.compare_digest`（F049） | `backend/app/api/webhook.py:122` |
 | 4 | 中 | ✅ 已於 2026-07-09 修復（Bug 4 / F025，見 11 號文檔） | ~~`GET`/`PUT`/`DELETE /cards/{note_id}` 對「筆記不存在」回 502 或靜默 200~~：三者均先確認存在，不存在回 404 `CARD_NOT_FOUND` | `backend/app/services/card_service.py` |
 | 5 | 中 | ✅ 已於 2026-07-08 修復（F022，見 10 號文檔） | ~~`GET /relations/graph` 裸 500~~：邏輯已下沉 `RelationService.get_graph_data`，`AnkiConnectError` 統一包裝為 `AnkiServiceError`，Anki 不可用時回 502 統一 `ErrorResponse` 格式 | `backend/app/services/relation_service.py` |
-| 6 | 中 | ✅ 已於 2026-07-09 修復（F002，見 11 號文檔） | ~~`POST /relations/sync` 在 Anki 空集合時會清空整個關聯資料庫~~：`sync_with_anki` 加空列表防護，空集合時 return 0 不刪除 | `backend/app/services/relation_service.py` **更正（2026-10-19）**：當時並未修正，2026-10-19 才實作（見 `docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md`）。 |
+| 6 | 中 | ✅ 已於 2026-07-09 修復（F002，見 11 號文檔） | ~~`POST /relations/sync` 在 Anki 空集合時會清空整個關聯資料庫~~：`sync_with_anki` 加空列表防護，空集合時 return 0 不刪除 | `backend/app/services/relation_service.py` **更正（2026-10-19）**：當時並未修正；2026-10-19 才實作，行為也不是 return 0，而是拒絕清理（API 回 409、TG 說明原因，見 `docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md`）。 |
 | 7 | 低 | 🔶 部分改善（2026-07-09） | Webhook 驗證失敗現回 403（可從狀態碼判斷），但成功／解析失敗仍一律 200（避免 Telegram 重送），監控仍需解析 Body | `backend/app/api/webhook.py:131,148,155` |
 | 8 | 低 | ⏸ 未處理 | OpenAPI tags 元資料只宣告了 Health/Cards/Storage 三組，缺 Relations 與 Telegram Webhook | `backend/app/main.py` |
 | 9 | 低 | ⏸ 未處理 | CORS 白名單寫死 `localhost:5173`，如需其他來源的跨域直連需修改代碼 | `backend/app/main.py` |

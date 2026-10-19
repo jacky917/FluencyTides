@@ -19,7 +19,12 @@ from app.core.auth import verify_api_key
 from app.core.dependencies import get_anki_client, get_relation_service
 from app.infrastructure.anki.client import AnkiClient
 from app.schemas.card import ErrorResponse
-from app.schemas.relation import CardRelationCreate, CardRelationRead, CardRelationDelete
+from app.schemas.relation import (
+    CardRelationCreate,
+    CardRelationDelete,
+    CardRelationRead,
+    RelationSyncResponse,
+)
 from app.services.relation_service import RelationService
 
 logger = logging.getLogger(__name__)
@@ -176,7 +181,7 @@ async def delete_relations_by_note_id(
 
 @router.post(
     "/sync",
-    response_model=dict[str, int | bool],
+    response_model=RelationSyncResponse,
     responses={
         409: {
             "model": ErrorResponse,
@@ -197,7 +202,7 @@ async def sync_relations(
     force: bool = False,
     anki_client: AnkiClient = Depends(get_anki_client),
     relation_service: RelationService = Depends(get_relation_service),
-) -> dict[str, int | bool]:
+) -> RelationSyncResponse:
     """同步清理孤兒關聯的 Controller 端點。
 
     Controller endpoint that syncs with Anki and prunes orphan relations.
@@ -210,17 +215,17 @@ async def sync_relations(
             Injected RelationService instance.
 
     Returns:
-        結果摘要，例如 ``{"deleted_count": 2, "scanned_notes": 17394, "orphan_notes": 1,
-        "ankiweb_synced": true}``。``ankiweb_synced`` 為 false 表示清理前與 AnkiWeb 同步失敗、以本機收藏為準。
-        The summary.
+        結果摘要。The summary.
 
     Raises:
-        RelationSyncRefusedError: 409——拒絕清理（見 description）。
+        RelationSyncEmptyAnkiError: 409——Anki 回傳 0 張筆記（``force`` 也無效）。
+        RelationSyncNeedsForceError: 409——要刪超過一半且未帶 ``force``。
+        AnkiConnectError: 502——連不上 Anki 或 Anki 回報錯誤（不刪任何資料）。
     """
     result = await relation_service.sync_with_anki(anki_client, force=force)
-    return {
-        "deleted_count": result.deleted,
-        "scanned_notes": result.scanned_notes,
-        "orphan_notes": result.orphan_notes,
-        "ankiweb_synced": result.ankiweb_synced,
-    }
+    return RelationSyncResponse(
+        deleted_count=result.deleted,
+        scanned_notes=result.scanned_notes,
+        orphan_notes=result.orphan_notes,
+        ankiweb_synced=result.ankiweb_synced,
+    )

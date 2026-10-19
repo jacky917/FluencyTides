@@ -1,9 +1,11 @@
-"""同步清理孤兒關聯的測試（docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md §3）。
+"""同步清理孤兒關聯的測試（設計書 relation_sync_and_search_escape_FIX_2026-10-19.md §3）。
 
-Tests for ``RelationService.sync_with_anki``: an empty Anki answer is
-refused (even with ``force``), deleting more than half needs ``force``,
-relations created after the scan started are kept, deletions are batched and
-atomic, and tens of thousands of note IDs do not hit SQLite's parameter limit.
+Tests for ``RelationService.sync_with_anki``: the AnkiWeb sync runs first
+and its failure is tolerated and reported, an empty Anki answer is refused
+(even with ``force``), deleting more than half needs ``force``, relations
+created after the scan started are kept, deletions are batched and atomic,
+an unreported row count falls back to the estimate, tens of thousands of note
+IDs do not hit SQLite's parameter limit, and the API maps refusals to 409.
 """
 
 import asyncio
@@ -336,3 +338,33 @@ def test_ankiweb_sync_runs_before_reading_notes(session_factory):
     )
     _sync(session_factory, anki=anki)
     assert order == ["sync", "find"]
+
+
+def test_unreported_rowcount_falls_back_to_the_estimate(session_factory, caplog):
+    """資料庫沒回報刪除筆數（rowcount 為 None）：資料照樣刪除，回報預估的筆數而不是 0，並記 WARNING。"""
+    _seed(session_factory, [(1, 2), (3, 4), (5, 6)])
+
+    def hide_rowcount(session):
+        original = session.execute
+
+        async def execute(statement, *args, **kwargs):
+            outcome = await original(statement, *args, **kwargs)
+            if getattr(statement, "is_delete", False):
+                return mock.MagicMock(rowcount=None)
+            return outcome
+
+        session.execute = execute
+
+    with caplog.at_level("WARNING", logger=relation_service.__name__):
+        result = _sync(session_factory, [1, 2], wrap_session=hide_rowcount)
+    assert result.deleted == 2 and _count(session_factory) == 1
+    assert any("未回報刪除筆數" in record.getMessage() for record in caplog.records)
+
+
+def test_empty_anki_with_failed_ankiweb_sync_points_to_the_sync(session_factory):
+    """Anki 回 0 張且 AnkiWeb 同步也失敗：拒絕訊息指出先處理同步（很可能就是原因）。"""
+    _seed(session_factory, [(1, 2)])
+    anki = _anki([], sync=mock.AsyncMock(side_effect=AnkiConnectError("需要完整同步")))
+    with pytest.raises(RelationSyncEmptyAnkiError, match="AnkiWeb 同步也失敗"):
+        _sync(session_factory, anki=anki)
+    assert _count(session_factory) == 1

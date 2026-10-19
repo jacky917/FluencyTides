@@ -196,7 +196,7 @@ def test_sync_command_reports_scanned_cards_and_escapes_errors():
     from app.services.relation_service import RelationSyncResult
 
     message, status = _message("/sync")
-    result = RelationSyncResult(scanned_notes=3, orphan_notes=1, deleted=2, considered=5)
+    result = RelationSyncResult(scanned_notes=3, orphan_notes=1, deleted=2, considered=5, ankiweb_synced=True)
     relations = mock.MagicMock(sync_with_anki=mock.AsyncMock(return_value=result))
     _run(commands.command_sync_handler(message, _anki(), relations))
     assert _sent(status.edit_text) == ["✅ 清理完成：掃描 3 張筆記，移除 2 筆失效關聯。"]

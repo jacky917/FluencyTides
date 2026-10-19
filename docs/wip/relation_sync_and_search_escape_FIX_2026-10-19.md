@@ -3,7 +3,7 @@
 | 欄位 | 內容 |
 |---|---|
 | **創建日期** | 2026-10-19 |
-| **狀態** | ✅ 實作完成（分支 `fix/relation-sync-and-search-escape`，2026-10-19）；§8 尚待部署後確認的項目見該節。§9 的待決策 1、2 採建議值（超過一半且超過 20 列；TG 不提供強制），3、4 不在本次範圍 |
+| **狀態** | ✅ 實作完成（分支 `fix/relation-sync-and-search-escape`，2026-10-19）；§8 尚待部署後確認的項目見該節。§9 的待決策 1、2 採建議值（超過一半且超過 20 列；TG 不提供強制），3、4、5 不在本次範圍 |
 | **性質** | 調查結果 + 修正設計；2026-10-19 經一輪審查，修正了查證不足的敘述並補上並發情況（見各節「審查後補充」） |
 | **範圍** | `backend/app/services/relation_service.py`、`backend/app/api/relations.py`、`backend/app/bot/handlers/commands.py`（`/sync`）；`backend/app/infrastructure/anki/`（新的搜尋跳脫模組）與所有組 Anki 查詢的地方；`backend/tests/test_jp_verb_reading_judgments.py`；`docs/bk/` 中與事實不符的 F002 紀錄（01、02、04、06、09、11、12、README） |
 | **來源** | `docs/wip/backlog.md` 的 T1、T2（原出自 `docs/archive/tg_bot_copy_review_2026-10-18.md` §6）；`docs/wip/web_ui_parity_FEAT_2026-10-18.md` §6 第 1 點；`docs/archive/capability_routing_FEAT_2026-10-19.md` §11.3 |
@@ -18,7 +18,7 @@
 | 1 | `/sync` 收到空清單時刪光所有關聯 | **高**（會遺失資料） | 實測確認：`sync_with_anki([])` 把 5 筆關聯全部刪除。文件記載 2026-07-09 已修（F002），但程式與測試**從未存在**於 git 歷史 | 空清單一律拒絕；先算出要刪的列再刪；大比例刪除需明確確認 |
 | 2 | 外語糾錯重複檢查的查詢跳脫錯誤 | **中** | 在正式 Anki 上實測：`_`、`*` 被當成萬用字元，會比對到別張卡；`"` 被寫成 `""`，查詢不報錯但永遠找不到，重複檢查形同失效 | 抽出共用的搜尋跳脫，所有組查詢的地方改用它 |
 | 3 | 依賴開發者 `.env` 的測試 | 低 | 斷言寫在 `mock.patch` 區塊外，比對到 `.env` 的值；沒有 `.env` 的環境必定失敗 | 斷言移進區塊內 |
-| 4 | TG 實機錄音評分確認 | 驗證 | 能力路由 R2 後還沒用真實語音走過一次 | 依 §5.4 的清單確認 |
+| 4 | TG 實機錄音評分確認 | 驗證 | 能力路由 R2 後還沒用真實語音走過一次 | 依 §5.2 的清單確認 |
 
 另外，調查時發現 **`docs/bk/` 的修復紀錄大量與程式不符**（§6.1），並非只有 F002。這不在本計畫範圍，但會影響之後所有依賴這些文件的判斷，建議另開一項全面核對。
 
@@ -27,6 +27,8 @@
 ## 2. 調查：`/sync` 刪光關聯
 
 ### 2.1 程式現況
+
+以下行號都是修正前（`3e93c6b`）的程式。
 
 `RelationService.sync_with_anki()`（`backend/app/services/relation_service.py:154`）一次執行：
 
@@ -95,21 +97,22 @@ git log --all --oneline -- "*test_relation_sync.py"
 
 0. （實作審查後補充）先明確與 AnkiWeb 同步一次（`sync(raise_errors=True)`）。失敗不中止，以本機收藏為準，結果標在回傳的 `ankiweb_synced` 並記 WARNING，事後能把刪除與同步失敗連在一起。
 1. **掃描開始時間**：在取 Anki 筆記（`find_notes("deck:*")`）**之前**，以**資料庫的時鐘**記下時間；只有 `created_at` 早於這個時間 2 秒以上的關聯才可能被當成孤兒（`created_at` 由資料庫填入、SQLite 只到秒，所以用同一個時鐘並留餘裕）。實作時介面改為 `sync_with_anki(anki_client, force=...)`，由服務層自己依序記時間、取筆記，呼叫端不會弄錯順序。（審查後補充：否則 `/sync` 掃描期間剛生成的子卡，其筆記不在掃描結果裡，新建的關聯會立刻被刪掉。`card_relations.created_at` 已存在，為 UTC；比較時兩邊都用 UTC。）
-2. `valid_note_ids` 為空：拋 `RelationSyncEmptyAnkiError`（`error_code` 為 `RELATION_SYNC_EMPTY_ANKI`），訊息說明「Anki 回傳 0 張筆記，為避免誤刪已停止清理（強制清理也不會執行）」。不刪任何資料。兩種拒絕都是 `RelationSyncRefusedError`（`FluencyTidesError` 子類，HTTP 409）的子類；實作審查後拆成兩個 `error_code`，網頁才分得出「能不能強制」。
-3. 讀出關聯表裡（`created_at < scanned_at` 的列）出現過的所有筆記 ID（`source_note_id`、`target_note_id` 的聯集，去掉 NULL），在 Python 端與 `valid_note_ids` 做差集，得到孤兒 ID。
+2. `valid_note_ids` 為空：拋 `RelationSyncEmptyAnkiError`（`error_code` 為 `RELATION_SYNC_EMPTY_ANKI`），訊息說明「Anki 回傳 0 張筆記，為避免誤刪已停止清理（強制清理也不會執行）」，並附下一步：AnkiWeb 同步也失敗時請先在 Anki 處理同步（同步失敗很可能就是原因），否則請確認 Anki 已開啟並載入收藏。不刪任何資料。兩種拒絕都是 `RelationSyncRefusedError`（`FluencyTidesError` 子類，HTTP 409）的子類；實作審查後拆成兩個 `error_code`，網頁才分得出「能不能強制」。
+3. 讀出關聯表裡考慮範圍內（`created_at` 早於掃描開始 2 秒以上，即 `created_at < cutoff`）的列出現過的所有筆記 ID（`source_note_id`、`target_note_id` 的聯集，去掉 NULL），在 Python 端與 `valid_note_ids` 做差集，得到孤兒 ID。
    - 這樣也避開了 `NOT IN` 帶上萬個參數：參數只剩孤兒 ID，並分批（每批 400 個）以 `IN` 刪除。每條 DELETE 帶 2 × 批次 + 1 個參數（起點、終點各展開一次，加上截止時間），400 → 801 個，在舊版 SQLite（3.32 之前）的 999 上限內。所有批次在同一個 transaction 裡，最後才提交：中途任何失敗都不會留下刪到一半的結果。
-4. 刪除條件同樣限定 `created_at < scanned_at`。
-5. 比例防護：要刪的關聯超過全部關聯的 50%，且超過 20 列時，除非呼叫端帶 `force=True`，否則拋 `RelationSyncNeedsForceError`（`error_code` 為 `RELATION_SYNC_NEEDS_FORCE`），訊息附上「將刪除 N / 總數 M 筆」。剛好 20 列或剛好一半都不擋。
-6. 回傳值改為小型結果物件：刪除數、掃描的筆記數、孤兒筆記 ID 數、`ankiweb_synced`，讓各入口都能顯示。資料庫沒回報刪除筆數（`rowcount` 為 None 或負數）時記 WARNING 並以 0 計；實際刪除數與預估不同時也記 WARNING。
+4. 比例防護（在刪除之前檢查）：要刪的關聯超過考慮範圍內關聯的 50%，且超過 20 列時，除非呼叫端帶 `force=True`，否則拋 `RelationSyncNeedsForceError`（`error_code` 為 `RELATION_SYNC_NEEDS_FORCE`），訊息附上「將刪除 N / 總數 M 筆」。剛好 20 列或剛好一半都不擋。
+5. 刪除條件同樣限定 `created_at < cutoff`。
+6. 回傳值改為小型結果物件：刪除數、掃描的筆記數、孤兒筆記 ID 數、`ankiweb_synced`，讓各入口都能顯示。資料庫沒回報刪除筆數（`rowcount` 為 None 或負數）時記 WARNING，改用同一個 transaction 裡算出的預估刪除數（資料已刪除並提交，顯示「移除 0 筆」會誤導）；實際刪除數與預估不同時也記 WARNING。`ankiweb_synced` 為必填，忘了傳不會被當成同步成功。
 
-服務層的訊息只陳述事實（發生了什麼、刪了幾筆），「下一步怎麼做」由各入口補上——TG 與網頁能做的事不同。
+服務層的訊息陳述事實（發生了什麼、刪了幾筆）與兩邊都適用的下一步；只有某個入口能做的事（例如網頁的強制清理）由該入口補上。
 
 ### 3.2 入口
 
 | 入口 | 改動 |
 |---|---|
+| TG（全域） | 新增全域錯誤處理（`bot/handlers/errors.py`）：handler 沒攔下的例外記下 traceback，並通知使用者這次操作沒有完成、結束按鈕轉圈。原本只有 log，使用者端完全沒有反應 |
 | TG `/sync` | 被拒絕時回覆原因與數字（例如「⚠️ 沒有清理：Anki 回傳 0 張筆記…」）。TG 不提供 `force`：要刪超過一半而被擋時，指出到網頁「Knowledge Graph」按同步並確認強制清理。連不上 Anki、資料庫錯誤也都更新狀態訊息並說明「未刪除任何關聯」（原本資料庫錯誤會讓訊息停在「⏳ 清理中」）。AnkiWeb 同步失敗時在完成訊息後補一行說明 |
-| `POST /api/v1/relations/sync` | 新增 `?force=true` 查詢參數（只放寬比例防護，空清單永遠拒絕）；被拒絕時回 409 與 `RELATION_SYNC_EMPTY_ANKI` 或 `RELATION_SYNC_NEEDS_FORCE`；成功回應多了 `scanned_notes`、`orphan_notes`、`ankiweb_synced` |
+| `POST /api/v1/relations/sync` | 新增 `?force=true` 查詢參數（只放寬比例防護，空清單永遠拒絕）；被拒絕時回 409 與 `RELATION_SYNC_EMPTY_ANKI` 或 `RELATION_SYNC_NEEDS_FORCE`；回應改為 Pydantic 模型 `RelationSyncResponse`，多了 `scanned_notes`、`orphan_notes`、`ankiweb_synced` |
 | 網頁知識圖譜「Sync」 | 成功時顯示掃描張數與移除筆數；收到 `RELATION_SYNC_NEEDS_FORCE` 時跳確認框，確認後帶 `force=true` 重送；`RELATION_SYNC_EMPTY_ANKI` 只說明原因；非後端錯誤另記 `console.error` |
 
 ### 3.3 文件
@@ -143,7 +146,7 @@ git log --all --oneline -- "*test_relation_sync.py"
 |---|---|---|
 | 含 `_` 的 `Card_ID` | 1 | `\_` 照字面比對得到 `_` |
 | 含 `"` 的 `Context` 欄位 | 1 | `\"` 照字面比對得到 `"` |
-| 含 `:` 的 `Context` 欄位（冒號不處理） | 1 | 指定欄位時，值中間的冒號不跳脫也比對得到 |
+| 含 `:` 的 `Context` 欄位（冒號不處理） | 1 | 指定欄位時，值中間的冒號不跳脫也比對得到（後來改為一律跳脫，見下表） |
 
 實作審查後再補的**冒號**驗證（同樣唯讀）：
 
@@ -159,7 +162,7 @@ git log --all --oneline -- "*test_relation_sync.py"
 
 ### 4.2 現在的行為與後果
 
-`expression_fsm.py:453-458`：
+修正前（`3e93c6b`）的 `expression_fsm.py:453-458`：
 
 ```python
 original_text = data.get("original_text", "").replace('"', '""')
@@ -174,6 +177,8 @@ query = f'deck:"{deck_name}" note:"{model_name}" "My_Original:{original_text}"'
 
 ### 4.3 其他組查詢的地方
 
+位置的行號與「現況」都是修正前（`3e93c6b`）的程式。
+
 | 位置 | 插入的值 | 現況 | 風險 |
 |---|---|---|---|
 | `bot/handlers/fsm/expression_fsm.py:458` | 使用者輸入的原文 | 跳脫錯誤 | 中：見 §4.2 |
@@ -181,7 +186,7 @@ query = f'deck:"{deck_name}" note:"{model_name}" "My_Original:{original_text}"'
 | `api/relations.py:58`（知識圖譜依牌組篩選） | 前端傳來的牌組名 | 只加外層引號 | 低：牌組名含 `_` 時多撈到名稱相近的牌組 |
 | `services/task_handlers/{speaking_coach,speaking_trilingual,vocabulary_mining}_handler.py`（共 4 處） | 牌組名 | `"deck:{deck}"`，沒跳脫 | 低：同上 |
 | `bot/handlers/{commands,callbacks,messages,voice}.py`（共 6 處 `Card_ID:{card_id}`） | Deep Link 裡的卡片 ID | 沒加引號、沒跳脫 | 低：Telegram 的 start 參數只允許 `A-Za-z0-9_-`，最壞是 `_` 當萬用字元；現有 ID 格式下實際撞不到 |
-| `bot/handlers/fsm/expression_fsm.py:941` | 母卡 note ID（整數） | — | 無 |
+| `bot/handlers/fsm/expression_fsm.py:941` | 母卡 note ID（整數） | — | 無（仍一併改用 `note_type_term` + `field_term`，寫法一致） |
 | `services/card_browse_service.py`（`deck_search_term`） | 牌組名 | ✅ 已正確跳脫（`_SEARCH_SPECIALS`），有測試 | 無；本計畫把它的實作搬去共用 |
 
 ### 4.4 方案
@@ -191,10 +196,10 @@ query = f'deck:"{deck_name}" note:"{model_name}" "My_Original:{original_text}"'
    - `field_term(field: str, value: str) -> str`：回傳 `"欄位:跳脫後的值"`，整段加引號（值裡有空白也安全）。
    - `deck_term(deck: str) -> str`：由 `card_browse_service.deck_search_term` 搬過來；`card_browse_service` 改成匯入它，對外名稱不變。
    - `note_type_term(name)`、`note_types_query(names, deck=None)`：筆記類型條件（實作時補上，三個 handler 共用）。
-2. §4.3 表中「現況」不是 ✅ 的地方全部改用這兩個函式。`Card_ID` 查詢改為 `field_term("Card_ID", card_id)`。
+2. §4.3 表中「現況」不是 ✅ 的地方全部改用這些函式。`Card_ID` 查詢改為 `field_term("Card_ID", card_id)`。
 3. 測試：
-   - `search.py` 的單元測試：四種特殊字元、反斜線不重複跳脫、空字串、含換行與 HTML 的值原樣保留。
-   - 外語糾錯重複檢查：原文含 `"`、`_`、`*`、`\` 時，傳給 `find_notes` 的查詢字串正確。
+   - `search.py` 的單元測試：五種特殊字元、反斜線不重複跳脫、空字串、含換行與 HTML 的值原樣保留。
+   - 外語糾錯重複檢查：原文含 `"`、`_`、`*`、`\`、`:` 時，傳給 `find_notes` 的查詢字串正確。
    - 既有的 `deck_search_term` 測試照常通過。
 
 ---
@@ -264,16 +269,17 @@ ssh jacky917@192.168.50.172 'docker logs fluencytides-backend 2>&1 | grep -aE "�
 
 | 檔案 | 改動 |
 |---|---|
-| `backend/app/infrastructure/anki/search.py`（新） | `escape_search_value`、`field_term`、`deck_term` |
+| `backend/app/infrastructure/anki/search.py`（新） | `escape_search_value`、`field_term`、`deck_term`、`note_type_term`、`note_types_query` |
 | `backend/app/services/card_browse_service.py` | `deck_search_term` 改用 `search.deck_term` |
-| `backend/app/bot/handlers/fsm/expression_fsm.py` | 重複檢查改用 `field_term` / `deck_term`；只有 Anki 查詢失敗才退回直接生成，並先告訴使用者跳過了檢查；流程狀態沒有原文時當成流程失效 |
-| `backend/app/services/anki_model_manager.py` | 重複位置查詢改為「同筆記類型＋第一個欄位完全相同」（Anki 的重複判定條件），失敗時記下查詢與 traceback，仍退回原本的重複錯誤 |
-| `backend/app/api/relations.py` | 圖譜牌組篩選改用 `deck_term`；`/relations/sync` 加 `force`、處理拒絕 |
-| `backend/app/services/task_handlers/` 三個 handler | 牌組篩選改用 `deck_term` |
+| `backend/app/bot/handlers/fsm/expression_fsm.py` | 重複檢查改用 `deck_term` / `note_type_term` / `field_term`；覆蓋時的子卡查詢（`Master_Note_ID`）改用 `note_type_term` + `field_term`；只有 Anki 查詢失敗才退回直接生成，並先告訴使用者跳過了檢查；流程狀態沒有原文時當成流程失效 |
+| `backend/app/services/anki_model_manager.py` | 重複位置查詢改為「同筆記類型＋模型定義的第一個欄位完全相同」（Anki 的重複判定條件），失敗時記下查詢與 traceback、查無結果時記 INFO，仍退回原本的重複錯誤 |
+| `backend/app/api/relations.py`、`backend/app/schemas/relation.py` | 圖譜牌組篩選改用 `deck_term`；`/relations/sync` 加 `force`、處理拒絕，回應改為 `RelationSyncResponse` |
+| `backend/app/services/task_handlers/` 三個 handler | 牌組與筆記類型篩選改用 `note_types_query` |
 | `backend/app/bot/handlers/{commands,callbacks,messages,voice}.py` | `Card_ID` 查詢改用 `field_term`；`/sync` 顯示拒絕原因 |
+| `backend/app/bot/handlers/errors.py`（新）、`backend/app/bot/dispatcher.py` | 全域錯誤處理 |
 | `backend/app/services/relation_service.py` | `sync_with_anki` 改為先算再刪、只處理掃描開始前建立的關聯、空清單與比例防護、回傳結果物件 |
 | `backend/app/core/exceptions/services.py` | 新增 `RelationSyncRefusedError`（409）與子類 `RelationSyncEmptyAnkiError`、`RelationSyncNeedsForceError` |
-| `frontend/src/api/client.ts`、`frontend/src/pages/KnowledgeGraph.tsx` | `syncRelations(force)`、回應型別；確認後強制清理、顯示掃描張數 |
+| `frontend/src/api/client.ts`、`frontend/src/types/api.ts`、`frontend/src/pages/KnowledgeGraph.tsx` | `syncRelations(force)`、回應型別 `RelationSyncResponse`；確認後強制清理、顯示掃描張數 |
 | `backend/tests/` | `test_anki_search.py`（新）、`test_relation_sync.py`（新）、外語糾錯重複檢查與 `/sync` 回覆的測試；修 `test_jp_verb_reading_judgments.py:231` |
 | `docs/bk/01`、`02`、`04`、`06`、`09`、`11`、`12`、`docs/bk/README.md` | 更正 F002 狀態 |
 | `docs/wip/backlog.md` | 實作後移除 T1、T2 |
@@ -282,14 +288,14 @@ ssh jacky917@192.168.50.172 'docker logs fluencytides-backend 2>&1 | grep -aE "�
 
 ## 8. 驗收
 
-- [x] `sync_with_anki([])` 拋 `RelationSyncRefusedError`，資料表筆數不變（實作後介面改為傳入 Anki 客戶端，由服務層自己取筆記，才能在取之前記下掃描時間）
+- [x] Anki 回傳 0 張筆記時拋 `RelationSyncEmptyAnkiError`（`RelationSyncRefusedError` 的子類），資料表筆數不變（實作後介面改為傳入 Anki 客戶端，由服務層自己取筆記，才能在取之前記下掃描時間）
 - [x] 要刪的超過 50% 且超過 20 列時拒絕；帶 `force=True` 才刪
 - [x] `valid_note_ids` 超過 32,766 個時照常運作（測試以 SQLite 建 40,000 個 ID）
 - [x] 掃描開始之後才建立的關聯不會被刪（即使它的筆記不在掃描結果裡）
 - [x] TG `/sync` 被拒絕時回覆原因與數字；API 回 409 與 `RELATION_SYNC_EMPTY_ANKI` / `RELATION_SYNC_NEEDS_FORCE`；網頁知識圖譜的同步按鈕顯示後端的原因，要刪超過一半時可確認後強制
 - [x] 分批刪除跨多批時全部刪除；中途失敗時一筆都不留下刪除（測試）
 - [x] 掃描時間在取 Anki 筆記之前取（測試：把順序反過來會失敗）
-- [x] 連不上 Anki、資料庫錯誤時 TG 狀態訊息都會更新
+- [x] 連不上 Anki、資料庫錯誤時 TG 狀態訊息都會更新；handler 沒攔下的例外由全域錯誤處理通知使用者
 - [x] 外語糾錯重複檢查：原文含 `"`、`_`、`*`、`\`、`:` 時查詢字串正確（單元測試）；查不到 Anki 時明講跳過檢查；正式 Anki 上已確認跳脫後的 `note:`、欄位條件結果正確
 - [ ] 部署後在 TG 實際走一次外語糾錯，原文含 `_` 或 `"`
 - [x] `test_jp_verb_reading_judgments.py` 在沒有 `backend/.env` 的 worktree 通過
@@ -312,4 +318,4 @@ cd backend && python -m ruff check app tests
 2. **TG `/sync` 要不要提供強制清理**：建議不提供，強制只走 API。
 3. **§6.1 的文件全面核對**：要不要另開一項（建議要，否則之後的判斷都可能建立在錯的紀錄上）。
 4. **§6.2 正式機要不要設定 `API_SECRET_KEY`**。
-4. **（實作審查後）強制清理的上限**：網頁確認的是當下的「將刪除 N / M 筆」，帶 `force=true` 重送時服務層會重算、不再比對比例。若確認後 Anki 剛好換成另一個較小的收藏，強制清理可能刪得比確認時多（空收藏仍一律拒絕）。可行做法：重送時帶 `expected=N`，重算後超過就再拒絕。風險低，未在本次實作。
+5. **（實作審查後）強制清理的上限**：網頁確認的是當下的「將刪除 N / M 筆」，帶 `force=true` 重送時服務層會重算、不再比對比例。若確認後 Anki 剛好換成另一個較小的收藏，強制清理可能刪得比確認時多（空收藏仍一律拒絕）。可行做法：重送時帶 `expected=N`，重算後超過就再拒絕。風險低，未在本次實作。

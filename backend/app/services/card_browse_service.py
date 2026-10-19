@@ -66,17 +66,17 @@ _TEMPLATE_REF = re.compile(r"\{\{(.*?)\}\}", re.S)
 
 
 def deck_search_term(deck: str) -> str:
-    """組出只比對這個牌組（含子牌組）的搜尋條件，名稱中的萬用字元照字面比對。
+    """組出只比對這個牌組（含子牌組）的搜尋條件，名稱中的萬用字元與冒號照字面比對。
 
-    Build a search term matching exactly this deck and its sub-decks; ``*``
-    and ``_`` in the name are matched literally. Delegates to the shared
-    :func:`app.infrastructure.anki.search.deck_term`.
+    Build a search term matching exactly this deck and its sub-decks; ``*``,
+    ``_`` and ``:`` in the name are escaped and matched literally. Delegates to
+    the shared :func:`app.infrastructure.anki.search.deck_term`.
 
     Args:
         deck: 牌組完整名稱，例如 ``日本語::外語糾錯``。Full deck name.
 
     Returns:
-        例如 ``deck:"日本語::外語糾錯"``。The search term.
+        例如 ``deck:"日本語\\:\\:外語糾錯"``（跳脫後的 ``::`` 照常比對子牌組）。The search term.
     """
     return deck_term(deck)
 

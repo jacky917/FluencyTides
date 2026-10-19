@@ -459,5 +459,5 @@ async def command_sync_handler(
         logger.exception("/sync 發生業務錯誤，未刪除任何關聯")
         await status_msg.edit_text(f"❌ 清理失敗（未刪除任何關聯）：{error_detail(e)}")
     except SQLAlchemyError as e:
-        logger.exception("/sync 資料庫錯誤，transaction 已回復，未刪除任何關聯")
+        logger.exception("/sync 資料庫錯誤：transaction 未提交，session 結束時回復，未刪除任何關聯")
         await status_msg.edit_text(f"❌ 清理失敗（資料庫錯誤，未刪除任何關聯）：{error_detail(e)}")

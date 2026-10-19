@@ -145,3 +145,20 @@ class RelationDef(BaseModel):
         default="forward",
         description="關係方向性",
     )
+
+
+class RelationSyncResponse(BaseModel):
+    """``POST /relations/sync`` 的回應。Response of the relation sync.
+
+    Attributes:
+        deleted_count: 刪除的關聯數；資料庫驅動未回報筆數時為預估值。Relations deleted.
+        scanned_notes: 這次從 Anki 取得的筆記數。Notes returned by Anki.
+        orphan_notes: 關聯中已不在 Anki 的筆記數。Referenced notes no longer in Anki.
+        ankiweb_synced: 清理前與 AnkiWeb 的同步是否成功；false 表示以本機收藏為準。
+            Whether the AnkiWeb sync before cleanup succeeded.
+    """
+
+    deleted_count: int = Field(..., ge=0, description="刪除的關聯數；資料庫驅動未回報筆數時為預估值")
+    scanned_notes: int = Field(..., ge=0, description="這次從 Anki 取得的筆記數")
+    orphan_notes: int = Field(..., ge=0, description="關聯中已不在 Anki 的筆記數")
+    ankiweb_synced: bool = Field(..., description="清理前與 AnkiWeb 的同步是否成功；false 表示以本機收藏為準")

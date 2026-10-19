@@ -336,11 +336,14 @@ class AnkiModelManager:
 
         Look up the deck holding the duplicate note after a duplicate error.
 
-        此方法透過搜尋第一個欄位的值來定位重複的筆記，
-        並追溯其所屬的牌組名稱，幫助使用者快速找到衝突來源。
+        以 Anki 判定重複的條件反查：同筆記類型、且模型定義的第一個欄位完全相同（值照字面跳脫），
+        再追溯其所屬的牌組名稱，幫助使用者快速找到衝突來源。盡力而為：任何失敗都回傳 None，
+        呼叫端保留原本的重複錯誤。注意 Anki 比對重複時會去掉 HTML，欄位搜尋則比對原始內容，
+        所以欄位帶 HTML 時可能查不到（記 INFO）。
 
-        Locates the duplicate by searching the first field's value and
-        traces its deck names to help the user find the conflict source.
+        Locates the duplicate the way Anki detects it (same note type, same
+        first field as defined by the model, matched literally) and traces its
+        deck names. Best effort: any failure returns None.
 
         Args:
             note: 觸發重複錯誤的筆記。The note that triggered the error.
@@ -360,11 +363,13 @@ class AnkiModelManager:
             first_field_name = field_names[0] if field_names else next(iter(note.fields))
             first_field_val = note.fields.get(first_field_name, "")
             if not first_field_val:
+                logger.info("反查重複卡片：第一個欄位 %s 是空的，不反查", first_field_name)
                 return None
             query = f"{note_type_term(note.modelName)} {field_term(first_field_name, first_field_val)}"
             note_ids = await self._anki_client.find_notes(query)
 
             if not note_ids:
+                logger.info("反查重複卡片查無結果（query=%s）", query)
                 return None
 
             notes_info = await self._anki_client.get_notes_info(
@@ -389,6 +394,7 @@ class AnkiModelManager:
                     f"👉 本地 Anki 搜尋: nid:{note_ids[0]}\n"
                     f"👉 所屬牌組: [{deck_list_str}]"
                 )
+            logger.info("反查重複卡片：找到筆記 %s 但取不到牌組（query=%s）", note_ids, query)
 
         except Exception:  # noqa: BLE001 - 見上方說明，失敗時回傳 None 保留原錯誤
             logger.warning("反查重複卡片所在牌組失敗（query=%s）", query, exc_info=True)
