@@ -129,13 +129,13 @@ export function changedFields(original: Record<string, string>, edited: Record<s
 
 /**
  * 清單中顯示的摘要：第一個有內容、非 JSON 的欄位，去掉 HTML 標記與所有 `[...]`（振假名讀音、
- * sound 標記等）。
- * The list preview: the first non-empty, non-JSON field as plain text.
+ * sound 標記等）。回傳完整文字，放不下時由畫面截斷。
+ * The list preview: the first non-empty, non-JSON field as plain text, in
+ * full (the UI clamps it).
  * @param fields - 欄位名 → 原始值（依順序）。Field values in order.
- * @param maxLength - 最多幾個字。Maximum length.
  * @returns 摘要；沒有可顯示的欄位時為空字串。The preview, or ''.
  */
-export function cardPreview(fields: Record<string, string>, maxLength = 80): string {
+export function cardPreview(fields: Record<string, string>): string {
   for (const [name, value] of Object.entries(fields)) {
     if (isStructuredField(name, value)) continue
     const text = value
@@ -149,7 +149,7 @@ export function cardPreview(fields: Record<string, string>, maxLength = 80): str
       .replace(/&amp;/g, '&')
       .replace(/\s+/g, ' ')
       .trim()
-    if (text) return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text
+    if (text) return text
   }
   return ''
 }

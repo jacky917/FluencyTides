@@ -120,4 +120,29 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* Tailwind v4 把按鈕的游標改回預設箭頭；可點的按鈕一律顯示手指 */
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
 }
+
+/*
+ * 卡面正反切換動畫（lib/faceTransitions.ts）。每種分離開（out）與進來（in）兩段；
+ * --face-dir：1 為翻到背面、-1 為翻回正面，動畫依方向反過來。
+ * Card face switch animations; --face-dir mirrors them.
+ */
+@keyframes face-fade-out { to { opacity: 0; } }
+@keyframes face-fade-in { from { opacity: 0; } }
+
+@keyframes face-flip-out { to { transform: rotateY(calc(-90deg * var(--face-dir, 1))); } }
+@keyframes face-flip-in { from { transform: rotateY(calc(90deg * var(--face-dir, 1))); } }
+
+@keyframes face-flip-vertical-out { to { transform: rotateX(calc(90deg * var(--face-dir, 1))); } }
+@keyframes face-flip-vertical-in { from { transform: rotateX(calc(-90deg * var(--face-dir, 1))); } }
+
+@keyframes face-slide-out { to { opacity: 0; transform: translateX(calc(-40px * var(--face-dir, 1))); } }
+@keyframes face-slide-in { from { opacity: 0; transform: translateX(calc(40px * var(--face-dir, 1))); } }
+
+@keyframes face-zoom-out { to { opacity: 0; transform: scale(0.94); } }
+@keyframes face-zoom-in { from { opacity: 0; transform: scale(1.04); } }

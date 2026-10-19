@@ -79,6 +79,6 @@ describe('field values', () => {
     expect(cardPreview({ Data_JSON: '[1]', Word: ' 絡[から]まる<br>' })).toBe('絡まる')
     expect(cardPreview({ Prompt: '<b>Hello</b>&nbsp;&amp; bye [sound:a.mp3]' })).toBe('Hello & bye')
     expect(cardPreview({ A: '', B: '  ' })).toBe('')
-    expect(cardPreview({ A: 'x'.repeat(100) }, 10)).toBe(`${'x'.repeat(10)}…`)
+    expect(cardPreview({ A: 'x'.repeat(300) })).toBe('x'.repeat(300))
   })
 })

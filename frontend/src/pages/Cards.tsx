@@ -12,8 +12,10 @@
  * 一筆瀏覽器歷史，所以瀏覽器的上一頁也能返回。點正面空白處翻到背面（與 Anki 審閱相同）。
  *
  * 版面依內容區實際寬度（左側選單收合後會變寬）分三種，見 `lib/cardLayout.ts`：三欄並排、
- * 牌組與清單並排而卡面在下方、全部疊成一欄。並排的面板之間可以拖曳調整寬度，寬度存在
- * localStorage（只存使用者拖曳的那一個）；雙擊分隔線恢復預設。切換模式會重新掛載面板，
+ * 牌組與清單並排而卡面在下方、全部疊成一欄。三欄時頁面剛好填滿視窗、外層不捲動，各欄有自己
+ * 的捲軸（標題列固定在上方）。並排的面板之間可以拖曳調整寬度，寬度存在 localStorage（只存
+ * 使用者拖曳過的面板，其他用預設：卡面在視窗不超過 1920px 時 768px、更寬時 1080px）；雙擊
+ * 分隔線恢復預設。切換模式會重新掛載面板，
  * 所以面板的狀態（牌組展開、搜尋草稿、筆記欄位視窗）放在頁面這一層。
  *
  * Left: the deck tree; middle: the cards of the selected deck (sub-decks
@@ -31,22 +33,24 @@ import { usePanelRef, type Layout, type LayoutChangedMeta, type PanelSize } from
 import { FluencyTidesAPI } from '../api/client'
 import { CardDetailModal } from '../components/CardDetailModal'
 import { CardFrame } from '../components/CardFrame'
+import { FaceTransition } from '../components/FaceTransition'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../components/ui/resizable'
 import { Skeleton } from '../components/ui/skeleton'
 import { useElementWidth } from '../hooks/useElementWidth'
+import { useFlipPreference } from '../hooks/useFlipPreference'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { describeApiError, retryTransient } from '../lib/apiError'
 import { parseBrowseParams, pickNoteCard, pushTrail, type CardSide } from '../lib/cardBrowse'
 import {
   DECK_MAX,
   DECK_MIN,
-  DEFAULT_PANEL_WIDTHS,
   LIST_MIN,
   VIEWER_MAX,
   VIEWER_MIN,
+  defaultPanelWidths,
   layoutMode,
   sanitizePanelWidths,
   type PanelWidths,
@@ -57,8 +61,11 @@ import { cn } from '../lib/utils'
 
 const PAGE_SIZE = 50
 
+/** 自己捲動的面板，標題列固定在上方。Sticky header of a self-scrolling panel. */
+const STICKY_HEADER = 'sticky top-0 z-10 bg-card rounded-t-lg'
+
 /** 存面板寬度的 localStorage 鍵。localStorage key of the panel widths. */
-const PANEL_WIDTHS_KEY = 'cards_panel_widths'
+const PANEL_WIDTHS_KEY = 'cards_panel_widths_v2'
 
 /** 跳轉時放進瀏覽器歷史的狀態：從哪張卡片跳過來。History state of a jump. */
 interface JumpState {
@@ -167,8 +174,10 @@ export default function Cards() {
   const [fieldsOpen, setFieldsOpen] = useState(false)
   const scrolledCardRef = useRef<number | null>(null)
 
-  const [storedWidths, setStoredWidths] = useLocalStorage<PanelWidths>(PANEL_WIDTHS_KEY, DEFAULT_PANEL_WIDTHS)
-  const widths = sanitizePanelWidths(storedWidths)
+  const [storedRaw, setStoredWidths] = useLocalStorage<Partial<PanelWidths>>(PANEL_WIDTHS_KEY, {})
+  const stored = sanitizePanelWidths(storedRaw)
+  const defaults = defaultPanelWidths(window.innerWidth)
+  const widths: PanelWidths = { ...defaults, ...stored }
   const deckRef = usePanelRef()
   const viewerRef = usePanelRef()
   // 面板目前的寬度（含程式為了放得下而縮小的）；只存使用者正在拖曳的那一個，
@@ -181,12 +190,13 @@ export default function Cards() {
   const saveWidths = (_layout: Layout, meta: LayoutChangedMeta) => {
     const key = activeHandle.current
     if (!meta.isUserInteraction || key === null) return
-    setStoredWidths(sanitizePanelWidths({ ...widths, [key]: liveWidths.current[key] }))
+    setStoredWidths(sanitizePanelWidths({ ...stored, [key]: liveWidths.current[key] }))
   }
   const resetWidth = (key: keyof PanelWidths) => {
-    const value = DEFAULT_PANEL_WIDTHS[key]
-    ;(key === 'deck' ? deckRef : viewerRef).current?.resize(value)
-    setStoredWidths({ ...widths, [key]: value })
+    ;(key === 'deck' ? deckRef : viewerRef).current?.resize(defaults[key])
+    const rest = { ...stored }
+    delete rest[key]
+    setStoredWidths(rest)
   }
   /** 調整某個面板寬度的分隔線。The separator that resizes one panel. */
   const handleFor = (key: keyof PanelWidths) => (
@@ -201,18 +211,22 @@ export default function Cards() {
     />
   )
 
-  const deckPanel = (className?: string) => (
+  // 並排時面板填滿高度、自己捲動，標題列固定在上方
+  const scrollClass = (scrollable: boolean) => (scrollable ? 'h-full overflow-auto' : undefined)
+  const deckPanel = (scrollable = false) => (
     <DeckPanel
-      className={className}
+      className={scrollClass(scrollable)}
+      scrollable={scrollable}
       toggled={deckToggled}
       onToggled={setDeckToggled}
       selected={deck}
       onSelect={(name) => update({ deck: name, page: null, card: null, trail: null })}
     />
   )
-  const listPanel = (className?: string) => (
+  const listPanel = (scrollable = false) => (
     <CardListPanel
-      className={className}
+      className={scrollClass(scrollable)}
+      scrollable={scrollable}
       draft={searchDraft}
       onDraft={setSearchDraft}
       deck={deck}
@@ -224,10 +238,10 @@ export default function Cards() {
       onSelect={(id) => update({ card: String(id), trail: null })}
     />
   )
-  const viewerPanel = (className?: string) => (
+  const viewerPanel = (scrollable = false, className?: string) => (
     <CardViewPanel
-      className={className}
-      sideBySide={mode === 'three'}
+      className={cn(scrollClass(scrollable), className)}
+      sideBySide={scrollable}
       fieldsOpen={fieldsOpen}
       onFieldsOpen={setFieldsOpen}
       scrolledCardRef={scrolledCardRef}
@@ -252,27 +266,28 @@ export default function Cards() {
       groupResizeBehavior="preserve-pixel-size"
       onResize={trackWidth('deck')}
     >
-      {deckPanel('h-full overflow-auto')}
+      {deckPanel(true)}
     </ResizablePanel>
   )
 
+  // 三欄時剛好填滿視窗（扣掉頂列 3rem 與內容區上下 padding 3rem），外層不捲動
   return (
-    <div className="space-y-6">
-      <div>
+    <div className={mode === 'three' ? 'flex h-[calc(100svh-6rem)] min-h-[28rem] flex-col gap-6' : 'space-y-6'}>
+      <div className="shrink-0">
         <h2 className="text-3xl font-bold tracking-tight">卡片瀏覽</h2>
         <p className="text-muted-foreground mt-2">
           選一個牌組查看其中（含子牌組）的卡片；卡面由 Anki 渲染，與 Anki 中看到的大致相同。
         </p>
       </div>
 
-      <div ref={layoutRef}>
+      <div ref={layoutRef} className={mode === 'three' ? 'min-h-0 flex-1' : undefined}>
         {mode === 'three' ? (
           // 牌組與卡面拖曳後保持像素寬度，清單吃剩下的寬度
-          <ResizablePanelGroup className="h-[calc(100svh-12rem)] min-h-[30rem]" onLayoutChanged={saveWidths}>
+          <ResizablePanelGroup className="h-full" onLayoutChanged={saveWidths}>
             {deckResizable}
             {handleFor('deck')}
             <ResizablePanel id="list" minSize={LIST_MIN}>
-              {listPanel('h-full overflow-auto')}
+              {listPanel(true)}
             </ResizablePanel>
             {handleFor('viewer')}
             <ResizablePanel
@@ -284,7 +299,7 @@ export default function Cards() {
               groupResizeBehavior="preserve-pixel-size"
               onResize={trackWidth('viewer')}
             >
-              {viewerPanel('h-full overflow-auto')}
+              {viewerPanel(true)}
             </ResizablePanel>
           </ResizablePanelGroup>
         ) : mode === 'two' ? (
@@ -293,10 +308,10 @@ export default function Cards() {
               {deckResizable}
               {handleFor('deck')}
               <ResizablePanel id="list" minSize={LIST_MIN}>
-                {listPanel('h-full overflow-auto')}
+                {listPanel(true)}
               </ResizablePanel>
             </ResizablePanelGroup>
-            {viewerPanel('mx-auto w-full')}
+            {viewerPanel(false, 'mx-auto w-full')}
           </div>
         ) : (
           <div className="space-y-4">
@@ -318,12 +333,15 @@ export default function Cards() {
  */
 function DeckPanel({
   className,
+  scrollable,
   toggled,
   onToggled,
   selected,
   onSelect,
 }: {
   className?: string
+  /** 面板自己捲動（標題列固定）。The panel scrolls itself, with a sticky header. */
+  scrollable: boolean
   /** 使用者手動展開或收合過的節點。Nodes the user toggled by hand. */
   toggled: Record<string, boolean>
   onToggled: (update: (prev: Record<string, boolean>) => Record<string, boolean>) => void
@@ -341,7 +359,7 @@ function DeckPanel({
 
   return (
     <Card className={className}>
-      <CardHeader className="pb-2 flex-row items-center justify-between space-y-0">
+      <CardHeader className={cn('pb-2 flex-row items-center justify-between space-y-0', scrollable && STICKY_HEADER)}>
         <CardTitle className="text-base flex items-center gap-2">
           <FolderTree className="h-4 w-4" />
           牌組
@@ -462,6 +480,8 @@ function DeckButton({ label, active, onClick }: { label: string; active: boolean
 /** {@link CardListPanel} 的 props。Props of {@link CardListPanel}. */
 interface CardListPanelProps {
   className?: string
+  /** 面板自己捲動（標題列固定）。The panel scrolls itself, with a sticky header. */
+  scrollable: boolean
   /** 搜尋框中還沒送出的文字。The unsubmitted search text. */
   draft: string
   onDraft: (draft: string) => void
@@ -480,6 +500,7 @@ interface CardListPanelProps {
  */
 function CardListPanel({
   className,
+  scrollable,
   draft,
   onDraft: setDraft,
   deck,
@@ -506,7 +527,7 @@ function CardListPanel({
 
   return (
     <Card className={className}>
-      <CardHeader className="pb-2 space-y-3">
+      <CardHeader className={cn('pb-2 space-y-3', scrollable && STICKY_HEADER)}>
         <CardTitle className="text-base break-all">{deck ?? '全部牌組'}</CardTitle>
         <form onSubmit={submit} className="flex gap-2">
           <Input
@@ -549,6 +570,7 @@ function CardListPanel({
             <ul className="space-y-1">
               {data?.cards.map((card) => {
                 const subDeck = relativeDeckPath(card.deck_name, deck)
+                const preview = cardPreview(card.fields)
                 return (
                   <li key={card.card_id}>
                     <button
@@ -559,8 +581,9 @@ function CardListPanel({
                         selectedCardId === card.card_id ? 'border-primary bg-primary/5' : 'hover:bg-accent',
                       )}
                     >
-                      <span className="line-clamp-2 font-medium [overflow-wrap:anywhere]">
-                        {cardPreview(card.fields) || '（沒有文字欄位）'}
+                      {/* 完整文字，放不下兩行時才由 CSS 截斷；滑鼠移上去看全文 */}
+                      <span className="line-clamp-2 font-medium [overflow-wrap:anywhere]" title={preview || undefined}>
+                        {preview || '（沒有文字欄位）'}
                       </span>
                       <span className="block truncate text-xs text-muted-foreground">
                         {card.model_name}
@@ -637,6 +660,7 @@ function CardViewPanel({
   onDeleted,
 }: CardViewPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null)
+  const { effective: flipPreference } = useFlipPreference()
 
   // 窄畫面卡面在清單下方：選卡時捲過去。瀏覽器也不會更新畫面外的跨來源 iframe，卡面要進到
   // 畫面內才會回報高度。並排時卡面有自己的捲軸，換卡時捲回頂端。
@@ -686,7 +710,7 @@ function CardViewPanel({
 
   return (
     <Card ref={panelRef} className={panelClass}>
-      <CardHeader className="px-4 pb-3 space-y-2">
+      <CardHeader className={cn('px-4 pb-3 space-y-2', sideBySide && STICKY_HEADER)}>
         {trailLength > 0 && (
           <Button size="sm" variant="ghost" className="-ml-2 h-7 self-start px-2" onClick={onBack}>
             <ArrowLeft className="h-4 w-4" />
@@ -733,15 +757,25 @@ function CardViewPanel({
         ) : isError ? (
           <ErrorNote title="無法載入卡片" error={error} />
         ) : (
-          <CardFrame
-            key={`${data.card_id}-${side}`}
-            html={side === 'question' ? data.question : data.answer}
-            ord={data.ord}
-            title={`${data.model_name} ${side === 'question' ? '正面' : '背面'}`}
-            onBrowse={onBrowse}
-            // 點正面翻到背面（與 Anki 審閱相同）；背面不會翻回正面
-            onFaceClick={side === 'question' ? () => onSide('answer') : undefined}
-          />
+          // 同一張卡片翻面時播動畫（偏好設定頁可選），換卡片時直接切換
+          <FaceTransition
+            value={side}
+            resetKey={data.card_id}
+            direction={side === 'answer' ? 1 : -1}
+            preference={flipPreference}
+          >
+            {(shown) => (
+              <CardFrame
+                key={`${data.card_id}-${shown}`}
+                html={shown === 'question' ? data.question : data.answer}
+                ord={data.ord}
+                title={`${data.model_name} ${shown === 'question' ? '正面' : '背面'}`}
+                onBrowse={onBrowse}
+                // 點正面翻到背面（與 Anki 審閱相同）；背面不會翻回正面
+                onFaceClick={shown === 'question' && side === 'question' ? () => onSide('answer') : undefined}
+              />
+            )}
+          </FaceTransition>
         )}
       </CardContent>
       <CardDetailModal
