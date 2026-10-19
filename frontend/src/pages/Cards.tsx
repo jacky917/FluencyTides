@@ -40,6 +40,7 @@ import { Input } from '../components/ui/input'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../components/ui/resizable'
 import { Skeleton } from '../components/ui/skeleton'
 import { useElementWidth } from '../hooks/useElementWidth'
+import { useElasticOverscroll } from '../hooks/useElasticOverscroll'
 import { useFlipPreference } from '../hooks/useFlipPreference'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { describeApiError, retryTransient } from '../lib/apiError'
@@ -660,7 +661,11 @@ function CardViewPanel({
   onDeleted,
 }: CardViewPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null)
-  const { effective: flipPreference } = useFlipPreference()
+  const contentRef = useRef<HTMLDivElement>(null)
+  const { effective: flipPreference, reducedMotion } = useFlipPreference()
+  // 並排時卡面自己捲動：捲軸隱藏，捲到頂或底再拉有彈性回饋（卡面 iframe 內的手勢由橋接腳本轉送）；
+  // 系統「減少動態效果」時不加
+  const elastic = useElasticOverscroll(panelRef, contentRef, sideBySide && cardId !== null && !reducedMotion)
 
   // 窄畫面卡面在清單下方：選卡時捲過去。瀏覽器也不會更新畫面外的跨來源 iframe，卡面要進到
   // 畫面內才會回報高度。並排時卡面有自己的捲軸，換卡時捲回頂端。
@@ -697,8 +702,13 @@ function CardViewPanel({
     retry: retryTransient,
   })
 
-  // 不並排時卡面最寬 768px（與並排時的預設寬度相同）並置中
-  const panelClass = cn(!sideBySide && 'max-w-[48rem]', className)
+  // 不並排時卡面最寬 768px（與並排時的預設寬度相同）並置中；並排時隱藏捲軸、關掉瀏覽器自己的
+  // 回彈（Safari、Android 會有），只留我們的彈性回饋，才不會兩種疊在一起
+  const panelClass = cn(
+    !sideBySide && 'max-w-[48rem]',
+    sideBySide && 'overscroll-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+    className,
+  )
 
   if (cardId === null) {
     return (
@@ -751,7 +761,7 @@ function CardViewPanel({
           <CardTitle className="text-base">Card {cardId}</CardTitle>
         )}
       </CardHeader>
-      <CardContent className="px-3 pb-3">
+      <CardContent ref={contentRef} className="px-3 pb-3">
         {isPending ? (
           <Skeleton className="h-60 w-full" />
         ) : isError ? (
@@ -763,8 +773,10 @@ function CardViewPanel({
             resetKey={data.card_id}
             direction={side === 'answer' ? 1 : -1}
             preference={flipPreference}
+            waitForReady
+            faceClassName="rounded-lg"
           >
-            {(shown) => (
+            {(shown, { onReady }) => (
               <CardFrame
                 key={`${data.card_id}-${shown}`}
                 html={shown === 'question' ? data.question : data.answer}
@@ -773,6 +785,13 @@ function CardViewPanel({
                 onBrowse={onBrowse}
                 // 點正面翻到背面（與 Anki 審閱相同）；背面不會翻回正面
                 onFaceClick={shown === 'question' && side === 'question' ? () => onSide('answer') : undefined}
+                onHeight={onReady}
+                onScrollGesture={(gesture) => {
+                  const controller = elastic.current
+                  if (!controller) return
+                  if (gesture.kind === 'wheel') controller.wheel(gesture.deltaY)
+                  else controller.touch(gesture.phase, gesture.y)
+                }}
               />
             )}
           </FaceTransition>

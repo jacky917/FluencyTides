@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { FluencyTidesAPI } from '../api/client'
 import { describeApiError, isBackendError } from '../lib/apiError'
-import { buildCardDocument, createFrameMessageHandler } from '../lib/ankiFrame'
+import { buildCardDocument, createFrameMessageHandler, type ScrollGesture } from '../lib/ankiFrame'
 
 /** iframe 的最小高度（內容回報高度前先用這個）。Minimum frame height. */
 const MIN_HEIGHT = 240
@@ -25,6 +25,8 @@ const newNonce = () => Math.random().toString(36).slice(2) + Date.now().toString
  * @param props.title - iframe 的無障礙名稱。Accessible name.
  * @param props.onBrowse - 卡面要打開這些筆記（「查看母卡片」等按鈕）。Opens the notes a template asks for.
  * @param props.onFaceClick - 點了卡面上不是按鈕的地方；不給時不理會。A click outside any control.
+ * @param props.onHeight - 卡面回報內容高度時。Called with each reported content height.
+ * @param props.onScrollGesture - 卡面內的捲動手勢。Scroll gestures inside the face.
  * @returns iframe，以及媒體或腳本錯誤的提示。The frame and any errors.
  */
 export function CardFrame({
@@ -33,12 +35,16 @@ export function CardFrame({
   title,
   onBrowse,
   onFaceClick,
+  onHeight,
+  onScrollGesture,
 }: {
   html: string
   ord: number
   title: string
   onBrowse: (noteIds: number[]) => void
   onFaceClick?: () => void
+  onHeight?: (height: number) => void
+  onScrollGesture?: (gesture: ScrollGesture) => void
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(MIN_HEIGHT)
@@ -48,10 +54,14 @@ export function CardFrame({
   // 用 ref 取最新的 onBrowse：不必因為父元件重新渲染就重掛訊息處理函式
   const onBrowseRef = useRef(onBrowse)
   const onFaceClickRef = useRef(onFaceClick)
+  const onHeightRef = useRef(onHeight)
+  const onScrollGestureRef = useRef(onScrollGesture)
   useEffect(() => {
     onBrowseRef.current = onBrowse
     onFaceClickRef.current = onFaceClick
-  }, [onBrowse, onFaceClick])
+    onHeightRef.current = onHeight
+    onScrollGestureRef.current = onScrollGesture
+  }, [onBrowse, onFaceClick, onHeight, onScrollGesture])
   // 內容一變就換 nonce：舊文件還在進行中的下載不會被新文件誤收
   const { srcDoc, nonce } = useMemo(() => {
     const documentNonce = newNonce()
@@ -70,7 +80,10 @@ export function CardFrame({
       fetchMedia: FluencyTidesAPI.getAnkiMedia,
       describeError: (error) => describeApiError(error).message,
       isActive: () => active,
-      onHeight: (value) => setHeight(Math.max(MIN_HEIGHT, value)),
+      onHeight: (value) => {
+        setHeight(Math.max(MIN_HEIGHT, value))
+        onHeightRef.current?.(value)
+      },
       onMediaFailed: (name, reason, error) => {
         // 檔案不存在等業務錯誤是預期內的，只有網路或程式錯誤才記成 error
         if (error !== undefined && !isBackendError(error)) console.error(`[CardFrame] 媒體檔 ${name} 載入失敗`, error)
@@ -80,6 +93,7 @@ export function CardFrame({
       onFrameError: (message) => setFrameErrors((prev) => (prev.includes(message) ? prev : [...prev, message])),
       onBrowse: (noteIds) => onBrowseRef.current(noteIds),
       onFaceClick: () => onFaceClickRef.current?.(),
+      onScrollGesture: (gesture) => onScrollGestureRef.current?.(gesture),
       onNotice: (message) => setNotices((prev) => (prev.includes(message) ? prev : [...prev, message])),
     })
     window.addEventListener('message', onMessage)

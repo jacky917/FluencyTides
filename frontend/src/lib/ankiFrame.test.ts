@@ -10,6 +10,7 @@ import {
   isLocalMediaName,
   parseAnkiConnectCall,
   parseNoteQuery,
+  parseScrollGesture,
   type FrameMessageDeps,
 } from './ankiFrame'
 
@@ -112,6 +113,7 @@ describe('createFrameMessageHandler', () => {
       onBrowse: vi.fn(),
       onNotice: vi.fn(),
       onFaceClick: vi.fn(),
+      onScrollGesture: vi.fn(),
       isActive: () => true,
       ...overrides,
     }
@@ -147,6 +149,25 @@ describe('createFrameMessageHandler', () => {
     send({ type: 'anki-frame-error', nonce: 'n1', message: 'TypeError: x' })
 
     expect(deps.onFrameError).toHaveBeenCalledWith('TypeError: x')
+  })
+
+  it('forwards valid scroll gestures only', () => {
+    const { deps, send } = setup()
+
+    send({ type: 'anki-scroll-gesture', nonce: 'n1', gesture: { kind: 'wheel', deltaY: 5000 } })
+    send({ type: 'anki-scroll-gesture', nonce: 'n1', gesture: { kind: 'touch', phase: 'move', y: 'x' } })
+    send({ type: 'anki-scroll-gesture', nonce: 'n1', gesture: { kind: 'touch', phase: 'end' } })
+
+    expect(deps.onScrollGesture).toHaveBeenCalledTimes(2)
+    expect(deps.onScrollGesture).toHaveBeenNthCalledWith(1, { kind: 'wheel', deltaY: 1000 })
+    expect(deps.onScrollGesture).toHaveBeenNthCalledWith(2, { kind: 'touch', phase: 'end' })
+  })
+
+  it('rejects malformed gestures', () => {
+    for (const raw of [null, 3, {}, { kind: 'wheel' }, { kind: 'wheel', deltaY: Number.NaN }, { kind: 'touch', phase: 'drag' }]) {
+      expect(parseScrollGesture(raw)).toBeNull()
+    }
+    expect(parseScrollGesture({ kind: 'touch', phase: 'move', y: 120 })).toEqual({ kind: 'touch', phase: 'move', y: 120 })
   })
 
   it('forwards clicks on the face', () => {

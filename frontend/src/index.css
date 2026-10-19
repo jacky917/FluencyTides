@@ -128,21 +128,40 @@
 }
 
 /*
- * 卡面正反切換動畫（lib/faceTransitions.ts）。每種分離開（out）與進來（in）兩段；
- * --face-dir：1 為翻到背面、-1 為翻回正面，動畫依方向反過來。
- * Card face switch animations; --face-dir mirrors them.
+ * 卡面正反切換動畫（lib/faceTransitions.ts）。舊的一面 leave、新的一面 enter，同時播放；
+ * --face-dir：1 為翻到背面、-1 為翻回正面，動畫依方向鏡像。
+ * 翻轉：兩面背對背（backface-visibility: hidden），一起轉 180 度，看起來是同一張卡；轉到
+ * 一半時稍微縮小並加深陰影，像把卡片拿起來翻面。只用 transform 與 box-shadow（filter 會讓
+ * 3D 背面隱藏失效）。
+ * Card face switch animations; leave and enter play together, mirrored by --face-dir.
  */
-@keyframes face-fade-out { to { opacity: 0; } }
-@keyframes face-fade-in { from { opacity: 0; } }
+@keyframes face-flip-leave {
+  0% { transform: rotateY(0deg) scale(1); box-shadow: 0 0 0 0 rgb(15 23 42 / 0); }
+  50% { transform: rotateY(calc(-90deg * var(--face-dir, 1))) scale(0.94); box-shadow: 0 24px 48px -12px rgb(15 23 42 / 0.35); }
+  100% { transform: rotateY(calc(-180deg * var(--face-dir, 1))) scale(1); box-shadow: 0 0 0 0 rgb(15 23 42 / 0); }
+}
+@keyframes face-flip-enter {
+  0% { transform: rotateY(calc(180deg * var(--face-dir, 1))) scale(1); box-shadow: 0 0 0 0 rgb(15 23 42 / 0); }
+  50% { transform: rotateY(calc(90deg * var(--face-dir, 1))) scale(0.94); box-shadow: 0 24px 48px -12px rgb(15 23 42 / 0.35); }
+  100% { transform: rotateY(0deg) scale(1); box-shadow: 0 0 0 0 rgb(15 23 42 / 0); }
+}
 
-@keyframes face-flip-out { to { transform: rotateY(calc(-90deg * var(--face-dir, 1))); } }
-@keyframes face-flip-in { from { transform: rotateY(calc(90deg * var(--face-dir, 1))); } }
+@keyframes face-flip-vertical-leave {
+  0% { transform: rotateX(0deg) scale(1); box-shadow: 0 0 0 0 rgb(15 23 42 / 0); }
+  50% { transform: rotateX(calc(90deg * var(--face-dir, 1))) scale(0.94); box-shadow: 0 24px 48px -12px rgb(15 23 42 / 0.35); }
+  100% { transform: rotateX(calc(180deg * var(--face-dir, 1))) scale(1); box-shadow: 0 0 0 0 rgb(15 23 42 / 0); }
+}
+@keyframes face-flip-vertical-enter {
+  0% { transform: rotateX(calc(-180deg * var(--face-dir, 1))) scale(1); box-shadow: 0 0 0 0 rgb(15 23 42 / 0); }
+  50% { transform: rotateX(calc(-90deg * var(--face-dir, 1))) scale(0.94); box-shadow: 0 24px 48px -12px rgb(15 23 42 / 0.35); }
+  100% { transform: rotateX(0deg) scale(1); box-shadow: 0 0 0 0 rgb(15 23 42 / 0); }
+}
 
-@keyframes face-flip-vertical-out { to { transform: rotateX(calc(90deg * var(--face-dir, 1))); } }
-@keyframes face-flip-vertical-in { from { transform: rotateX(calc(-90deg * var(--face-dir, 1))); } }
+@keyframes face-slide-leave { to { opacity: 0; transform: translateX(calc(-24% * var(--face-dir, 1))); } }
+@keyframes face-slide-enter { from { opacity: 0; transform: translateX(calc(24% * var(--face-dir, 1))); } }
 
-@keyframes face-slide-out { to { opacity: 0; transform: translateX(calc(-40px * var(--face-dir, 1))); } }
-@keyframes face-slide-in { from { opacity: 0; transform: translateX(calc(40px * var(--face-dir, 1))); } }
+@keyframes face-fade-leave { to { opacity: 0; } }
+@keyframes face-fade-enter { from { opacity: 0; } }
 
-@keyframes face-zoom-out { to { opacity: 0; transform: scale(0.94); } }
-@keyframes face-zoom-in { from { opacity: 0; transform: scale(1.04); } }
+@keyframes face-zoom-leave { to { opacity: 0; transform: scale(0.92); } }
+@keyframes face-zoom-enter { from { opacity: 0; transform: scale(1.05); } }

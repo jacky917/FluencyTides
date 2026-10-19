@@ -3,8 +3,9 @@ import {
   DEFAULT_FLIP_PREFERENCE,
   FACE_SPEEDS,
   FACE_TRANSITIONS,
+  faceTiming,
   faceTransitionStyle,
-  needsPerspective,
+  isFlip,
   sanitizeFlipPreference,
 } from './faceTransitions'
 
@@ -19,21 +20,29 @@ describe('sanitizeFlipPreference', () => {
 })
 
 describe('faceTransitionStyle', () => {
-  it('plays each half for half the duration, mirrored by direction', () => {
-    const style = faceTransitionStyle({ animation: 'flip', speed: 'normal' }, 'out', -1)
-    expect(style?.animation).toBe(`face-flip-out ${FACE_SPEEDS.normal.ms / 2}ms cubic-bezier(0.4, 0, 1, 1) both`)
-    expect((style as Record<string, unknown>)['--face-dir']).toBe(-1)
-    expect(faceTransitionStyle({ animation: 'fade', speed: 'fast' }, 'in', 1)?.animation).toContain('face-fade-in')
+  it('plays both faces for the whole duration, mirrored by direction', () => {
+    const preference = { animation: 'flip', speed: 'normal' } as const
+    const { ms, easing } = faceTiming(preference)
+    const leave = faceTransitionStyle(preference, 'leave', -1) as Record<string, unknown>
+    expect(ms).toBe(FACE_SPEEDS.normal.ms)
+    expect(leave.animation).toBe(`face-flip-leave ${ms}ms ${easing} both`)
+    expect(leave['--face-dir']).toBe(-1)
+    expect(faceTransitionStyle({ animation: 'fade', speed: 'fast' }, 'enter', 1)?.animation).toContain('face-fade-enter')
+  })
+
+  it('hides the backfaces of flips only', () => {
+    expect(faceTransitionStyle({ animation: 'flip-vertical', speed: 'fast' }, 'enter', 1)?.backfaceVisibility).toBe('hidden')
+    expect(faceTransitionStyle({ animation: 'slide', speed: 'fast' }, 'enter', 1)?.backfaceVisibility).toBeUndefined()
   })
 
   it('has no style for no animation', () => {
-    expect(faceTransitionStyle({ animation: 'none', speed: 'slow' }, 'in', 1)).toBeUndefined()
+    expect(faceTransitionStyle({ animation: 'none', speed: 'slow' }, 'enter', 1)).toBeUndefined()
   })
 
-  it('uses a perspective for the flips only', () => {
-    expect(needsPerspective('flip')).toBe(true)
-    expect(needsPerspective('flip-vertical')).toBe(true)
-    expect(needsPerspective('fade')).toBe(false)
+  it('knows which animations flip', () => {
+    expect(isFlip('flip')).toBe(true)
+    expect(isFlip('flip-vertical')).toBe(true)
+    expect(isFlip('fade')).toBe(false)
   })
 
   it('lists every animation once', () => {

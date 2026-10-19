@@ -81,6 +81,24 @@ export interface FaceClickMessage {
   nonce: string
 }
 
+/**
+ * 卡面內的捲動手勢（滾輪、觸控）。iframe 內的事件不會傳到網頁；卡面本身不捲動，捲動會由瀏覽器
+ * 接給外層，這裡只是讓外層知道，好在捲到邊界時做彈性回饋。觸控用 `screenY`：外層捲動時 iframe
+ * 跟著移動，`clientY` 會不準。
+ * Scroll gestures inside the face, forwarded so the parent can add
+ * rubber-band feedback at its edges.
+ */
+export type ScrollGesture =
+  | { kind: 'wheel'; deltaY: number }
+  | { kind: 'touch'; phase: 'start' | 'move' | 'end'; y?: number }
+
+/** iframe → 網頁：一個捲動手勢。Frame → parent: a scroll gesture. */
+export interface ScrollGestureMessage {
+  type: 'anki-scroll-gesture'
+  nonce: string
+  gesture: ScrollGesture
+}
+
 /** iframe → 網頁：模板呼叫了網頁版不支援的 AnkiConnect 動作。Frame → parent: an unsupported call. */
 export interface FrameNoticeMessage {
   type: 'anki-frame-notice'
@@ -169,6 +187,28 @@ export function parseNoteQuery(query: string): number[] | null {
 }
 
 /**
+ * 檢查 iframe 送來的捲動手勢（不可信）：形狀不對或數值不是有限數字時為 null；滾輪量限制在
+ * ±1000。
+ * Validates a scroll gesture from the frame.
+ * @param raw - 送來的資料。The raw data.
+ * @returns 手勢，或 null。The gesture, or null.
+ */
+export function parseScrollGesture(raw: unknown): ScrollGesture | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const value = raw as { kind?: unknown; deltaY?: unknown; phase?: unknown; y?: unknown }
+  if (value.kind === 'wheel') {
+    return typeof value.deltaY === 'number' && Number.isFinite(value.deltaY)
+      ? { kind: 'wheel', deltaY: Math.max(-1000, Math.min(1000, value.deltaY)) }
+      : null
+  }
+  if (value.kind === 'touch' && (value.phase === 'start' || value.phase === 'move' || value.phase === 'end')) {
+    if (value.y === undefined) return { kind: 'touch', phase: value.phase }
+    return typeof value.y === 'number' && Number.isFinite(value.y) ? { kind: 'touch', phase: value.phase, y: value.y } : null
+  }
+  return null
+}
+
+/**
  * 網頁願意代為下載的檔名：只接受媒體資料夾中的單一檔名（不含 `/` `\` NUL、不是 `.` `..`）。
  * 後端 `validate_media_filename` 是權威版本；這裡先擋，省一趟請求並回覆明確的原因。
  *
@@ -193,6 +233,7 @@ export function isBareMediaName(name: string): boolean {
  * - 攔下對 AnkiConnect 的 `fetch`、`XMLHttpRequest`、`sendBeacon`（見模組說明）；`guiBrowse`
  *   只在使用者剛點過時才請網頁切換卡片，卡面載入時自己呼叫的不會跳走。
  * - 點擊 `data-anki-sound` 播放鈕時播放該檔案；這些檔案在卡面載入時就先下載。
+ * - 把滾輪與觸控手勢轉給網頁（`anki-scroll-gesture`，見 {@link ScrollGesture}）。
  * - 點擊卡面上不是控制項的地方時通知網頁（`anki-face-click`）。控制項：連結、按鈕、表單元件、
  *   播放鈕，以及游標是手指（`cursor: pointer`）的元素——模板的按鈕多半是設了 `onclick` 的
  *   `div`，只能從樣式判斷；選取文字時不算。等一下雙擊的時間才通知，雙擊選字不會翻面。
@@ -310,6 +351,18 @@ export const FRAME_BRIDGE_SCRIPT = String.raw`(() => {
       event.preventDefault();
       new window.Audio(button.getAttribute('data-anki-sound')).play().catch(() => undefined);
     });
+    // 捲動手勢轉給網頁（彈性回饋）；不攔、不取消，原生捲動照常接給外層
+    const forward = (gesture) => post({ type: 'anki-scroll-gesture', gesture });
+    window.addEventListener('wheel', (event) => {
+      const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
+      forward({ kind: 'wheel', deltaY: event.deltaY * scale });
+    }, { passive: true });
+    for (const [type, phase] of [['touchstart', 'start'], ['touchmove', 'move'], ['touchend', 'end'], ['touchcancel', 'end']]) {
+      window.addEventListener(type, (event) => {
+        const touch = event.touches[0];
+        forward({ kind: 'touch', phase, y: touch ? touch.screenY : undefined });
+      }, { passive: true });
+    }
     // 點卡面空白處：通知網頁。播放鈕的處理在前面，已 preventDefault，這裡會略過
     const controlSelector = 'a, button, input, textarea, select, label, summary, audio, video, [onclick], [role=button], [contenteditable], [data-anki-sound]';
     const hasSelection = () => {
@@ -488,6 +541,8 @@ export interface FrameMessageDeps {
   onNotice: (message: string) => void
   /** 使用者點了卡面上不是控制項的地方。A click on the face outside any control. */
   onFaceClick: () => void
+  /** 卡面內的捲動手勢。A scroll gesture inside the face. */
+  onScrollGesture: (gesture: ScrollGesture) => void
   /** 這份文件是否仍是目前顯示的那份（換文件後，進行中的下載不再回覆）。Still current? */
   isActive: () => boolean
 }
@@ -518,6 +573,7 @@ export function createFrameMessageHandler(deps: FrameMessageDeps): (event: Messa
       id?: unknown
       name?: unknown
       query?: unknown
+      gesture?: unknown
     } | null
     if (typeof data !== 'object' || data === null || data.nonce !== deps.nonce) return
 
@@ -537,6 +593,11 @@ export function createFrameMessageHandler(deps: FrameMessageDeps): (event: Messa
     }
     if (data.type === 'anki-face-click') {
       deps.onFaceClick()
+      return
+    }
+    if (data.type === 'anki-scroll-gesture') {
+      const gesture = parseScrollGesture(data.gesture)
+      if (gesture) deps.onScrollGesture(gesture)
       return
     }
     if (data.type === 'anki-browse') {

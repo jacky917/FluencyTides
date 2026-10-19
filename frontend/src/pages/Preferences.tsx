@@ -119,7 +119,13 @@ function AnimationOption({
         aria-label={`預覽「${option.label}」`}
         className="rounded-md bg-muted/60 p-3"
       >
-        <FaceTransition value={side} resetKey={option.id} direction={side === 'back' ? 1 : -1} preference={preview}>
+        <FaceTransition
+          value={side}
+          resetKey={option.id}
+          direction={side === 'back' ? 1 : -1}
+          preference={preview}
+          faceClassName="rounded-md"
+        >
           {(shown) => <PreviewFace side={shown} />}
         </FaceTransition>
       </button>
@@ -151,12 +157,18 @@ function AnimationOption({
 }
 
 /**
- * 預覽用的迷你卡面（深色，與 Anki 卡面相近）。A miniature card face for previews.
+ * 預覽用的迷你卡面（深色，與 Anki 卡面相近）。背面比正面高，看得出高度的過渡。
+ * A miniature card face for previews; the back is taller, showing the height tween.
  * @returns 卡面 JSX。Face JSX.
  */
 function PreviewFace({ side }: { side: 'front' | 'back' }) {
   return (
-    <div className="flex h-20 flex-col items-center justify-center rounded-md bg-[#1e1e1e] text-white shadow-sm">
+    <div
+      className={cn(
+        'flex flex-col items-center justify-center rounded-md bg-[#1e1e1e] text-white shadow-sm',
+        side === 'front' ? 'h-16' : 'h-24',
+      )}
+    >
       <span className="text-[10px] uppercase tracking-widest text-white/50">{side === 'front' ? '正面' : '背面'}</span>
       <span className="text-lg font-semibold">{side === 'front' ? '絡まる' : 'からまる・纏住'}</span>
     </div>
