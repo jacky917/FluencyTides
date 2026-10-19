@@ -160,3 +160,39 @@ class LLMRouteStoreUnavailableError(LLMRouteError):
     """
     error_code = "LLM_ROUTE_STORE_UNAVAILABLE"
     status_code = 503
+
+
+class CardNotFoundError(ServiceBaseError):
+    """Anki 中找不到指定的卡片（可能已刪除或尚未同步）。
+
+    The requested card does not exist in Anki.
+    """
+    error_code = "CARD_NOT_FOUND"
+    status_code = 404
+
+
+class InvalidMediaFilenameError(ServiceBaseError):
+    """媒體檔名不合格：只接受 Anki 媒體資料夾中的單一檔名，不接受路徑。
+
+    The media filename is not a bare file name (paths are rejected).
+    """
+    error_code = "INVALID_MEDIA_FILENAME"
+    status_code = 400
+
+
+class MediaFileNotFoundError(ServiceBaseError):
+    """Anki 媒體資料夾中沒有這個檔案。
+
+    The file does not exist in Anki's media folder.
+    """
+    error_code = "MEDIA_FILE_NOT_FOUND"
+    status_code = 404
+
+
+class InvalidAnkiSearchError(ServiceBaseError):
+    """Anki 拒絕使用者輸入的搜尋語句（多半是語法錯誤）。
+
+    Anki rejected the user's search query, usually a syntax error.
+    """
+    error_code = "INVALID_ANKI_SEARCH"
+    status_code = 400

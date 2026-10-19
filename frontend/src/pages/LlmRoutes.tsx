@@ -20,15 +20,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Button } from '../components/ui/button'
 import { Skeleton } from '../components/ui/skeleton'
 import { cn } from '../lib/utils'
+import { describeApiError, failureTitle, isBackendError } from '../lib/apiError'
 import {
   GLOBAL_ROUTE_KEY,
   SOURCE_LABELS,
   defaultEffort,
-  describeApiError,
-  failureTitle,
   formatChoice,
   initialSelection,
-  isBackendError,
   previewLabel,
 } from '../lib/llmRoutes'
 import type { LLMEndpointOption, LLMRoute, LLMRouteChoice } from '../types/api'

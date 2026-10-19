@@ -184,6 +184,44 @@ class AnkiNoteInfo(BaseModel):
     cards: list[int]
 
 
+class AnkiCardField(BaseModel):
+    """``cardsInfo`` 中一個欄位的值與順序。A field's value and position.
+
+    Attributes:
+        value: 欄位原始值。Raw field value.
+        order: 在筆記類型中的位置（0 起算）。Position in the note type.
+    """
+    value: str
+    order: int
+
+
+class AnkiCardInfo(BaseModel):
+    """AnkiConnect cardsInfo 回傳的卡片資訊（只取用到的欄位，其餘忽略）。
+
+    Card info returned by AnkiConnect cardsInfo; unused keys are ignored.
+
+    Attributes:
+        cardId: 卡片 ID。Card ID.
+        note: 所屬筆記 ID。Note ID.
+        deckName: 所在牌組的完整名稱。Full deck name.
+        modelName: 筆記類型。Note type.
+        ord: 卡片模板序號（0 起算）。Template ordinal.
+        fields: 欄位名 → 值與順序。Field values.
+        question: Anki 渲染好的正面（``[sound:]`` 已換成 ``[anki:play:q:N]``）。
+            Rendered front.
+        answer: Anki 渲染好的背面（``[sound:]`` 已換成 ``[anki:play:a:N]``）。
+            Rendered back.
+    """
+    cardId: int
+    note: int
+    deckName: str
+    modelName: str
+    ord: int
+    fields: dict[str, AnkiCardField]
+    question: str
+    answer: str
+
+
 # ============================================================================
 # 模型管理 Schema (Model Actions)
 # ============================================================================

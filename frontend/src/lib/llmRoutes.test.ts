@@ -1,12 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   defaultEffort,
-  describeApiError,
   encodeRouteKey,
-  failureTitle,
   formatChoice,
   initialSelection,
-  isBackendError,
   previewLabel,
 } from './llmRoutes'
 import type { LLMEndpointOption } from '../types/api'
@@ -51,57 +48,6 @@ describe('encodeRouteKey', () => {
   it('escapes the global key', () => {
     expect(encodeRouteKey('*')).toBe('%2A')
     expect(encodeRouteKey('jp_verb_pair')).toBe('jp_verb_pair')
-  })
-})
-
-describe('describeApiError', () => {
-  it('keeps the backend message verbatim with its status', () => {
-    const error = { error_code: 'INVALID_LLM_ROUTE', message: "模型 'x' 不在端點 'yinli' 的白名單", status: 422 }
-    expect(describeApiError(error)).toEqual({ status: 422, message: "模型 'x' 不在端點 'yinli' 的白名單" })
-    expect(isBackendError(error)).toBe(true)
-  })
-
-  it('joins FastAPI validation errors by field', () => {
-    const error = {
-      message: 'Request failed with status code 422',
-      response: {
-        status: 422,
-        data: { detail: [{ loc: ['body', 'endpoint'], msg: 'too short' }, { loc: ['body', 'model'], msg: 'missing' }] },
-      },
-    }
-    expect(describeApiError(error)).toEqual({ status: 422, message: 'endpoint: too short；model: missing' })
-    expect(isBackendError(error)).toBe(false)
-  })
-
-  it('falls back when the validation detail is empty', () => {
-    const error = { message: 'Request failed with status code 422', response: { status: 422, data: { detail: [] } } }
-    expect(describeApiError(error).message).toContain('HTTP 422')
-  })
-
-  it('describes a proxy error without a backend body', () => {
-    const error = { message: 'Request failed with status code 504', response: { status: 504, data: '<html>' } }
-    expect(describeApiError(error)).toEqual({
-      status: 504,
-      message: '後端或代理回應 HTTP 504：Request failed with status code 504',
-    })
-  })
-
-  it('reports a missing response as unreachable, without a status', () => {
-    expect(describeApiError({ message: 'Network Error' })).toEqual({
-      message: '連不到後端（網路或代理中斷）：Network Error',
-    })
-    expect(describeApiError(null).message).toBe('null')
-  })
-})
-
-describe('failureTitle', () => {
-  it('only claims nothing was written for a 4xx', () => {
-    expect(failureTitle(404, '儲存')).toBe('無法儲存')
-    expect(failureTitle(422, '儲存')).toBe('無法儲存')
-  })
-
-  it.each([503, 500, 502, 504, undefined])('treats %s as an unknown outcome', (status) => {
-    expect(failureTitle(status, '恢復預設')).toBe('恢復預設未完成或結果未知，請重新整理查看')
   })
 })
 

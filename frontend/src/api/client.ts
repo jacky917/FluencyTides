@@ -17,6 +17,8 @@ import type {
   AnkiDeckInfo,
   GraphData,
   CardDetail,
+  CardPage,
+  CardView,
   CardRelationCreate,
   HandlerInfo,
   HandlerCreatePayload,
@@ -28,6 +30,7 @@ import type {
   LLMRoute,
   LLMRoutesResponse,
 } from '../types/api';
+import { readErrorBody } from '../lib/apiError';
 import { encodeRouteKey } from '../lib/llmRoutes';
 
 /**
@@ -36,12 +39,13 @@ import { encodeRouteKey } from '../lib/llmRoutes';
  * Vite 的 proxy 會自動轉發到後端。
  * The Vite proxy automatically forwards requests to the backend.
  *
- * 認證設計（S009）：後端的 `/handlers/*` 與 `/relations/*` 需要 `X-API-Key`，
+ * 認證設計（S009）：後端的 `/api/v1/*`（`/handlers`、`/relations`、`/cards`、`/anki-media`、
+ * `/llm-routes` 等）需要 `X-API-Key`，
  * 但此處**刻意不設定**該 header——金鑰由 nginx 於反向代理層注入
  * （見 `frontend/nginx.conf.template`）。若改在前端帶金鑰，它會被打包進 JS
  * bundle，任何人開 DevTools 都看得到。請勿在此加入 API 金鑰。
  *
- * Auth design (S009): the backend's `/handlers/*` and `/relations/*` require
+ * Auth design (S009): the backend's `/api/v1/*` endpoints require
  * `X-API-Key`, but this client deliberately does NOT set it — the key is
  * injected by nginx at the reverse-proxy layer (see
  * `frontend/nginx.conf.template`). Sending it from the frontend would bake
@@ -58,15 +62,17 @@ const apiClient = axios.create({
 /**
  * Response 攔截器：自動解包 `response.data`，
  * 並將後端的 ErrorResponse 結構（附上 HTTP 狀態碼 `status`）提取為 rejection payload。
+ * 以 `responseType: 'blob'` 下載時錯誤的 body 也是 Blob，先讀成 JSON 才看得到 `error_code`。
  * Response interceptor: automatically unwraps `response.data`,
  * and extracts the backend ErrorResponse structure (plus the HTTP `status`)
- * as the rejection payload.
+ * as the rejection payload; Blob error bodies are parsed first.
  */
 apiClient.interceptors.response.use(
   (response) => response.data,
-  (error) => {
-    if (error.response?.data?.error_code) {
-      return Promise.reject({ ...error.response.data, status: error.response.status });
+  async (error) => {
+    const data = (await readErrorBody(error.response?.data)) as { error_code?: string } | undefined;
+    if (data?.error_code) {
+      return Promise.reject({ ...data, status: error.response.status });
     }
     return Promise.reject(error);
   }
@@ -236,13 +242,55 @@ export const FluencyTidesAPI = {
     apiClient.get('/handlers/decks'),
 
   /**
-   * 讀取單一卡片詳情。
-   * Reads the details of a single card.
+   * 讀取單一筆記詳情（AnkiConnect `notesInfo` 的欄位，camelCase）。
+   * Reads the details of a single note (AnkiConnect `notesInfo` keys, camelCase).
    * @param noteId - 目標 Note ID。Target note ID.
-   * @returns 卡片詳情。Card detail.
+   * @returns 筆記詳情。Note detail.
    */
   getCard: (noteId: number): Promise<CardDetail> =>
     apiClient.get(`/handlers/cards/${noteId}`),
+
+  // ======================================================================
+  // 卡片瀏覽 (Card Browse)：不經過 handler，任何筆記類型都能看
+  // ======================================================================
+
+  /**
+   * 列出一頁卡片（新到舊）；牌組包含子牌組。
+   * Lists one page of cards, newest first; a deck includes its sub-decks.
+   * @param params.deck - 牌組完整名稱；省略為全部。Full deck name, or all decks.
+   * @param params.q - 額外的 Anki 搜尋語句。Extra Anki search.
+   * @param params.page - 頁碼（1 起算）。Page number.
+   * @param params.pageSize - 每頁張數（上限 200）。Page size.
+   * @returns 這一頁與總數。The page and the total.
+   */
+  browseCards: (params: { deck?: string; q?: string; page?: number; pageSize?: number }): Promise<CardPage> =>
+    apiClient.get('/cards', {
+      params: {
+        deck: params.deck || undefined,
+        q: params.q?.trim() || undefined,
+        page: params.page,
+        page_size: params.pageSize,
+      },
+    }),
+
+  /**
+   * 讀取單一卡片與 Anki 渲染好的正反面。
+   * Reads one card with its rendered faces.
+   * @param cardId - Anki 卡片 ID。Card ID.
+   * @returns 卡片與卡面 HTML。The card and its faces.
+   */
+  getCardView: (cardId: number): Promise<CardView> =>
+    apiClient.get(`/cards/${cardId}`),
+
+  /**
+   * 讀取 Anki 媒體資料夾中的檔案（音檔、頭像）。
+   * Reads a file from Anki's media folder.
+   * @param filename - 單一檔名。A bare file name.
+   * @returns 檔案內容（帶 MIME 類型；只有音訊、影片、圖片照實際類型，其他為 octet-stream）。
+   *   The file as a Blob.
+   */
+  getAnkiMedia: (filename: string): Promise<Blob> =>
+    apiClient.get(`/anki-media/${encodeURIComponent(filename)}`, { responseType: 'blob' }),
 
   // ======================================================================
   // LLM 用途設定 (LLM Routes)

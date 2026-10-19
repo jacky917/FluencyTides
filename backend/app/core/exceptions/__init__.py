@@ -40,6 +40,10 @@ from .services import (
     LLMRouteNotFoundError,
     InvalidLLMRouteError,
     LLMRouteStoreUnavailableError,
+    CardNotFoundError,
+    InvalidMediaFilenameError,
+    MediaFileNotFoundError,
+    InvalidAnkiSearchError,
 )
 
 __all__ = [
@@ -70,4 +74,8 @@ __all__ = [
     "LLMRouteNotFoundError",
     "InvalidLLMRouteError",
     "LLMRouteStoreUnavailableError",
+    "CardNotFoundError",
+    "InvalidMediaFilenameError",
+    "MediaFileNotFoundError",
+    "InvalidAnkiSearchError",
 ]

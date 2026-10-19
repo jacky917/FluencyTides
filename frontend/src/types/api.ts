@@ -177,12 +177,54 @@ export interface GraphData {
 // 卡片詳情 (Card Detail / RUD)
 // ============================================================================
 
-/** 單一卡片的完整詳情。Full details of a single card. */
+/**
+ * 單一筆記的完整詳情（`GET /handlers/cards/{note_id}`）。欄位名沿用 AnkiConnect `notesInfo`
+ * 的 camelCase，與其他 API 的 snake_case 不同。
+ * Full details of a single note; keys keep AnkiConnect's camelCase.
+ */
 export interface CardDetail {
-  note_id: number;
-  model_name: string;
+  noteId: number;
+  modelName: string;
   tags: string[];
+  /** 欄位名 → 值與在筆記類型中的順序。Field name → value and position. */
+  fields: Record<string, { value: string; order: number }>;
+  cards: number[];
+}
+
+// ============================================================================
+// 卡片瀏覽 (Card Browse)
+// ============================================================================
+
+/** 清單中的一張卡（`GET /cards`）。A card in the browse list. */
+export interface CardSummary {
+  card_id: number;
+  note_id: number;
+  /** 所在牌組的完整名稱（`::` 分層）。Full deck name. */
+  deck_name: string;
+  model_name: string;
+  /** 卡片模板序號（0 起算）。Template ordinal. */
+  ord: number;
+  /**
+   * 欄位名 → 原始值，依筆記類型的欄位順序（JSON 物件的鍵序；欄位名是整數字串時 JS 會把它
+   * 排到前面）。Raw field values in note-type order.
+   */
   fields: Record<string, string>;
+}
+
+/** 一頁卡片。A page of cards. */
+export interface CardPage {
+  cards: CardSummary[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+/** 單一卡片與 Anki 渲染好的卡面（`GET /cards/{card_id}`）。A card with its rendered faces. */
+export interface CardView extends CardSummary {
+  /** 正面 HTML（含 `<style>` 與模板腳本；播放標記已換成 `data-anki-sound` 按鈕）。Front HTML. */
+  question: string;
+  /** 背面 HTML（模板用 `{{FrontSide}}` 時含正面）。Back HTML. */
+  answer: string;
 }
 
 // ============================================================================
