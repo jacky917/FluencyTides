@@ -350,7 +350,7 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
     def _print_timeout_seconds(self) -> int:
         """傳給 ``--print-timeout`` 的秒數：比 subprocess 逾時早觸發。
 
-        每次呼叫才讀設定，/setconfig 調整下一次即生效。下限 1 秒——agy 1.3.5
+        每次呼叫才讀設定，settings 改了下一次即生效。下限 1 秒——agy 1.3.5
         把 0 解讀為不限。
         """
         timeout = self._runtime().timeout_seconds

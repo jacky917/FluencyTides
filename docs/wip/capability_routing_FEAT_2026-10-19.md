@@ -3,7 +3,7 @@
 | 欄位 | 內容 |
 |---|---|
 | **創建日期** | 2026-10-19 |
-| **性質** | 設計計畫書（尚未修改程式，待確認） |
+| **性質** | 設計計畫書；R1、R2 已實作（實作紀錄見 §11） |
 | **範圍** | `backend/app/infrastructure/llm/routing.py`、`llm_route_service.py`、`api/llm_routes.py`、`bot/handlers/models_menu.py`、`/setconfig`（`commands.py`、`callbacks_config.py`、`core/dynamic_config.py`）、`infrastructure/audio_evaluator/`、`infrastructure/stt/`、`bot/handlers/voice.py`、資料表 `llm_routes` 與其 alembic 遷移、網頁的 LLM 模型設定頁、`scripts/common/llm_label.py`、`scripts/fastapi_client/query_backend_model.py` |
 | **前置** | `feat/llm-model-routing`（P1～P4 的模型路由，`docs/archive/llm_model_routing_FEAT_2026-10-15.md`） |
 | **相關** | `docs/wip/web_ui_parity_FEAT_2026-10-18.md`：本計畫取代其階段 B 的 `/setconfig` 部分，也是其階段 C（錄音評分）的前提。`docs/wip/speaking_card_types_PROPOSAL_2026-10-18.md`：各練法用自己的筆記類型與 handler |
@@ -195,6 +195,8 @@ CREATE = route("expression_correction.create", "外語糾錯：寫入子卡", ca
 
 例：`recording_eval.speaking_trilingual` 只設了 `audio_eval` 與 `llm`；`stt` 會往上找到 `recording_eval`，那裡沒設，再到 `*`。
 
+例外（R2 實作時決定，見 §11.1）：用途鍵為某個能力宣告了自己的預設（`env_defaults`）時，該預設排在 `*` 之前。目前只有錄音評分的 `llm`（audio 端點＋`STT_LLM_MODEL_NAME`）。
+
 ---
 
 ## 6. 資料表與遷移
@@ -299,6 +301,50 @@ cd frontend && npm run lint && npm test && npm run build
 
 ## 10. 待決策
 
-1. **`proxy` 評分器**（`proxy_client.py`）要不要保留。保留的話，它是 `audio_llm` 的一種端點類型；不用的話，R2 時一起移除。
-2. **評分器快取**：每次評分都依設定建立，還是依設定組合快取。建議依組合快取；設定變更時清除，與現在路由快取的失效方式相同。
-3. **R1 的改名是否一次到位**。建議一次改完、不留舊 API 與 `/models` 別名：只有你在用，兩套名稱並存反而容易混淆。
+1. ~~**`proxy` 評分器**要不要保留~~ → 保留，成為 openai 類端點的送音檔方式 `AUDIO_TRANSPORT=image_url`（§11）。
+2. ~~**評分器快取**~~ → 依設定組合快取，任何寫入或刪除（路由快取世代改變）時清空。
+3. ~~**R1 的改名是否一次到位**~~ → 一次改完，不留舊 API 與 `/models` 別名。
+
+---
+
+## 11. 實作紀錄
+
+### 11.1 R2（2026-10-19）
+
+依 §3–§9 實作，以下是計畫書沒寫死、實作時決定的部分：
+
+| 項目 | 做法 | 理由 |
+|---|---|---|
+| `AUDIO_*` 的憑證放哪 | 合成一個內建端點，ID 固定為 `audio`（保留字，自訂端點不能用）。類型：`AUDIO_EVALUATOR_PROVIDER=gemini_native` → gemini-native；其他（`openai` / `proxy` / `stt_diff` / `stt_llm`）→ openai，沒有 `AUDIO_BASE_URL` 時用 OpenAI 官方網址；`proxy` 以 `image_url` 送音檔，其餘以 `input_audio`。啟動 log 記一行選定的類型 | `audio_llm` 與 `stt_llm` 的 `llm` 都要能選到「現在用的那把金鑰」，現有 `.env` 不必改，行為與能力路由之前相同 |
+| audio 端點的白名單 | 音訊模型＝`AUDIO_MODELS`＋`AUDIO_MODEL_NAME`；文字模型＝同一份清單＋`STT_LLM_MODEL_NAME` | 取代 `MODIFY_AUDIO_MODEL_NAME` 與 `MODIFY_STT_LLM_MODEL_NAME`；能聽音檔的模型也能做文字評分 |
+| 自訂端點的音訊模型 | `LLM_ENDPOINTS__<ID>__AUDIO_MODELS`、`LLM_ENDPOINTS__<ID>__AUDIO_TRANSPORT`（`input_audio` 預設 / `image_url`） | §6.4；`image_url` 就是原本的 proxy 評分器 |
+| `stt_llm` 的 `llm` 預設 | `recording_eval` 宣告時給 `env_defaults`：audio 端點＋`STT_LLM_MODEL_NAME`，分支沿用。**這種用途鍵宣告的預設排在全域 `*` 之前**：錄音評分的 `llm` 解析為「分支 → 流程 → 宣告的預設」，不看 `*` | `*` 的 `llm` 是建卡的預設（例如 Claude Code）；否則設了 `*` 就會讓 stt_llm 改用 Claude Code（慢、吃訂閱）。要換錄音評分用的模型就直接設 `recording_eval` |
+| `stt_llm` 評分器 | 改用 `llm` 能力的 `BaseLLMClient.generate_structured_data`，不再自建 `AsyncOpenAI`；LLM 客戶端隨評分器快取 | §8.3。行為差異：temperature 改為客戶端的設定（原本 0.3），重試與逾時改用客戶端的策略（原本 90 秒、不重試） |
+| 三語卡分支宣告位置 | 與流程鍵一起放在 `services/recording_eval.py`（`capability_route_service` 會 import 它，確保清單一定有） | 階段 C 的 `RecordingService` 出現後再搬 |
+| 錯誤 | 建不出評分器時拋 `AudioEvaluatorUnavailableError`（503），訊息說明哪個能力、哪一層、哪個設定；TG 照實回覆並保留錄音模式 | 改好設定後可在時限內直接重傳 |
+| `/api/v1/config` | 移除 `configs` 與 `GET /config/{key}`（來自 `MODIFY_*`），只留 `runtime` | §8.4 |
+| TG 清單與網頁卡片的 ⚠️ | 有評分策略的鍵只看策略本身與策略用到的能力（全域另算文字 LLM）；各能力自己的警示照常顯示 | 策略是 listen 時，STT 沒設定不影響評分，不必標 |
+| 評分器組成的讀取 | 一則語音的策略與各能力由同一份設定快照解析 | 讀取期間有寫入時，不會把新策略配上舊模型 |
+| 舊 `/setconfig` 的按鈕 | 聊天裡殘留的 `setconfig_*` / `setcfg_val:*` 按鈕回覆「選單已過期」 | 不讓按鈕一直轉圈 |
+
+### 11.2 部署注意
+
+正式機的 `.env` 若要保留原本 `/setconfig` 可選的模型，需加上（值沿用原本 `MODIFY_*` 的清單）：
+
+```text
+AUDIO_MODELS=["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.1-pro-preview"]
+```
+
+`MODIFY_*` 可以刪掉（留著也不再有作用）。沒有任何 DB 設定時，錄音評分照 `.env` 運作，與部署前相同。
+
+### 11.3 驗證
+
+```bash
+cd backend && python -m pytest tests -q
+```
+
+```bash
+cd frontend && npm run lint && npm test && npm run build
+```
+
+另以暫存 SQLite 啟動後端與網頁實測：網頁把全域 `*` 的評分策略改成 `stt_diff`、三語卡分支設 `stt_llm` 後，`recording_eval` 沿用全域（來源「全域」）、三語卡用自己的設定；重啟後端後設定仍在，啟動 log 顯示依設定建立的評分器（`recording_eval → stt_diff`）。TG 實機錄音評分尚未在正式機走過（需部署後確認）。

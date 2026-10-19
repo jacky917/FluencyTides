@@ -7,7 +7,7 @@ kanji surface has multiple readings.
 的問題，語言專屬能力不該看起來像通用的
 （docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.4）。
 
-使用的模型由用途鍵 ``jp_verb_reading`` 決定（TG ``/models``），請求不能覆寫。
+使用的模型由用途鍵 ``jp_verb_reading`` 決定（TG ``/setconfig``），請求不能覆寫。
 """
 
 from fastapi import APIRouter, status

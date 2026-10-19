@@ -19,6 +19,7 @@ from .infrastructure import (
     AnkiServiceError,
     AnkiFieldCorruptedError,
     STTServiceError,
+    AudioEvaluatorUnavailableError,
     StorageServiceError,
 )
 from .bot import (
@@ -57,6 +58,7 @@ __all__ = [
     "AnkiServiceError",
     "AnkiFieldCorruptedError",
     "STTServiceError",
+    "AudioEvaluatorUnavailableError",
     "StorageServiceError",
     "BotBaseError",
     "BotStateError",

@@ -304,7 +304,9 @@ flowchart LR
 | `LLM_API_KEY` | OpenAI 相容 API 金鑰（實務上為 Gemini） | `None` | 生卡功能必填 | `config.py:239` |
 | `LLM_BASE_URL` | OpenAI 相容端點 URL | `None` | 生卡功能必填 | `config.py:243` |
 | `LLM_MODEL_NAME` | LLM 模型名 | `gemini-2.0-flash` | 否 | `config.py:247` |
-| `AUDIO_EVALUATOR_PROVIDER` | 語音評分供應商：`openai` / `gemini_native` | `gemini_native` | 否 | `config.py:255` |
+| `AUDIO_EVALUATOR_PROVIDER` | 錄音評分的 `.env` 預設策略與內建 audio 端點類型：`gemini_native` / `openai` / `proxy` / `stt_diff` / `stt_llm`（實際策略以 `/setconfig` 設定為準） | `gemini_native` | 否 | `config.py` |
+| `AUDIO_MODELS` | 內建 audio 端點可選的音訊模型（JSON 陣列）；`AUDIO_MODEL_NAME` 一律加入 | 空 | 否 | `config.py` |
+| `STT_MODELS` | whisper 可選的模型（JSON 陣列）；`STT_MODEL_NAME` 一律加入 | 空 | 否 | `config.py` |
 | `GEMINI_NATIVE_API_KEY` | google-genai 原生 SDK 金鑰 | `None` | 語音評分功能必填（gemini_native 時） | `config.py:264` |
 | `GEMINI_NATIVE_MODEL` | Gemini 原生模型名 | `gemini-2.5-flash` | 否 | `config.py:271` |
 

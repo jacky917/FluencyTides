@@ -13,8 +13,8 @@ Calls the LAN-hosted Speaches service through the OpenAI-compatible
 設計決策：
 - 語言參數必須明確傳入：實測顯示自動偵測會誤判（日文被判為韓文、
   信心度 0.29），故由本類負責 locale → ISO 639-1 映射（§2.4）。
-- 模型名於「每次呼叫時」讀取 settings，以支援 /setconfig 熱切換
-  （比照 gemini_client 先例，§2.3 解法 2）。
+- 伺服器、金鑰與模型由呼叫端傳入（能力路由的 ``stt``，見
+  ``audio_evaluator/factory.py``）；設定變更時由工廠建立新的客戶端。
 - 不做模型自動下載：生產路徑上 3-5 分鐘的下載會撞爆 TG handler
   超時；模型缺失由伺服器回錯、包成 STTServiceError 提示手動安裝。
 
@@ -22,8 +22,9 @@ Design decisions:
 - The language parameter must be passed explicitly: testing showed that
   auto-detection misidentifies languages (Japanese detected as Korean at
   0.29 confidence), so this class owns the locale → ISO 639-1 mapping.
-- The model name is read from settings on every call so /setconfig hot
-  swaps take effect (mirroring the gemini_client precedent).
+- Server, key and model are passed in by the caller (the ``stt``
+  capability route, see ``audio_evaluator/factory.py``); a setting change
+  makes the factory build a new client.
 - No automatic model download: a 3-5 minute download on the production
   path would blow the Telegram handler timeout; a missing model surfaces
   as a server error wrapped in STTServiceError suggesting manual install.
@@ -36,7 +37,6 @@ import httpx
 import openai
 from openai import AsyncOpenAI
 
-from app.core.config import settings
 from app.core.exceptions import STTServiceError
 
 logger = logging.getLogger(__name__)
@@ -55,26 +55,39 @@ class WhisperClient:
     Attributes:
         _client: OpenAI 相容的非同步客戶端實例。The OpenAI-compatible
             async client instance.
+        _server_url: Speaches 服務網址。The Speaches server URL.
+        _model_name: Whisper 模型名。The Whisper model name.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, server_url: str | None, model: str, api_key: str = "no-key") -> None:
         """初始化 WhisperClient。
 
         Initialize the WhisperClient.
 
+        Args:
+            server_url: Speaches 服務網址（``STT_SERVER_URL``）。The server URL.
+            model: Whisper 模型名（能力路由的 ``stt``）。The Whisper model.
+            api_key: 服務的金鑰（``STT_API_KEY``，自架服務通常不檢查）。The key.
+
         Raises:
-            STTServiceError: STT_SERVER_URL 未設定時拋出。Raised when
-                STT_SERVER_URL is not configured.
+            STTServiceError: 服務網址或模型未設定時拋出。Raised when the
+                server URL or model is not configured.
         """
-        if not settings.STT_SERVER_URL:
+        if not server_url:
             raise STTServiceError(
                 "STT_SERVER_URL 未設定，無法初始化 WhisperClient。"
             )
-        self._client = AsyncOpenAI(
-            api_key=settings.STT_API_KEY,
-            base_url=settings.STT_SERVER_URL,
-        )
-        logger.info("WhisperClient 初始化完成: %s", settings.STT_SERVER_URL)
+        if not model:
+            raise STTServiceError("Whisper 模型未設定（STT_MODEL_NAME），無法初始化 WhisperClient。")
+        self._client = AsyncOpenAI(api_key=api_key or "no-key", base_url=server_url)
+        self._server_url = server_url
+        self._model_name = model
+        logger.info("WhisperClient 初始化完成: %s（%s）", server_url, model)
+
+    @property
+    def model_name(self) -> str:
+        """Whisper 模型名。The Whisper model name."""
+        return self._model_name
 
     @staticmethod
     def to_whisper_language(target_language: str | None) -> str | None:
@@ -128,9 +141,7 @@ class WhisperClient:
                 Raised on connection failure, timeout, or server error.
         """
         language = self.to_whisper_language(target_language)
-        # 模型名於呼叫時讀取，支援 /setconfig 熱切換
-        # Read the model name per call to honor /setconfig hot swaps.
-        model_name = settings.STT_MODEL_NAME
+        model_name = self._model_name
 
         kwargs: dict[str, object] = {
             "model": model_name,
@@ -156,7 +167,7 @@ class WhisperClient:
             raise STTServiceError(
                 f"STT 服務呼叫失敗: {e}。"
                 f"請確認服務已啟動且模型 '{model_name}' 已安裝"
-                f"（POST {settings.STT_SERVER_URL}/models/{model_name}）。"
+                f"（POST {self._server_url}/models/{model_name}）。"
             ) from e
 
         text = getattr(transcript, "text", "") or ""

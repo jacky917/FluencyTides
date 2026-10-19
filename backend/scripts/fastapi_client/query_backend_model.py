@@ -95,7 +95,7 @@ async def main() -> None:
         print("🤖 全域模型標籤 : (全域 LLM 客戶端未建立——金鑰、CLI 或 effort 設定有誤?見後端 log)")
     if runtime.get("llm_client_matches_global") is False:
         print("🚨 全域客戶端與全域 * 目前的設定不一致(上方標籤與 CLI 診斷可能是舊的);")
-        print("   在 /models 重存一次全域 * 或重啟後端即可重建")
+        print("   在 /setconfig 重存一次全域 * 或重啟後端即可重建")
     print(f"🔌 全域端點     : {runtime.get('llm_provider')}")
     print(f"🃏 後端 Anki 端點: {runtime.get('anki_connect_url')}")
 
@@ -159,20 +159,6 @@ async def main() -> None:
         print(f"   本機: {local_anki}")
         print("   兩邊指向不同 Anki 時,後端建卡與腳本傳媒體會分裂,請先對齊再生成。")
 
-    configs = data.get("configs", [])
-    if configs:
-        print("\n========== 可動態修改的設定 ==========")
-        for entry in configs:
-            options = entry.get("options")
-            options_str = " / ".join(options) if options else "(不限)"
-            # requires_rebuild 是資訊性標記:改「值」時後端會自動重建對應
-            # 元件(語音評分器等),與容器/映像無關,呼叫端無需任何動作
-            rebuild_mark = "  🔁(改值時後端自動重建對應元件)" if entry.get("requires_rebuild") else ""
-            print(f"  {entry['key']} = {entry['current_value']}{rebuild_mark}")
-            print(f"      可選: {options_str}")
-    else:
-        print("\n(白名單為空:.env 未設任何 MODIFY_* 變數)")
-
 
 def _print_capability_routes(runtime: dict) -> None:
     """列出各用途的模型與來源(模型路由計畫 D9;舊版後端沒有這一塊時略過)。
@@ -181,15 +167,15 @@ def _print_capability_routes(runtime: dict) -> None:
     """
     block = runtime.get("capability_routes")
     if block is None:
-        print("\n(後端版本不含 capability_routes:各用途的模型請用 TG /models 查看)")
+        print("\n(後端版本不含 capability_routes:各用途的模型請用 TG /setconfig 查看)")
         return
-    print("\n========== 各用途的模型(TG /models 設定)==========")
+    print("\n========== 各用途的工具(TG /setconfig 設定)==========")
     if "error" in block:
         print(f"❌ 後端組不出清單:{block['error']}(詳見後端 log)")
         return
     if block.get("db_unavailable"):
         print("🚨 後端讀不到資料庫:以下皆為 .env 預設,實際存的設定未知")
-    source_names = {"route": "用途", "global": "全域", "env": ".env"}
+    source_names = {"route": "用途", "parent": "流程", "global": "全域", "env": ".env"}
     for route in block.get("routes", []):
         for capability, state in (route.get("capabilities") or {}).items():
             marker = "⚠️ " if state.get("rejected") or state.get("problem") or not route.get("declared") else ""

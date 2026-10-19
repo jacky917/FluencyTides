@@ -6,7 +6,7 @@ Capability route settings API.
 - ``PUT    /api/v1/capability-routes/{route_key}/{capability}``  寫入一組選擇（白名單＋試建客戶端檢查）
 - ``DELETE /api/v1/capability-routes/{route_key}/{capability}``  恢復預設（退回全域，或 ``.env``）
 
-目前只有 ``llm`` 能力。全域設定的用途鍵是 ``*``（URL 中寫成 ``%2A``）；寫入或刪除它之後
+能力見 :mod:`app.infrastructure.llm.capabilities`。全域設定的用途鍵是 ``*``（URL 中寫成 ``%2A``）；寫入或刪除它之後
 （不論成敗）會重建 ``app.state.llm_client``（診斷端點用，模型路由計畫 D9）。認證與其他 API 相同，
 掛在 ``verify_api_key`` 之下（部署上的存取控制見 README 的「API 認證」）。可選項目只列 provider
 ID、類型與白名單，不含金鑰。
@@ -22,8 +22,9 @@ import logging
 from fastapi import APIRouter, Depends, Request
 
 from app.core.auth import verify_api_key
-from app.infrastructure.llm.endpoints import list_endpoints
-from app.infrastructure.llm.routing import CAPABILITY_LLM, GLOBAL_ROUTE_KEY
+from app.infrastructure.llm import routing
+from app.infrastructure.llm.capabilities import CAPABILITY_AUDIO_EVAL, CAPABILITY_ORDER, list_providers
+from app.infrastructure.llm.routing import GLOBAL_ROUTE_KEY
 from app.schemas.capability_route import (
     CapabilityRoutesResponse,
     ModelOptionRead,
@@ -71,17 +72,25 @@ async def list_capability_routes() -> CapabilityRoutesResponse:
     When the database cannot be read, every row reports ``db_unavailable``.
     """
     views, read_ok = await capability_route_service.list_routes()
+    strategies_order = [option.id for option in list_providers(CAPABILITY_AUDIO_EVAL)]
     return CapabilityRoutesResponse(
         routes=[capability_route_service.to_read(view) for view in views],
         providers={
-            CAPABILITY_LLM: [
+            capability: [
                 ProviderOptionRead(
-                    id=endpoint.id,
-                    type=endpoint.type,
-                    models=[ModelOptionRead(name=o.name, efforts=list(o.efforts)) for o in endpoint.models],
+                    id=option.id,
+                    type=option.type,
+                    models=[ModelOptionRead(name=o.name, efforts=list(o.efforts)) for o in option.models],
+                    title=option.title,
                 )
-                for endpoint in list_endpoints()
+                for option in list_providers(capability)
             ]
+            for capability in CAPABILITY_ORDER
+        },
+        strategies={
+            declared.key: [strategy for strategy in strategies_order if strategy in allowed]
+            for declared in routing.list_route_keys()
+            if (allowed := routing.allowed_strategies(declared.key)) is not None
         },
         db_unavailable=not read_ok,
     )

@@ -131,7 +131,6 @@ class ServiceInjectionMiddleware(BaseMiddleware):
     - relation_service: RelationService
     - anki_client: AnkiClient
     - user_state_manager: UserStateManager (Singleton)
-    - audio_evaluator: BaseAudioEvaluator (Singleton，若已初始化)
     """
 
     async def __call__(
@@ -193,10 +192,5 @@ class ServiceInjectionMiddleware(BaseMiddleware):
 
             # 注入 UserStateManager Singleton
             data["user_state_manager"] = user_state_manager
-
-            # 注入 Audio Evaluator (若已在 app.state 中初始化)
-            audio_evaluator = getattr(app.state, "audio_evaluator", None)
-            if audio_evaluator:
-                data["audio_evaluator"] = audio_evaluator
 
             return await handler(event, data)

@@ -122,6 +122,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # effort 設定錯誤）不阻止啟動：設為 None 並記 WARNING
     await capability_route_service.refresh_global_client(app.state)
 
+    # 錄音評分器每次評分時依能力路由建立（見 app/services/recording_eval.py）；這裡先試建一次
+    # 流程鍵的評分器，設定有誤時在啟動 log 就看得到，不阻止啟動
+    try:
+        from app.services import recording_eval
+
+        _, plan = await recording_eval.evaluator_for(recording_eval.RECORDING_EVAL.key)
+        logger.info("✅ 錄音評分器可用（recording_eval → %s）。", plan.strategy_name)
+    except Exception as e:  # noqa: BLE001 - 不阻止啟動；評分時會再建一次並回報給使用者
+        logger.warning("⚠️ 錄音評分器目前無法建立（TG 錄音評分會失敗，改設定後即可）：%s", e)
+
     # MinioClient 初始化同理，不應阻止應用啟動。
     try:
         app.state.minio_client = MinioClient()
@@ -131,17 +141,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "⚠️ MinioClient 初始化失敗（Storage 相關端點將不可用）: %s", e
         )
         app.state.minio_client = None
-
-    # 初始化 AudioEvaluator Singleton (Strategy Pattern)
-    try:
-        from app.infrastructure.audio_evaluator.factory import create_audio_evaluator
-        app.state.audio_evaluator = create_audio_evaluator()
-        logger.info("✅ AudioEvaluator Singleton 已初始化。")
-    except Exception as e:
-        logger.warning(
-            "⚠️ AudioEvaluator 初始化失敗（Workflow B 語音評分將不可用）: %s", e
-        )
-        app.state.audio_evaluator = None
 
     # 初始化並啟動 Telegram Bot (Polling)
     bot = create_bot()

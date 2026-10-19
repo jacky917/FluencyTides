@@ -19,13 +19,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from app.bot.handlers import callbacks, callbacks_config, commands, media, messages, voice
+from app.bot.handlers import callbacks, commands, media, messages, voice
 from app.bot.handlers.fsm import expression_fsm, speaking_fsm, vocabulary_fsm
 from app.bot.handlers.fsm.expression_fsm import ExpressionStates
 from app.bot.state import UserState, UserStateManager
 from app.bot.utils import texts
 from app.core.config import settings
-from app.core.exceptions import FluencyTidesError
+from app.core.exceptions import FluencyTidesError, AudioEvaluatorUnavailableError
 from app.infrastructure.anki.client import AnkiConnectError
 
 CHAT_ID = 7
@@ -207,15 +207,6 @@ def test_sync_command_reports_scanned_cards_and_escapes_errors():
     assert failed.startswith("❌ 清理失敗：")
 
 
-def test_setconfig_without_options_points_llm_settings_to_models():
-    """只剩 MODIFY_LLM_* 時 /setconfig 也是空的：說明 LLM 改用 /models，而不是「沒有設定」。"""
-    message, _ = _message("/setconfig", user_id=99)
-    with mock.patch.object(settings, "TG_ADMIN_CHAT_ID", 99), \
-         mock.patch.object(commands, "get_modifiable_configs", return_value={}):
-        _run(commands.command_setconfig_handler(message))
-    assert _sent(message.answer) == [texts.NO_MODIFIABLE_CONFIGS]
-
-
 # ----------------------------------------------------------------------
 # 兜底文字（messages.py）與說話者名稱
 # ----------------------------------------------------------------------
@@ -387,15 +378,27 @@ def test_crash_alert_is_escaped_and_bounded():
 # ----------------------------------------------------------------------
 
 
-def _voice(manager, evaluator=None, anki=None):
+def _evaluator_patch(evaluator):
+    """讓 voice 依 handler 取得的評分器是 ``evaluator``；None＝依設定建不出評分器。"""
+    if evaluator is None:
+        side_effect = AudioEvaluatorUnavailableError("錄音評分器無法建立：AUDIO_API_KEY 未設定")
+        return mock.patch.object(voice.recording_eval, "evaluator_for_handler", mock.AsyncMock(side_effect=side_effect))
+    plan = mock.MagicMock(strategy_name="listen")
+    return mock.patch.object(
+        voice.recording_eval, "evaluator_for_handler", mock.AsyncMock(return_value=(evaluator, plan))
+    )
+
+
+def _voice(manager, evaluator=None, anki=None, registry=None):
     message, status = _message()
     message.voice = mock.MagicMock(file_id="f")
     message.bot = mock.MagicMock()
     message.bot.get_file = mock.AsyncMock(return_value=mock.MagicMock(file_path="p"))
     message.bot.download_file = mock.AsyncMock()
-    _run(voice.process_voice_handler(
-        message, anki or _anki(), mock.MagicMock(), manager, mock.MagicMock(), mock.MagicMock(), evaluator
-    ))
+    with _evaluator_patch(evaluator):
+        _run(voice.process_voice_handler(
+            message, anki or _anki(), registry or mock.MagicMock(), manager, mock.MagicMock(), mock.MagicMock()
+        ))
     return message, status
 
 
@@ -412,11 +415,48 @@ def test_voice_without_task_mentions_the_time_limit():
 
 
 def test_missing_evaluator_keeps_recording_mode_and_says_so():
-    """評分服務未啟用：狀態沒清，明說可以切換模式後在時限內重傳。"""
+    """依設定建不出評分器：狀態沒清，說明原因，改好設定後可在時限內重傳。"""
     manager = _recording_state()
     _, status = _voice(manager, evaluator=None)
-    assert "可用 /setconfig 切換評分模式" in _sent(status.edit_text)[-1]
+    last = _sent(status.edit_text)[-1]
+    _assert_tg_html(last)
+    assert "AUDIO_API_KEY 未設定" in last and "改好設定後" in last
     assert manager.get_state(CHAT_ID) is not None
+
+
+def test_unexpected_error_while_building_the_evaluator_is_reported():
+    """建評分器時的非預期錯誤：照實回覆（不停在「讀取卡片中…」），狀態保留可重傳。"""
+    manager = _recording_state()
+    message, status = _message()
+    message.voice = mock.MagicMock(file_id="f")
+    message.bot = mock.MagicMock()
+    message.bot.get_file = mock.AsyncMock(return_value=mock.MagicMock(file_path="p"))
+    message.bot.download_file = mock.AsyncMock()
+    lookup = mock.AsyncMock(side_effect=RuntimeError("boom"))
+    with mock.patch.object(voice.recording_eval, "evaluator_for_handler", lookup):
+        _run(voice.process_voice_handler(message, _anki(), mock.MagicMock(), manager, mock.MagicMock(), mock.MagicMock()))
+    assert "語音評分服務發生錯誤" in _sent(status.edit_text)[-1]
+    assert manager.get_state(CHAT_ID) is not None
+
+
+def test_voice_builds_the_evaluator_from_the_cards_handler():
+    """三語卡與對話卡各依自己的 handler 取評分器（可以設不同策略）。"""
+    for field_name, handler in (("Recordings", "speaking_coach"), ("Recordings_JA", "speaking_trilingual")):
+        manager = UserStateManager()
+        manager.set_state(CHAT_ID, UserState(action="recording", card_id="SC_1", extra={"field_name": field_name}))
+        evaluator = mock.MagicMock()
+        evaluator.evaluate_audio = mock.AsyncMock(side_effect=FluencyTidesError("boom"))
+        lookup = mock.AsyncMock(return_value=(evaluator, mock.MagicMock(strategy_name="listen")))
+        message, _ = _message()
+        message.voice = mock.MagicMock(file_id="f")
+        message.bot = mock.MagicMock()
+        message.bot.get_file = mock.AsyncMock(return_value=mock.MagicMock(file_path="p"))
+        message.bot.download_file = mock.AsyncMock()
+        with mock.patch.object(voice.recording_eval, "evaluator_for_handler", lookup):
+            _run(voice.process_voice_handler(
+                message, _anki(), mock.MagicMock(), manager, mock.MagicMock(), mock.MagicMock()
+            ))
+        lookup.assert_awaited_once_with(handler)
 
 
 def test_ai_busy_says_to_click_the_record_button_again():
@@ -447,14 +487,7 @@ def test_unscored_recording_is_not_written_or_reported_as_scored():
     evaluator = mock.MagicMock()
     evaluator.evaluate_audio = mock.AsyncMock(side_effect=AudioNotScoredError("沒有偵測到<語音>。"))
     registry = mock.MagicMock()
-    message, status = _message()
-    message.voice = mock.MagicMock(file_id="f")
-    message.bot = mock.MagicMock()
-    message.bot.get_file = mock.AsyncMock(return_value=mock.MagicMock(file_path="p"))
-    message.bot.download_file = mock.AsyncMock()
-    _run(voice.process_voice_handler(
-        message, _anki(), registry, manager, mock.MagicMock(), mock.MagicMock(), evaluator
-    ))
+    _, status = _voice(manager, evaluator=evaluator, registry=registry)
 
     last = _sent(status.edit_text)[-1]
     _assert_tg_html(last)
@@ -462,86 +495,6 @@ def test_unscored_recording_is_not_written_or_reported_as_scored():
     assert "請回 Anki 卡片重新點按鈕" in last
     registry.get_handler.assert_not_called()  # 沒有寫入任何紀錄
     assert manager.get_state(CHAT_ID) is None
-
-
-# ----------------------------------------------------------------------
-# /setconfig（callbacks_config.py）
-# ----------------------------------------------------------------------
-
-
-@pytest.fixture
-def admin():
-    with mock.patch.object(settings, "TG_ADMIN_CHAT_ID", 1):
-        yield
-
-
-def test_setconfig_options_over_64_bytes_are_not_listed(admin):
-    """callback data 以 bytes 計：超過 64 bytes 的選項不列出（截斷的話按下去必定被當成無效）；
-    文字沒有反引號、值有轉義，按鈕有 answer。"""
-    options = ["ok", "很長的中文選項" * 4]
-    query = _callback("setconfig_key:AUDIO_MODEL_NAME")
-    with mock.patch.object(callbacks_config, "get_modifiable_configs", return_value={"AUDIO_MODEL_NAME": options}), \
-         mock.patch.object(settings, "AUDIO_MODEL_NAME", NASTY):
-        _run(callbacks_config.handle_setconfig_key_selection(query))
-
-    query.answer.assert_awaited_once_with()
-    text = query.message.edit_text.await_args.args[0]
-    _assert_tg_html(text)
-    markup = query.message.edit_text.await_args.kwargs["reply_markup"]
-    labels = [button.text for row in markup.inline_keyboard for button in row]
-    assert labels == ["ok", "⬅️ 返回"]
-
-
-def test_setconfig_without_options_is_not_a_dead_end(admin):
-    query = _callback("setconfig_key:AUDIO_MODEL_NAME")
-    with mock.patch.object(callbacks_config, "get_modifiable_configs", return_value={"AUDIO_MODEL_NAME": None}):
-        _run(callbacks_config.handle_setconfig_key_selection(query))
-    text = query.message.edit_text.await_args.args[0]
-    _assert_tg_html(text)
-    assert query.message.edit_text.await_args.kwargs["reply_markup"] is not None
-
-
-@pytest.mark.parametrize("data", ["setconfig_key:LLM_MODEL_NAME", "setcfg_val:AUDIO_MODEL_NAME:gone"])
-def test_setconfig_stale_buttons_say_expired(admin, data):
-    """舊按鈕（設定已不在清單、或選項改過）：提示選單已過期，不說「不允許修改」「無效的選項」。"""
-    query = _callback(data)
-    whitelist = {"AUDIO_MODEL_NAME": ["a"]}
-    with mock.patch.object(callbacks_config, "get_modifiable_configs", return_value=whitelist):
-        if data.startswith("setconfig_key"):
-            _run(callbacks_config.handle_setconfig_key_selection(query))
-        else:
-            _run(callbacks_config.handle_setconfig_value_selection(query))
-    query.answer.assert_awaited_once_with(texts.SETCONFIG_EXPIRED_ALERT, show_alert=True)
-
-
-def test_setconfig_evaluator_switch_failure_is_logged_with_traceback(admin, caplog):
-    """切換評分器失敗：設定回滾、畫面不是死路，log 留下完整 traceback（畫面只說「詳見伺服器日誌」）。"""
-    query = _callback("setcfg_val:AUDIO_EVALUATOR_PROVIDER:stt_diff")
-    app = mock.MagicMock()
-    with mock.patch.object(callbacks_config, "get_modifiable_configs",
-                           return_value={"AUDIO_EVALUATOR_PROVIDER": ["gemini_native", "stt_diff"]}), \
-         mock.patch.object(settings, "AUDIO_EVALUATOR_PROVIDER", "gemini_native"), \
-         mock.patch("app.infrastructure.audio_evaluator.factory.create_audio_evaluator", side_effect=KeyError("x")):
-        _run(callbacks_config.handle_setconfig_value_selection(query, app=app))
-        assert settings.AUDIO_EVALUATOR_PROVIDER == "gemini_native"
-
-    text = query.message.edit_text.await_args.args[0]
-    _assert_tg_html(text)
-    assert query.message.edit_text.await_args.kwargs["reply_markup"] is not None
-    [record] = [r for r in caplog.records if "切換 Audio Evaluator" in r.getMessage()]
-    assert record.exc_info
-
-
-def test_setconfig_success_text(admin):
-    query = _callback("setcfg_val:AUDIO_MODEL_NAME:b")
-    with mock.patch.object(callbacks_config, "get_modifiable_configs", return_value={"AUDIO_MODEL_NAME": ["a", "b"]}), \
-         mock.patch.object(settings, "AUDIO_MODEL_NAME", "a"):
-        _run(callbacks_config.handle_setconfig_value_selection(query))
-        assert settings.AUDIO_MODEL_NAME == "b"
-    text = query.message.edit_text.await_args.args[0]
-    _assert_tg_html(text)
-    assert text == "✅ <b>AUDIO_MODEL_NAME</b> 已設為 <b>b</b>（重啟後還原）。"
-    query.answer.assert_awaited_once_with()
 
 
 # ----------------------------------------------------------------------

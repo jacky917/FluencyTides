@@ -2,13 +2,15 @@
  * 工具設定頁面（能力路由）。
  * Tool settings page (capability routes).
  *
- * 網頁版的 TG `/models`：列出每個用途鍵（含全域 `*`）在各能力上的生效設定，可為某個用途的某個
- * 能力選 provider → 模型 →（有 effort 時）effort 並儲存，或恢復預設。選項只來自後端回傳的
- * 白名單（`GET /api/v1/capability-routes` 的 `providers`）。目前只有 `llm`（文字生成）能力。
+ * 網頁版的 TG `/setconfig`：列出每個用途鍵（含全域 `*`）在各能力上的生效設定（文字 LLM、錄音評分
+ * 策略、聽音檔的模型、語音轉文字），可為某個用途的某個能力選 provider →（需要時）模型 →（有 effort
+ * 時）effort 並儲存，或恢復預設。選項只來自後端回傳的白名單（`GET /api/v1/capability-routes` 的
+ * `providers`；評分策略另依 `strategies` 的限縮過濾）。分支鍵（`<流程>.<分支>`）縮排在流程鍵之下。
  *
- * The web counterpart of TG `/models`: each route key's per-capability
+ * The web counterpart of TG `/setconfig`: each route key's per-capability
  * setting, with a provider → model → (effort) picker and a restore action.
- * Options come only from the backend's whitelist.
+ * Options come only from the backend's whitelist; branch keys are indented
+ * under their flow key.
  */
 
 import { useState } from 'react'
@@ -22,13 +24,21 @@ import { Skeleton } from '../components/ui/skeleton'
 import { cn } from '../lib/utils'
 import { describeApiError, failureTitle, isBackendError } from '../lib/apiError'
 import {
+  CAPABILITY_AUDIO_EVAL,
+  CAPABILITY_LLM,
   GLOBAL_ROUTE_KEY,
   SOURCE_LABELS,
+  buildChoice,
+  capabilitiesInUse,
   capabilityLabel,
   defaultEffort,
+  emptyProviderHint,
   formatChoice,
   initialSelection,
+  parentKey,
   previewLabel,
+  providerLabel,
+  providersFor,
 } from '../lib/capabilityRoutes'
 import type { CapabilityRoute, CapabilityState, ProviderOption, RouteUpdate } from '../types/api'
 
@@ -120,6 +130,7 @@ export default function ToolSettings() {
     })
 
   const readOnly = data?.db_unavailable ?? true
+  const listedKeys = new Set(data?.routes.map((route) => route.route_key) ?? [])
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -127,8 +138,9 @@ export default function ToolSettings() {
         <div>
           <h2 className="text-3xl font-bold tracking-tight">工具設定</h2>
           <p className="text-muted-foreground mt-2">
-            為每個用途選擇使用的工具與模型，下一次使用即生效、重啟後仍在。來源：<b>用途</b>＝該用途自己的設定、
-            <b>全域</b>＝<code>*</code> 的設定、<b>.env</b>＝部署預設。
+            為每個用途選擇使用的工具與模型（文字 LLM、錄音評分策略、聽音檔的模型、語音轉文字），下一次使用即生效、
+            重啟後仍在。來源：<b>用途</b>＝該用途自己的設定、<b>流程</b>＝分支沿用流程鍵的設定、<b>全域</b>＝
+            <code>*</code> 的設定、<b>.env</b>＝部署預設。
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
@@ -167,7 +179,9 @@ export default function ToolSettings() {
               <RouteCard
                 key={route.route_key}
                 route={route}
+                isBranch={parentKey(route.route_key) !== null && listedKeys.has(parentKey(route.route_key) ?? '')}
                 providers={data.providers}
+                strategies={data.strategies ?? {}}
                 readOnly={readOnly}
                 editingSlot={editingSlot}
                 onEdit={(slot) => setEditingSlot(slot)}
@@ -207,7 +221,10 @@ function Warning({ title, lines }: { title: string; lines: string[] }) {
 /** {@link RouteCard} 的 props。Props of {@link RouteCard}. */
 interface RouteCardProps {
   route: CapabilityRoute
+  /** 分支鍵（流程鍵也在清單中）：縮排顯示。A branch whose flow key is listed. */
+  isBranch: boolean
   providers: Record<string, ProviderOption[]>
+  strategies: Record<string, string[]>
   readOnly: boolean
   editingSlot: string | null
   onEdit: (slot: string | null) => void
@@ -220,19 +237,37 @@ interface RouteCardProps {
  * One route key's card: the key, its description, and one panel per capability.
  * @returns 卡片 JSX。Card JSX.
  */
-function RouteCard({ route, providers, readOnly, editingSlot, onEdit, notices, onNotice }: RouteCardProps) {
+function RouteCard({
+  route,
+  isBranch,
+  providers,
+  strategies,
+  readOnly,
+  editingSlot,
+  onEdit,
+  notices,
+  onNotice,
+}: RouteCardProps) {
   const isGlobal = route.route_key === GLOBAL_ROUTE_KEY
   const states = Object.entries(route.capabilities)
+  // 只標出會用到的能力的問題（例如策略是 listen 時，STT 沒設定不影響評分）；各能力自己的警示照常顯示
+  const inUse = capabilitiesInUse(route)
   const flagged =
-    !route.declared || states.some(([, state]) => state.rejected.length > 0 || state.problem !== null)
+    !route.declared ||
+    states.some(
+      ([capability, state]) =>
+        inUse.has(capability) && (!state.declared || state.rejected.length > 0 || state.problem !== null),
+    )
 
   return (
-    <Card className={cn(flagged && 'border-amber-500/60')}>
+    <Card className={cn(flagged && 'border-amber-500/60', isBranch && 'ml-6 sm:ml-10')}>
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
           {flagged && <AlertTriangle className="h-4 w-4 text-amber-600" aria-label="警示" />}
+          {isBranch && <span className="text-muted-foreground" aria-hidden>└</span>}
           <code>{route.route_key}</code>
           {isGlobal && <span className="text-xs font-normal text-muted-foreground">全域</span>}
+          {isBranch && <span className="text-xs font-normal text-muted-foreground">分支，沒設定的能力沿用流程鍵</span>}
         </CardTitle>
         <CardDescription>{route.description ?? '（程式中已沒有這個用途）'}</CardDescription>
       </CardHeader>
@@ -244,10 +279,10 @@ function RouteCard({ route, providers, readOnly, editingSlot, onEdit, notices, o
             <CapabilityPanel
               key={capability}
               routeKey={route.route_key}
-              declared={route.declared}
+              declared={route.declared && state.declared}
               capability={capability}
               state={state}
-              providers={providers[capability] ?? []}
+              providers={providersFor(capability, route.route_key, providers, strategies)}
               readOnly={readOnly}
               editing={editingSlot === slot}
               onEdit={(editing) => onEdit(editing ? slot : null)}
@@ -363,6 +398,9 @@ function CapabilityPanel({
         </div>
       )}
 
+      {declared === false && state.declared === false && (
+        <Warning title="孤兒設定" lines={['程式中這個用途已不用這個能力，只能恢復預設以刪除。']} />
+      )}
       {state.problem && <Warning title="目前生效的設定無法使用" lines={[state.problem]} />}
       {state.rejected.length > 0 && (
         <Warning
@@ -488,12 +526,11 @@ function CapabilityEditor({
   const idPrefix = `${capability}-${routeKey}`
 
   const provider = providers.find((item) => item.id === providerId)
+  const needsModel = (provider?.models.length ?? 0) > 0
   const model = provider?.models.find((item) => item.name === modelName)
   const needsEffort = (model?.efforts.length ?? 0) > 0
-  const choice: RouteUpdate | null =
-    provider && model && (!needsEffort || model.efforts.includes(effort))
-      ? { provider: provider.id, model: model.name, effort: needsEffort ? effort : null }
-      : null
+  const choice: RouteUpdate | null = buildChoice(providers, { provider: providerId, model: modelName, effort })
+  const columns = 1 + (needsModel || !provider ? 1 : 0) + (needsEffort ? 1 : 0)
 
   const selectModel = (name: string, from: ProviderOption | undefined) => {
     setModelName(name)
@@ -513,12 +550,7 @@ function CapabilityEditor({
   })
 
   if (providers.length === 0) {
-    return (
-      <Warning
-        title="沒有可選的端點"
-        lines={['.env 的白名單都是空的（LLM_ENDPOINTS__<ID>__MODELS、LLM_CLAUDE_CODE_MODELS…）。']}
-      />
-    )
+    return <Warning title={`沒有可選的${providerLabel(capability)}`} lines={[emptyProviderHint(capability)]} />
   }
 
   return (
@@ -532,10 +564,10 @@ function CapabilityEditor({
         }
       }}
     >
-      <div className={cn('grid gap-4', needsEffort ? 'md:grid-cols-3' : 'md:grid-cols-2')}>
+      <div className={cn('grid gap-4', columns === 3 ? 'md:grid-cols-3' : columns === 2 ? 'md:grid-cols-2' : '')}>
         <div className="space-y-2">
           <label className="text-sm font-medium" htmlFor={`provider-${idPrefix}`}>
-            端點
+            {providerLabel(capability)}
           </label>
           <select
             id={`provider-${idPrefix}`}
@@ -549,36 +581,38 @@ function CapabilityEditor({
             }}
           >
             <option value="" disabled>
-              選擇端點
+              選擇{providerLabel(capability)}
             </option>
             {providers.map((item) => (
               <option key={item.id} value={item.id}>
-                {item.id}（{item.type}）
+                {providerOptionText(item)}
               </option>
             ))}
           </select>
         </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium" htmlFor={`model-${idPrefix}`}>
-            模型
-          </label>
-          <select
-            id={`model-${idPrefix}`}
-            className={SELECT_CLASS}
-            value={modelName}
-            disabled={!provider}
-            onChange={(e) => selectModel(e.target.value, provider)}
-          >
-            <option value="" disabled>
-              選擇模型
-            </option>
-            {provider?.models.map((item) => (
-              <option key={item.name} value={item.name}>
-                {item.name}
+        {(needsModel || !provider) && (
+          <div className="space-y-2">
+            <label className="text-sm font-medium" htmlFor={`model-${idPrefix}`}>
+              模型
+            </label>
+            <select
+              id={`model-${idPrefix}`}
+              className={SELECT_CLASS}
+              value={modelName}
+              disabled={!provider}
+              onChange={(e) => selectModel(e.target.value, provider)}
+            >
+              <option value="" disabled>
+                選擇模型
               </option>
-            ))}
-          </select>
-        </div>
+              {provider?.models.map((item) => (
+                <option key={item.name} value={item.name}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {needsEffort && model && (
           <div className="space-y-2">
             <label className="text-sm font-medium" htmlFor={`effort-${idPrefix}`}>
@@ -606,14 +640,17 @@ function CapabilityEditor({
       {choice && provider && (
         <div className="space-y-1">
           <p>
-            <b>{routeKey}</b> 改用：
+            <b>{routeKey}</b> 的{capabilityLabel(capability)}改用：
             <code className="rounded bg-background px-2 py-0.5 border">
               {previewLabel(provider, choice.model, choice.effort)}
             </code>
-            <span className="text-muted-foreground">（將寫進卡片的標籤）</span>
+            {capability === CAPABILITY_LLM && <span className="text-muted-foreground">（將寫進卡片的標籤）</span>}
           </p>
+          {provider.title && <p className="text-muted-foreground">{provider.title}</p>}
           <p className="text-muted-foreground">
-            儲存時會先試建一次客戶端（檢查 CLI、金鑰），之後的生成立即生效、重啟後仍在。
+            {capability === CAPABILITY_AUDIO_EVAL
+              ? '策略用到的模型在「聽音檔的模型」「語音轉文字」「文字 LLM」設定。儲存後下一次評分即生效、重啟後仍在。'
+              : '儲存時會先試建一次（檢查 CLI、金鑰、伺服器設定），之後立即生效、重啟後仍在。'}
           </p>
         </div>
       )}
@@ -628,4 +665,15 @@ function CapabilityEditor({
       </div>
     </form>
   )
+}
+
+/**
+ * provider 選項的文字：策略附說明，端點附類型（與 ID 相同時省略）。
+ * The text of a provider option.
+ * @param option - provider。The provider.
+ * @returns 顯示文字。Display text.
+ */
+function providerOptionText(option: ProviderOption): string {
+  if (option.title) return `${option.id} — ${option.title}`
+  return option.type === option.id ? option.id : `${option.id}（${option.type}）`
 }

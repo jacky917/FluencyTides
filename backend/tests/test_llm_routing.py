@@ -82,12 +82,12 @@ def whitelist():
 
 
 def _rows(**choices: RouteChoice):
-    """以 ``_fetch_choices`` 回傳指定的設定列（route_key → 選擇）。
+    """以 ``_fetch_choices`` 回傳指定的 ``llm`` 設定列（route_key → 選擇）。
 
     ``*`` 不是合法的關鍵字參數名，以 ``GLOBAL`` 代表全域。
     """
     stored = {(GLOBAL_ROUTE_KEY if key == "GLOBAL" else key): value for key, value in choices.items()}
-    return mock.patch.object(routing, "_fetch_choices", mock.AsyncMock(return_value=stored))
+    return mock.patch.object(routing, "_fetch_choices", mock.AsyncMock(return_value={"llm": stored}))
 
 
 def _resolve(key: str):
@@ -99,15 +99,17 @@ def _resolve(key: str):
 # ----------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("key", ["scenario.ask", "jp.verb_pair.child-card", "A1", "x" * 64])
+@pytest.mark.parametrize("key", ["scenario.ask", "jp_verb-pair.child-card", "A1", "x" * 64])
 def test_free_form_keys_are_accepted(key):
-    """用途鍵可自由命名，含 . _ -。"""
+    """用途鍵可自由命名，含 . _ -（. 只用來分兩層）。"""
     route = routing.route(key, "測試", {"llm"})
     assert route.key == key
     assert route in list_route_keys()
 
 
-@pytest.mark.parametrize("key", ["*", "", "has space", "中文", "x" * 65, "a/b", "a\n"])
+@pytest.mark.parametrize(
+    "key", ["*", "", "has space", "中文", "x" * 65, "a/b", "a\n", "a.b.c", ".a", "a.", "a..b"]
+)
 def test_invalid_keys_raise(key):
     """不合規的鍵在宣告當下拋錯；直接建構 Route 也一樣。"""
     with pytest.raises(ValueError, match="不合規"):
@@ -197,12 +199,24 @@ def test_route_row_beats_global(whitelist):
     assert other.source == "global"
 
 
-def test_dot_in_key_has_no_hierarchy(whitelist):
-    """``scenario.ask`` 沒設定時不會去找 ``scenario``，直接退回全域。"""
-    with _rows(scenario=RouteChoice("yinli", "m2", None)):
+def test_branch_falls_back_to_its_flow_key(whitelist):
+    """``scenario.ask`` 沒設定時往上找流程鍵 ``scenario``（計畫書 §5），再到全域。"""
+    with _rows(scenario=RouteChoice("yinli", "m2", None), GLOBAL=RouteChoice("yinli", "m1", None)):
         resolved = _resolve("scenario.ask")
+    assert (resolved.source, resolved.model) == ("parent", "m2")
 
-    assert resolved.source == "env"
+    routing.invalidate_cache()
+    with _rows(**{"scenario.ask": RouteChoice("yinli", "m1", None), "scenario": RouteChoice("yinli", "m2", None)}):
+        resolved = _resolve("scenario.ask")
+    assert (resolved.source, resolved.model) == ("route", "m1")
+
+
+def test_invalid_flow_row_is_skipped_for_the_branch(whitelist):
+    """流程鍵的設定不在白名單時，分支照樣跳過它往全域找，並記在 rejected。"""
+    with _rows(scenario=RouteChoice("gone", "m2", None), GLOBAL=RouteChoice("yinli", "m1", None)):
+        resolved = _resolve("scenario.ask")
+    assert resolved.source == "global"
+    assert [layer.route_key for layer in resolved.rejected] == ["scenario"]
 
 
 def test_global_key_resolves_global_then_env(whitelist):
@@ -294,13 +308,13 @@ def _db_error() -> OperationalError:
 
 def test_rows_cached_until_invalidated(whitelist):
     """設定讀一次後快取；invalidate_cache 後重新讀取。"""
-    fetch = mock.AsyncMock(return_value={"jp_verb_pair": RouteChoice("yinli", "m1", None)})
+    fetch = mock.AsyncMock(return_value={"llm": {"jp_verb_pair": RouteChoice("yinli", "m1", None)}})
     with mock.patch.object(routing, "_fetch_choices", fetch):
         _resolve("jp_verb_pair")
         _resolve("expression_correction")
         assert fetch.await_count == 1
 
-        fetch.return_value = {"jp_verb_pair": RouteChoice("yinli", "m2", None)}
+        fetch.return_value = {"llm": {"jp_verb_pair": RouteChoice("yinli", "m2", None)}}
         routing.invalidate_cache()
         assert _resolve("jp_verb_pair").model == "m2"
         assert fetch.await_count == 2
@@ -517,8 +531,8 @@ def test_missing_table_falls_back_to_env(whitelist, caplog):
 
 def test_db_choice_builds_real_relay_client(whitelist):
     """DB 選了中轉站：route.client() 建出用該端點網址與金鑰的 LLMClient，標籤前綴為端點 ID。"""
-    route = routing.route("test.e2e.relay", "測試", {"llm"})
-    with _rows(**{"test.e2e.relay": RouteChoice("yinli", "m1", None)}):
+    route = routing.route("test.e2e_relay", "測試", {"llm"})
+    with _rows(**{"test.e2e_relay": RouteChoice("yinli", "m1", None)}):
         client = asyncio.run(route.client())
 
     assert isinstance(client, LLMClient)
@@ -529,8 +543,8 @@ def test_db_choice_builds_real_relay_client(whitelist):
 
 def test_db_choice_without_effort_omits_cli_flag(whitelist, tmp_path):
     """DB 選了不帶 effort 的 CLI 模型：真實客戶端的命令列沒有 --effort，標籤沒有 @。"""
-    route = routing.route("test.e2e.cli", "測試", {"llm"})
-    with _rows(**{"test.e2e.cli": RouteChoice("claude-code", "haiku", None)}), \
+    route = routing.route("test.e2e_cli", "測試", {"llm"})
+    with _rows(**{"test.e2e_cli": RouteChoice("claude-code", "haiku", None)}), \
          mock.patch.object(settings, "LLM_CLAUDE_CODE_WORKDIR", str(tmp_path / "cc")), \
          mock.patch.object(settings, "LLM_CLAUDE_CODE_AUDIT_DIR", ""), \
          mock.patch.object(settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", ""), \

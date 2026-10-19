@@ -78,12 +78,15 @@ export interface ErrorResponse {
 // 能力路由 (Capability Routes)
 // ============================================================================
 
-/** 生效的層：用途自己的設定、全域 `*`、`.env` 預設。The winning layer. */
-export type RouteSource = 'route' | 'global' | 'env';
+/** 生效的層：用途自己的設定、分支沿用的流程鍵、全域 `*`、`.env` 預設。The winning layer. */
+export type RouteSource = 'route' | 'parent' | 'global' | 'env';
 
 /** 一組選擇。A choice of provider / model / effort. */
 export interface RouteChoice {
-  /** 由誰提供；`llm` 能力為端點 ID。Who provides it; the endpoint ID for `llm`. */
+  /**
+   * 由誰提供：`llm` / `audio_llm` 為端點 ID、`stt` 為 `whisper`、`audio_eval` 為策略名。
+   * Who provides it: an endpoint ID, `whisper`, or a strategy name.
+   */
   provider: string;
   /** 模型名；不需要模型的能力為 null。Model name, or null. */
   model: string | null;
@@ -93,7 +96,8 @@ export interface RouteChoice {
 /** 寫入用的選擇（`PUT /capability-routes/{key}/{capability}`）。A choice to store. */
 export interface RouteUpdate {
   provider: string;
-  model: string;
+  /** 模型名；策略（`audio_eval`）為 null。Model name; null for strategies. */
+  model: string | null;
   effort: string | null;
 }
 
@@ -114,6 +118,8 @@ export interface CapabilityState {
   db_unavailable: boolean;
   /** 生效設定目前無法使用的原因。Why the effective setting is unusable right now. */
   problem: string | null;
+  /** 這個鍵是否宣告了這個能力；false＝孤兒設定，只能刪除。false rows can only be deleted. */
+  declared: boolean;
 }
 
 /** 一個用途鍵與它各能力的狀態（`*` 為全域）。One route key and its capabilities. */
@@ -135,8 +141,12 @@ export interface ModelOption {
 /** 可選的 provider 與白名單。A selectable provider and its whitelist. */
 export interface ProviderOption {
   id: string;
+  /** 端點類型、`whisper`，或策略的 `strategy`。Endpoint type, `whisper` or `strategy`. */
   type: string;
+  /** 可選的模型；空＝這個 provider 不選模型（策略）。Empty for providers without a model. */
   models: ModelOption[];
+  /** 說明（策略才有）。Description, for strategies. */
+  title?: string | null;
 }
 
 /** `GET /capability-routes` 的回應。Response of `GET /capability-routes`. */
@@ -144,6 +154,8 @@ export interface CapabilityRoutesResponse {
   routes: CapabilityRoute[];
   /** 能力 → 可選的 provider。Capability to its selectable providers. */
   providers: Record<string, ProviderOption[]>;
+  /** 有限縮評分策略的用途鍵 → 允許的策略。Route keys restricting the strategies. */
+  strategies?: Record<string, string[]>;
   /** 讀不到資料庫：各列為 `.env` 預設，暫時無法修改。DB unreadable; rows show `.env` defaults. */
   db_unavailable: boolean;
 }

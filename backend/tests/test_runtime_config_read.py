@@ -1,9 +1,9 @@
-"""執行期設定服務與 config API(唯讀切片)的單元測試。
+"""執行期設定服務與 config API(唯讀)的單元測試。
 
-Unit tests for the runtime config service and API (read-only slice).
+Unit tests for the runtime config service and API (read-only).
 
-對應計畫 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。
-以 mock 白名單與最小 FastAPI app 測試,不觸碰真實 .env 白名單內容。
+對應計畫 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。``MODIFY_*`` 白名單設定
+已由能力路由取代,這裡只剩 runtime 對帳區塊。
 """
 
 import asyncio
@@ -22,12 +22,6 @@ from app.services import runtime_config_service as rcs_mod
 from app.services.runtime_config_service import RuntimeConfigService
 
 
-FAKE_WHITELIST = {
-    "AUDIO_MODEL_NAME": ["model-a", "model-b"],
-    "AUDIO_EVALUATOR_PROVIDER": None,  # 不限選項
-}
-
-
 def _make_app(llm_client=None) -> FastAPI:
     """建立只掛 config router 的最小 app(繞過 lifespan/DB)。
 
@@ -40,23 +34,6 @@ def _make_app(llm_client=None) -> FastAPI:
 
 
 class TestServiceRead:
-    def test_list_configs_returns_whitelisted_with_current_values(self):
-        with mock.patch.object(rcs_mod, "get_modifiable_configs", return_value=FAKE_WHITELIST), \
-             mock.patch.object(settings, "AUDIO_MODEL_NAME", "model-a"):
-            entries = {e.key: e for e in RuntimeConfigService().list_configs()}
-        assert entries["AUDIO_MODEL_NAME"].current_value == "model-a"
-        assert entries["AUDIO_MODEL_NAME"].options == ["model-a", "model-b"]
-        assert entries["AUDIO_MODEL_NAME"].requires_rebuild is False
-        assert entries["AUDIO_EVALUATOR_PROVIDER"].options is None
-        assert entries["AUDIO_EVALUATOR_PROVIDER"].requires_rebuild is True
-
-    def test_get_config_outside_whitelist_returns_none(self):
-        """白名單外(含真實存在的敏感鍵)一律 None——防鍵名探測。"""
-        with mock.patch.object(rcs_mod, "get_modifiable_configs", return_value=FAKE_WHITELIST):
-            svc = RuntimeConfigService()
-            assert svc.get_config("LLM_API_KEY") is None
-            assert svc.get_config("NOT_A_REAL_KEY") is None
-
     def test_runtime_info_reads_live_client_label(self):
         fake_client = SimpleNamespace(_formatted_model_name="(claude-code)opus-5@medium")
         state = SimpleNamespace(llm_client=fake_client)
@@ -242,32 +219,16 @@ class TestServiceRead:
 
 
 class TestConfigApi:
-    def test_list_endpoint_shape(self):
+    def test_endpoint_shape(self):
+        """只回 runtime 區塊;舊的 configs(MODIFY_*)與 /config/{key} 已移除。"""
         fake_client = SimpleNamespace(_formatted_model_name="(claude-code)opus-5@medium")
-        with mock.patch.object(rcs_mod, "get_modifiable_configs", return_value=FAKE_WHITELIST), \
-             mock.patch.object(settings, "AUDIO_MODEL_NAME", "model-a"):
-            client = TestClient(_make_app(llm_client=fake_client))
-            resp = client.get("/api/v1/config")
+        client = TestClient(_make_app(llm_client=fake_client))
+        resp = client.get("/api/v1/config")
         assert resp.status_code == 200
         body = resp.json()
+        assert set(body) == {"runtime"}
         assert body["runtime"]["llm_label"] == "(claude-code)opus-5@medium"
-        keys = {c["key"] for c in body["configs"]}
-        assert keys == {"AUDIO_MODEL_NAME", "AUDIO_EVALUATOR_PROVIDER"}
-
-    def test_get_single_key(self):
-        with mock.patch.object(rcs_mod, "get_modifiable_configs", return_value=FAKE_WHITELIST), \
-             mock.patch.object(settings, "AUDIO_MODEL_NAME", "model-b"):
-            client = TestClient(_make_app())
-            resp = client.get("/api/v1/config/AUDIO_MODEL_NAME")
-        assert resp.status_code == 200
-        assert resp.json()["current_value"] == "model-b"
-
-    def test_get_outside_whitelist_is_404(self):
-        with mock.patch.object(rcs_mod, "get_modifiable_configs", return_value=FAKE_WHITELIST):
-            client = TestClient(_make_app())
-            assert client.get("/api/v1/config/LLM_API_KEY").status_code == 404
-            assert client.get("/api/v1/config/NOPE").status_code == 404
-
+        assert client.get("/api/v1/config/AUDIO_MODEL_NAME").status_code == 404
 
 # ----------------------------------------------------------------------
 # 模型路由的診斷（模型路由計畫 D9）

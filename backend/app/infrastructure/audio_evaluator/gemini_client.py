@@ -31,7 +31,6 @@ import logging
 from google import genai
 from google.genai import types, errors
 
-from app.core.config import settings
 from app.core.exceptions import LLMServiceError
 from app.infrastructure.audio_evaluator.base import BaseAudioEvaluator
 from app.schemas.llm.speaking import AudioEvaluationResult
@@ -58,23 +57,30 @@ class GeminiNativeAudioEvaluator(BaseAudioEvaluator):
         _model_name: 使用的 Gemini 模型名稱。The Gemini model name in use.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, api_key: str, model: str, api_key_setting: str = "AUDIO_API_KEY") -> None:
         """初始化 Gemini 原生語音評分器。
 
         Initialize the Gemini native speech evaluator.
 
+        Args:
+            api_key: Google API 金鑰。The Google API key.
+            model: 聽音檔的模型（能力路由的 ``audio_llm``）。The audio model.
+            api_key_setting: 金鑰的設定名（錯誤訊息用）。Setting name of the key.
+
         Raises:
-            LLMServiceError: 當 AUDIO_API_KEY 未設定時。Raised when
-                AUDIO_API_KEY is not configured.
+            LLMServiceError: 金鑰或模型未設定時。Raised when the key or model
+                is missing.
         """
-        api_key = settings.AUDIO_API_KEY
         if not api_key:
             raise LLMServiceError(
-                "AUDIO_API_KEY 未設定，"
+                f"{api_key_setting} 未設定，"
                 "無法初始化 Gemini Native Audio Evaluator。"
             )
+        if not model:
+            raise LLMServiceError("聽音檔的模型未設定（AUDIO_MODEL_NAME），無法初始化 Gemini Native Audio Evaluator。")
 
         self._client = genai.Client(api_key=api_key)
+        self._model_name = model
         logger.info(
             "Gemini Native Audio Evaluator 初始化完成",
         )
@@ -129,8 +135,7 @@ class GeminiNativeAudioEvaluator(BaseAudioEvaluator):
         elif audio_filename.endswith(".mp3"):
             mime_type = "audio/mpeg"
 
-        # 動態讀取設定，以支援 /setconfig 的變更
-        model_name = getattr(settings, "AUDIO_MODEL_NAME", "gemini-2.5-flash")
+        model_name = self._model_name
 
         # 組裝多模態內容：Prompt 文字 + 音檔 inline data
         contents: list[types.Part | str] = [

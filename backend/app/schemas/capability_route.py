@@ -3,9 +3,9 @@
 Request / response models for the capability route settings API.
 
 回應以「用途鍵 × 能力」組織：每個用途鍵列出它各能力的狀態，可選項目也依能力分開。
-目前只有 ``llm`` 能力。
-Responses are organised by route key and capability; only ``llm`` exists
-so far.
+能力：``llm``（文字 LLM）、``audio_eval``（錄音評分策略）、``audio_llm``（聽音檔的模型）、
+``stt``（語音轉文字）。
+Responses are organised by route key and capability.
 """
 
 from pydantic import BaseModel, Field
@@ -24,14 +24,15 @@ class RouteUpdate(BaseModel):
     layer, shared with the Telegram menu.
 
     Attributes:
-        provider: 由誰提供；``llm`` 為端點 ID。Who provides it; the endpoint ID
-            for ``llm``.
-        model: 模型名（須在該 provider 的白名單內，區分大小寫）。Model name (whitelisted).
+        provider: 由誰提供：``llm`` / ``audio_llm`` 為端點 ID、``stt`` 為 ``whisper``、``audio_eval``
+            為策略名（``listen`` / ``stt_diff`` / ``stt_llm``）。Who provides it.
+        model: 模型名（須在該 provider 的白名單內，區分大小寫）；``audio_eval`` 省略或 null。
+            Model name (whitelisted); omitted for ``audio_eval``.
         effort: 思考深度；模型不使用 effort 時省略、null 或空字串。Effort, or null.
     """
 
     provider: str = Field(..., min_length=1, max_length=ENDPOINT_ID_MAX_LENGTH)
-    model: str = Field(..., min_length=1, max_length=MODEL_NAME_MAX_LENGTH)
+    model: str | None = Field(None, max_length=MODEL_NAME_MAX_LENGTH)
     effort: str | None = Field(None, max_length=EFFORT_MAX_LENGTH)
 
 
@@ -63,8 +64,10 @@ class CapabilityStateRead(BaseModel):
         db_unavailable: DB 讀取失敗、暫用 ``.env``。Whether the DB was unreadable.
         problem: 生效設定目前無法使用的原因（provider 需要的套件未安裝或版本不符、``.env`` 的
             設定有誤）；有值時 ``label`` 與 ``effective.effort`` 可能不準確。null 只表示沒有
-            偵測到這兩類問題，不代表已驗證可用。Why the effective setting cannot be
+            偵測到這些問題，不代表已驗證可用。Why the effective setting cannot be
             used right now, or null (which does not mean it was verified).
+        declared: 這個鍵是否宣告了這個能力；false＝孤兒設定（只能刪除）。Whether the key
+            declares this capability; false rows can only be deleted.
     """
 
     source: RouteSource
@@ -74,6 +77,7 @@ class CapabilityStateRead(BaseModel):
     rejected: list[RejectedLayerRead]
     db_unavailable: bool
     problem: str | None
+    declared: bool = True
 
 
 class RouteRead(BaseModel):
@@ -84,8 +88,8 @@ class RouteRead(BaseModel):
         description: 說明；孤兒鍵為 null。Description.
         declared: 是否為程式中宣告的鍵（False＝DB 裡的孤兒列，只能刪除）。False for
             orphan rows.
-        capabilities: 能力 → 狀態。宣告的鍵列出它宣告的能力；全域列出所有能力；孤兒鍵列出
-            DB 中存了值的能力。Capability to state.
+        capabilities: 能力 → 狀態。宣告的鍵列出它宣告的能力（加上 DB 中存了值、但沒有宣告的
+            能力）；全域列出所有能力；孤兒鍵列出 DB 中存了值的能力。Capability to state.
     """
 
     route_key: str
@@ -108,14 +112,16 @@ class ProviderOptionRead(BaseModel):
     """可選的 provider 與其白名單（不含金鑰）。A selectable provider (no secrets).
 
     Attributes:
-        id: provider ID（``llm`` 為端點 ID）。Provider ID.
-        type: 類型（``llm`` 為端點類型，例如 ``claude-code``）。Its type.
-        models: 可選的模型。Selectable models.
+        id: provider ID（端點 ID、``whisper`` 或策略名）。Provider ID.
+        type: 類型（端點類型，例如 ``claude-code``；``whisper``；策略為 ``strategy``）。Its type.
+        models: 可選的模型；空串列＝這個 provider 不選模型（策略）。Selectable models.
+        title: 說明（策略才有）。Description, for strategies.
     """
 
     id: str
     type: str
     models: list[ModelOptionRead]
+    title: str | None = None
 
 
 class CapabilityRoutesResponse(BaseModel):
@@ -123,13 +129,17 @@ class CapabilityRoutesResponse(BaseModel):
 
     Attributes:
         routes: 各用途鍵的狀態（全域、已宣告、孤兒鍵）。The routes.
-        providers: 能力 → 可選的 provider 與白名單。Capability to its options.
+        providers: 能力 → 可選的 provider 與白名單（``audio_eval`` 為全部策略；用途鍵的限縮見
+            ``strategies``）。Capability to its options.
+        strategies: 有限縮評分策略的用途鍵 → 允許的策略（沒列出的鍵可用全部策略）。
+            Route keys that restrict the strategies, with the allowed ones.
         db_unavailable: 讀不到資料庫：各列為 ``.env`` 預設，孤兒鍵不在清單中。
             Whether the database could not be read.
     """
 
     routes: list[RouteRead]
     providers: dict[str, list[ProviderOptionRead]]
+    strategies: dict[str, list[str]] = Field(default_factory=dict)
     db_unavailable: bool
 
 

@@ -13,6 +13,10 @@ Phase 9 更新：
 - 不再呼叫已移除的 card_service.process_voice_evaluation()。
 - 改為直接使用 AudioEvaluator + HandlerRegistry 的 speaking_coach handler。
 
+能力路由 R2：評分器每次依卡片的 handler 從能力路由取得（``recording_eval`` 或
+``recording_eval.<handler>``，見 :mod:`app.services.recording_eval`），不再注入全域的
+``audio_evaluator``；改設定（TG ``/setconfig``、網頁工具設定）後下一則語音即生效。
+
 Telegram Bot voice message handler module (Workflow B).
 
 Receives user voice messages, checks the UserStateManager state to decide
@@ -27,6 +31,9 @@ Phase 9 update:
 - No longer calls the removed card_service.process_voice_evaluation().
 - Uses AudioEvaluator plus the speaking_coach handler from HandlerRegistry
   directly instead.
+
+Capability routing R2: the evaluator is obtained per message from the
+capability routes of the card's handler instead of a global singleton.
 """
 
 import base64
@@ -43,10 +50,11 @@ from app.core.exceptions import FluencyTidesError
 
 from app.bot.state import UserStateManager
 from app.bot.utils.texts import CARD_NOT_FOUND, error_detail, state_minutes
-from app.core.exceptions import AnkiFieldCorruptedError
+from app.core.exceptions import AnkiFieldCorruptedError, AudioEvaluatorUnavailableError
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
-from app.infrastructure.audio_evaluator.base import AudioNotScoredError, BaseAudioEvaluator
+from app.infrastructure.audio_evaluator.base import AudioNotScoredError
+from app.services import recording_eval
 from app.services.card_service import CardService
 from app.services.relation_service import RelationService
 from app.services.task_handlers.registry import HandlerRegistry
@@ -67,7 +75,6 @@ async def process_voice_handler(
     user_state_manager: UserStateManager,
     card_service: CardService,
     relation_service: RelationService,
-    audio_evaluator: BaseAudioEvaluator | None = None,
 ) -> None:
     """處理使用者發送的語音訊息。
 
@@ -88,12 +95,7 @@ async def process_voice_handler(
             Injected UserStateManager instance.
         card_service: 注入的 CardService。Injected CardService instance.
         relation_service: 注入的 RelationService。Injected RelationService.
-        audio_evaluator: 注入的 Audio Evaluator 實例（由工廠模式建立）。
-            Injected audio evaluator instance (created by the factory).
     """
-    if not audio_evaluator:
-        logger.warning("⚠️ 語音評分服務未初始化 (API Key 缺失)。依賴評分的任務將會失敗。")
-
     chat_id = message.chat.id
     state = user_state_manager.get_state(chat_id)
 
@@ -223,11 +225,22 @@ async def process_voice_handler(
 
     # ── Step 4: 分支處理 ──
     if state.action == "recording":
-        if not audio_evaluator:
-            # 狀態沒清（仍在錄音模式）：切換評分模式後可在時限內直接重傳
+        # 三語卡與對話卡各用自己的 handler，評分器依 handler 的用途鍵建立（可設不同策略）
+        handler_name = "speaking_trilingual" if trilingual_lang else "speaking_coach"
+        try:
+            audio_evaluator, _plan = await recording_eval.evaluator_for_handler(handler_name)
+        except AudioEvaluatorUnavailableError as e:
+            # 狀態沒清（仍在錄音模式）：改好設定後可在時限內直接重傳
+            logger.error("錄音評分器無法建立（%s）：%s", handler_name, e.message)
             await status_msg.edit_text(
-                "❌ 語音評分服務未啟用，這次沒有評分。管理員可用 /setconfig 切換評分模式，之後在錄音模式內重傳語音即可。"
+                f"❌ 語音評分服務無法使用，這次沒有評分：{html.escape(e.message)}\n"
+                "改好設定後，在錄音模式內重傳語音即可。"
             )
+            return
+        except Exception as e:
+            # 讀設定或建評分器時的非預期錯誤：不能讓狀態訊息停在「讀取卡片中…」沒有下文
+            logger.exception("建立錄音評分器時發生未處理的異常（%s）: %s", handler_name, e)
+            await status_msg.edit_text("❌ 語音評分服務發生錯誤（詳見伺服器日誌），這次沒有評分。請稍後在錄音模式內重傳語音。")
             return
 
         await status_msg.edit_text("⏳ 評分中…")
@@ -280,15 +293,14 @@ async def process_voice_handler(
                 "comment": result.feedback_anki_html or result.feedback,
                 "score": result.score,
             }
+            speaking_handler = handler_registry.get_handler(handler_name)
             if trilingual_lang:
-                speaking_handler = handler_registry.get_handler("speaking_trilingual")
                 update_params = {
                     "action": "add_recording",
                     "lang": trilingual_lang,
                     "recording": new_recording,
                 }
             else:
-                speaking_handler = handler_registry.get_handler("speaking_coach")
                 update_params = {
                     "action": "add_recording",
                     "recording": new_recording,
@@ -328,13 +340,10 @@ async def process_voice_handler(
         else:
             safe_feedback = html.escape(result.feedback[:500])
 
-        # 各 evaluator 自行回報的模式/模型標籤；缺省時退回目前設定值
+        # 各 evaluator 自行回報的模式/模型標籤；缺省時退回評分策略名
         # Mode/model label self-reported by the evaluator; falls back to
-        # the current setting when absent.
-        from app.core.config import settings as _settings
-        evaluator_label = html.escape(
-            result.evaluator_label or _settings.AUDIO_EVALUATOR_PROVIDER
-        )
+        # the strategy name when absent.
+        evaluator_label = html.escape(result.evaluator_label or _plan.strategy_name)
 
         await status_msg.edit_text(
             f"✅ <b>錄音評分完成！</b>\n\n"

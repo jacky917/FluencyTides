@@ -116,7 +116,7 @@ class ClozePositioningError(LLMGenerationError):
 
 
 class RouteError(ServiceBaseError):
-    """能力路由設定（TG /models、/api/v1/capability-routes）的錯誤基類。
+    """能力路由設定（TG /setconfig、/api/v1/capability-routes）的錯誤基類。
 
     Base error for capability route settings management.
     """

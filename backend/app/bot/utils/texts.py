@@ -19,9 +19,6 @@ NEWCARD_RESTART = "請用 /newcard 重新開始。"
 FLOW_ENDED_ALERT = "⌛ 流程已結束，請用 /newcard 重新開始。"
 UPLOAD_EXPIRED_ALERT = "⌛ 已過期，請回 Anki 重新點「＋」上傳。"
 UPLOAD_RETRY = "請回 Anki 重新點「＋」上傳。"
-SETCONFIG_EXPIRED_ALERT = "選單已過期，請重新輸入 /setconfig。"
-# /setconfig 沒有可修改的設定（.env 只剩 MODIFY_LLM_* 時也是這樣：那些已改由 /models 管理）
-NO_MODIFIABLE_CONFIGS = "⚠️ 沒有可在這裡修改的設定（.env 的 MODIFY_*；LLM 模型請改用 /models）。"
 
 # 例外訊息放進回覆時的長度上限（先截斷再轉義，見 escape_tg）
 ERROR_DETAIL_LIMIT = 200

@@ -3,24 +3,100 @@
  * Pure helpers for the tool settings (capability routes) page.
  */
 
-import type { ProviderOption, RouteChoice, RouteSource } from '../types/api'
+import type { CapabilityRoute, ProviderOption, RouteChoice, RouteSource, RouteUpdate } from '../types/api'
 
 /** 全域設定的用途鍵。The route key of the global setting. */
 export const GLOBAL_ROUTE_KEY = '*'
 
 /** 文字生成能力。The text-generation capability. */
 export const CAPABILITY_LLM = 'llm'
+/** 錄音評分策略。The recording-evaluation strategy. */
+export const CAPABILITY_AUDIO_EVAL = 'audio_eval'
+/** 聽音檔的模型。The audio-listening model. */
+export const CAPABILITY_AUDIO_LLM = 'audio_llm'
+/** 語音轉文字。Speech-to-text. */
+export const CAPABILITY_STT = 'stt'
 
-/** 來源的顯示名稱（與 TG `/models` 相同）。Source display names, same as TG `/models`. */
+/** 來源的顯示名稱（與 TG `/setconfig` 相同）。Source display names, same as TG `/setconfig`. */
 export const SOURCE_LABELS: Record<RouteSource, string> = {
   route: '用途',
+  parent: '流程',
   global: '全域',
   env: '.env',
 }
 
-/** 能力的顯示名稱；不在表中的能力直接顯示代號。Capability display names. */
+/** 能力的顯示名稱（與 TG `/setconfig` 相同）；不在表中的能力直接顯示代號。Capability display names. */
 const CAPABILITY_LABELS: Record<string, string> = {
-  [CAPABILITY_LLM]: '文字生成（LLM）',
+  [CAPABILITY_LLM]: '文字 LLM',
+  [CAPABILITY_AUDIO_EVAL]: '評分策略',
+  [CAPABILITY_AUDIO_LLM]: '聽音檔的模型',
+  [CAPABILITY_STT]: '語音轉文字',
+}
+
+/** 編輯區第一層的名稱：端點、服務或策略。The first picker's label per capability. */
+const PROVIDER_LABELS: Record<string, string> = {
+  [CAPABILITY_LLM]: '端點',
+  [CAPABILITY_AUDIO_LLM]: '端點',
+  [CAPABILITY_STT]: '服務',
+  [CAPABILITY_AUDIO_EVAL]: '策略',
+}
+
+/** 某能力沒有可選項目時，說明白名單在哪裡設定。Where to configure an empty whitelist. */
+const EMPTY_PROVIDER_HINTS: Record<string, string> = {
+  [CAPABILITY_LLM]: '.env 的白名單都是空的（LLM_ENDPOINTS__<ID>__MODELS、LLM_CLAUDE_CODE_MODELS…）。',
+  [CAPABILITY_AUDIO_LLM]: '沒有能聽音檔的端點（AUDIO_API_KEY 未設定，或 LLM_ENDPOINTS__<ID>__AUDIO_MODELS 都是空的）。',
+  [CAPABILITY_STT]: 'STT_SERVER_URL 未設定，或 STT_MODEL_NAME / STT_MODELS 都是空的。',
+  [CAPABILITY_AUDIO_EVAL]: '這個用途沒有允許任何評分策略。',
+}
+
+/**
+ * 編輯區第一層的名稱。The first picker's label.
+ * @param capability - 能力。Capability.
+ * @returns 名稱。The label.
+ */
+export function providerLabel(capability: string): string {
+  return PROVIDER_LABELS[capability] ?? 'provider'
+}
+
+/**
+ * 沒有可選項目時的說明。Hint shown when nothing is selectable.
+ * @param capability - 能力。Capability.
+ * @returns 說明。The hint.
+ */
+export function emptyProviderHint(capability: string): string {
+  return EMPTY_PROVIDER_HINTS[capability] ?? '白名單是空的。'
+}
+
+/**
+ * 分支鍵的流程鍵（`a.b` → `a`）；不是分支時為 null。The flow key of a branch.
+ * @param routeKey - 用途鍵。Route key.
+ * @returns 流程鍵，或 null。The flow key, or null.
+ */
+export function parentKey(routeKey: string): string | null {
+  const index = routeKey.indexOf('.')
+  return index > 0 ? routeKey.slice(0, index) : null
+}
+
+/**
+ * 這個用途鍵在這個能力上可選的 provider：評分策略依鍵的限縮過濾（分支沒有限縮時沿用流程鍵的）。
+ * The providers selectable for a key and capability; strategies follow the key's restriction.
+ * @param capability - 能力。Capability.
+ * @param routeKey - 用途鍵。Route key.
+ * @param providers - 能力 → 全部 provider。All providers per capability.
+ * @param strategies - 用途鍵 → 允許的策略。Allowed strategies per key.
+ * @returns 可選的 provider。The selectable providers.
+ */
+export function providersFor(
+  capability: string,
+  routeKey: string,
+  providers: Record<string, ProviderOption[]>,
+  strategies: Record<string, string[]> = {},
+): ProviderOption[] {
+  const options = providers[capability] ?? []
+  if (capability !== CAPABILITY_AUDIO_EVAL) return options
+  const parent = parentKey(routeKey)
+  const allowed = strategies[routeKey] ?? (parent ? strategies[parent] : undefined)
+  return allowed ? options.filter((option) => allowed.includes(option.id)) : options
 }
 
 /**
@@ -47,20 +123,21 @@ const STRIP_PREFIX_BY_TYPE: Record<string, string> = {
 }
 
 /**
- * 算出 `llm` 能力的這組選擇會寫進卡片的標籤，規則與後端 `build_model_label` 相同；
- * 僅供儲存前預覽，實際標籤以 PUT 回傳的 `label` 為準。
+ * 算出這組選擇的顯示標籤，規則與後端 `preview_label` 相同（`llm` 即寫進卡片的標籤）；
+ * 僅供儲存前預覽，實際標籤以 PUT 回傳的 `label` 為準。策略（不選模型）的標籤就是策略名。
  *
- * Computes the card label an `llm` choice would produce, mirroring the
- * backend's `build_model_label`. Preview only — the `label` returned by PUT
- * is authoritative.
+ * Computes the label a choice would produce, mirroring the backend's
+ * `preview_label`. Preview only — the `label` returned by PUT is
+ * authoritative. A strategy's label is its name.
  *
- * @param provider - 選定的端點。The chosen endpoint.
- * @param model - 模型名。Model name.
+ * @param provider - 選定的 provider。The chosen provider.
+ * @param model - 模型名（策略為 null）。Model name, null for strategies.
  * @param effort - effort，或 null（不使用）。The effort, or null.
- * @returns 例如 `(yinli)gemini-3.5-flash`、`(claude-code)opus-5@high`。The label.
+ * @returns 例如 `(yinli)gemini-3.5-flash`、`(claude-code)opus-5@high`、`listen`。The label.
  */
-export function previewLabel(provider: ProviderOption, model: string, effort: string | null): string {
+export function previewLabel(provider: ProviderOption, model: string | null, effort: string | null): string {
   const providerId = provider.id.trim().toLowerCase()
+  if (model === null) return providerId
   const prefix = STRIP_PREFIX_BY_TYPE[provider.type] ?? ''
   const shownModel = prefix && model.startsWith(prefix) ? model.slice(prefix.length) : model
   let label = NO_PREFIX_ENDPOINTS.has(providerId) ? shownModel : `(${providerId})${shownModel}`
@@ -119,8 +196,8 @@ export interface Selection {
  */
 export function initialSelection(stored: RouteChoice | null, providers: ProviderOption[]): Selection {
   const provider = stored ? providers.find((item) => item.id === stored.provider) : undefined
-  if (!stored || !provider) {
-    return { provider: '', model: '', effort: '' }
+  if (!stored || !provider || provider.models.length === 0) {
+    return { provider: provider?.id ?? '', model: '', effort: '' }
   }
   const model = provider.models.find((item) => item.name === stored.model)
   if (!model) {
@@ -130,4 +207,48 @@ export function initialSelection(stored: RouteChoice | null, providers: Provider
     return { provider: provider.id, model: model.name, effort: stored.effort }
   }
   return { provider: provider.id, model: model.name, effort: defaultEffort(model.efforts) }
+}
+
+/**
+ * 由編輯區的選擇組出要寫入的值；還沒選完（或選的已不在白名單）時為 null。不選模型的 provider（策略）
+ * 選了就完成，模型與 effort 都送 null。
+ * Builds the value to store from the picker, or null while incomplete.
+ * Providers without models (strategies) are complete once picked.
+ * @param providers - 可選的 provider。The selectable providers.
+ * @param selection - 編輯區的選擇。The picker state.
+ * @returns 要寫入的值，或 null。The value to store, or null.
+ */
+export function buildChoice(providers: ProviderOption[], selection: Selection): RouteUpdate | null {
+  const provider = providers.find((item) => item.id === selection.provider)
+  if (!provider) return null
+  if (provider.models.length === 0) return { provider: provider.id, model: null, effort: null }
+  const model = provider.models.find((item) => item.name === selection.model)
+  if (!model) return null
+  if (model.efforts.length === 0) return { provider: provider.id, model: model.name, effort: null }
+  return model.efforts.includes(selection.effort)
+    ? { provider: provider.id, model: model.name, effort: selection.effort }
+    : null
+}
+
+/** 各評分策略用到的其他能力（與後端 `STRATEGY_CAPABILITIES` 相同）。Capabilities each strategy uses. */
+const STRATEGY_CAPABILITIES: Record<string, string[]> = {
+  listen: [CAPABILITY_AUDIO_LLM],
+  stt_diff: [CAPABILITY_STT],
+  stt_llm: [CAPABILITY_STT, CAPABILITY_LLM],
+}
+
+/**
+ * 目前會用到的能力（與 TG 清單的 ⚠️ 規則相同）：有評分策略的鍵只算策略本身與策略用到的能力（全域 `*`
+ * 另算文字 LLM，它也是建卡的預設），其他鍵算全部；孤兒設定一律算。
+ * The capabilities currently in use, as the TG list counts them.
+ * @param route - 用途鍵的狀態。The route.
+ * @returns 會用到的能力。The capabilities in use.
+ */
+export function capabilitiesInUse(route: CapabilityRoute): Set<string> {
+  const all = Object.keys(route.capabilities)
+  const strategy = route.capabilities[CAPABILITY_AUDIO_EVAL]
+  if (!strategy) return new Set(all)
+  const used = new Set([CAPABILITY_AUDIO_EVAL, ...(STRATEGY_CAPABILITIES[strategy.effective.provider] ?? [])])
+  if (route.route_key === GLOBAL_ROUTE_KEY) used.add(CAPABILITY_LLM)
+  return new Set(all.filter((capability) => used.has(capability) || route.capabilities[capability].declared === false))
 }

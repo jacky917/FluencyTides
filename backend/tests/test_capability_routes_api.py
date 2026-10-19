@@ -346,8 +346,15 @@ def test_unknown_capability_is_422(client, method):
 
 
 def test_listing_groups_states_by_capability(client):
-    """GET 的每個用途鍵以能力分組，可選項目也依能力分開（目前只有 llm）。"""
+    """GET 的每個用途鍵以能力分組：全域列出所有能力、宣告的鍵只列它宣告的；可選項目依能力分開。"""
     body = client.get("/api/v1/capability-routes").json()
 
-    assert set(body["providers"]) == {"llm"}
-    assert all(set(route["capabilities"]) == {"llm"} for route in body["routes"])
+    capabilities = {"llm", "audio_eval", "audio_llm", "stt"}
+    assert set(body["providers"]) == capabilities
+    routes = {route["route_key"]: route for route in body["routes"]}
+    assert set(routes["*"]["capabilities"]) == capabilities
+    assert set(routes["recording_eval"]["capabilities"]) == capabilities
+    assert set(routes["recording_eval.speaking_trilingual"]["capabilities"]) == capabilities
+    assert set(routes["jp_verb_pair"]["capabilities"]) == {"llm"}
+    assert [option["id"] for option in body["providers"]["audio_eval"]] == ["listen", "stt_diff", "stt_llm"]
+    assert all(option["models"] == [] for option in body["providers"]["audio_eval"])

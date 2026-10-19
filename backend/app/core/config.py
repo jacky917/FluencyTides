@@ -70,6 +70,11 @@ class LLMEndpointSettings(BaseModel):
         safety_settings: 是否送 ``safety_settings``（``true`` / ``false``）；未設
             時 ID 為 google / openai 者不送、其餘送。只對 openai 類有效。
             Whether to send safety_settings; openai type only.
+        audio_models: 能聽音檔的模型白名單（能力路由的 ``audio_llm``），JSON 陣列，
+            不帶 effort。Whitelist of audio-capable models, as a JSON array.
+        audio_transport: openai 類送音檔的方式：``input_audio``（預設，OpenAI 的音訊輸入）
+            或 ``image_url``（偽裝成圖片，給只收圖片的中轉站）。How an openai-type
+            endpoint receives audio.
     """
 
     model_config = ConfigDict(frozen=True, extra="allow")
@@ -79,6 +84,8 @@ class LLMEndpointSettings(BaseModel):
     api_key: SecretStr | None = None
     models: Any = ()
     safety_settings: Any = None
+    audio_models: Any = ()
+    audio_transport: str | None = None
 
 
 class Settings(BaseSettings):
@@ -650,7 +657,14 @@ class Settings(BaseSettings):
     )
     AUDIO_MODEL_NAME: str = Field(
         default="gemini-2.5-flash",
-        description="語音評估模型名稱 (Gemini 或 OpenAI 共用)",
+        description="語音評估模型名稱 (Gemini 或 OpenAI 共用)；能力路由 audio_llm 的 .env 預設",
+    )
+    AUDIO_MODELS: Any = Field(
+        default=(),
+        description=(
+            '內建 audio 端點（由 AUDIO_* 合成）可選的音訊模型白名單（JSON 陣列，例如 ["gemini-3.5-flash"]）；'
+            "AUDIO_MODEL_NAME 一律加入。這些模型也可當 audio 端點的文字模型（stt_llm 評分、建卡）"
+        ),
     )
 
     # ====================================================================
@@ -664,6 +678,8 @@ class Settings(BaseSettings):
             "'proxy' (第三方中轉)、'stt_diff' (本地 Whisper + difflib 零成本比對)、"
             "'stt_llm' (本地 Whisper + 純文字 LLM 低成本評分)。"
             "策略模式允許在不修改業務邏輯的前提下切換供應商。"
+            "能力路由 audio_eval 的 .env 預設：gemini_native / openai / proxy 對應策略 listen，"
+            "其餘照名；也決定內建 audio 端點的類型（見 endpoints.py）"
         ),
     )
 
@@ -676,7 +692,11 @@ class Settings(BaseSettings):
     )
     STT_MODEL_NAME: str = Field(
         default="Systran/faster-whisper-large-v3",
-        description="faster-whisper 模型 ID",
+        description="faster-whisper 模型 ID；能力路由 stt 的 .env 預設",
+    )
+    STT_MODELS: Any = Field(
+        default=(),
+        description="whisper 可選的模型白名單（JSON 陣列）；STT_MODEL_NAME 一律加入",
     )
     STT_API_KEY: str = Field(
         default="speaches",
@@ -684,7 +704,10 @@ class Settings(BaseSettings):
     )
     STT_LLM_MODEL_NAME: str = Field(
         default="gemini-2.5-flash",
-        description="stt_llm 模式專用的純文字評分模型 (與多模態 AUDIO_MODEL_NAME 脫鉤)",
+        description=(
+            "stt_llm 模式專用的純文字評分模型 (與多模態 AUDIO_MODEL_NAME 脫鉤)；"
+            "錄音評分 recording_eval 的 llm 能力在 .env 那一層用 audio 端點加上這個模型"
+        ),
     )
 
     # ====================================================================

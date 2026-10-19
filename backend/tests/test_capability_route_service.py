@@ -37,6 +37,20 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def _llm_list(result):
+    """``list_routes`` 的結果只取各鍵的 ``llm`` 狀態（本檔的測試都針對 llm）。
+
+    錄音評分的鍵（recording_eval…）的 llm 在 .env 那一層另有預設（audio 端點），不在這些測試的範圍，略過。
+    """
+    key_views, read_ok = result
+    views = [
+        view.view("llm")
+        for view in key_views
+        if view.view("llm") is not None and not view.route_key.startswith("recording_eval")
+    ]
+    return views, read_ok
+
+
 def _rows(session_factory) -> list[CapabilityRouteSetting]:
     async def fetch():
         async with session_factory() as session:
@@ -250,7 +264,7 @@ def test_unreadable_db_cause_is_logged_on_each_management_read(llm_route_db, llm
     with _db_down():
         for _ in range(2):
             with pytest.raises(RouteStoreUnavailableError):
-                _run(capability_route_service.describe(KEY))
+                _run(capability_route_service.describe(KEY)).view("llm")
 
     records = [r for r in caplog.records if "管理操作讀取 capability_routes 失敗" in r.getMessage()]
     assert len(records) == 2 and all(r.exc_info for r in records)
@@ -320,7 +334,7 @@ def test_db_down_is_not_reported_as_not_found(llm_route_db, llm_whitelist):
         with pytest.raises(RouteStoreUnavailableError):
             _run(capability_route_service.delete_route("removed.feature", updated_by="api"))
         with pytest.raises(RouteStoreUnavailableError):
-            _run(capability_route_service.describe(KEY))
+            _run(capability_route_service.describe(KEY)).view("llm")
 
     assert len(_rows(llm_route_db)) == 1
 
@@ -328,7 +342,7 @@ def test_db_down_is_not_reported_as_not_found(llm_route_db, llm_whitelist):
 def test_db_down_listing_still_returns_with_flag(llm_route_db, llm_whitelist):
     """讀不到 DB 時清單照常回傳（.env 預設），整體與每列都標示 db_unavailable。"""
     with _db_down():
-        views, read_ok = _run(capability_route_service.list_routes())
+        views, read_ok = _llm_list(_run(capability_route_service.list_routes()))
 
     assert read_ok is False
     assert all(view.resolved.source == "env" and view.resolved.db_unavailable for view in views)
@@ -378,7 +392,7 @@ def test_list_order_global_declared_then_orphans(llm_route_db, llm_whitelist):
     """顯示順序：全域、已宣告的鍵（排序）、孤兒鍵；孤兒鍵即使字母較前也排在最後。"""
     _insert(llm_route_db, route_key="aa.orphan", provider="yinli", model="m1")
 
-    views, read_ok = _run(capability_route_service.list_routes())
+    views, read_ok = _llm_list(_run(capability_route_service.list_routes()))
     keys = [view.route_key for view in views]
 
     assert read_ok is True
@@ -421,8 +435,8 @@ def test_listing_survives_a_broken_package(llm_route_db, llm_whitelist, caplog, 
     with mock.patch.object(settings, "LLM_CLAUDE_CODE_MODELS", ("claude-opus-5@low|high",)):
         _insert(llm_route_db, route_key=KEY, provider="claude-code", model="claude-opus-5", effort="low")
         with _broken_import_for("claude-code", error):
-            views, read_ok = _run(capability_route_service.list_routes())
-            described = _run(capability_route_service.describe(KEY))
+            views, read_ok = _llm_list(_run(capability_route_service.list_routes()))
+            described = _run(capability_route_service.describe(KEY)).view("llm")
 
     view = next(view for view in views if view.route_key == KEY)
     assert read_ok is True
@@ -443,7 +457,7 @@ def test_env_layer_with_a_missing_package_still_lists(llm_route_db, llm_whitelis
     with mock.patch.object(settings, "LLM_PROVIDER", "claude-code"), \
          mock.patch.object(settings, "LLM_MODEL_NAME", "claude-opus-5"), \
          _broken_import_for("claude-code"):
-        views, _ = _run(capability_route_service.list_routes())
+        views, _ = _llm_list(_run(capability_route_service.list_routes()))
 
     assert views and all(view.resolved.source == "env" for view in views)
     assert all(view.problem is not None and "jsonschema" in view.problem for view in views)
@@ -470,7 +484,7 @@ def test_skipped_env_endpoint_is_flagged(llm_route_db, llm_whitelist):
     }
     with mock.patch.object(settings, "LLM_ENDPOINTS", endpoints), \
          mock.patch.object(settings, "LLM_PROVIDER", "relay"):
-        views, _ = _run(capability_route_service.list_routes())
+        views, _ = _llm_list(_run(capability_route_service.list_routes()))
 
     global_view = views[0]
     assert global_view.resolved.source == "env"
@@ -483,7 +497,7 @@ def test_stale_row_is_shown_with_reason(llm_route_db, llm_whitelist):
     """DB 中已不在白名單的設定：照實列出，並帶跳過原因。"""
     _insert(llm_route_db, route_key=KEY, provider="yinli", model="retired-model")
 
-    view = _run(capability_route_service.describe(KEY))
+    view = _run(capability_route_service.describe(KEY)).view("llm")
 
     assert view.stored is not None and view.stored.model == "retired-model"
     assert view.resolved.source == "env"
@@ -496,7 +510,7 @@ def test_env_layer_reports_the_effort_actually_used(llm_route_db, llm_whitelist)
 
     with mock.patch.object(settings, "LLM_PROVIDER", "claude-code"), \
          mock.patch.object(settings, "LLM_MODEL_NAME", "claude-opus-5"):
-        view = _run(capability_route_service.describe(KEY))
+        view = _run(capability_route_service.describe(KEY)).view("llm")
 
     assert view.resolved.source == "env"
     assert (view.effective_effort, view.label) == ("high", "(claude-code)opus-5@high")

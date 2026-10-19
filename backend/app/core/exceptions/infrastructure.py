@@ -115,6 +115,19 @@ class STTServiceError(InfrastructureBaseError):
     error_code = "STT_SERVICE_ERROR"
 
 
+class AudioEvaluatorUnavailableError(InfrastructureBaseError):
+    """依目前的能力路由設定建不出錄音評分器（金鑰或伺服器未設定、套件未安裝、策略無效）。
+
+    Raised when no audio evaluator can be built from the current capability
+    route settings (missing key or server, missing package, bad strategy).
+
+    與評分途中的失敗（``LLMServiceError`` / ``STTServiceError``）分開：這是設定問題，
+    改設定（TG ``/setconfig`` 或網頁的工具設定）就能修。
+    """
+    error_code = "AUDIO_EVALUATOR_UNAVAILABLE"
+    status_code = 503
+
+
 class StorageServiceError(InfrastructureBaseError):
     """物件存儲服務異常。
 
