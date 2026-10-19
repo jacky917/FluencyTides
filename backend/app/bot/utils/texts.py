@@ -3,7 +3,7 @@ Telegram Bot 共用的回覆文字。
 
 Shared reply texts for the Telegram bot.
 
-同一件事全 bot 用同一個說法（用語規則見 docs/wip/tg_bot_copy_review_2026-10-18.md §2）：
+同一件事全 bot 用同一個說法（用語規則見 docs/archive/tg_bot_copy_review_2026-10-18.md §2）：
 失敗附下一步、動態內容一律轉義、不給使用者看內部名稱（Card ID、欄位英文名、類別名）。
 
 One wording per situation across the bot: failures say what to do next,

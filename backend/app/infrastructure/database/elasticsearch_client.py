@@ -120,7 +120,7 @@ async def recreate_index():
                             # 降りる→下りる），UniDic 在 lemma 層同樣合併，
                             # 故驗證器需 sibling_surfaces 防護才不會讓規範
                             # 表記的母卡吃掉變體表記的句子。詳見
-                            # docs/wip/es_sudachi_normalizedform_FIX_2026-09-05.md
+                            # docs/archive/es_sudachi_normalizedform_FIX_2026-09-05.md
                             "sudachi_normalizedform",
                             "sudachi_part_of_speech"
                         ]

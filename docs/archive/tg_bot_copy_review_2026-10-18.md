@@ -3,7 +3,8 @@
 | 欄位 | 內容 |
 |---|---|
 | **創建日期** | 2026-10-18 |
-| **性質** | 審查結果 + 修改工作項（尚未修改程式） |
+| **性質** | 審查結果 + 修改工作項 |
+| **狀態** | ✅ 第 3 節必修與第 6 節「可能刪錯卡」已完成並合併（859031f，PR #24）；第 4、5 節與第 6 節其餘項目移到 `docs/wip/backlog.md`。2026-10-19 歸檔。文中的 `/setconfig`、`callbacks_config.py` 已於能力路由 R2 移除 |
 | **範圍** | `backend/app/bot/`（handlers、fsm、alerts、dependencies）與它們引用的訊息來源（`callbacks._sync_with_warning`、`stt_diff_evaluator` 的評語、`llm_route_service` 的錯誤訊息） |
 | **基準** | 分支 `feat/llm-model-routing` 工作區；狀態機見 `docs/bk/16_TG_Bot_State_Machine.html` |
 | **規模** | 約 225 處使用者看得到的文字（訊息、alert、按鈕） |

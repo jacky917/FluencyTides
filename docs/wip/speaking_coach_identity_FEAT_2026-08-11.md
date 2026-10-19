@@ -7,7 +7,7 @@
 | **狀態** | 🚧 P0–P3 完成（2026-08-11），91 tests 全綠；**P4（`Target_Language` 補值）待人工確認後執行** |
 | **範圍** | `tests/test_speaking_coach_identity.py`(新檔)、`scripts/local_anki/Speaking_Coach_Dark/import_cards.py`、`scripts/local_anki/Speaking_Coach_Dark/clear_identity.py`(新檔)、`scripts/local_anki/Speaking_Coach_Dark/jsons/`(新目錄)、`app/core/config.py`(新增根牌組設定)、`.env.example` |
 | **不動** | Anki 內既有 63 張卡片的**內容與錄音**、`Speaking_Coach_Dark` note model 的 8 欄位定義、**`common/card_identity.py` 的內容**(只 import 不修改)、**`Speaking_Trilingual_Dark/` 下的任何檔案**(屬 [card_identity_writeback_FEAT](../archive/card_identity_writeback_FEAT_2026-08-11.md) 的職責)、`app/bot/` 下任何 handler、`generate_interview_cards.py`(見 §2 非目標) |
-| **PR / 進度** | 尚未開始 |
+| **PR / 進度** | P0–P3 已合併到 main（7fc6481）；P4 未執行 |
 | **關聯文件** | [`card_identity_writeback_FEAT_2026-08-11.md`](../archive/card_identity_writeback_FEAT_2026-08-11.md)(**前置案** —— 本案沿用其決策表與清除工具設計, 並依賴**該案 P5** 產出的 `common/card_identity.py`)、[`jsons/README.md`](../../backend/scripts/local_anki/Speaking_Trilingual_Dark/jsons/README.md)(Trilingual 的卡片撰寫準則, 本案需產出對應版本) |
 
 ---

@@ -270,7 +270,7 @@ Web API 與 Telegram Bot **共用同一層 Service**——這是本專案分層�
 
 #### capability_route_service（`capability_route_service.py`，2026-10；前身為 `llm_route_service.py`）
 
-能力路由設定的讀寫服務，`/api/v1/capability-routes` 與 TG `/setconfig` 共用同一層（不各自實作驗證）。每個操作針對「用途鍵 × 能力」，能力為 `llm` / `audio_eval` / `audio_llm` / `stt`（計畫書 [capability_routing_FEAT_2026-10-19.md](../wip/capability_routing_FEAT_2026-10-19.md)；錄音評分見 §5.3.2）：
+能力路由設定的讀寫服務，`/api/v1/capability-routes` 與 TG `/setconfig` 共用同一層（不各自實作驗證）。每個操作針對「用途鍵 × 能力」，能力為 `llm` / `audio_eval` / `audio_llm` / `stt`（計畫書 [capability_routing_FEAT_2026-10-19.md](../archive/capability_routing_FEAT_2026-10-19.md)；錄音評分見 §5.3.2）：
 
 - **寫入**（`set_route`）依序檢查：用途鍵已宣告（或為全域 `*`）且宣告了這個能力 → `(provider, 模型, effort)` 在該能力的白名單內（與讀取端同一個 `routing.check_choice`；`audio_eval` 另檢查用途鍵允許的策略）→ 試建一次（`llm` 建客戶端、`audio_llm` 建聽音檔的評分器、`stt` 建 Whisper 客戶端；不打 API）；通過後以「有就更新、沒有就新增」寫入 `capability_routes`，不論成敗都清空路由快取。**刪除**（`delete_route`）＝恢復預設，孤兒鍵（程式已不再宣告的用途）也可刪。
 - **讀取**（`list_routes` / `describe`）每個請求只讀一次 DB、所有列由同一份快照解析；回傳每個用途的生效設定、來源、被略過的層與 `problem`。管理路徑不沿用生成路徑的「讀不到 DB＝沒有設定」：查單一用途、刪除在讀不到時回 503，清單則照常回傳並標 `db_unavailable`。
