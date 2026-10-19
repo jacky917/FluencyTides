@@ -33,7 +33,7 @@
 | 3 | 上傳音檔到 References / Prompt_Audios（頭像、說話者） | 寫入欄位的部分共用（`execute_update(action=add_audio)`）；**頭像清單、自訂頭像、選 handler 只在 TG**（`callbacks.py`、`messages.py`、`media.py`） | 只有 `add_audio`，而且檔案要已經在 Anki 媒體庫 | `GET /avatars`、`POST /avatars`、multipart `POST /cards/{note_id}/audio` |
 | 4 | 刪除 JSON 欄位條目（含三語 `_ZH/_JA/_EN`） | **只在 `commands.py:241 _handle_delete_entry`** | 只有 Recordings 的 `delete_recording` | `DELETE /cards/{note_id}/fields/{field}/{index}`，背後是新的 service 函式 |
 | 5a | `/sync`（清理失效關聯） | `relation_service.sync_with_anki` | `POST /relations/sync`；前端已有 `syncRelations` | 只缺網頁上的按鈕 |
-| 5b | `/setconfig`（MODIFY_* 執行期設定） | 讀取在 `runtime_config_service.py`；**寫入只在 `callbacks_config.py:124`**（含重建 `audio_evaluator` 與失敗回滾） | `GET /config`、`GET /config/{key}`（**沒有認證**） | `RuntimeConfigService.set_config()` 與 `PUT /config/{key}`，需要認證（見 §5 決策 1） |
+| 5b | `/setconfig`（MODIFY_* 執行期設定） | 讀取在 `runtime_config_service.py`；**寫入只在 `callbacks_config.py:124`**（含重建 `audio_evaluator` 與失敗回滾） | `GET /config`、`GET /config/{key}`（**沒有認證**） | 改由能力路由取代（`capability_routing_FEAT_2026-10-19.md`）：三項設定搬進資料庫、舊 `/setconfig` 移除，網頁用工具設定頁 |
 | 5c | `/models` | `llm_route_service.py`，已共用 | `GET/PUT/DELETE /llm-routes` | 已完成（`LlmRoutes.tsx`） |
 | 6 | `/start`、`/help`、`/newcard` 選單；TTS、`gen` 按鈕 | 選單與說明；TTS 與 `gen` 都回覆「尚未開放」 | — | 網頁不需要對應。TTS 在兩邊都沒有實作 |
 
@@ -105,7 +105,7 @@ cd backend && python -m pytest tests -q
 ### 階段 B：小型管理功能
 
 - 網頁加「同步關聯」按鈕（用既有的 `POST /relations/sync`）。
-- `/setconfig`：抽出 `RuntimeConfigService.set_config()`，含重建 `audio_evaluator` 與失敗回滾；新增 `PUT /config/{key}`，TG 的 `callbacks_config.py` 改呼叫它。
+- `/setconfig`：不在本計畫處理。改由 `capability_routing_FEAT_2026-10-19.md` 取代：評分策略與模型搬進能力路由的資料表，舊的暫時設定移除，TG `/models` 改名為 `/setconfig`，網頁的 LLM 模型設定頁擴充成工具設定頁。
 - 刪除 JSON 條目：抽出 service 函式（含三語欄位白名單、`last` 索引、`AnkiJsonFieldManager`、寫入前後同步）；新增 `DELETE /cards/{note_id}/fields/{field}/{index}`，TG 的 `_handle_delete_entry` 改呼叫它。
 - 前端：設定頁（MODIFY_* 清單與修改）；卡片頁對 Recordings、References、Prompt_Audios 每一筆提供刪除。
 
@@ -132,7 +132,7 @@ cd backend && python -m pytest tests -q
 
 ## 5. 需要確認的決策
 
-1. **`/config` 寫入的認證。** 目前 `/config` 沒有掛 `verify_api_key`。部署時網頁由 nginx 注入金鑰，所以只要掛上 `verify_api_key`，網頁就能寫入。但這等於「能開網頁的人就能改設定」，實際的存取控制只剩 Cloudflare Access。TG 那邊另有 `TG_ADMIN_CHAT_ID` 檢查。**建議：** 寫入端點掛 `verify_api_key`，存取控制交給 Cloudflare Access，在 README 註明。
+1. **（已由能力路由計畫取代）** `/config` 不再新增寫入端點；設定的寫入走能力路由的 API（與現在的 `/llm-routes` 一樣掛 `verify_api_key`）。`GET /config` 仍是診斷用的唯讀端點，目前沒有認證，是否補上另議。
 2. **卡面用 iframe 顯示 Anki 的渲染結果，還是逐一寫 React 渲染器。** **建議：** 先用 iframe，一次涵蓋所有類型；需要互動的部分（錄音、刪除條目、上傳音檔）放在 iframe 外的 React 操作面板，不去改模板。
 3. **卡片詳情 API 的格式。** 改後端會影響 `/handlers/cards/{id}` 的其他使用者（腳本），改前端只動網頁。**建議：** 前端改型別，後端不動。
 4. **對話卡的 Card_ID 格式。** TG 用 `SC_%Y%m%d_%H%M%S`，handler 用 uuid4。**建議：** 統一用 handler 的 uuid4（同一秒建兩張不會撞）。
