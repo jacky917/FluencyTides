@@ -1,0 +1,258 @@
+/*
+ * 卡面正反切換動畫的外觀（行為在 FaceTransition.tsx，目錄與時長在 lib/faceTransitions.ts）。
+ * Visuals of the card face switch; behaviour lives in FaceTransition.tsx.
+ *
+ * 每一面是一個 .face-layer，播放時帶：
+ *   data-face-anim   動畫代號（page / slide / fade / zoom）
+ *   data-face-part   播往前的哪一段（leave / enter）；往回時兩面互換、倒著播
+ *   --face-duration、--face-easing、--face-play（normal / reverse）
+ * 每種動畫只寫往前的樣子；::after 用來做陰影與變暗，::before 是翻頁時紙張的背面。
+ *
+ * 注意：animation-timing-function 會套在每一段 keyframe 之間（不是整段動畫），所以主要動作
+ * 只寫頭尾兩個 keyframe，曲線才會從頭到尾連續；中途隆起（陰影、抬起、傾斜）或停留（淡入淡出）
+ * 的效果另外寫成一個動畫，用獨立的 rotate / scale 屬性，不和 transform 互相覆蓋。
+ */
+
+.face-stage {
+  display: grid;
+}
+
+/* 會轉出卡面範圍的動畫（翻頁）不裁切；其他的橫向裁切，才不會撐出橫向捲動 */
+.face-stage[data-face-clip] {
+  overflow-x: clip;
+}
+
+.face-stage[data-face-anim='page'] {
+  perspective: 2400px;
+}
+
+.face-layer {
+  grid-area: 1 / 1;
+  align-self: start;
+  min-width: 0;
+  position: relative;
+}
+
+/* 準備中：先合成成獨立圖層並畫好（瀏覽器不畫完全透明、沒有 will-change 的元素，iframe 也可能
+   被當成看不見而暫停繪製），開始播放時才不會卡住 */
+.face-layer[data-face-stage='preparing'] {
+  opacity: 0.01;
+  pointer-events: none;
+}
+
+/* 切換開始（準備中）就把兩面都提升成獨立圖層，播放的第一個畫格不用再重新合成 */
+.face-stage[data-face-busy] > .face-layer {
+  will-change: opacity, transform;
+}
+
+.face-layer[data-face-anim] {
+  animation-duration: var(--face-duration);
+  animation-timing-function: var(--face-easing);
+  animation-direction: var(--face-play);
+  animation-fill-mode: both;
+}
+
+.face-layer[data-face-anim]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  animation-duration: var(--face-duration);
+  animation-timing-function: var(--face-easing);
+  animation-direction: var(--face-play);
+  animation-fill-mode: both;
+}
+
+/* ---------- 翻頁：整頁沿左側書脊翻起、離開，露出下一頁 ---------- */
+
+/* 翻起來的那一頁在上面：從平放轉到略過側立（95 度，約在 86% 時側立、之後背對而隱藏），中途抬起並略微傾斜（像右下角先翻起來），
+   最後一段淡出。只轉到略過 90 度：再轉下去頁面會跑到書脊左邊、超出卡面被面板裁掉。
+   不用 preserve-3d（opacity 小於 1 時規格要求壓平 3D，部分瀏覽器會露出鏡像的內容），
+   背對時整頁隱藏 */
+.face-layer[data-face-anim='page'][data-face-part='leave'] {
+  z-index: 2;
+  transform-origin: left center;
+  backface-visibility: hidden;
+  animation-name: face-page-turn, face-page-lift, face-page-vanish;
+}
+
+/* 頁面翻起時越來越暗（受光角度改變），靠書脊的一側最亮 */
+.face-layer[data-face-anim='page'][data-face-part='leave']::after {
+  background: linear-gradient(to left, rgb(0 0 0 / 0.65), rgb(0 0 0 / 0.2) 45%, rgb(255 255 255 / 0.05) 75%, rgb(0 0 0 / 0));
+  animation-name: face-page-shade;
+}
+
+/* 下面那一頁：略為下沉後浮起，靠書脊處有翻起那頁投下的影子，頁面翻走後散去 */
+.face-layer[data-face-anim='page'][data-face-part='enter'] {
+  animation-name: face-page-under;
+}
+
+.face-layer[data-face-anim='page'][data-face-part='enter']::after {
+  background: linear-gradient(to right, rgb(0 0 0 / 0.65), rgb(0 0 0 / 0.2) 45%, rgb(0 0 0 / 0) 80%);
+  animation-name: face-page-cast;
+}
+
+@keyframes face-page-turn {
+  from {
+    rotate: y 0deg;
+  }
+  to {
+    rotate: y -95deg;
+  }
+}
+
+@keyframes face-page-lift {
+  0%,
+  100% {
+    scale: 1;
+    transform: rotateZ(0deg);
+    box-shadow: 0 0 0 0 rgb(15 23 42 / 0);
+  }
+  55% {
+    scale: 0.96;
+    transform: rotateZ(-1.5deg);
+    box-shadow: 0 26px 50px -16px rgb(15 23 42 / 0.45);
+  }
+}
+
+@keyframes face-page-vanish {
+  0%,
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes face-page-shade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes face-page-under {
+  from {
+    scale: 0.98;
+  }
+  to {
+    scale: 1;
+  }
+}
+
+@keyframes face-page-cast {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* ---------- 推移：新的一面從右側推入，舊的一面退後變暗 ---------- */
+
+.face-layer[data-face-anim='slide'][data-face-part='enter'] {
+  z-index: 2;
+  box-shadow: -16px 0 32px -14px rgb(15 23 42 / 0.5);
+  animation-name: face-slide-enter;
+}
+
+.face-layer[data-face-anim='slide'][data-face-part='leave'] {
+  animation-name: face-slide-leave;
+}
+
+.face-layer[data-face-anim='slide'][data-face-part='leave']::after {
+  background: rgb(0 0 0);
+  animation-name: face-dim;
+}
+
+@keyframes face-slide-enter {
+  from {
+    translate: 100% 0;
+  }
+  to {
+    translate: 0 0;
+  }
+}
+
+@keyframes face-slide-leave {
+  from {
+    translate: 0 0;
+  }
+  to {
+    translate: -30% 0;
+  }
+}
+
+@keyframes face-dim {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.4;
+  }
+}
+
+/* ---------- 交叉淡化／縮放：新的一面在上面先淡入，舊的一面稍後才淡出，
+   兩面合起來始終不透明，不會在中途透出底下的頁面 ---------- */
+
+@keyframes face-fade-in-early {
+  0% {
+    opacity: 0;
+  }
+  65%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes face-fade-out-late {
+  0%,
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.face-layer[data-face-anim='fade'][data-face-part='enter'] {
+  z-index: 2;
+  animation-name: face-fade-in-early;
+}
+
+.face-layer[data-face-anim='fade'][data-face-part='leave'] {
+  animation-name: face-fade-out-late;
+}
+
+.face-layer[data-face-anim='zoom'][data-face-part='enter'] {
+  z-index: 2;
+  animation-name: face-zoom-settle, face-fade-in-early;
+}
+
+.face-layer[data-face-anim='zoom'][data-face-part='leave'] {
+  animation-name: face-zoom-recede, face-fade-out-late;
+}
+
+@keyframes face-zoom-settle {
+  from {
+    scale: 1.06;
+  }
+  to {
+    scale: 1;
+  }
+}
+
+@keyframes face-zoom-recede {
+  from {
+    scale: 1;
+  }
+  to {
+    scale: 0.92;
+  }
+}

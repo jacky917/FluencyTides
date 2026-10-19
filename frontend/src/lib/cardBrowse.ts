@@ -3,6 +3,9 @@
  * URL parameters of the card browsing page, parsed in one place.
  */
 
+/** 清單每頁幾張（跳轉查詢筆記的卡片也用這個上限）。Cards per list page. */
+export const BROWSE_PAGE_SIZE = 50
+
 /** 卡片瀏覽頁的狀態。The page state kept in the URL. */
 export interface BrowseParams {
   /** 牌組完整名稱；null 為全部牌組。Full deck name, or null for all. */

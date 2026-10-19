@@ -11,6 +11,8 @@
 export const SPRING_BACK = 'transform 520ms cubic-bezier(0.18, 0.89, 0.32, 1.12)'
 /** 滾輪停下多久算放開（滾輪沒有「放開」事件）。Idle time that ends a wheel pull. */
 export const WHEEL_RELEASE_MS = 140
+/** 預設的位移上限（px，上下都是）。Default displacement limit, both ways. */
+export const DEFAULT_MAX_PULL = 150
 /** 阻力係數（與 iOS 相同）。Resistance constant, as on iOS. */
 const RUBBER_BAND_CONSTANT = 0.55
 
@@ -71,22 +73,39 @@ export interface ElasticOverscroll {
   dispose: () => void
 }
 
+/** {@link createElasticOverscroll} 的選項。Options of the effect. */
+export interface ElasticOptions {
+  /** 位移上限（px，上下都是；橡皮筋曲線的漸近值，永遠到不了）。Displacement limit. */
+  maxPull?: number
+  /**
+   * 位移改變時（正為頂端往下拉、負為底端往上拉，0 為放開）；`animated` 為正在彈回。
+   * Called with each displacement; `animated` while springing back.
+   */
+  onPull?: (displacement: number, animated: boolean) => void
+}
+
 /**
  * 建立彈性效果：拉動時位移 `content`，依 `scroller` 的捲動位置判斷是否到邊界。
  * Creates the effect, moving `content` based on `scroller`'s edges.
  * @param scroller - 捲動容器。The scroll container.
  * @param content - 要位移的內容。The element to displace.
+ * @param options - 上限與回呼。Limit and callback.
  * @returns 控制器。The controller.
  */
-export function createElasticOverscroll(scroller: HTMLElement, content: HTMLElement): ElasticOverscroll {
+export function createElasticOverscroll(
+  scroller: HTMLElement,
+  content: HTMLElement,
+  { maxPull = DEFAULT_MAX_PULL, onPull }: ElasticOptions = {},
+): ElasticOverscroll {
   let pull = 0
   let lastY: number | null = null
   let releaseTimer: number | undefined
 
-  const limit = () => Math.max(80, scroller.clientHeight * 0.35)
   const apply = (animated: boolean) => {
+    const displacement = rubberBand(pull, maxPull)
     content.style.transition = animated ? SPRING_BACK : 'none'
-    content.style.transform = pull === 0 ? '' : `translate3d(0, ${rubberBand(pull, limit()).toFixed(2)}px, 0)`
+    content.style.transform = pull === 0 ? '' : `translate3d(0, ${displacement.toFixed(2)}px, 0)`
+    onPull?.(displacement, animated)
   }
   // 拉動中（含往回推、還沒抵銷完）把捲動位置固定在邊界：滾輪與 iframe 轉送的觸控無法取消
   // 原生捲動，不固定的話內容會同時被捲動又被位移，移動兩倍的距離
@@ -138,6 +157,7 @@ export function createElasticOverscroll(scroller: HTMLElement, content: HTMLElem
       pull = 0
       content.style.transition = ''
       content.style.transform = ''
+      onPull?.(0, false)
     },
   }
 }

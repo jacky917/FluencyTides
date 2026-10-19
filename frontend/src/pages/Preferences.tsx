@@ -11,14 +11,14 @@ import { Check, RotateCcw } from 'lucide-react'
 import { FaceTransition } from '../components/FaceTransition'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
-import { useFlipPreference } from '../hooks/useFlipPreference'
+import { useFacePreference } from '../hooks/useFacePreference'
 import {
-  DEFAULT_FLIP_PREFERENCE,
+  DEFAULT_FACE_PREFERENCE,
   FACE_SPEEDS,
   FACE_TRANSITIONS,
   type FaceTransitionOption,
   type FaceTransitionSpeed,
-  type FlipPreference,
+  type FacePreference,
 } from '../lib/faceTransitions'
 import { cn } from '../lib/utils'
 
@@ -44,9 +44,9 @@ export default function Preferences() {
  * @returns 設定區塊 JSX。Section JSX.
  */
 function FlipAnimationSettings() {
-  const { preference, reducedMotion, setPreference } = useFlipPreference()
+  const { preference, reducedMotion, setPreference } = useFacePreference()
   const isDefault =
-    preference.animation === DEFAULT_FLIP_PREFERENCE.animation && preference.speed === DEFAULT_FLIP_PREFERENCE.speed
+    preference.animation === DEFAULT_FACE_PREFERENCE.animation && preference.speed === DEFAULT_FACE_PREFERENCE.speed
 
   return (
     <Card>
@@ -55,7 +55,7 @@ function FlipAnimationSettings() {
           <CardTitle className="text-lg">卡片翻面動畫</CardTitle>
           <CardDescription>卡片瀏覽頁切換正面與背面時播放。點預覽區可以試看。</CardDescription>
         </div>
-        <Button variant="ghost" size="sm" disabled={isDefault} onClick={() => setPreference(DEFAULT_FLIP_PREFERENCE)}>
+        <Button variant="ghost" size="sm" disabled={isDefault} onClick={() => setPreference(DEFAULT_FACE_PREFERENCE)}>
           <RotateCcw className="h-4 w-4" />
           恢復預設
         </Button>
@@ -104,7 +104,7 @@ function AnimationOption({
   onSelect: () => void
 }) {
   const [side, setSide] = useState<'front' | 'back'>('front')
-  const preview: FlipPreference = { animation: option.id, speed }
+  const preview: FacePreference = { animation: option.id, speed }
 
   return (
     <div
@@ -117,7 +117,8 @@ function AnimationOption({
         type="button"
         onClick={() => setSide((prev) => (prev === 'front' ? 'back' : 'front'))}
         aria-label={`預覽「${option.label}」`}
-        className="rounded-md bg-muted/60 p-3"
+        // 翻頁會轉出卡面範圍，預覽區裁切在自己的框內
+        className="overflow-hidden rounded-md bg-muted/60 p-3"
       >
         <FaceTransition
           value={side}
@@ -202,7 +203,6 @@ function SpeedPicker({ value, onChange }: { value: FaceTransitionSpeed; onChange
               className="sr-only"
             />
             {speed.label}
-            <span className="ml-1 text-xs opacity-70">{speed.ms}ms</span>
           </label>
         ))}
       </fieldset>

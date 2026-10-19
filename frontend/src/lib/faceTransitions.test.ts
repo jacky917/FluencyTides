@@ -1,53 +1,70 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_FLIP_PREFERENCE,
+  DEFAULT_FACE_PREFERENCE,
   FACE_SPEEDS,
   FACE_TRANSITIONS,
+  faceMarkup,
   faceTiming,
-  faceTransitionStyle,
-  isFlip,
-  sanitizeFlipPreference,
+  sanitizeFacePreference,
 } from './faceTransitions'
 
-describe('sanitizeFlipPreference', () => {
+describe('sanitizeFacePreference', () => {
   it('keeps known values', () => {
-    expect(sanitizeFlipPreference({ animation: 'slide', speed: 'slow' })).toEqual({ animation: 'slide', speed: 'slow' })
+    expect(sanitizeFacePreference({ animation: 'slide', speed: 'slow' })).toEqual({ animation: 'slide', speed: 'slow' })
   })
 
-  it.each([null, 'flip', {}, { animation: 'spin', speed: 'warp' }, { animation: 3 }])('defaults %j', (raw) => {
-    expect(sanitizeFlipPreference(raw)).toEqual(DEFAULT_FLIP_PREFERENCE)
+  it('migrates the old flip animations to the page turn', () => {
+    expect(sanitizeFacePreference({ animation: 'flip', speed: 'fast' })).toEqual({ animation: 'page', speed: 'fast' })
+    expect(sanitizeFacePreference({ animation: 'flip-vertical' }).animation).toBe('page')
+  })
+
+  it.each([null, 'page', {}, { animation: 'spin', speed: 'warp' }, { animation: 3 }])('defaults %j', (raw) => {
+    expect(sanitizeFacePreference(raw)).toEqual(DEFAULT_FACE_PREFERENCE)
   })
 })
 
-describe('faceTransitionStyle', () => {
-  it('plays both faces for the whole duration, mirrored by direction', () => {
-    const preference = { animation: 'flip', speed: 'normal' } as const
-    const { ms, easing } = faceTiming(preference)
-    const leave = faceTransitionStyle(preference, 'leave', -1) as Record<string, unknown>
-    expect(ms).toBe(FACE_SPEEDS.normal.ms)
-    expect(leave.animation).toBe(`face-flip-leave ${ms}ms ${easing} both`)
-    expect(leave['--face-dir']).toBe(-1)
-    expect(faceTransitionStyle({ animation: 'fade', speed: 'fast' }, 'enter', 1)?.animation).toContain('face-fade-enter')
+describe('faceTiming', () => {
+  it('scales the base duration per animation', () => {
+    expect(faceTiming({ animation: 'slide', speed: 'normal' }).ms).toBe(FACE_SPEEDS.normal.ms)
+    expect(faceTiming({ animation: 'page', speed: 'normal' }).ms).toBeGreaterThan(FACE_SPEEDS.normal.ms)
+    expect(faceTiming({ animation: 'none', speed: 'slow' }).ms).toBe(0)
+  })
+})
+
+describe('faceMarkup', () => {
+  it('plays the forward parts going to the back', () => {
+    expect(faceMarkup({ animation: 'page', speed: 'normal' }, 'leaving', 1)).toMatchObject({
+      'data-face-anim': 'page',
+      'data-face-part': 'leave',
+      style: { '--face-play': 'normal' },
+    })
+    expect(faceMarkup({ animation: 'page', speed: 'normal' }, 'entering', 1)?.['data-face-part']).toBe('enter')
   })
 
-  it('hides the backfaces of flips only', () => {
-    expect(faceTransitionStyle({ animation: 'flip-vertical', speed: 'fast' }, 'enter', 1)?.backfaceVisibility).toBe('hidden')
-    expect(faceTransitionStyle({ animation: 'slide', speed: 'fast' }, 'enter', 1)?.backfaceVisibility).toBeUndefined()
+  it('plays the forward parts reversed, roles swapped, going back', () => {
+    // 往回：舊的一面倒放「進來」那段，新的一面倒放「離開」那段
+    expect(faceMarkup({ animation: 'slide', speed: 'fast' }, 'leaving', -1)).toMatchObject({
+      'data-face-part': 'enter',
+      style: { '--face-play': 'reverse' },
+    })
+    expect(faceMarkup({ animation: 'slide', speed: 'fast' }, 'entering', -1)?.['data-face-part']).toBe('leave')
   })
 
-  it('has no style for no animation', () => {
-    expect(faceTransitionStyle({ animation: 'none', speed: 'slow' }, 'enter', 1)).toBeUndefined()
+  it('carries the duration and easing as CSS variables', () => {
+    const { ms, easing } = faceTiming({ animation: 'zoom', speed: 'slow' })
+    expect(faceMarkup({ animation: 'zoom', speed: 'slow' }, 'entering', 1)?.style).toMatchObject({
+      '--face-duration': `${ms}ms`,
+      '--face-easing': easing,
+    })
   })
 
-  it('knows which animations flip', () => {
-    expect(isFlip('flip')).toBe(true)
-    expect(isFlip('flip-vertical')).toBe(true)
-    expect(isFlip('fade')).toBe(false)
+  it('has no markup without animation', () => {
+    expect(faceMarkup({ animation: 'none', speed: 'normal' }, 'leaving', 1)).toBeNull()
   })
 
-  it('lists every animation once', () => {
+  it('lists every animation once, including the default', () => {
     const ids = FACE_TRANSITIONS.map((option) => option.id)
     expect(new Set(ids).size).toBe(ids.length)
-    expect(ids).toContain(DEFAULT_FLIP_PREFERENCE.animation)
+    expect(ids).toContain(DEFAULT_FACE_PREFERENCE.animation)
   })
 })
