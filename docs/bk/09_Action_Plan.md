@@ -29,6 +29,8 @@
 
 1. **F001（critical/S）** 恢復 `list_available_models` 的方法定義 — [card_service.py:488](../backend/app/services/card_service.py:488) 的方法簽名遺失，docstring 與 return 成為 `process_voice_evaluation` 尾端的死代碼，`GET /api/v1/cards/models` 必然 500，前端 CardGenerator 的模型下拉選單因此失效。補回 `def list_available_models(self) -> list[AnkiModelInfo]:` 並加 smoke test。
 2. **F002（critical/S）** `sync_with_anki` 空列表防護 — [relation_service.py:143](../backend/app/services/relation_service.py:143)：Anki 回傳空集合時會清空整個關聯資料表，而關聯資料**只存在 SQLite、無法從 Anki 重建**。開頭加防護：空列表記 warning 並 return 0。
+
+> **更正（2026-10-19）**：查證程式與 git 歷史，這個防護與 `test_relation_sync.py` 從未存在；實際修正見 `docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md`（空清單拒絕、比例防護、只處理掃描開始前建立的關聯）。
 3. **F003（critical/S）+ F012（high/M）** SQLite 落點與權限 — 預設資料庫路徑不在掛載卷內，每次自動部署即清空資料庫；即使改到 `/app/data`，非 root 使用者對 bind mount 目錄又可能無寫入權限。一起修：預設 URL 改 `sqlite+aiosqlite:////app/data/fluencytides.db`，部署文件註明 `chown` 或改用 named volume。
 4. **F013（high/S）** compose 網路兩邊都宣告 `external: true` — 沒有任何一方建立網路，`compose up` 必然失敗。改由後端 compose 建立（`name: fluencytides_net`），前端保持 external。
 5. **F010（high/S）** 刪除被 commit 的 `vite.config.js` / `vite.config.d.ts` — Vite 會優先載入 `.js` 而遮蔽 `vite.config.ts`，所有後續 vite 設定修改都會靜默無效。`git rm` 後在 `.gitignore` 封鎖，`tsconfig.node.json` 加 `noEmit`。

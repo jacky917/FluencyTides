@@ -160,6 +160,8 @@ flowchart TD
 
 ### F002｜sync_with_anki 收到空列表時會清空整個關聯資料表（資料遺失）
 
+> **更正（2026-10-19）**：查證程式與 git 歷史，這個防護與 `test_relation_sync.py` 從未存在；實際修正見 `docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md`（空清單拒絕、比例防護、只處理掃描開始前建立的關聯）。
+
 > ✅ **已修復（2026-07-09，第二輪）**：`sync_with_anki` 開頭加空列表防護，`valid_note_ids` 為空時記 warning 並 return 0，杜絕一句 `/sync` 清空整個關聯表，詳見 [11_Implementation_Log.md](11_Implementation_Log.md)。
 
 - **位置**：`backend/app/services/relation_service.py:143`

@@ -28,6 +28,7 @@ import json
 import logging
 import uuid
 
+from app.infrastructure.anki.search import note_types_query
 from app.services.task_handlers.base import BaseHandler
 from app.services.task_handlers.registry import register_handler
 from app.services.task_handlers.shared.trilingual_lang import (
@@ -165,9 +166,7 @@ class SpeakingTrilingualHandler(BaseHandler):
         Returns:
             卡片摘要字典列表。List of card summary dicts.
         """
-        query = " OR ".join([f'"note:{m}"' for m in self.supported_models])
-        if deck_name:
-            query = f'"deck:{deck_name}" ({query})'
+        query = note_types_query(self.supported_models, deck_name)
 
         note_ids = await card_service.find_notes(query)
         notes_info = await card_service.get_notes_info(note_ids)

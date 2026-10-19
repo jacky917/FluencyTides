@@ -46,6 +46,7 @@ from io import BytesIO
 from aiogram import F, Router
 from aiogram.types import Message
 from aiogram.exceptions import TelegramAPIError
+from app.infrastructure.anki.search import field_term
 from app.core.exceptions import FluencyTidesError
 
 from app.bot.state import UserStateManager
@@ -149,7 +150,7 @@ async def process_voice_handler(
         # 取前同步 (有防抖)
         await anki_client.sync(raise_errors=False)
 
-        note_ids = await anki_client.find_notes(f"Card_ID:{card_id}")
+        note_ids = await anki_client.find_notes(field_term("Card_ID", card_id))
         if not note_ids:
             await status_msg.edit_text(CARD_NOT_FOUND)
             user_state_manager.clear_state(chat_id)

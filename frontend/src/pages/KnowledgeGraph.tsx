@@ -10,6 +10,7 @@ import { Card } from '../components/ui/card'
 import { Skeleton } from '../components/ui/skeleton'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
+import { describeApiError, isBackendError } from '../lib/apiError'
 
 /**
  * 節點文字標籤的可選字型樣式。
@@ -113,13 +114,25 @@ export default function KnowledgeGraph() {
   })
 
   const syncMutation = useMutation({
-    mutationFn: FluencyTidesAPI.syncRelations,
+    mutationFn: (force: boolean) => FluencyTidesAPI.syncRelations(force),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['graph'] })
-      alert(`Sync complete! Cleaned up ${data.deleted_count} orphaned relations.`)
+      // 顯示掃描張數：Anki 回很少張卻刪很多時，使用者看得出不對勁
+      const syncNote = data.ankiweb_synced ? '' : '\n（與 AnkiWeb 同步失敗，這次以本機 Anki 的收藏為準）'
+      alert(`同步完成：掃描 ${data.scanned_notes} 張筆記，移除 ${data.deleted_count} 筆失效關聯。${syncNote}`)
     },
-    onError: () => {
-      alert('Failed to sync with Anki. Is Anki running?')
+    // 後端拒絕清理（409）時沒有刪除任何資料：要刪超過一半時讓使用者確認後強制，Anki 回 0 張時只說明原因
+    onError: (err) => {
+      const { message } = describeApiError(err)
+      const code = (err as { error_code?: string }).error_code
+      if (code === 'RELATION_SYNC_NEEDS_FORCE') {
+        if (window.confirm(`${message}\n\n確定 Anki 已完整載入、仍要清理嗎？`)) {
+          syncMutation.mutate(true)
+        }
+        return
+      }
+      if (!isBackendError(err)) console.error('[KnowledgeGraph] 同步關聯失敗', err)
+      alert(code?.startsWith('RELATION_SYNC') ? `沒有清理：${message}` : `同步失敗：${message}`)
     }
   })
 
@@ -258,7 +271,7 @@ export default function KnowledgeGraph() {
           </Button>
 
           <Button 
-            onClick={() => syncMutation.mutate()} 
+            onClick={() => syncMutation.mutate(false)} 
             disabled={syncMutation.isPending || isLinkMode}
             variant="outline"
           >

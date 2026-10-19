@@ -381,6 +381,8 @@ frontend/
 #### 風險二（Critical，✅ 已於 2026-07-09 修復）：`/sync` 在 Anki 空集合時清空整個關聯資料表 — 不可逆資料遺失
 
 > **2026-07-09 修復（F002）**：`sync_with_anki` 開頭加空列表防護，`valid_note_ids` 為空時記 warning 並 return 0，不再執行刪除。以下為原問題分析。
+> 
+> **更正（2026-10-19）**：查證程式與 git 歷史，這個防護與 `test_relation_sync.py` 從未存在；實際修正見 `docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md`（空清單拒絕、比例防護、只處理掃描開始前建立的關聯）。
 
 `backend/app/services/relation_service.py:143` 的 delete 語句在 `valid_note_ids` 為空列表時，SQLAlchemy 2.x 將 `.not_in([])` 展開為恆真條件，WHERE 退化為刪除幾乎所有關聯紀錄。兩個呼叫端（`backend/app/api/relations.py:162` 與 `backend/app/bot/handlers/commands.py:369` 的 `/sync` 指令）都直接把 `find_notes("deck:*")` 結果傳入——只要 Anki 當下集合為空（新 profile、切換 profile、集合未載入），一句 `/sync` 即把 SQLite 中全部圖譜關聯永久刪除，無確認、無備份，且**關聯資料只存在 SQLite，無法從 Anki 重建**。（F002）
 

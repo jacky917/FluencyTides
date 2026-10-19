@@ -145,8 +145,8 @@ cd backend && python -m pytest tests -q
 
 ## 6. 盤點時發現的既有問題（不在本計畫範圍）
 
-- `backend/tests/test_jp_verb_reading_judgments.py:231` 的斷言寫在 `with mock.patch…` 區塊之外，比對的是開發者 `.env` 的 `LLM_MODEL_NAME`。在沒有 `backend/.env` 的環境（CI、worktree）會失敗：本 worktree 是 809 passed、1 failed。把斷言移進 `with` 區塊即可。
+- （✅ 已修：`docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md` §5.1）`backend/tests/test_jp_verb_reading_judgments.py:231` 的斷言寫在 `with mock.patch…` 區塊之外，比對的是開發者 `.env` 的 `LLM_MODEL_NAME`。在沒有 `backend/.env` 的環境（CI、worktree）會失敗：本 worktree 是 809 passed、1 failed。把斷言移進 `with` 區塊即可。
 - `vocabulary_mining_handler.py:108-112` 寫入的 `Meaning`/`Context` 在 TOEIC_Coach_Dark 上不存在。
-- 各 handler 的 Anki 查詢沒有跳脫牌組名。
+- 各 handler 的 Anki 查詢沒有跳脫牌組名。（✅ 已修：`docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md` §4，共用 `app/infrastructure/anki/search.py`）
 - `npm run build` 的 `tsc -b` 會改寫已追蹤的 `vite.config.js`、`vite.config.d.ts`。建議把它們從版本控制移除，或在 tsconfig 設定不輸出。
 - LLM 模型設定頁的 503 有兩種情況共用同一個 `error_code`：寫入前讀不到 DB（確定沒寫入），以及寫入時異常（結果未知）。網頁只能用不斷言的措辭。若後端拆成兩個 code，網頁就能說得更準確。

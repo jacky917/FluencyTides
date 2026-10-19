@@ -422,10 +422,13 @@ Anki 實體節點（`relation_service.py:326-335`）：
 
 - **定義**：`backend/app/api/relations.py:138-167`
 - **用途**：向 Anki 查詢目前所有存在的筆記 ID（搜尋式 `deck:*`），刪除資料庫中已不存在於 Anki 的孤兒關聯。
-- **請求參數**：無（無 Body）。
-- **成功回應**（200）：`{"deleted_count": 5}`。
-- **錯誤情況**：502 `ANKI_SERVICE_ERROR`（宣告於 `relations.py:141-143`）；401 認證失敗。
+- **請求參數**：查詢參數 `force: bool = false`（2026-10-19 新增）：要刪的關聯超過一半（且超過 20 筆）時仍執行。Anki 回傳 0 張筆記時即使 `force` 也拒絕。
+- **成功回應**（200）：`{"deleted_count": 5, "scanned_notes": 17394, "orphan_notes": 2, "ankiweb_synced": true}`（後三個欄位 2026-10-19 新增；`ankiweb_synced` 為 false 表示清理前與 AnkiWeb 同步失敗、以本機收藏為準）。
+- **錯誤情況**（2026-10-19 新增 409，皆未刪除任何資料）：409 `RELATION_SYNC_EMPTY_ANKI`（Anki 回傳 0 張筆記，`force` 也無效）；409 `RELATION_SYNC_NEEDS_FORCE`（要刪超過一半且超過 20 筆，確認後帶 `force=true` 重送）；502 `ANKI_SERVICE_ERROR`；401 認證失敗。所有刪除在同一個 transaction，失敗時不會留下刪到一半的結果。
+- **只處理掃描開始前建立的關聯**（2026-10-19）：掃描期間剛生成的子卡，其關聯不會被當成孤兒。
 - **注意（2026-07-09 已修，F002）**：原本若 Anki 集合為空（`find_notes("deck:*")` 回傳空列表），`sync_with_anki` 會把**所有**關聯視為孤兒而清空整個關聯資料庫。現在 `sync_with_anki` 開頭加空列表防護：`valid_note_ids` 為空時記 warning 並 return 0（不執行任何刪除），杜絕「一句 /sync 清空整表」的不可逆資料遺失。
+
+> **更正（2026-10-19）**：查證程式與 git 歷史，這個防護與 `test_relation_sync.py` 從未存在；實際修正見 `docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md`（空清單拒絕、比例防護、只處理掃描開始前建立的關聯）。
 
 ---
 
@@ -693,7 +696,7 @@ Router 定義於 `backend/app/api/storage.py:31-35`（`prefix="/storage"`、`tag
 | 3 | 高 | ✅ 已於 2026-07-09 修復（F005，見 11 號文檔） | ~~`TG_WEBHOOK_SECRET` 未設定時 Webhook 完全無認證~~：改 fail-closed，未設即 403；比對改 `hmac.compare_digest`（F049） | `backend/app/api/webhook.py:122` |
 | 4 | 中 | ✅ 已於 2026-07-09 修復（Bug 4 / F025，見 11 號文檔） | ~~`GET`/`PUT`/`DELETE /cards/{note_id}` 對「筆記不存在」回 502 或靜默 200~~：三者均先確認存在，不存在回 404 `CARD_NOT_FOUND` | `backend/app/services/card_service.py` |
 | 5 | 中 | ✅ 已於 2026-07-08 修復（F022，見 10 號文檔） | ~~`GET /relations/graph` 裸 500~~：邏輯已下沉 `RelationService.get_graph_data`，`AnkiConnectError` 統一包裝為 `AnkiServiceError`，Anki 不可用時回 502 統一 `ErrorResponse` 格式 | `backend/app/services/relation_service.py` |
-| 6 | 中 | ✅ 已於 2026-07-09 修復（F002，見 11 號文檔） | ~~`POST /relations/sync` 在 Anki 空集合時會清空整個關聯資料庫~~：`sync_with_anki` 加空列表防護，空集合時 return 0 不刪除 | `backend/app/services/relation_service.py` |
+| 6 | 中 | ✅ 已於 2026-07-09 修復（F002，見 11 號文檔） | ~~`POST /relations/sync` 在 Anki 空集合時會清空整個關聯資料庫~~：`sync_with_anki` 加空列表防護，空集合時 return 0 不刪除 | `backend/app/services/relation_service.py` **更正（2026-10-19）**：當時並未修正，2026-10-19 才實作（見 `docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md`）。 |
 | 7 | 低 | 🔶 部分改善（2026-07-09） | Webhook 驗證失敗現回 403（可從狀態碼判斷），但成功／解析失敗仍一律 200（避免 Telegram 重送），監控仍需解析 Body | `backend/app/api/webhook.py:131,148,155` |
 | 8 | 低 | ⏸ 未處理 | OpenAPI tags 元資料只宣告了 Health/Cards/Storage 三組，缺 Relations 與 Telegram Webhook | `backend/app/main.py` |
 | 9 | 低 | ⏸ 未處理 | CORS 白名單寫死 `localhost:5173`，如需其他來源的跨域直連需修改代碼 | `backend/app/main.py` |

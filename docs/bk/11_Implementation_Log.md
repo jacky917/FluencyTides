@@ -35,7 +35,7 @@
 
 | finding | 修法 | 驗證 |
 |---------|------|------|
-| **F002**(critical) | `sync_with_anki` 開頭加空列表防護：`valid_note_ids` 為空時記 warning 並 return 0，杜絕「一句 /sync 清空整個關聯表」 | 代碼審查確認防護在刪除邏輯之前 |
+| **F002**(critical) | `sync_with_anki` 開頭加空列表防護：`valid_note_ids` 為空時記 warning 並 return 0，杜絕「一句 /sync 清空整個關聯表」 | 代碼審查確認防護在刪除邏輯之前 **更正（2026-10-19）**：當時並未修正，2026-10-19 才實作（見 `docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md`）。 |
 | **F009**(high) | 新增 baseline 遷移 `7f3d1a2b4c5e`（手寫 `create_table(card_relations)` + 索引），`9bbc72f7c470` 的 down_revision 改指向它，全新環境 `alembic upgrade head` 不再失敗 | ✅ 全新 DB 遷移實測通過 |
 | **F003**(critical) | `.env.example` 的 DATABASE_URL 預設改 `sqlite+aiosqlite:////app/data/fluencytides.db`（掛載卷內）；compose 用 named volume | — |
 | **F012**(high) | compose 資料改 named volume（繼承映像內 chown 過的 `/app/data` ownership），附繁中遷移註解（舊 bind mount 資料以 `docker cp` 搬移） | — |

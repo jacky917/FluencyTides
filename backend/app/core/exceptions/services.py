@@ -197,3 +197,40 @@ class InvalidAnkiSearchError(ServiceBaseError):
     """
     error_code = "INVALID_ANKI_SEARCH"
     status_code = 400
+
+
+class RelationSyncRefusedError(ServiceBaseError):
+    """同步清理孤兒關聯時，Anki 的回應看起來不完整，為避免誤刪而拒絕清理。
+
+    Raised when syncing relations with Anki is refused to avoid mass deletion:
+    Anki returned no notes, or the sweep would delete too large a share of the
+    relations without an explicit ``force``.
+    """
+    error_code = "RELATION_SYNC_REFUSED"
+    status_code = 409
+
+
+class RelationSyncEmptyAnkiError(RelationSyncRefusedError):
+    """Anki 回傳 0 張筆記：一律拒絕，``force`` 也無效。
+
+    Anki returned no notes; refused even with ``force``.
+    """
+    error_code = "RELATION_SYNC_EMPTY_ANKI"
+
+
+class RelationSyncNeedsForceError(RelationSyncRefusedError):
+    """要刪的關聯超過一半：清單可能不完整，確認後帶 ``force`` 才執行。
+
+    More than half of the relations would be deleted; retry with ``force``
+    after confirming Anki is fully loaded.
+
+    Attributes:
+        to_delete: 將刪除的關聯數。Relations that would be deleted.
+        considered: 考慮範圍內的關聯數。Relations considered.
+    """
+    error_code = "RELATION_SYNC_NEEDS_FORCE"
+
+    def __init__(self, message: str, *, to_delete: int, considered: int) -> None:
+        super().__init__(message)
+        self.to_delete = to_delete
+        self.considered = considered

@@ -38,6 +38,7 @@ import json
 import logging
 from pathlib import Path
 
+from app.infrastructure.anki.search import field_term, note_type_term
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from app.schemas.anki import (
     AnkiModelInfo,
@@ -348,14 +349,20 @@ class AnkiModelManager:
             包含重複卡片詳細位置的錯誤訊息字串，若查找失敗則回傳 None。
             Detailed error message string, or None if lookup fails.
         """
+        if not note.fields:
+            return None
+        query = ""
+        # 盡力而為：反查只是讓錯誤訊息更詳細，任何失敗都退回原本的重複錯誤，不能蓋掉它
         try:
-            if not note.fields:
+            # Anki 的重複判定是「同筆記類型、第一個欄位相同」：照同樣條件完全比對（值照字面跳脫）。
+            # 第一個欄位以模型定義為準——note.fields 的順序可能跟著 LLM 回應走
+            field_names = await self._anki_client.get_model_field_names(note.modelName)
+            first_field_name = field_names[0] if field_names else next(iter(note.fields))
+            first_field_val = note.fields.get(first_field_name, "")
+            if not first_field_val:
                 return None
-
-            first_field_val = next(iter(note.fields.values()))
-            note_ids = await self._anki_client.find_notes(
-                f'"{first_field_val}"'
-            )
+            query = f"{note_type_term(note.modelName)} {field_term(first_field_name, first_field_val)}"
+            note_ids = await self._anki_client.find_notes(query)
 
             if not note_ids:
                 return None
@@ -383,10 +390,8 @@ class AnkiModelManager:
                     f"👉 所屬牌組: [{deck_list_str}]"
                 )
 
-        except Exception as lookup_err:
-            logger.warning(
-                "嘗試反查重複卡片所在牌組時失敗: %s", str(lookup_err)
-            )
+        except Exception:  # noqa: BLE001 - 見上方說明，失敗時回傳 None 保留原錯誤
+            logger.warning("反查重複卡片所在牌組失敗（query=%s）", query, exc_info=True)
 
         return None
 

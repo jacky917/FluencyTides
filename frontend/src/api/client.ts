@@ -82,6 +82,15 @@ apiClient.interceptors.response.use(
  * FluencyTides 後端 API 的統一呼叫介面。
  * Unified call interface for the FluencyTides backend API.
  */
+/** `POST /relations/sync` 的回應。Response of the relation sync. */
+export interface RelationSyncResponse {
+  deleted_count: number
+  scanned_notes: number
+  orphan_notes: number
+  /** false＝清理前與 AnkiWeb 同步失敗，以本機收藏為準。 */
+  ankiweb_synced: boolean
+}
+
 export const FluencyTidesAPI = {
   // ======================================================================
   // Handlers (Phase 9 核心 API)
@@ -226,8 +235,13 @@ export const FluencyTidesAPI = {
    * Syncs with Anki and cleans up orphaned relations.
    * @returns 清除筆數。Number of deleted relations.
    */
-  syncRelations: (): Promise<{ deleted_count: number }> =>
-    apiClient.post('/relations/sync'),
+  /**
+   * 同步清理孤兒關聯。後端拒絕時回 409：`RELATION_SYNC_EMPTY_ANKI`（不能強制）或
+   * `RELATION_SYNC_NEEDS_FORCE`（確認後帶 force 重送）。
+   * Syncs relations with Anki; pass `force` only after the user confirmed.
+   */
+  syncRelations: (force = false): Promise<RelationSyncResponse> =>
+    apiClient.post('/relations/sync', null, { params: { force } }),
 
   // ======================================================================
   // Anki 基礎查詢 (透過 Handler 或直接端點)

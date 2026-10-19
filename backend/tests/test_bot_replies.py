@@ -192,19 +192,90 @@ def test_stale_delete_link_explains_the_entry_is_gone():
 
 
 def test_sync_command_reports_scanned_cards_and_escapes_errors():
-    """/sync 不會觸發 AnkiWeb 同步：說清理失效關聯並顯示掃描張數；錯誤訊息轉義。"""
-    message, status = _message("/sync")
-    anki = _anki(find_notes=mock.AsyncMock(return_value=[1, 2, 3]))
-    relations = mock.MagicMock(sync_with_anki=mock.AsyncMock(return_value=2))
-    _run(commands.command_sync_handler(message, anki, relations))
-    assert _sent(status.edit_text) == ["✅ 清理完成：掃描 3 張卡片，移除 2 筆失效關聯。"]
+    """/sync：說清理失效關聯並顯示掃描張數；錯誤訊息轉義。"""
+    from app.services.relation_service import RelationSyncResult
 
     message, status = _message("/sync")
-    anki = _anki(find_notes=mock.AsyncMock(side_effect=AnkiConnectError("<Response [500]> & more")))
-    _run(commands.command_sync_handler(message, anki, relations))
+    result = RelationSyncResult(scanned_notes=3, orphan_notes=1, deleted=2, considered=5)
+    relations = mock.MagicMock(sync_with_anki=mock.AsyncMock(return_value=result))
+    _run(commands.command_sync_handler(message, _anki(), relations))
+    assert _sent(status.edit_text) == ["✅ 清理完成：掃描 3 張筆記，移除 2 筆失效關聯。"]
+
+    message, status = _message("/sync")
+    relations = mock.MagicMock(sync_with_anki=mock.AsyncMock(side_effect=AnkiConnectError("<Response [500]> & more")))
+    _run(commands.command_sync_handler(message, _anki(), relations))
     [failed] = _sent(status.edit_text)
     _assert_tg_html(failed)
-    assert failed.startswith("❌ 清理失敗：")
+    assert failed.startswith("❌ 清理失敗（連不上 Anki，未刪除任何關聯）：")
+
+    # Anki 有回應但回報錯誤（例如收藏未載入）：不說成連不上
+    from app.infrastructure.anki.client import AnkiActionError
+
+    message, status = _message("/sync")
+    relations = mock.MagicMock(sync_with_anki=mock.AsyncMock(side_effect=AnkiActionError("collection is not available")))
+    _run(commands.command_sync_handler(message, _anki(), relations))
+    assert _sent(status.edit_text)[0].startswith("❌ 清理失敗（Anki 回報錯誤，未刪除任何關聯）：")
+
+
+def test_sync_command_mentions_a_failed_ankiweb_sync():
+    """清理前與 AnkiWeb 同步失敗：清理照做，但說明這次以本機收藏為準。"""
+    from app.services.relation_service import RelationSyncResult
+
+    message, status = _message("/sync")
+    result = RelationSyncResult(scanned_notes=3, orphan_notes=0, deleted=0, considered=5, ankiweb_synced=False)
+    relations = mock.MagicMock(sync_with_anki=mock.AsyncMock(return_value=result))
+    _run(commands.command_sync_handler(message, _anki(), relations))
+    [reply] = _sent(status.edit_text)
+    assert reply.startswith("✅ 清理完成") and "AnkiWeb 同步失敗" in reply
+
+
+def test_sync_command_reports_database_errors():
+    """資料庫錯誤（非業務例外）也要更新狀態訊息，不能停在「⏳ 清理中」。"""
+    from sqlalchemy.exc import OperationalError
+
+    message, status = _message("/sync")
+    error = OperationalError("DELETE", {}, Exception("database is locked"))
+    relations = mock.MagicMock(sync_with_anki=mock.AsyncMock(side_effect=error))
+    _run(commands.command_sync_handler(message, _anki(), relations))
+    [failed] = _sent(status.edit_text)
+    _assert_tg_html(failed)
+    assert failed.startswith("❌ 清理失敗（資料庫錯誤，未刪除任何關聯）")
+
+
+def test_sync_command_reports_other_business_errors():
+    """拒絕以外的業務錯誤：同樣更新狀態訊息並說明沒有刪除。"""
+    message, status = _message("/sync")
+    relations = mock.MagicMock(sync_with_anki=mock.AsyncMock(side_effect=FluencyTidesError("<x> & y")))
+    _run(commands.command_sync_handler(message, _anki(), relations))
+    [failed] = _sent(status.edit_text)
+    _assert_tg_html(failed)
+    assert failed.startswith("❌ 清理失敗（未刪除任何關聯）：")
+
+
+def test_sync_command_explains_a_refusal():
+    """服務層拒絕清理（Anki 回傳 0 張筆記）：說明沒有清理與原因，不說成失敗。"""
+    from app.core.exceptions import RelationSyncEmptyAnkiError
+
+    message, status = _message("/sync")
+    error = RelationSyncEmptyAnkiError("Anki 回傳 0 張筆記，為避免誤刪已停止清理。")
+    relations = mock.MagicMock(sync_with_anki=mock.AsyncMock(side_effect=error))
+    _run(commands.command_sync_handler(message, _anki(), relations))
+    [reply] = _sent(status.edit_text)
+    _assert_tg_html(reply)
+    assert reply.startswith("⚠️ 沒有清理：") and "0 張筆記" in reply and "網頁" not in reply
+
+
+def test_sync_command_points_to_the_web_for_a_forced_cleanup():
+    """要刪超過一半而被擋：TG 不提供強制，指出到網頁確認強制清理。"""
+    from app.core.exceptions import RelationSyncNeedsForceError
+
+    message, status = _message("/sync")
+    error = RelationSyncNeedsForceError("將刪除 30 / 40 筆關聯（超過一半）", to_delete=30, considered=40)
+    relations = mock.MagicMock(sync_with_anki=mock.AsyncMock(side_effect=error))
+    _run(commands.command_sync_handler(message, _anki(), relations))
+    [reply] = _sent(status.edit_text)
+    _assert_tg_html(reply)
+    assert reply.startswith("⚠️ 沒有清理：") and "Knowledge Graph" in reply
 
 
 # ----------------------------------------------------------------------
@@ -534,6 +605,73 @@ def test_no_duplicate_resets_previous_decision():
     assert (data["duplicate_decision"], data["old_master_note_id"]) == (None, None)
 
 
+@pytest.mark.parametrize(
+    ("original", "expected"),
+    [
+        ('He said "hi"', '"My_Original:He said \\"hi\\""'),
+        ("50% off_*", '"My_Original:50% off\\_\\*"'),
+        ("C:\\path", '"My_Original:C\\:\\\\path"'),
+        ("第一行\n第二行", '"My_Original:第一行\n第二行"'),
+    ],
+    ids=["quote", "wildcards", "backslash", "newline"],
+)
+def test_duplicate_check_matches_the_original_literally(original, expected):
+    """重複檢查：原文照字面比對——引號以 \\" 跳脫（原本的 "" 會靜默地找不到），* _ 不當萬用字元，: 不當欄位分隔。"""
+    state = _fsm()
+    _run(state.set_state(ExpressionStates.waiting_for_reorganization))
+    _run(state.update_data(original_text=original))
+    service = mock.MagicMock(find_notes=mock.AsyncMock(return_value=[]))
+    with mock.patch.object(expression_fsm, "_generate_and_preview", mock.AsyncMock()):
+        _run(expression_fsm._check_duplicate_before_generate(_message()[0], state, service))
+
+    query = service.find_notes.await_args.args[0]
+    assert query.endswith(" " + expected)
+    assert query.startswith('deck:"日本語\\:\\:外語糾錯\\:\\:母卡片" note:"Expression\\_Master\\_Dark" ')
+
+
+def test_duplicate_check_without_original_text_ends_the_flow():
+    """流程狀態遺失原文（重啟、逾時）：當成流程失效，不拿空字串去查而比對到錯的卡。"""
+    state = _fsm()
+    _run(state.set_state(ExpressionStates.waiting_for_reorganization))
+    service = mock.MagicMock(find_notes=mock.AsyncMock(return_value=[]))
+    message, _ = _message()
+    with mock.patch.object(expression_fsm, "_generate_and_preview", mock.AsyncMock()) as generate:
+        _run(expression_fsm._check_duplicate_before_generate(message, state, service))
+
+    generate.assert_not_awaited()
+    service.find_notes.assert_not_awaited()
+    assert _sent(message.answer) == [expression_fsm._FLOW_EXPIRED]
+    assert _run(state.get_state()) is None
+
+
+def test_duplicate_check_failure_is_announced_before_generating():
+    """查不到 Anki：明講跳過了重複檢查再生成，不默默略過。"""
+    state = _fsm()
+    _run(state.set_state(ExpressionStates.waiting_for_reorganization))
+    _run(state.update_data(original_text="x"))
+    service = mock.MagicMock(find_notes=mock.AsyncMock(side_effect=AnkiConnectError("<Response [500]> & more")))
+    message, _ = _message()
+    with mock.patch.object(expression_fsm, "_generate_and_preview", mock.AsyncMock()) as generate:
+        _run(expression_fsm._check_duplicate_before_generate(message, state, service))
+
+    generate.assert_awaited_once()
+    [warning] = _sent(message.answer)
+    _assert_tg_html(warning)
+    assert warning.startswith("⚠️ 無法確認 Anki 是否已有相同原文的卡")
+
+
+def test_duplicate_check_programming_errors_are_not_swallowed():
+    """程式錯誤不被當成「查不到」：照常拋出，不默默略過重複檢查去生成。"""
+    state = _fsm()
+    _run(state.set_state(ExpressionStates.waiting_for_reorganization))
+    _run(state.update_data(original_text="x"))
+    service = mock.MagicMock(find_notes=mock.AsyncMock(side_effect=KeyError("fields")))
+    generate = mock.AsyncMock()
+    with mock.patch.object(expression_fsm, "_generate_and_preview", generate), pytest.raises(KeyError):
+        _run(expression_fsm._check_duplicate_before_generate(_message()[0], state, service))
+    generate.assert_not_awaited()
+
+
 def test_duplicate_warning_escapes_old_card_fields():
     """重複警告：原文與舊卡欄位（常帶 <div>、&nbsp;）都要轉義，否則警告送不出去、重複檢查被默默跳過。"""
     state = _fsm()
@@ -610,6 +748,7 @@ def test_overwrite_creates_first_then_deletes_old_cards():
     assert order == ["create", "delete"]
     assert handler.execute_create.await_args.kwargs["parameters"]["allow_duplicate"] is True
     service.anki_client.delete_notes.assert_awaited_once_with([77, 78, 79])
+    assert service.find_notes.await_args.args[0] == 'note:"Expression\\_Micro\\_Dark" "Master_Note_ID:77"'
     assert sent[-1].endswith("（已刪除舊卡）")
 
 

@@ -21,6 +21,8 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 import pydantic
+from sqlalchemy.exc import SQLAlchemyError
+from app.infrastructure.anki.search import field_term
 from app.core.exceptions import FluencyTidesError
 
 if TYPE_CHECKING:
@@ -41,7 +43,7 @@ from app.bot.utils.texts import (
     field_label,
     state_minutes,
 )
-from app.core.exceptions import AnkiFieldCorruptedError
+from app.core.exceptions import AnkiFieldCorruptedError, RelationSyncNeedsForceError, RelationSyncRefusedError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.tg.deep_link import (
     DeleteEntryAction,
@@ -51,7 +53,7 @@ from app.schemas.tg.deep_link import (
     TTSAudioAction,
 )
 from app.core.config import settings
-from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
+from app.infrastructure.anki.client import AnkiActionError, AnkiClient, AnkiConnectError
 from app.schemas.anki import AnkiNote, AnkiNoteOptions
 from app.schemas.speaking import NewCardPayload, ReferenceItem
 from app.services.relation_service import RelationService
@@ -120,7 +122,7 @@ async def command_start_handler(
     if isinstance(action, RecordAudioAction):
         # 驗證卡片是否存在於 Anki
         try:
-            note_ids = await anki_client.find_notes(f"Card_ID:{action.card_id}")
+            note_ids = await anki_client.find_notes(field_term("Card_ID", action.card_id))
             if not note_ids:
                 await message.answer(CARD_NOT_FOUND)
                 return
@@ -194,7 +196,7 @@ async def command_start_handler(
     if isinstance(action, AddAudioAction):
         # 驗證卡片是否存在於 Anki
         try:
-            note_ids = await anki_client.find_notes(f"Card_ID:{action.card_id}")
+            note_ids = await anki_client.find_notes(field_term("Card_ID", action.card_id))
             if not note_ids:
                 await message.answer(CARD_NOT_FOUND)
                 return
@@ -281,7 +283,7 @@ async def _handle_delete_entry(
         # 取前同步 (有防抖)
         await anki_client.sync(raise_errors=False)
 
-        note_ids = await anki_client.find_notes(f"Card_ID:{action.card_id}")
+        note_ids = await anki_client.find_notes(field_term("Card_ID", action.card_id))
         if not note_ids:
             await message.answer(CARD_NOT_FOUND)
             return
@@ -431,17 +433,31 @@ async def command_sync_handler(
         anki_client: 注入的 AnkiClient。Injected AnkiClient instance.
         relation_service: 注入的 RelationService。Injected RelationService.
     """
-    # 這個指令不會觸發 AnkiWeb 同步，只是掃描 Anki 現有卡片、清掉指向已刪卡片的關聯
+    # 掃描 Anki 現有筆記、清掉指向已刪筆記的關聯（服務層會先與 AnkiWeb 同步一次）。
+    # Anki 回 0 張、或要刪超過一半時服務層會拒絕；TG 不提供強制清理，需要時改用網頁知識圖譜的「同步」。
+    # 所有刪除在同一個 transaction 裡，任何失敗都不會留下刪到一半的結果，所以失敗時可以說「沒有刪除」
     status_msg = await message.answer("⏳ 清理失效關聯中…")
 
     try:
-        valid_note_ids = await anki_client.find_notes("deck:*")
-        deleted_count = await relation_service.sync_with_anki(valid_note_ids)
-
-        # 顯示掃描張數：Anki 回 0 張卻刪了一堆關聯時，使用者看得出不對勁
+        result = await relation_service.sync_with_anki(anki_client)
+        note = "" if result.ankiweb_synced else "\n⚠️ 與 AnkiWeb 同步失敗，這次以本機 Anki 的收藏為準。"
         await status_msg.edit_text(
-            f"✅ 清理完成：掃描 {len(valid_note_ids)} 張卡片，移除 {deleted_count} 筆失效關聯。"
+            f"✅ 清理完成：掃描 {result.scanned_notes} 張筆記，移除 {result.deleted} 筆失效關聯。{note}"
         )
-    except (AnkiConnectError, FluencyTidesError) as e:
-        logger.exception("Telegram Bot 同步發生未預期錯誤: %s", e)
-        await status_msg.edit_text(f"❌ 清理失敗：{error_detail(e)}")
+    except RelationSyncNeedsForceError as e:
+        await status_msg.edit_text(
+            f"⚠️ 沒有清理：{error_detail(e)}\n確認 Anki 已完整載入後，可在網頁「Knowledge Graph」按同步並確認強制清理。"
+        )
+    except RelationSyncRefusedError as e:
+        await status_msg.edit_text(f"⚠️ 沒有清理：{error_detail(e)}")
+    except AnkiConnectError as e:
+        # Anki 連不上或回報錯誤（例如收藏未載入）是預期內的狀況，不是程式錯誤：記 WARNING，不附 traceback
+        reason = "Anki 回報錯誤" if isinstance(e, AnkiActionError) else "連不上 Anki"
+        logger.warning("/sync：%s，未刪除任何關聯：%s", reason, e)
+        await status_msg.edit_text(f"❌ 清理失敗（{reason}，未刪除任何關聯）：{error_detail(e)}")
+    except FluencyTidesError as e:
+        logger.exception("/sync 發生業務錯誤，未刪除任何關聯")
+        await status_msg.edit_text(f"❌ 清理失敗（未刪除任何關聯）：{error_detail(e)}")
+    except SQLAlchemyError as e:
+        logger.exception("/sync 資料庫錯誤，transaction 已回復，未刪除任何關聯")
+        await status_msg.edit_text(f"❌ 清理失敗（資料庫錯誤，未刪除任何關聯）：{error_detail(e)}")
