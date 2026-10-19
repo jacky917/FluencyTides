@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_TRAIL, parseBrowseParams, parseTrail, pickNoteCard, positiveInt, pushTrail } from './cardBrowse'
+import {
+  MAX_TRAIL,
+  parseBrowseParams,
+  parseTrail,
+  pickNoteCard,
+  positiveInt,
+  pushTrail,
+  searchToRemember,
+} from './cardBrowse'
 
 describe('parseBrowseParams', () => {
   it('reads valid parameters', () => {
@@ -66,5 +74,14 @@ describe('pickNoteCard', () => {
 
   it('returns null when none of the notes has cards', () => {
     expect(pickNoteCard(cards, [3])).toBeNull()
+  })
+})
+
+describe('searchToRemember', () => {
+  it('keeps the position without the jump trail, in a stable order', () => {
+    expect(searchToRemember(new URLSearchParams('card=5&trail=1,2&deck=日本語&side=answer&x=1'))).toBe(
+      new URLSearchParams('deck=日本語&card=5&side=answer').toString(),
+    )
+    expect(searchToRemember(new URLSearchParams(''))).toBe('')
   })
 })

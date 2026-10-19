@@ -55,7 +55,11 @@ function AppSidebar() {
               <SidebarMenuItem key={item.path}>
                 <SidebarMenuButton asChild isActive={location.pathname === item.path}>
                   {/* 手機上選了頁面就收起選單 */}
-                  <Link to={item.path} onClick={() => isMobile && setOpenMobile(false)}>
+                  {/* 已經在這頁時連到目前的網址：不會清掉這頁記住的位置（例如卡片瀏覽的牌組與卡片） */}
+                  <Link
+                    to={location.pathname === item.path ? location.pathname + location.search : item.path}
+                    onClick={() => isMobile && setOpenMobile(false)}
+                  >
                     <item.icon />
                     <span>{item.name}</span>
                   </Link>

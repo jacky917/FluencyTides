@@ -102,3 +102,19 @@ export function pickNoteCard(cards: { card_id: number; note_id: number; ord: num
   }
   return null
 }
+
+/**
+ * 要記下來的瀏覽位置（下次從側邊欄回到這頁時恢復）：牌組、搜尋、頁碼、選取的卡片與正反面；
+ * 跳轉紀錄只對這一輪瀏覽有意義，不記。參數依固定順序排列，同樣的位置得到同樣的字串。
+ * The browse position to remember, without the jump trail, in a stable order.
+ * @param params - 目前的網址參數。The URL parameters.
+ * @returns 參數字串（沒有位置時為空字串）。The query string, or ''.
+ */
+export function searchToRemember(params: URLSearchParams): string {
+  const kept = new URLSearchParams()
+  for (const key of ['deck', 'q', 'page', 'card', 'side']) {
+    const value = params.get(key)
+    if (value) kept.set(key, value)
+  }
+  return kept.toString()
+}

@@ -23,6 +23,7 @@ import { CardViewPanel } from '../components/cards/CardViewPanel'
 import { DeckPanel } from '../components/cards/DeckPanel'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../components/ui/resizable'
 import { useCardNavigation } from '../hooks/useCardNavigation'
+import { useLocalStorage } from '../hooks/useLocalStorage'
 import { useElementWidth } from '../hooks/useElementWidth'
 import { usePanelWidths, type PanelKey } from '../hooks/usePanelWidths'
 import { DECK_MAX, DECK_MIN, LIST_MIN, VIEWER_MAX, VIEWER_MIN, layoutMode } from '../lib/cardLayout'
@@ -38,7 +39,8 @@ export default function Cards() {
   const mode = layoutMode(useElementWidth(layoutRef))
 
   // 版面模式改變（例如收合選單、縮放視窗）會重新掛載面板；面板的狀態放在這裡才不會遺失
-  const [deckToggled, setDeckToggled] = useState<Record<string, boolean>>({})
+  // 牌組樹的展開狀態也記在 localStorage，下次回來維持原樣
+  const [deckToggled, setDeckToggled] = useLocalStorage<Record<string, boolean>>('cards_deck_toggled', {})
   const [searchDraft, setSearchDraft] = useState(nav.search)
   const [fieldsOpen, setFieldsOpen] = useState(false)
   const scrolledCardRef = useRef<number | null>(null)

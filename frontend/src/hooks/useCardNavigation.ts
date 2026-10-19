@@ -4,7 +4,35 @@ import { useLocation, useNavigate, useSearchParams, type NavigateOptions } from 
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../api/client'
 import { describeApiError, retryTransient } from '../lib/apiError'
-import { BROWSE_PAGE_SIZE, parseBrowseParams, pickNoteCard, pushTrail, type CardSide } from '../lib/cardBrowse'
+import {
+  BROWSE_PAGE_SIZE,
+  parseBrowseParams,
+  pickNoteCard,
+  pushTrail,
+  searchToRemember,
+  type CardSide,
+} from '../lib/cardBrowse'
+
+/** 記住瀏覽位置的 localStorage 鍵。localStorage key of the remembered position. */
+const REMEMBERED_SEARCH_KEY = 'cards_last_search'
+
+/** 讀出記住的位置；讀不到時為空字串。Reads the remembered position. */
+function readRemembered(): string {
+  try {
+    return window.localStorage.getItem(REMEMBERED_SEARCH_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/** 記下位置（存不了時略過）。Stores the position, ignoring failures. */
+function writeRemembered(search: string): void {
+  try {
+    window.localStorage.setItem(REMEMBERED_SEARCH_KEY, search)
+  } catch {
+    // 只影響下次是否回到同一個位置
+  }
+}
 
 /** 跳轉時放進瀏覽器歷史的狀態：從哪張卡片跳過來。History state of a jump. */
 interface JumpState {
@@ -19,6 +47,8 @@ interface JumpState {
  * - 卡面按鈕打開其他筆記（`openNotes`）：查出卡片後切換過去，記下目前這張並新增一筆瀏覽器歷史，
  *   所以「返回」與瀏覽器的上一頁都能回來。查詢期間網址若變了（使用者另選了卡片），結果作廢。
  * - 翻面：取代目前的歷史並保留跳轉狀態，翻面後「返回」仍能直接退回上一頁。
+ * - 記住位置：瀏覽位置（不含跳轉紀錄）存在 localStorage；從側邊欄回到這頁（網址沒有參數）時
+ *   恢復上次的牌組、搜尋、頁碼與卡片。
  *
  * @returns 目前的狀態與改變它的函式。The state and the actions.
  */
@@ -36,6 +66,27 @@ export function useCardNavigation() {
   useEffect(() => {
     latestParams.current = params.toString()
   })
+
+  // 記住瀏覽位置。進來時網址沒有參數就恢復上次的位置；恢復完成（網址變成記下的那一串）之前
+  // 不覆寫記錄，否則第一次渲染的空網址會先把記錄清掉。只在這個分頁的位置改變時寫入、不跟著
+  // 其他分頁同步——兩個分頁停在不同位置時才不會互相覆寫個沒完
+  const pendingRestore = useRef<string | null>(null)
+  if (pendingRestore.current === null) {
+    pendingRestore.current = params.toString() === '' ? readRemembered() : ''
+  }
+  useEffect(() => {
+    if (pendingRestore.current) setParams(new URLSearchParams(pendingRestore.current), { replace: true })
+    // 只在進入頁面時恢復一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const current = searchToRemember(params)
+  useEffect(() => {
+    if (pendingRestore.current) {
+      if (current !== pendingRestore.current) return
+      pendingRestore.current = ''
+    }
+    writeRemembered(current)
+  }, [current])
 
   /** 改網址參數；值為 null 或空字串時移除。Update URL params; null or '' removes one. */
   const update = (changes: Record<string, string | null>, options?: NavigateOptions) =>

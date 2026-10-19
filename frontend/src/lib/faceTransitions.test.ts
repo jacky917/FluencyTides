@@ -13,9 +13,10 @@ describe('sanitizeFacePreference', () => {
     expect(sanitizeFacePreference({ animation: 'slide', speed: 'slow' })).toEqual({ animation: 'slide', speed: 'slow' })
   })
 
-  it('migrates the old flip animations to the page turn', () => {
+  it('migrates renamed animations', () => {
     expect(sanitizeFacePreference({ animation: 'flip', speed: 'fast' })).toEqual({ animation: 'page', speed: 'fast' })
     expect(sanitizeFacePreference({ animation: 'flip-vertical' }).animation).toBe('page')
+    expect(sanitizeFacePreference({ animation: 'fade' }).animation).toBe('morph')
   })
 
   it.each([null, 'page', {}, { animation: 'spin', speed: 'warp' }, { animation: 3 }])('defaults %j', (raw) => {

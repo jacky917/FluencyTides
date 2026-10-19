@@ -1,7 +1,8 @@
-import type { FormEvent } from 'react'
+import { useRef, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Search } from 'lucide-react'
 import { FluencyTidesAPI } from '../../api/client'
+import { useRevealSelected } from '../../hooks/useRevealSelected'
 import { retryTransient } from '../../lib/apiError'
 import { BROWSE_PAGE_SIZE } from '../../lib/cardBrowse'
 import { cardPreview } from '../../lib/cardFields'
@@ -55,6 +56,9 @@ export function CardListPanel({
     retry: retryTransient,
   })
   const pages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1
+  // 回到頁面時，把選取的卡片捲到看得到的地方
+  const panelRef = useRef<HTMLDivElement>(null)
+  useRevealSelected(panelRef, data !== undefined, scrollable)
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -62,7 +66,7 @@ export function CardListPanel({
   }
 
   return (
-    <Card className={panelScrollClass(scrollable)}>
+    <Card ref={panelRef} className={panelScrollClass(scrollable)}>
       <CardHeader className={cn('pb-2 space-y-3', scrollable && STICKY_HEADER)}>
         <CardTitle className="text-base break-all">{deck ?? '全部牌組'}</CardTitle>
         <form onSubmit={submit} className="flex gap-2">
@@ -111,6 +115,7 @@ export function CardListPanel({
                   <li key={card.card_id}>
                     <button
                       type="button"
+                      aria-current={selectedCardId === card.card_id || undefined}
                       onClick={() => onSelect(card.card_id)}
                       className={cn(
                         'w-full rounded-md border px-3 py-2 text-left transition-colors',

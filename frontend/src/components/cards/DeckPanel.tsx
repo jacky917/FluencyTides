@@ -1,7 +1,8 @@
-import { useMemo } from 'react'
+import { useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, FolderTree, RefreshCw } from 'lucide-react'
 import { FluencyTidesAPI } from '../../api/client'
+import { useRevealSelected } from '../../hooks/useRevealSelected'
 import { buildDeckTree, deckAncestors, type DeckNode } from '../../lib/deckTree'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
@@ -41,9 +42,12 @@ export function DeckPanel({
   // 使用者手動切換過的節點以手動為準；沒動過的，目前選取牌組的上層預設展開
   const ancestors = useMemo(() => new Set(selected ? deckAncestors(selected).slice(0, -1) : []), [selected])
   const isOpen = (node: DeckNode) => toggled[node.fullName] ?? ancestors.has(node.fullName)
+  // 回到頁面時，把選取的牌組捲到看得到的地方
+  const panelRef = useRef<HTMLDivElement>(null)
+  useRevealSelected(panelRef, data !== undefined, scrollable)
 
   return (
-    <Card className={panelScrollClass(scrollable)}>
+    <Card ref={panelRef} className={panelScrollClass(scrollable)}>
       <CardHeader className={cn('pb-2 flex-row items-center justify-between space-y-0', scrollable && STICKY_HEADER)}>
         <CardTitle className="text-base flex items-center gap-2">
           <FolderTree className="h-4 w-4" />
@@ -150,6 +154,7 @@ function DeckButton({ label, active, onClick }: { label: string; active: boolean
   return (
     <button
       type="button"
+      aria-current={active || undefined}
       onClick={onClick}
       className={cn(
         'flex-1 truncate rounded-md px-2 py-1 text-left transition-colors',

@@ -4,6 +4,7 @@ import ForceGraph2D from 'react-force-graph-2d'
 import { RefreshCw, Settings, Link as LinkIcon, Loader2, X } from 'lucide-react'
 import { FluencyTidesAPI } from '../api/client'
 import { useLocalStorage } from '../hooks/useLocalStorage'
+import { collectNodePositions, readGraphView, seedNodePositions, writeGraphCamera, writeGraphView } from '../lib/graphView'
 import { CardDetailModal } from '../components/CardDetailModal'
 import { Card } from '../components/ui/card'
 import { Skeleton } from '../components/ui/skeleton'
@@ -165,6 +166,47 @@ export default function KnowledgeGraph() {
     }
   }, [graphData])
 
+  // 視角記憶（見 lib/graphView.ts）：節點從上次的位置開始；每個節點都有記下的位置時，第一次
+  // 顯示不跑排版（畫面和上次一樣），之後拖動節點照常排版、鄰近節點會跟著調整。
+  // 節點位置只在排版停下（已穩定）時存；縮放、平移只存視角，半途的位置不會被存下來凍住
+  const restoredView = useMemo(() => {
+    const view = readGraphView(selectedDeck)
+    return { view, allSeeded: seedNodePositions(formattedGraphData.nodes, view) }
+  }, [formattedGraphData, selectedDeck])
+  const [thawedView, setThawedView] = useState<typeof restoredView | null>(null)
+  const frozen = restoredView.allSeeded && thawedView !== restoredView
+
+  const saveLayout = () => {
+    const graph = fgRef.current
+    if (!graph || formattedGraphData.nodes.length === 0) return
+    if (frozen) {
+      // 第一次顯示時沒跑排版就停下：位置沒變不必存，之後恢復一般排版
+      setThawedView(restoredView)
+      return
+    }
+    writeGraphView(selectedDeck, {
+      zoom: graph.zoom(),
+      center: graph.centerAt(),
+      nodes: collectNodePositions(formattedGraphData.nodes),
+    })
+  }
+  const saveCamera = () => {
+    const graph = fgRef.current
+    if (!graph || formattedGraphData.nodes.length === 0) return
+    writeGraphCamera(selectedDeck, { zoom: graph.zoom(), center: graph.centerAt() })
+  }
+
+  // 回到上次的縮放與中心點（圖掛上之後才能設定）
+  useEffect(() => {
+    const view = restoredView.view
+    if (!view) return
+    const timer = window.setTimeout(() => {
+      fgRef.current?.zoom(view.zoom, 0)
+      fgRef.current?.centerAt(view.center.x, view.center.y, 0)
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [restoredView])
+
   // Adjust Graph Physics to prevent nodes from sticking too close together
   useEffect(() => {
     if (fgRef.current) {
@@ -303,6 +345,9 @@ export default function KnowledgeGraph() {
             <ForceGraph2D
               ref={fgRef}
               graphData={formattedGraphData}
+              cooldownTicks={frozen ? 0 : undefined}
+              onEngineStop={saveLayout}
+              onZoomEnd={saveCamera}
               nodeLabel={(node: any) => {
                 if (node.translation) return `${node.label} (${node.translation}) - ${node.status || 'ghost'}`
                 return `${node.label} - ${node.status || 'ghost'}`

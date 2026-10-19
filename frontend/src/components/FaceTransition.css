@@ -3,7 +3,7 @@
  * Visuals of the card face switch; behaviour lives in FaceTransition.tsx.
  *
  * 每一面是一個 .face-layer，播放時帶：
- *   data-face-anim   動畫代號（page / slide / fade / zoom）
+ *   data-face-anim   動畫代號（page / slide / morph / zoom）
  *   data-face-part   播往前的哪一段（leave / enter）；往回時兩面互換、倒著播
  *   --face-duration、--face-easing、--face-play（normal / reverse）
  * 每種動畫只寫往前的樣子；::after 用來做陰影與變暗，::before 是翻頁時紙張的背面。
@@ -198,8 +198,15 @@
   }
 }
 
-/* ---------- 交叉淡化／縮放：新的一面在上面先淡入，舊的一面稍後才淡出，
+/* ---------- 伸縮漸變／縮放：新的一面在上面先淡入，舊的一面稍後才淡出，
    兩面合起來始終不透明，不會在中途透出底下的頁面 ---------- */
+
+/* 伸縮漸變：外框（高度隨動畫過渡）裁切內容並保留圓角，較高的一面隨外框伸長逐漸露出，
+   較矮的一面隨外框縮短逐漸收起，看起來是同一張卡片在變長變短 */
+.face-stage[data-face-anim='morph'] {
+  overflow: clip;
+  border-radius: var(--radius-lg, 0.5rem);
+}
 
 @keyframes face-fade-in-early {
   0% {
@@ -221,12 +228,12 @@
   }
 }
 
-.face-layer[data-face-anim='fade'][data-face-part='enter'] {
+.face-layer[data-face-anim='morph'][data-face-part='enter'] {
   z-index: 2;
   animation-name: face-fade-in-early;
 }
 
-.face-layer[data-face-anim='fade'][data-face-part='leave'] {
+.face-layer[data-face-anim='morph'][data-face-part='leave'] {
   animation-name: face-fade-out-late;
 }
 
