@@ -70,6 +70,15 @@ class AnkiConnectError(AnkiServiceError):
         super().__init__(message)
 
 
+class AnkiActionError(AnkiConnectError):
+    """AnkiConnect 有回應，但這個動作回報錯誤（例如搜尋語法錯誤、筆記不存在）。
+
+    AnkiConnect answered but the action itself failed (e.g. an invalid
+    search). Distinguishes caller errors from transport failures (connection
+    refused, timeouts), which stay plain ``AnkiConnectError``.
+    """
+
+
 class AnkiClient:
     """非同步 AnkiConnect API v6 完整 CRUD 封裝客戶端。
 
@@ -256,7 +265,7 @@ class AnkiClient:
             logger.error(
                 "AnkiConnect API 錯誤: %s (action: %s)", resp.error, action
             )
-            raise AnkiConnectError(resp.error)
+            raise AnkiActionError(resp.error)
 
         logger.debug("AnkiConnect 請求成功 -> action: %s", action)
         return resp.result
@@ -986,6 +995,25 @@ class AnkiClient:
             "modelFieldNames", modelName=model_name
         )
         return list(result)  # type: ignore[arg-type]
+
+    async def get_model_templates(self, model_name: str) -> dict[str, dict[str, str]]:
+        """取得指定模型的卡片模板（依模板序號排列）。
+
+        Get the card templates of the given model, in template order.
+
+        Args:
+            model_name: 模型名稱。Model name.
+
+        Returns:
+            模板名稱 → ``{"Front": ..., "Back": ...}``。Template name to its
+            front and back templates.
+
+        Raises:
+            AnkiConnectError: 模型不存在或 API 請求失敗時。Raised when the model
+                does not exist or the request fails.
+        """
+        result = await self._invoke("modelTemplates", modelName=model_name)
+        return dict(result)  # type: ignore[arg-type]
 
     async def add_model_field(
         self, model_name: str, field_name: str, index: int | None = None

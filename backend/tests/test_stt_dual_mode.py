@@ -199,25 +199,7 @@ class TestTemplateBranch(unittest.TestCase):
 
 
 class TestFactoryAndSchema(unittest.TestCase):
-    """工廠與 Schema 相容性（計畫 §5 測試 8-9）。Factory & schema (plan §5 #8-9)."""
-
-    def test_factory_creates_stt_diff(self) -> None:
-        """工廠應能建立 STTDiffEvaluator。Factory builds STTDiffEvaluator."""
-        from app.infrastructure.audio_evaluator.factory import create_audio_evaluator
-        with patch.object(settings, "AUDIO_EVALUATOR_PROVIDER", "stt_diff"), \
-             patch.object(settings, "STT_SERVER_URL", "http://localhost:8000/v1"):
-            evaluator = create_audio_evaluator()
-        self.assertIsInstance(evaluator, STTDiffEvaluator)
-
-    def test_factory_rejects_unknown_with_full_list(self) -> None:
-        """非法值的錯誤訊息應列出全部五個合法值。Error lists all five values."""
-        from app.infrastructure.audio_evaluator.factory import create_audio_evaluator
-        with patch.object(settings, "AUDIO_EVALUATOR_PROVIDER", "bogus"):
-            with self.assertRaises(ValueError) as ctx:
-                create_audio_evaluator()
-        msg = str(ctx.exception)
-        for name in ("gemini_native", "openai", "proxy", "stt_diff", "stt_llm"):
-            self.assertIn(name, msg)
+    """Schema 相容性（計畫 §5 測試 9；工廠改依能力路由建立，見 test_recording_eval_routing.py）。"""
 
     def test_schema_backward_compatible(self) -> None:
         """三欄位輸入（無新欄位）仍可建構。Three-field input still validates."""

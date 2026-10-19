@@ -21,17 +21,16 @@ from sqlmodel import SQLModel
 
 from app.core.config import LLMEndpointSettings, settings
 from app.core.exceptions import LLMServiceError
-from app.infrastructure.database.models import LLMRouteSetting
+from app.infrastructure.database.models import CapabilityRouteSetting
 from app.infrastructure.llm import routing
 from app.infrastructure.llm.base import OMIT_EFFORT
 from app.infrastructure.llm.claude_code_client import ClaudeCodeLLMClient
 from app.infrastructure.llm.client import LLMClient
 from app.infrastructure.llm.routing import (
     GLOBAL_ROUTE_KEY,
-    LLMRoute,
+    Route,
     RouteChoice,
     list_route_keys,
-    llm_route,
 )
 
 # conftest 的 autouse fixture 會把 _fetch_choices 換成空結果；真表測試要用原函式
@@ -83,12 +82,12 @@ def whitelist():
 
 
 def _rows(**choices: RouteChoice):
-    """以 ``_fetch_choices`` 回傳指定的設定列（route_key → 選擇）。
+    """以 ``_fetch_choices`` 回傳指定的 ``llm`` 設定列（route_key → 選擇）。
 
     ``*`` 不是合法的關鍵字參數名，以 ``GLOBAL`` 代表全域。
     """
     stored = {(GLOBAL_ROUTE_KEY if key == "GLOBAL" else key): value for key, value in choices.items()}
-    return mock.patch.object(routing, "_fetch_choices", mock.AsyncMock(return_value=stored))
+    return mock.patch.object(routing, "_fetch_choices", mock.AsyncMock(return_value={"llm": stored}))
 
 
 def _resolve(key: str):
@@ -100,41 +99,52 @@ def _resolve(key: str):
 # ----------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("key", ["scenario.ask", "jp.verb_pair.child-card", "A1", "x" * 64])
+@pytest.mark.parametrize("key", ["scenario.ask", "jp_verb-pair.child-card", "A1", "x" * 64])
 def test_free_form_keys_are_accepted(key):
-    """用途鍵可自由命名，含 . _ -。"""
-    route = llm_route(key, "測試")
+    """用途鍵可自由命名，含 . _ -（. 只用來分兩層）。"""
+    route = routing.route(key, "測試", {"llm"})
     assert route.key == key
     assert route in list_route_keys()
 
 
-@pytest.mark.parametrize("key", ["*", "", "has space", "中文", "x" * 65, "a/b", "a\n"])
+@pytest.mark.parametrize(
+    "key", ["*", "", "has space", "中文", "x" * 65, "a/b", "a\n", "a.b.c", ".a", "a.", "a..b"]
+)
 def test_invalid_keys_raise(key):
-    """不合規的鍵在宣告當下拋錯；直接建構 LLMRoute 也一樣。"""
+    """不合規的鍵在宣告當下拋錯；直接建構 Route 也一樣。"""
     with pytest.raises(ValueError, match="不合規"):
-        llm_route(key, "測試")
+        routing.route(key, "測試", {"llm"})
     with pytest.raises(ValueError, match="不合規"):
-        LLMRoute(key, "測試")
+        Route(key, "測試")
+
+
+@pytest.mark.parametrize("capabilities", [set(), {"tts"}, {"llm", "image_llm"}])
+def test_unknown_or_empty_capabilities_raise(capabilities):
+    """能力必須是程式支援的能力的非空子集；直接建構 Route 也一樣。"""
+    with pytest.raises(ValueError, match="能力不合規"):
+        routing.route("cap.test", "測試", capabilities)
+    with pytest.raises(ValueError, match="能力不合規"):
+        Route("cap.test", "測試", frozenset(capabilities))
 
 
 def test_duplicate_key_raises():
     """重複宣告在 import 時就會被發現。"""
-    llm_route("dup.key", "第一次")
+    routing.route("dup.key", "第一次", {"llm"})
     with pytest.raises(ValueError, match="重複宣告"):
-        llm_route("dup.key", "第二次")
+        routing.route("dup.key", "第二次", {"llm"})
 
 
 def test_route_is_immutable():
     """用途鍵物件不可變，登記表的鍵與物件不會脫節。"""
-    route = llm_route("frozen.key", "測試")
+    route = routing.route("frozen.key", "測試", {"llm"})
     with pytest.raises(AttributeError):
         route.key = "other"  # type: ignore[misc]
 
 
 def test_list_route_keys_sorted():
     """清單依鍵排序。"""
-    llm_route("zz.test", "z")
-    llm_route("aa.test", "a")
+    routing.route("zz.test", "z", {"llm"})
+    routing.route("aa.test", "a", {"llm"})
     keys = [route.key for route in list_route_keys()]
     assert keys == sorted(keys)
 
@@ -144,7 +154,7 @@ def test_call_sites_declare_their_keys(key, module):
     """現有呼叫點的模組在模組層宣告各自的用途鍵，且已登記。"""
     declared = [
         value for value in vars(importlib.import_module(module)).values()
-        if isinstance(value, LLMRoute)
+        if isinstance(value, Route)
     ]
     assert [route.key for route in declared] == [key]
     assert routing._DECLARED[key] is declared[0]
@@ -189,12 +199,24 @@ def test_route_row_beats_global(whitelist):
     assert other.source == "global"
 
 
-def test_dot_in_key_has_no_hierarchy(whitelist):
-    """``scenario.ask`` 沒設定時不會去找 ``scenario``，直接退回全域。"""
-    with _rows(scenario=RouteChoice("yinli", "m2", None)):
+def test_branch_falls_back_to_its_flow_key(whitelist):
+    """``scenario.ask`` 沒設定時往上找流程鍵 ``scenario``（計畫書 §5），再到全域。"""
+    with _rows(scenario=RouteChoice("yinli", "m2", None), GLOBAL=RouteChoice("yinli", "m1", None)):
         resolved = _resolve("scenario.ask")
+    assert (resolved.source, resolved.model) == ("parent", "m2")
 
-    assert resolved.source == "env"
+    routing.invalidate_cache()
+    with _rows(**{"scenario.ask": RouteChoice("yinli", "m1", None), "scenario": RouteChoice("yinli", "m2", None)}):
+        resolved = _resolve("scenario.ask")
+    assert (resolved.source, resolved.model) == ("route", "m1")
+
+
+def test_invalid_flow_row_is_skipped_for_the_branch(whitelist):
+    """流程鍵的設定不在白名單時，分支照樣跳過它往全域找，並記在 rejected。"""
+    with _rows(scenario=RouteChoice("gone", "m2", None), GLOBAL=RouteChoice("yinli", "m1", None)):
+        resolved = _resolve("scenario.ask")
+    assert resolved.source == "global"
+    assert [layer.route_key for layer in resolved.rejected] == ["scenario"]
 
 
 def test_global_key_resolves_global_then_env(whitelist):
@@ -281,18 +303,18 @@ def test_rejection_warned_once(whitelist, caplog):
 
 
 def _db_error() -> OperationalError:
-    return OperationalError("SELECT ...", {}, Exception("no such table: llm_routes"))
+    return OperationalError("SELECT ...", {}, Exception("no such table: capability_routes"))
 
 
 def test_rows_cached_until_invalidated(whitelist):
     """設定讀一次後快取；invalidate_cache 後重新讀取。"""
-    fetch = mock.AsyncMock(return_value={"jp_verb_pair": RouteChoice("yinli", "m1", None)})
+    fetch = mock.AsyncMock(return_value={"llm": {"jp_verb_pair": RouteChoice("yinli", "m1", None)}})
     with mock.patch.object(routing, "_fetch_choices", fetch):
         _resolve("jp_verb_pair")
         _resolve("expression_correction")
         assert fetch.await_count == 1
 
-        fetch.return_value = {"jp_verb_pair": RouteChoice("yinli", "m2", None)}
+        fetch.return_value = {"llm": {"jp_verb_pair": RouteChoice("yinli", "m2", None)}}
         routing.invalidate_cache()
         assert _resolve("jp_verb_pair").model == "m2"
         assert fetch.await_count == 2
@@ -321,10 +343,10 @@ def test_db_failure_falls_back_to_env_and_retries(whitelist, caplog):
 
     assert (first.source, first.db_unavailable) == ("env", True)
     assert fetch.await_count == 2
-    warnings = [record for record in caplog.records if "讀取 LLM 用途設定" in record.getMessage()]
+    warnings = [record for record in caplog.records if "讀取能力路由設定" in record.getMessage()]
     assert len(warnings) == 1
     assert warnings[0].exc_info is not None
-    assert "llm_routes" in warnings[0].getMessage()
+    assert "capability_routes" in warnings[0].getMessage()
 
 
 def test_db_recovery_logged_and_next_failure_warned_again(whitelist, caplog):
@@ -339,14 +361,14 @@ def test_db_recovery_logged_and_next_failure_warned_again(whitelist, caplog):
         _resolve("jp_verb_pair")
 
     messages = [record.getMessage() for record in caplog.records]
-    assert sum("讀取 LLM 用途設定" in message for message in messages) == 2
+    assert sum("讀取能力路由設定" in message for message in messages) == 2
     assert sum("已恢復讀取" in message for message in messages) == 1
 
 
 @pytest.mark.parametrize(
     "error",
     [
-        AttributeError("'LLMRouteSetting' object has no attribute 'effort'"),
+        AttributeError("'CapabilityRouteSetting' object has no attribute 'effort'"),
         InvalidRequestError("mapper 設定錯誤"),
         ModuleNotFoundError("app.infrastructure.database.models"),
     ],
@@ -366,7 +388,7 @@ def test_programming_error_is_not_swallowed(whitelist, error):
 
 def test_env_layer_calls_factory_without_arguments(whitelist):
     """.env 那一層以不帶參數的 create_llm_client() 建立——與導入路由前相同。"""
-    route = llm_route("test.env", "測試")
+    route = routing.route("test.env", "測試", {"llm"})
     with _rows(), mock.patch.object(routing.factory, "create_llm_client") as create:
         client = asyncio.run(route.client())
 
@@ -384,7 +406,7 @@ def test_env_layer_calls_factory_without_arguments(whitelist):
 )
 def test_db_layer_passes_endpoint_model_effort(whitelist, choice, expected_effort):
     """DB 層傳端點、模型與 effort；模型不使用 effort 時傳 OMIT_EFFORT。"""
-    route = llm_route("test.db", "測試")
+    route = routing.route("test.db", "測試", {"llm"})
     with _rows(**{"test.db": choice}), \
          mock.patch.object(routing.factory, "create_llm_client") as create:
         asyncio.run(route.client())
@@ -396,7 +418,7 @@ def test_db_layer_passes_endpoint_model_effort(whitelist, choice, expected_effor
 
 def test_db_layer_construction_failure_raises_with_context(whitelist, caplog):
     """DB 層建立失敗（如 CLI 不在）不退回 .env：記 ERROR 補路由脈絡後原樣拋出。"""
-    route = llm_route("test.fail", "測試")
+    route = routing.route("test.fail", "測試", {"llm"})
     error = LLMServiceError("找不到 claude 執行檔")
     with _rows(**{"test.fail": RouteChoice("claude-code", "opus", "high")}), \
          mock.patch.object(routing.factory, "create_llm_client", side_effect=error), \
@@ -418,7 +440,7 @@ def test_db_layer_construction_failure_raises_with_context(whitelist, caplog):
 def test_missing_third_party_package_becomes_llm_error_with_context(whitelist, caplog, rows, layer):
     """端點需要的第三方套件沒裝：不論哪一層都轉成 LLMServiceError，訊息帶用途、層與套件名，
     生成端看得出是哪個設定、能怎麼修（原本是裸的 ModuleNotFoundError，沒有路由脈絡）。"""
-    route = llm_route("test.pkg", "測試")
+    route = routing.route("test.pkg", "測試", {"llm"})
     error = ModuleNotFoundError("No module named 'jsonschema'", name="jsonschema")
     with _rows(**rows), \
          mock.patch.object(routing.factory, "create_llm_client", side_effect=error), \
@@ -434,7 +456,7 @@ def test_missing_third_party_package_becomes_llm_error_with_context(whitelist, c
 
 def test_missing_internal_module_is_not_disguised(whitelist):
     """import 失敗的是專案自己的模組：程式錯誤，照常拋出原本的例外。"""
-    route = llm_route("test.internal", "測試")
+    route = routing.route("test.internal", "測試", {"llm"})
     error = ModuleNotFoundError("No module named 'app.infrastructure.llm.nope'", name="app.infrastructure.llm.nope")
     with mock.patch.object(routing.factory, "create_llm_client", side_effect=error), \
          pytest.raises(ModuleNotFoundError):
@@ -446,7 +468,7 @@ def test_missing_internal_module_is_not_disguised(whitelist):
 # ----------------------------------------------------------------------
 
 
-def _run_against_sqlite(rows: list[LLMRouteSetting], key: str, *, create_table: bool = True):
+def _run_against_sqlite(rows: list[CapabilityRouteSetting], key: str, *, create_table: bool = True):
     """建一個記憶體 SQLite（可選擇不建表），寫入設定列，讓路由模組以原函式讀它。"""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -456,7 +478,7 @@ def _run_against_sqlite(rows: list[LLMRouteSetting], key: str, *, create_table: 
             async with engine.begin() as conn:
                 await conn.run_sync(
                     lambda sync_conn: SQLModel.metadata.create_all(
-                        sync_conn, tables=[LLMRouteSetting.__table__]
+                        sync_conn, tables=[CapabilityRouteSetting.__table__]
                     )
                 )
             async with session_factory() as session:
@@ -474,16 +496,16 @@ def _run_against_sqlite(rows: list[LLMRouteSetting], key: str, *, create_table: 
 
 
 def test_reads_rows_from_real_table(whitelist):
-    """從真實的 llm_routes 讀出設定並解析；effort 空字串視同 None。"""
+    """從真實的 capability_routes 讀出設定並解析；effort 空字串視同 None。"""
     rows = [
-        LLMRouteSetting(route_key="*", endpoint="yinli", model="m1", effort="", updated_by="api"),
-        LLMRouteSetting(
-            route_key="jp_verb_pair", endpoint="claude-code", model="opus", effort="high", updated_by="tg:1"
+        CapabilityRouteSetting(capability="llm", route_key="*", provider="yinli", model="m1", effort="", updated_by="api"),
+        CapabilityRouteSetting(
+            capability="llm", route_key="jp_verb_pair", provider="claude-code", model="opus", effort="high", updated_by="tg:1"
         ),
     ]
     resolved = _run_against_sqlite(rows, "jp_verb_pair")
     fallback = _run_against_sqlite(
-        [LLMRouteSetting(route_key="*", endpoint="yinli", model="m1", effort="", updated_by="api")],
+        [CapabilityRouteSetting(capability="llm", route_key="*", provider="yinli", model="m1", effort="", updated_by="api")],
         "expression_correction",
     )
 
@@ -494,12 +516,12 @@ def test_reads_rows_from_real_table(whitelist):
 
 
 def test_missing_table_falls_back_to_env(whitelist, caplog):
-    """資料表不存在（例如尚未建表）：退回 .env，警告點出 llm_routes。"""
+    """資料表不存在（例如尚未建表）：退回 .env，警告點出 capability_routes。"""
     with caplog.at_level(logging.WARNING, logger=routing.__name__):
         resolved = _run_against_sqlite([], "jp_verb_pair", create_table=False)
 
     assert resolved.source == "env"
-    assert "no such table: llm_routes" in caplog.text
+    assert "no such table: capability_routes" in caplog.text
 
 
 # ----------------------------------------------------------------------
@@ -509,8 +531,8 @@ def test_missing_table_falls_back_to_env(whitelist, caplog):
 
 def test_db_choice_builds_real_relay_client(whitelist):
     """DB 選了中轉站：route.client() 建出用該端點網址與金鑰的 LLMClient，標籤前綴為端點 ID。"""
-    route = llm_route("test.e2e.relay", "測試")
-    with _rows(**{"test.e2e.relay": RouteChoice("yinli", "m1", None)}):
+    route = routing.route("test.e2e_relay", "測試", {"llm"})
+    with _rows(**{"test.e2e_relay": RouteChoice("yinli", "m1", None)}):
         client = asyncio.run(route.client())
 
     assert isinstance(client, LLMClient)
@@ -521,8 +543,8 @@ def test_db_choice_builds_real_relay_client(whitelist):
 
 def test_db_choice_without_effort_omits_cli_flag(whitelist, tmp_path):
     """DB 選了不帶 effort 的 CLI 模型：真實客戶端的命令列沒有 --effort，標籤沒有 @。"""
-    route = llm_route("test.e2e.cli", "測試")
-    with _rows(**{"test.e2e.cli": RouteChoice("claude-code", "haiku", None)}), \
+    route = routing.route("test.e2e_cli", "測試", {"llm"})
+    with _rows(**{"test.e2e_cli": RouteChoice("claude-code", "haiku", None)}), \
          mock.patch.object(settings, "LLM_CLAUDE_CODE_WORKDIR", str(tmp_path / "cc")), \
          mock.patch.object(settings, "LLM_CLAUDE_CODE_AUDIT_DIR", ""), \
          mock.patch.object(settings, "LLM_CLAUDE_CODE_OAUTH_TOKEN", ""), \
@@ -537,7 +559,7 @@ def test_db_choice_without_effort_omits_cli_flag(whitelist, tmp_path):
 def test_env_layer_construction_failure_is_raised_unchanged(whitelist):
     """.env 那一層建立失敗（金鑰沒設、找不到 CLI）：與導入路由前相同，原樣拋出同一個 LLMServiceError，
     不加路由脈絡（沒有 DB 設定可改），也不會因為沒有選擇而變成 AttributeError。"""
-    route = llm_route("test.envfail", "測試")
+    route = routing.route("test.envfail", "測試", {"llm"})
     error = LLMServiceError("API_KEY 未設定")
     with _rows(), \
          mock.patch.object(routing.factory, "create_llm_client", side_effect=error), \
@@ -551,7 +573,7 @@ def test_env_layer_construction_failure_is_raised_unchanged(whitelist):
 def test_cli_workdir_failure_becomes_llm_error_with_context(whitelist, caplog):
     """CLI 工作目錄建不起來（掛載或權限有誤，OSError）：轉成帶用途與層的 LLMServiceError，
     不是沒有脈絡的 500。"""
-    route = llm_route("test.workdir", "測試")
+    route = routing.route("test.workdir", "測試", {"llm"})
     error = PermissionError(13, "Permission denied", "/app/.claude_code_workdir")
     with _rows(**{"test.workdir": RouteChoice("claude-code", "opus", "high")}), \
          mock.patch.object(routing.factory, "create_llm_client", side_effect=error), \

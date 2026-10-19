@@ -29,7 +29,7 @@ class JudgeReadingItem(BaseModel):
 class JudgeReadingsRequest(BaseModel):
     """判讀請求。Judge request.
 
-    模型由用途鍵 ``jp_verb_reading`` 的路由設定決定（TG ``/models`` 或 ``/api/v1/llm-routes``），
+    模型由用途鍵 ``jp_verb_reading`` 的路由設定決定（TG ``/setconfig`` 或 ``/api/v1/capability-routes``），
     請求不能覆寫。多餘欄位一律拒收（422）：舊版腳本帶 ``model`` / ``effort`` 時會明確失敗，
     不會被默默忽略、讓人以為用了指定的模型。
 

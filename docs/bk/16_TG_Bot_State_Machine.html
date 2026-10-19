@@ -169,15 +169,14 @@ flowchart TD
   WL{"WhitelistMiddleware&lt;br/&gt;user.id ∈ TG_ALLOWED_USER_IDS？"}
   WL -->|"名單未設定"| X2["全部擋下（只記 log）"]
   WL -->|"不在名單"| X3["回覆：您沒有權限使用此 Bot"]
-  WL -->|"通過"| SI["ServiceInjectionMiddleware&lt;br/&gt;注入 CardService、AnkiClient、UserStateManager、&lt;br/&gt;AudioEvaluator、RelationService（每則開一個 DB session）"]
-  SI --> R1["① commands&lt;br/&gt;/start /help /sync /setconfig"]
-  R1 -->|"不符"| RM["② models_menu&lt;br/&gt;/models、lr:*（LLM 模型選單）"]
+  WL -->|"通過"| SI["ServiceInjectionMiddleware&lt;br/&gt;注入 CardService、AnkiClient、UserStateManager、&lt;br/&gt;RelationService（每則開一個 DB session）"]
+  SI --> R1["① commands&lt;br/&gt;/start /help /sync"]
+  R1 -->|"不符"| RM["② models_menu&lt;br/&gt;/setconfig、lr:*（工具設定選單）"]
   RM -->|"不符"| R2["③ newcard_menu&lt;br/&gt;/newcard、newcard:*"]
-  R2 -->|"不符"| R3["④ callbacks_config&lt;br/&gt;setconfig_* / setcfg_val:*"]
-  R3 -->|"不符"| R4["⑤ callbacks&lt;br/&gt;avatar_* 頭像按鈕"]
-  R4 -->|"不符"| R5["⑥ media&lt;br/&gt;圖片"]
-  R5 -->|"不符"| R6["⑦ voice&lt;br/&gt;語音"]
-  R6 -->|"不符"| R7["⑧⑨⑩ FSM：外語糾錯 / 對話卡 / 單字卡&lt;br/&gt;（只認領自己狀態下的訊息與按鈕）"]
+  R2 -->|"不符"| R4["④ callbacks&lt;br/&gt;avatar_* 頭像按鈕"]
+  R4 -->|"不符"| R5["⑤ media&lt;br/&gt;圖片"]
+  R5 -->|"不符"| R6["⑥ voice&lt;br/&gt;語音（評分器依卡片的 handler 從能力路由取得）"]
+  R6 -->|"不符"| R7["⑦⑧⑨ FSM：外語糾錯 / 對話卡 / 單字卡&lt;br/&gt;（只認領自己狀態下的訊息與按鈕）"]
   R7 -->|"都不認領"| R10["⑪ messages&lt;br/&gt;wait_speaker_name 或兜底回覆"]
 </pre>
     </div>
@@ -254,9 +253,7 @@ stateDiagram-v2
   Rec --> Idle : 10 分鐘未完成
   Add --> Idle : 10 分鐘未完成
   Avatar --> Idle : 10 分鐘未完成
-  Idle --> Config : /setconfig（限管理員）
-  Config --> Idle : 選定新值
-  Idle --> Models : /models（限管理員）
+  Idle --> Models : /setconfig（限管理員）
   Models --> Idle : 儲存 / 恢復預設 / 關閉
 </pre>
     </div>
@@ -396,42 +393,32 @@ stateDiagram-v2
         <div class="diagram">
 <pre class="mermaid">
 flowchart LR
-  S["/setconfig"] --> A{"是 TG_ADMIN_CHAT_ID？"}
-  A -->|"否"| N["回覆：沒有權限"]
-  A -->|"是"| K["列出 .env 的 MODIFY_* 設定&lt;br/&gt;（MODIFY_LLM_* 一律略過）"]
-  K -->|"setconfig_key:KEY"| O{"有選項清單？"}
-  O -->|"沒有"| T["提示改 .env 或補選項清單"]
-  O -->|"有"| V["列出可選的值"]
-  V -->|"setconfig_back"| K
-  V -->|"setcfg_val:KEY:VALUE"| W["寫入 settings（只存在記憶體）"]
-  W -->|"KEY 是 AUDIO_EVALUATOR_PROVIDER"| R{"重建語音評分器"}
-  R -->|"失敗"| RB["還原舊值並回報"]
-  R -->|"成功"| OK["完成"]
-  W -->|"其他 KEY"| OK
   SY["/sync"] --> SY2["Anki 同步，清掉 DB 中卡片已不存在的孤兒關聯"]
   H["/help"] --> H2["回覆使用說明"]
 </pre>
         </div>
-        <p class="caption">2026-10-18 起 <code>/setconfig</code> 不再處理任何 <code>LLM_</code> 開頭的設定：<code>.env</code> 若還留著 <code>MODIFY_LLM_*</code>，選單不列出並在後端記一次 WARNING。生成用的 LLM 模型改由 §4.6 的 <code>/models</code> 依用途設定（存在資料庫，重啟後仍有效）；<code>/setconfig</code> 的其餘設定仍只存在記憶體，重啟後回到 <code>.env</code>。</p>
+        <p class="caption">工具設定（<code>/setconfig</code>）見 §4.6。舊版這裡的 <code>/setconfig</code>（<code>.env</code> 的 <code>MODIFY_*</code>，只存在記憶體）已於能力路由 R2 移除。以下為舊版說明，保留作紀錄：2026-10-18 起 <code>/setconfig</code> 不再處理任何 <code>LLM_</code> 開頭的設定：<code>.env</code> 若還留著 <code>MODIFY_LLM_*</code>，選單不列出並在後端記一次 WARNING。生成用的 LLM 模型改由 §4.6 的 <code>/models</code> 依用途設定（存在資料庫，重啟後仍有效）；<code>/setconfig</code> 的其餘設定仍只存在記憶體，重啟後回到 <code>.env</code>。</p>
       </div>
 
       <div class="flow" id="models">
-        <div class="flow-head"><h3>4.6 LLM 模型選單 /models</h3><span class="chip tg">不使用狀態，按鈕自帶位置</span></div>
-        <p class="prose">管理每個 LLM 用途（例如 <code>jp_verb_pair</code>、<code>jp_verb_reading</code>）與全域 <code>*</code> 該用哪個端點、模型與思考深度（effort）。選項只來自 <code>.env</code> 的白名單，寫入與 API <code>/api/v1/llm-routes</code> 共用同一個服務（白名單檢查＋試建一次客戶端），存在資料庫的 <code>llm_routes</code> 表，下一次生成即生效、重啟後仍在。<b>沒有任何 FSM 或 UserStateManager 狀態</b>：每個按鈕的 callback data 寫成 <code>lr:&lt;動作&gt;:&lt;版本&gt;:&lt;序號…&gt;</code>，自帶目前選到哪一步，以序號代替名稱以符合 Telegram 的 64 位元組上限。</p>
+        <div class="flow-head"><h3>4.6 工具設定選單 /setconfig（原 /models）</h3><span class="chip tg">不使用狀態，按鈕自帶位置</span></div>
+        <p class="prose">管理每個用途（例如 <code>jp_verb_pair</code>、<code>recording_eval</code>、<code>recording_eval.speaking_trilingual</code>）與全域 <code>*</code> 在各能力上用的工具：文字 LLM（端點、模型、effort）、評分策略（<code>listen</code> / <code>stt_diff</code> / <code>stt_llm</code>）、聽音檔的模型、語音轉文字。能力路由 R2 起取代原本的 <code>/models</code> 與暫時性的 <code>/setconfig</code>。選項只來自 <code>.env</code> 的白名單，寫入與 API <code>/api/v1/capability-routes</code> 共用同一個服務（白名單檢查＋試建一次），存在資料庫的 <code>capability_routes</code> 表，下一次使用即生效、重啟後仍在。<b>沒有任何 FSM 或 UserStateManager 狀態</b>：每個按鈕的 callback data 寫成 <code>lr:&lt;動作&gt;:&lt;版本&gt;:&lt;序號…&gt;</code>，自帶目前選到哪一步，以序號代替名稱以符合 Telegram 的 64 位元組上限。</p>
         <div class="diagram">
 <pre class="mermaid">
 flowchart TD
-  S["/models"] --> A{"是 TG_ADMIN_CHAT_ID？"}
+  S["/setconfig"] --> A{"是 TG_ADMIN_CHAT_ID？"}
   A -->|"否 / 未設定管理員"| N["回覆：只有管理員可以使用"]
-  A -->|"是"| L["用途清單 lr:l（每頁 8 個，第一列是 * 全域）&lt;br/&gt;每列「用途：標籤［來源］」，⚠️ 標出孤兒鍵與被略過的設定"]
+  A -->|"是"| L["用途清單 lr:l（每頁 10 個，第一列是 * 全域，分支縮排在流程鍵下）&lt;br/&gt;每列「用途：標籤［來源］」，⚠️ 標出孤兒設定、被略過的設定與用到的能力無法使用"]
   L -->|"上一頁 / 下一頁"| L
-  L -->|"lr:k 選一個用途"| D["詳情：目前生效、本用途的設定、被略過的原因"]
-  D -->|"⚙️ 設定（孤兒鍵沒有）lr:e"| E["選端點（白名單非空者）"]
+  L -->|"lr:k 選一個用途"| K["用途：各能力目前生效的設定"]
+  K -->|"lr:a 選一個能力"| D["能力詳情：目前生效、本用途的設定、被略過的原因"]
+  D -->|"⚙️ 設定（孤兒設定沒有）lr:p"| E["選 provider（端點 / whisper / 策略）"]
+  E -->|"策略不選模型，直接到確認"| C
   E -->|"lr:m"| M["選模型"]
   M -->|"多個 effort：lr:f"| F["選 effort"]
   M -->|"只有一個 effort 自動選上 / 不使用 effort 跳過"| C
   F -->|"lr:c"| C["確認：顯示將寫進卡片的標籤"]
-  C -->|"✅ 儲存 lr:s"| W{"白名單＋試建客戶端"}
+  C -->|"✅ 儲存 lr:s"| W{"白名單＋試建"}
   W -->|"不合格"| ER["❌ 無法儲存：原因"]
   ER -->|"返回"| D
   W -->|"通過"| OK["✅ 已儲存：新的生效設定"]
@@ -442,17 +429,18 @@ flowchart TD
   M -->|"返回"| E
   F -->|"返回"| M
   C -->|"返回（多個 effort 時回選 effort）"| M
-  D -->|"返回清單"| L
-  X["任何畫面的 ✖️ 關閉 lr:x"] --> Z["已關閉 LLM 模型設定"]
+  D -->|"返回"| K
+  K -->|"返回清單"| L
+  X["任何畫面的 ✖️ 關閉 lr:x"] --> Z["已關閉工具設定"]
 </pre>
         </div>
         <div class="table-wrap">
           <table>
             <tr><th>規則</th><th>行為</th></tr>
-            <tr><td>舊按鈕偵測</td><td>「版本」是用途清單＋端點白名單的 6 碼雜湊，每次按鈕都重新計算比對。清單變了（重新部署改了 <code>.env</code>、刪了孤兒鍵）或序號、格式無效時一律提示「選單已過期，請重新輸入 /models」，不會誤改別的用途。關閉鈕 <code>lr:x</code> 不帶版本，任何時候都能按</td></tr>
+            <tr><td>舊按鈕偵測</td><td>「版本」是用途清單（含各鍵的能力與策略限縮）＋各能力白名單的 6 碼雜湊，每次按鈕都重新計算比對。清單變了（重新部署改了 <code>.env</code>、刪了孤兒鍵）或序號、格式無效時一律提示「選單已過期，請重新輸入 /setconfig」，不會誤改別的用途。關閉鈕 <code>lr:x</code> 不帶版本，任何時候都能按</td></tr>
             <tr><td>授權</td><td>指令與每個按鈕都檢查 <code>TG_ADMIN_CHAT_ID</code>；未設定管理員時整個選單無法使用</td></tr>
             <tr><td>讀不到資料庫</td><td>清單照常顯示（皆為 <code>.env</code> 預設並附警示），但除關閉鈕外的所有按鈕都被拒絕（唯讀），避免把「讀不到」當成「沒有設定」</td></tr>
-            <tr><td>解析順序</td><td>用途自己的設定 → 全域 <code>*</code> → <code>.env</code>；不在白名單的設定被略過並在詳情標示。改的是 <code>*</code> 時另重建診斷用的全域客戶端</td></tr>
+            <tr><td>解析順序</td><td>每個能力各自：分支 → 流程鍵 → 全域 <code>*</code> → <code>.env</code>；不在白名單的設定被略過並在詳情標示。改的是 <code>*</code> 的文字 LLM 時另重建診斷用的全域客戶端</td></tr>
             <tr><td>與其他流程</td><td>不讀寫任何狀態，在 FSM 流程中途也能用（router 排在 FSM 之前），用完後原流程的狀態不變</td></tr>
           </table>
         </div>
@@ -468,7 +456,7 @@ flowchart TD
     </div>
     <ul class="pitfalls">
       <li><span class="sev high">衝突</span><div><b>兩套狀態同時存在時，文字會先被 FSM 吃掉</b><p>例如在外語糾錯流程中途點了 addaudio 連結並走到「輸入說話者名稱」，打的名稱會被 FSM 當成糾錯流程的輸入（FSM 排在兜底 router 之前），頭像流程收不到，10 分鐘後過期。</p></div></li>
-      <li><span class="sev high">卡住</span><div><b>沒有全域取消</b><p>/start、/help、/sync、/setconfig、/models 在流程中都能用（它們的 router 排在 FSM 之前，且不帶狀態過濾），但不會清除 FSM 狀態。外語糾錯沒有取消按鈕，只有遇到重複時的「取消糾錯」和預覽時的「全部放棄」。FSM 不會過期，想離開只能 /newcard 重新開始（會覆蓋）或等後端重啟。</p></div></li>
+      <li><span class="sev high">卡住</span><div><b>沒有全域取消</b><p>/start、/help、/sync、/setconfig 在流程中都能用（它們的 router 排在 FSM 之前，且不帶狀態過濾），但不會清除 FSM 狀態。外語糾錯沒有取消按鈕，只有遇到重複時的「取消糾錯」和預覽時的「全部放棄」。FSM 不會過期，想離開只能 /newcard 重新開始（會覆蓋）或等後端重啟。</p></div></li>
       <li><span class="sev mid">舊按鈕</span><div><b>「返回」與對話卡「取消」按鈕不檢查目前狀態</b><p><code>expr_back_*</code>、<code>speak_back_*</code>、<code>speak_cancel</code> 沒有綁狀態過濾。點聊天紀錄中舊訊息上的返回鈕，會把已經結束的流程重新拉回那一步。單字卡的取消有綁狀態，不受影響。<code>/models</code> 的按鈕以版本雜湊偵測過期（§4.6），也不受影響。</p></div></li>
       <li><span class="sev mid">殘留</span><div><b>評分服務未初始化時，錄音狀態不會清除</b><p><code>recording</code> 收到語音後，音檔已先上傳到 Anki Media，接著發現評分器不可用就直接結束，狀態留到 10 分鐘過期。</p></div></li>
       <li><span class="sev mid">重啟</span><div><b>兩套狀態都只存在記憶體</b><p>部署或重啟後，所有進行到一半的流程都會消失，使用者需要重新開始；Deep Link 的錄音任務要重新點卡片上的按鈕。</p></div></li>
@@ -490,23 +478,22 @@ flowchart TD
         <tr><td>白名單 / 服務注入</td><td><code>bot/dependencies.py:54</code>、<code>bot/dependencies.py:115</code></td></tr>
         <tr><td>自訂狀態與過期</td><td><code>bot/state.py:41</code>（UserState）、<code>bot/state.py:62</code>（UserStateManager）</td></tr>
         <tr><td>/start 與 Deep Link 分派</td><td><code>bot/handlers/commands.py:57</code>（recording :187、add_audio :216）</td></tr>
-        <tr><td>/help、/sync、/setconfig</td><td><code>bot/handlers/commands.py:403</code>、<code>:443</code>、<code>:478</code></td></tr>
-        <tr><td>/models 選單</td><td><code>bot/handlers/models_menu.py:493</code>（指令）、<code>:513</code>（關閉 lr:x）、<code>:533</code>（其餘按鈕 handle_menu）；callback data 組裝 / 解析與版本核對 <code>:199</code> / <code>:211</code>、版本雜湊 <code>:112</code>、管理員檢查 <code>:466</code>、儲存 <code>:679</code>、恢復預設 <code>:706</code></td></tr>
-        <tr><td>/models 的讀寫服務</td><td><code>services/llm_route_service.py</code>（<code>set_route</code> :426、<code>delete_route</code> :519、<code>refresh_global_client</code> :591）</td></tr>
+        <tr><td>/help、/sync</td><td><code>bot/handlers/commands.py:382</code>、<code>:420</code></td></tr>
+        <tr><td>/setconfig 選單</td><td><code>bot/handlers/models_menu.py:692</code>（指令）、<code>:712</code>（關閉 lr:x）、<code>:732</code>（其餘按鈕 handle_menu）；callback data 組裝 / 解析與版本核對 <code>:284</code> / <code>:296</code>、版本雜湊 <code>:156</code>、管理員檢查 <code>:664</code>、儲存 <code>:894</code>、恢復預設 <code>:926</code></td></tr>
+        <tr><td>/setconfig 的讀寫服務</td><td><code>services/capability_route_service.py</code>（<code>set_route</code> :625、<code>delete_route</code> :737、<code>refresh_global_client</code> :826）</td></tr>
         <tr><td>/newcard 選單</td><td><code>bot/handlers/newcard_menu.py:138</code>（分派 :189）</td></tr>
         <tr><td>外語糾錯 FSM</td><td><code>bot/handlers/fsm/expression_fsm.py:45</code>（重複檢查 :341、生成預覽 :490、返回 :876）</td></tr>
         <tr><td>對話卡 FSM</td><td><code>bot/handlers/fsm/speaking_fsm.py:81</code>（建卡 :396、返回 :509）</td></tr>
         <tr><td>單字卡 FSM</td><td><code>bot/handlers/fsm/vocabulary_fsm.py:33</code>（建卡 :98）；實際建卡 <code>services/task_handlers/vocabulary_mining_handler.py:81</code>（未呼叫 LLM）</td></tr>
-        <tr><td>語音（評分 / 上傳）</td><td><code>bot/handlers/voice.py:59</code>（recording :224、add_audio :339）</td></tr>
+        <tr><td>語音（評分 / 上傳）</td><td><code>bot/handlers/voice.py:71</code>（recording :227、add_audio :355）；評分器 <code>services/recording_eval.py:57</code> → <code>infrastructure/audio_evaluator/factory.py:239</code></td></tr>
         <tr><td>頭像按鈕與最終寫回</td><td><code>bot/handlers/callbacks.py:172</code>、<code>_execute_final_update :63</code></td></tr>
         <tr><td>自訂頭像圖片</td><td><code>bot/handlers/media.py:28</code></td></tr>
         <tr><td>說話者名稱 / 兜底回覆</td><td><code>bot/handlers/messages.py:79</code>、<code>:138</code></td></tr>
-        <tr><td>設定選單回呼</td><td><code>bot/handlers/callbacks_config.py:24</code>、<code>:84</code>、<code>:114</code></td></tr>
       </table>
     </div>
   </section>
 
-  <footer>依 main 分支 1f76ef7 的程式碼盤點，2026-10-15；2026-10-18 依分支 feat/llm-model-routing（含未提交的工作區）更新 router 順序、/models 選單、§4.3 更正與程式碼索引的行號。程式碼變動後請以實際行為為準。圖表由 mermaid 11.4.1（jsDelivr CDN）在瀏覽器端繪製，離線開啟時會顯示圖的原始碼。</footer>
+  <footer>依 main 分支 1f76ef7 的程式碼盤點，2026-10-15；2026-10-18 依分支 feat/llm-model-routing（含未提交的工作區）更新 router 順序、/models 選單、§4.3 更正與程式碼索引的行號；2026-10-19 依能力路由 R2 更新（/models 改名 /setconfig 並加上能力一層、移除舊 /setconfig 與 callbacks_config、voice 依能力路由取評分器）。程式碼變動後請以實際行為為準。圖表由 mermaid 11.4.1（jsDelivr CDN）在瀏覽器端繪製，離線開啟時會顯示圖的原始碼。</footer>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>

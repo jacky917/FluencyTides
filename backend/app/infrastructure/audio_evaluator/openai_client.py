@@ -34,7 +34,6 @@ from openai import AsyncOpenAI
 import openai
 import httpx
 
-from app.core.config import settings
 from app.core.exceptions import LLMServiceError
 from app.infrastructure.audio_evaluator.base import BaseAudioEvaluator
 from app.schemas.llm.speaking import AudioEvaluationResult
@@ -73,28 +72,32 @@ class OpenAIAudioEvaluator(BaseAudioEvaluator):
         _model_name: 使用的模型名稱。The model name in use.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self, *, api_key: str, model: str, base_url: str | None = None, api_key_setting: str = "AUDIO_API_KEY"
+    ) -> None:
         """初始化 OpenAI 相容層語音評分器。
 
         Initialize the OpenAI-compatible speech evaluator.
 
-        使用與 LLMClient 相同的 API Key 和 Base URL。
-
-        Uses the same API key and base URL as LLMClient.
+        Args:
+            api_key: API 金鑰。The API key.
+            model: 聽音檔的模型（能力路由的 ``audio_llm``）。The audio model.
+            base_url: OpenAI 相容端點網址；None 為 OpenAI 官方。The base URL.
+            api_key_setting: 金鑰的設定名（錯誤訊息用）。Setting name of the key.
 
         Raises:
-            LLMServiceError: 當必要設定未提供時。Raised when required
-                settings are missing.
+            LLMServiceError: 金鑰或模型未設定時。Raised when the key or model
+                is missing.
         """
-        if not settings.AUDIO_API_KEY:
+        if not api_key:
             raise LLMServiceError(
-                "AUDIO_API_KEY 未設定，無法初始化 OpenAI Audio Evaluator。"
+                f"{api_key_setting} 未設定，無法初始化 OpenAI Audio Evaluator。"
             )
+        if not model:
+            raise LLMServiceError("聽音檔的模型未設定（AUDIO_MODEL_NAME），無法初始化 OpenAI Audio Evaluator。")
 
-        self._client = AsyncOpenAI(
-            api_key=settings.AUDIO_API_KEY,
-            base_url=settings.AUDIO_BASE_URL,
-        )
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._model_name = model
         logger.info(
             "OpenAI Audio Evaluator 初始化完成",
         )
@@ -169,7 +172,7 @@ class OpenAIAudioEvaluator(BaseAudioEvaluator):
             import asyncio
             response = await asyncio.wait_for(
                 self._client.chat.completions.create(
-                    model=settings.AUDIO_MODEL_NAME,
+                    model=self._model_name,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_content},
@@ -208,7 +211,7 @@ class OpenAIAudioEvaluator(BaseAudioEvaluator):
             decoder = json.JSONDecoder()
             parsed, idx = decoder.raw_decode(cleaned.lstrip())
             result = AudioEvaluationResult(**parsed)
-            result.evaluator_label = settings.AUDIO_MODEL_NAME
+            result.evaluator_label = self._model_name
             return result
         except (json.JSONDecodeError, ValueError) as e:
             logger.error("OpenAI Audio Evaluator 回傳格式錯誤: %s", content)

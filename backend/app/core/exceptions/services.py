@@ -115,16 +115,16 @@ class ClozePositioningError(LLMGenerationError):
     status_code = 422
 
 
-class LLMRouteError(ServiceBaseError):
-    """LLM 用途設定（/models、/api/v1/llm-routes）的錯誤基類。
+class RouteError(ServiceBaseError):
+    """能力路由設定（TG /setconfig、/api/v1/capability-routes）的錯誤基類。
 
-    Base error for LLM route settings management.
+    Base error for capability route settings management.
     """
-    error_code = "LLM_ROUTE_ERROR"
+    error_code = "ROUTE_ERROR"
     status_code = 400
 
 
-class LLMRouteNotFoundError(LLMRouteError):
+class RouteNotFoundError(RouteError):
     """用途鍵不存在或不可設定。
 
     查詢與刪除時指「既未在程式中宣告、DB 中也沒有」；寫入時指「未在程式中宣告」——
@@ -134,29 +134,66 @@ class LLMRouteNotFoundError(LLMRouteError):
     stored) or cannot be set (write: not declared, even if an orphan row
     exists).
     """
-    error_code = "LLM_ROUTE_NOT_FOUND"
+    error_code = "ROUTE_NOT_FOUND"
     status_code = 404
 
 
-class InvalidLLMRouteError(LLMRouteError):
-    """要寫入的設定不合格：不在 .env 白名單，或試建客戶端失敗（呼叫端可修正）。
+class InvalidRouteError(RouteError):
+    """要寫入的設定不合格：用途鍵沒有宣告這個能力、不在 .env 白名單，或試建客戶端失敗（呼叫端可修正）。
 
-    The choice is outside the whitelist or the trial client build failed.
+    The capability is not declared for the key, the choice is outside the
+    whitelist, or the trial client build failed.
     """
-    error_code = "INVALID_LLM_ROUTE"
+    error_code = "INVALID_ROUTE"
     status_code = 422
 
 
-class LLMRouteStoreUnavailableError(LLMRouteError):
-    """llm_routes 資料表讀寫時資料庫異常。
+class RouteStoreUnavailableError(RouteError):
+    """capability_routes 資料表讀寫時資料庫異常。
 
     兩種情況，訊息不同：讀不到（無法判斷設定是否存在，與「不存在」區分），或寫入／刪除時
     出錯（結果未知，應先重新查看）。DB 恢復後重試即可——寫入是 upsert、刪除依鍵，重做
     一次結果相同。
 
-    The llm_routes table could not be read (existence cannot be decided) or
+    The capability_routes table could not be read (existence cannot be decided) or
     a write / delete failed with an unknown outcome. Retrying after the
     database recovers is safe: both operations are idempotent.
     """
-    error_code = "LLM_ROUTE_STORE_UNAVAILABLE"
+    error_code = "ROUTE_STORE_UNAVAILABLE"
     status_code = 503
+
+
+class CardNotFoundError(ServiceBaseError):
+    """Anki 中找不到指定的卡片（可能已刪除或尚未同步）。
+
+    The requested card does not exist in Anki.
+    """
+    error_code = "CARD_NOT_FOUND"
+    status_code = 404
+
+
+class InvalidMediaFilenameError(ServiceBaseError):
+    """媒體檔名不合格：只接受 Anki 媒體資料夾中的單一檔名，不接受路徑。
+
+    The media filename is not a bare file name (paths are rejected).
+    """
+    error_code = "INVALID_MEDIA_FILENAME"
+    status_code = 400
+
+
+class MediaFileNotFoundError(ServiceBaseError):
+    """Anki 媒體資料夾中沒有這個檔案。
+
+    The file does not exist in Anki's media folder.
+    """
+    error_code = "MEDIA_FILE_NOT_FOUND"
+    status_code = 404
+
+
+class InvalidAnkiSearchError(ServiceBaseError):
+    """Anki 拒絕使用者輸入的搜尋語句（多半是語法錯誤）。
+
+    Anki rejected the user's search query, usually a syntax error.
+    """
+    error_code = "INVALID_ANKI_SEARCH"
+    status_code = 400

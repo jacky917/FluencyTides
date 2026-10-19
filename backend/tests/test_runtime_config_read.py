@@ -1,9 +1,9 @@
-"""執行期設定服務與 config API(唯讀切片)的單元測試。
+"""執行期設定服務與 config API(唯讀)的單元測試。
 
-Unit tests for the runtime config service and API (read-only slice).
+Unit tests for the runtime config service and API (read-only).
 
-對應計畫 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。
-以 mock 白名單與最小 FastAPI app 測試,不觸碰真實 .env 白名單內容。
+對應計畫 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。``MODIFY_*`` 白名單設定
+已由能力路由取代,這裡只剩 runtime 對帳區塊。
 """
 
 import asyncio
@@ -22,12 +22,6 @@ from app.services import runtime_config_service as rcs_mod
 from app.services.runtime_config_service import RuntimeConfigService
 
 
-FAKE_WHITELIST = {
-    "AUDIO_MODEL_NAME": ["model-a", "model-b"],
-    "AUDIO_EVALUATOR_PROVIDER": None,  # 不限選項
-}
-
-
 def _make_app(llm_client=None) -> FastAPI:
     """建立只掛 config router 的最小 app(繞過 lifespan/DB)。
 
@@ -40,23 +34,6 @@ def _make_app(llm_client=None) -> FastAPI:
 
 
 class TestServiceRead:
-    def test_list_configs_returns_whitelisted_with_current_values(self):
-        with mock.patch.object(rcs_mod, "get_modifiable_configs", return_value=FAKE_WHITELIST), \
-             mock.patch.object(settings, "AUDIO_MODEL_NAME", "model-a"):
-            entries = {e.key: e for e in RuntimeConfigService().list_configs()}
-        assert entries["AUDIO_MODEL_NAME"].current_value == "model-a"
-        assert entries["AUDIO_MODEL_NAME"].options == ["model-a", "model-b"]
-        assert entries["AUDIO_MODEL_NAME"].requires_rebuild is False
-        assert entries["AUDIO_EVALUATOR_PROVIDER"].options is None
-        assert entries["AUDIO_EVALUATOR_PROVIDER"].requires_rebuild is True
-
-    def test_get_config_outside_whitelist_returns_none(self):
-        """白名單外(含真實存在的敏感鍵)一律 None——防鍵名探測。"""
-        with mock.patch.object(rcs_mod, "get_modifiable_configs", return_value=FAKE_WHITELIST):
-            svc = RuntimeConfigService()
-            assert svc.get_config("LLM_API_KEY") is None
-            assert svc.get_config("NOT_A_REAL_KEY") is None
-
     def test_runtime_info_reads_live_client_label(self):
         fake_client = SimpleNamespace(_formatted_model_name="(claude-code)opus-5@medium")
         state = SimpleNamespace(llm_client=fake_client)
@@ -242,32 +219,16 @@ class TestServiceRead:
 
 
 class TestConfigApi:
-    def test_list_endpoint_shape(self):
+    def test_endpoint_shape(self):
+        """只回 runtime 區塊;舊的 configs(MODIFY_*)與 /config/{key} 已移除。"""
         fake_client = SimpleNamespace(_formatted_model_name="(claude-code)opus-5@medium")
-        with mock.patch.object(rcs_mod, "get_modifiable_configs", return_value=FAKE_WHITELIST), \
-             mock.patch.object(settings, "AUDIO_MODEL_NAME", "model-a"):
-            client = TestClient(_make_app(llm_client=fake_client))
-            resp = client.get("/api/v1/config")
+        client = TestClient(_make_app(llm_client=fake_client))
+        resp = client.get("/api/v1/config")
         assert resp.status_code == 200
         body = resp.json()
+        assert set(body) == {"runtime"}
         assert body["runtime"]["llm_label"] == "(claude-code)opus-5@medium"
-        keys = {c["key"] for c in body["configs"]}
-        assert keys == {"AUDIO_MODEL_NAME", "AUDIO_EVALUATOR_PROVIDER"}
-
-    def test_get_single_key(self):
-        with mock.patch.object(rcs_mod, "get_modifiable_configs", return_value=FAKE_WHITELIST), \
-             mock.patch.object(settings, "AUDIO_MODEL_NAME", "model-b"):
-            client = TestClient(_make_app())
-            resp = client.get("/api/v1/config/AUDIO_MODEL_NAME")
-        assert resp.status_code == 200
-        assert resp.json()["current_value"] == "model-b"
-
-    def test_get_outside_whitelist_is_404(self):
-        with mock.patch.object(rcs_mod, "get_modifiable_configs", return_value=FAKE_WHITELIST):
-            client = TestClient(_make_app())
-            assert client.get("/api/v1/config/LLM_API_KEY").status_code == 404
-            assert client.get("/api/v1/config/NOPE").status_code == 404
-
+        assert client.get("/api/v1/config/AUDIO_MODEL_NAME").status_code == 404
 
 # ----------------------------------------------------------------------
 # 模型路由的診斷（模型路由計畫 D9）
@@ -276,15 +237,15 @@ class TestConfigApi:
 
 def test_runtime_info_lists_routes_and_endpoints_without_secrets(llm_route_db, llm_whitelist, declare_route_key):
     """runtime 列出各用途生效的設定與來源、端點與白名單（不含金鑰）；全域端點取自全域 * 的設定。"""
-    from app.services import llm_route_service
+    from app.services import capability_route_service
 
     declare_route_key("test.diag", "診斷測試")
-    asyncio.run(llm_route_service.set_route("*", "yinli", "m1", None, updated_by="api"))
+    asyncio.run(capability_route_service.set_route("*", "yinli", "m1", None, updated_by="api"))
 
     info = asyncio.run(RuntimeConfigService().get_runtime_info(SimpleNamespace(llm_client=None)))
 
-    routes = {route["route_key"]: route for route in info["llm_routes"]["routes"]}
-    assert info["llm_routes"]["db_unavailable"] is False
+    routes = {route["route_key"]: route["capabilities"]["llm"] for route in info["capability_routes"]["routes"]}
+    assert info["capability_routes"]["db_unavailable"] is False
     assert (routes["*"]["source"], routes["*"]["label"]) == ("global", "(yinli)m1")
     assert (routes["test.diag"]["source"], routes["test.diag"]["label"]) == ("global", "(yinli)m1")
     assert info["llm_provider"] == "yinli"
@@ -298,9 +259,9 @@ def test_runtime_info_lists_routes_and_endpoints_without_secrets(llm_route_db, l
 
 def test_runtime_info_probes_the_global_cli_endpoint(llm_route_db, llm_whitelist):
     """全域 * 設成 CLI 型端點時，claude-code 診斷跟著全域設定（不是 .env 的 LLM_PROVIDER）。"""
-    from app.services import llm_route_service
+    from app.services import capability_route_service
 
-    asyncio.run(llm_route_service.set_route("*", "claude-code", "haiku", None, updated_by="api"))
+    asyncio.run(capability_route_service.set_route("*", "claude-code", "haiku", None, updated_by="api"))
     probe = mock.AsyncMock(return_value={"client_initialized": True})
     with mock.patch.object(RuntimeConfigService, "_probe_claude_code", probe):
         info = asyncio.run(RuntimeConfigService().get_runtime_info(SimpleNamespace(llm_client=None)))
@@ -312,15 +273,15 @@ def test_runtime_info_probes_the_global_cli_endpoint(llm_route_db, llm_whitelist
 
 def test_runtime_info_still_reports_when_routes_fail(llm_route_db, llm_whitelist, caplog):
     """組各用途清單時發生非預期錯誤：該區塊帶錯誤說明並記 traceback，其餘照常回報（帶病回報）。"""
-    from app.services import llm_route_service
+    from app.services import capability_route_service
 
-    with mock.patch.object(llm_route_service, "list_routes", side_effect=RuntimeError("boom")):
+    with mock.patch.object(capability_route_service, "list_routes", side_effect=RuntimeError("boom")):
         info = asyncio.run(RuntimeConfigService().get_runtime_info(SimpleNamespace(llm_client=None)))
 
-    assert info["llm_routes"] == {"error": "RuntimeError: boom"}
+    assert info["capability_routes"] == {"error": "RuntimeError: boom"}
     assert info["anki_connect_url"] == settings.ANKI_CONNECT_URL
     assert info["llm_endpoints"]["endpoints"]
-    assert "診斷端點組 llm_routes 失敗" in caplog.text
+    assert "診斷端點組 capability_routes 失敗" in caplog.text
 
 
 def test_runtime_info_lists_skipped_endpoints(llm_route_db, llm_whitelist):
@@ -336,14 +297,14 @@ def test_runtime_info_lists_skipped_endpoints(llm_route_db, llm_whitelist):
 
 def test_refresh_global_client_follows_the_global_route(llm_route_db, llm_whitelist):
     """全域客戶端依全域 * 建立：設了 * 就用它，沒設就用 .env。"""
-    from app.services import llm_route_service
+    from app.services import capability_route_service
 
     state = SimpleNamespace()
-    asyncio.run(llm_route_service.refresh_global_client(state))
+    asyncio.run(capability_route_service.refresh_global_client(state))
     assert state.llm_client.model_label == "gemini-3.5-flash"
 
-    asyncio.run(llm_route_service.set_route("*", "yinli", "m2", None, updated_by="api"))
-    asyncio.run(llm_route_service.refresh_global_client(state))
+    asyncio.run(capability_route_service.set_route("*", "yinli", "m2", None, updated_by="api"))
+    asyncio.run(capability_route_service.refresh_global_client(state))
     assert state.llm_client.model_label == "(yinli)m2"
 
 
@@ -351,11 +312,11 @@ def test_refresh_global_client_failure_leaves_none_and_logs(llm_route_db, llm_wh
     """全域客戶端建不起來（例如金鑰沒設）：不拋出（不影響啟動與寫入），設為 None 並記 WARNING。"""
     from app.core.exceptions import LLMServiceError
     from app.infrastructure.llm import routing
-    from app.services import llm_route_service
+    from app.services import capability_route_service
 
     state = SimpleNamespace(llm_client=object())
     with mock.patch.object(routing, "client_for", side_effect=LLMServiceError("API_KEY 未設定")):
-        asyncio.run(llm_route_service.refresh_global_client(state))
+        asyncio.run(capability_route_service.refresh_global_client(state))
 
     assert state.llm_client is None
     assert "全域 LLM 客戶端建立失敗" in caplog.text and "API_KEY 未設定" in caplog.text
@@ -364,14 +325,14 @@ def test_refresh_global_client_failure_leaves_none_and_logs(llm_route_db, llm_wh
 def test_runtime_info_flags_a_global_client_out_of_sync(llm_route_db, llm_whitelist, caplog):
     """全域客戶端與全域 * 目前的設定不一致（例如啟動時讀不到 DB 而用了 .env、之後 DB 恢復）：
     llm_client_matches_global 為 False 並記 WARNING，不讓標籤與端點互相矛盾而沒有提示。"""
-    from app.services import llm_route_service
+    from app.services import capability_route_service
 
     state = SimpleNamespace(llm_client=None)
-    asyncio.run(llm_route_service.refresh_global_client(state))  # 依 .env 建立
+    asyncio.run(capability_route_service.refresh_global_client(state))  # 依 .env 建立
     info = asyncio.run(RuntimeConfigService().get_runtime_info(state))
     assert info["llm_client_matches_global"] is True
 
-    asyncio.run(llm_route_service.set_route("*", "yinli", "m1", None, updated_by="api"))  # 沒有重建
+    asyncio.run(capability_route_service.set_route("*", "yinli", "m1", None, updated_by="api"))  # 沒有重建
     info = asyncio.run(RuntimeConfigService().get_runtime_info(state))
 
     assert info["llm_client_matches_global"] is False
@@ -381,9 +342,9 @@ def test_runtime_info_flags_a_global_client_out_of_sync(llm_route_db, llm_whitel
 
 def test_runtime_info_cannot_compare_when_routes_fail(llm_route_db, llm_whitelist):
     """組不出清單時無法比對：llm_client_matches_global 為 None，llm_provider 退回 .env 的 LLM_PROVIDER。"""
-    from app.services import llm_route_service
+    from app.services import capability_route_service
 
-    with mock.patch.object(llm_route_service, "list_routes", side_effect=RuntimeError("boom")):
+    with mock.patch.object(capability_route_service, "list_routes", side_effect=RuntimeError("boom")):
         info = asyncio.run(RuntimeConfigService().get_runtime_info(SimpleNamespace(llm_client=None)))
 
     assert info["llm_client_matches_global"] is None

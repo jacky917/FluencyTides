@@ -1,17 +1,15 @@
-"""執行期設定服務(唯讀切片):白名單設定列表與後端 runtime 對帳資訊。
+"""執行期設定服務(唯讀):後端 runtime 對帳資訊。
 
-Runtime configuration service (read-only slice): whitelisted settings
-listing and backend runtime reconciliation info.
+Runtime configuration service (read-only): backend runtime reconciliation info.
 
-對應計畫 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。
-本檔目前只實作讀取側(list/get/runtime);寫入側 `set_config`(驗證 →
-setattr → rebuild 註冊表 → 失敗回滾)依計畫 P0 後續補上,介面已預留。
-Only the read side is implemented for now; the write side follows the
-plan's P0 and its interface is reserved below.
+對應計畫 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。原本的白名單設定
+(``MODIFY_*``、``/setconfig`` 的暫時設定)已由能力路由取代(能力路由計畫
+capability_routing_FEAT_2026-10-19.md §7、§8.4),本檔只剩診斷用的 runtime 區塊。
+The ``MODIFY_*`` whitelist was replaced by capability routing; only the
+diagnostics block remains.
 
-框架無關:不 import fastapi/aiogram,呼叫端(REST router / TG callback)
-自行把結果轉成 HTTP 語意或訊息文案。
-Framework-free: callers map results to HTTP or chat semantics themselves.
+框架無關:不 import fastapi/aiogram,呼叫端(REST router)自行把結果轉成 HTTP 語意。
+Framework-free: callers map results to HTTP semantics themselves.
 """
 
 from __future__ import annotations
@@ -20,96 +18,19 @@ import asyncio
 import json
 import logging
 import subprocess
-from dataclasses import dataclass
 from typing import Any
 
 from app.core.config import settings
-from app.core.dynamic_config import get_modifiable_configs
 from app.infrastructure.llm.endpoints import get_endpoint, load_endpoints, skipped_endpoints
 from app.infrastructure.llm.factory import CLAUDE_CODE_PROVIDER, is_cli_provider
 from app.infrastructure.llm.labels import normalize_provider
-from app.infrastructure.llm.routing import GLOBAL_ROUTE_KEY
-from app.services import llm_route_service
+from app.infrastructure.llm.routing import CAPABILITY_LLM, GLOBAL_ROUTE_KEY
+from app.services import capability_route_service
 
 logger = logging.getLogger(__name__)
 
-# 改值後需要重建 singleton 的設定鍵(計畫 §3.5 REBUILD_REGISTRY 的鍵集合;
-# 對應的 factory 綁定在寫入側實作時補上)。LLM 設定已不經這裡修改(改由 /models,
-# 模型路由計畫 D8),所以不在其中。
-# Keys whose changes require a singleton rebuild.
-REQUIRES_REBUILD_KEYS: frozenset[str] = frozenset({
-    "AUDIO_EVALUATOR_PROVIDER",
-})
-
-
-@dataclass(frozen=True)
-class ConfigEntry:
-    """單一可動態修改設定的描述。
-
-    Description of one dynamically modifiable setting.
-
-    Attributes:
-        key: 設定鍵名(settings 屬性名)。Setting key.
-        current_value: 目前生效值(settings 原值的字串形式)。Current
-            value as string. **注意**:這是 settings 原值,不是 DB 標籤——
-            寫 DB 的 llm_model 一律取生成 API 回應,詳見計畫 §3.5 警告。
-        options: 允許的選項;None = 不限。Allowed options; None means
-            unrestricted.
-        requires_rebuild: 改值是否會觸發 singleton 重建。Whether a change
-            triggers a singleton rebuild.
-    """
-    key: str
-    current_value: str
-    options: list[str] | None
-    requires_rebuild: bool
-
-
 class RuntimeConfigService:
-    """白名單設定的讀取(與未來的套用)服務。
-
-    Read (and, later, apply) service for whitelisted settings.
-    """
-
-    def list_configs(self) -> list[ConfigEntry]:
-        """列出全部白名單設定與當前值。
-
-        List every whitelisted setting with its current value.
-
-        Returns:
-            list[ConfigEntry]: 依鍵名排序;白名單為空時為空列表。Entries
-            sorted by key; empty when the whitelist is empty.
-        """
-        modifiable = get_modifiable_configs()
-        entries: list[ConfigEntry] = []
-        for key in sorted(modifiable):
-            entry = self.get_config(key)
-            if entry is not None:
-                entries.append(entry)
-        return entries
-
-    def get_config(self, key: str) -> ConfigEntry | None:
-        """讀取單一白名單設定。
-
-        Read one whitelisted setting.
-
-        Args:
-            key: 設定鍵名。Setting key.
-
-        Returns:
-            ConfigEntry | None: 白名單外(或 settings 無此屬性)回 None
-            ——呼叫端一律以「不存在」處理,不區分原因,避免鍵名探測。
-            None for non-whitelisted or unknown keys; callers treat both
-            uniformly to avoid key probing.
-        """
-        modifiable = get_modifiable_configs()
-        if key not in modifiable or not hasattr(settings, key):
-            return None
-        return ConfigEntry(
-            key=key,
-            current_value=str(getattr(settings, key)),
-            options=modifiable[key],
-            requires_rebuild=key in REQUIRES_REBUILD_KEYS,
-        )
+    """後端 runtime 對帳資訊的讀取服務。Read service for the runtime block."""
 
     async def get_runtime_info(
         self, app_state: Any, check_auth: bool = False
@@ -133,7 +54,7 @@ class RuntimeConfigService:
             清單時退回 .env 的 ``LLM_PROVIDER``)、
             ``anki_connect_url``(後端實際連線的 Anki 端點,供腳本啟動對帳)、
             全域端點為 CLI 型時的 ``claude_code`` 環境診斷區塊(其他為 None),
-            以及模型路由計畫 D9 的 ``llm_routes``(每個用途生效的設定與來源)
+            以及能力路由的 ``capability_routes``(每個用途各能力生效的設定與來源)
             與 ``llm_endpoints``(端點與白名單,不含金鑰)。
         """
         llm_client = getattr(app_state, "llm_client", None)
@@ -143,8 +64,8 @@ class RuntimeConfigService:
             getattr(llm_client, "model_label", None)
             or getattr(llm_client, "_formatted_model_name", None)
         )
-        llm_routes, global_route = await self._llm_routes()
-        global_endpoint_id = global_route["effective"]["endpoint"] if global_route is not None else None
+        capability_routes, global_route = await self._capability_routes()
+        global_endpoint_id = global_route["effective"]["provider"] if global_route is not None else None
         # 全域客戶端是啟動時或最後一次改 * 時建立的；之後全域設定的解析結果可能變了（例如啟動時
         # 讀不到 DB 而用了 .env、之後 DB 恢復）。比對兩者的標籤，不一致就明說，不讓標籤與端點互相矛盾
         matches_global = llm_label == global_route["label"] if global_route is not None else None
@@ -170,30 +91,31 @@ class RuntimeConfigService:
             "llm_provider": provider,
             "anki_connect_url": settings.ANKI_CONNECT_URL,
             "claude_code": claude_code,
-            "llm_routes": llm_routes,
+            "capability_routes": capability_routes,
             "llm_endpoints": self._llm_endpoints(),
         }
 
     @staticmethod
-    async def _llm_routes() -> tuple[dict[str, Any], dict[str, Any] | None]:
-        """各用途生效的設定(與 ``GET /api/v1/llm-routes`` 的 ``routes`` 同格式)。
+    async def _capability_routes() -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """各用途生效的設定(與 ``GET /api/v1/capability-routes`` 的 ``routes`` 同格式)。
 
-        Every route's effective setting, plus the global row itself.
+        Every route's effective setting, plus the global ``llm`` state itself.
 
         Returns:
-            ``({"routes": [...], "db_unavailable": bool}, 全域 * 那一列)``。組不出清單時
+            ``({"routes": [...], "db_unavailable": bool}, 全域 * 的 llm 狀態)``。組不出清單時
             (非預期錯誤,含清單裡找不到全域 *)回 ``({"error": "<型別>: <訊息>"}, None)`` 並記下
             traceback——診斷端點要能帶病回報,不因這一塊整個失敗。
         """
         try:
-            views, read_ok = await llm_route_service.list_routes()
-            routes = [llm_route_service.to_read(view).model_dump() for view in views]
+            views, read_ok = await capability_route_service.list_routes()
+            routes = [capability_route_service.to_read(view).model_dump() for view in views]
             # 依鍵找全域那一列，不依賴清單順序
             global_route = next(route for route in routes if route["route_key"] == GLOBAL_ROUTE_KEY)
+            global_llm = global_route["capabilities"][CAPABILITY_LLM]
         except Exception as error:  # noqa: BLE001 - 診斷端點：其餘區塊照常回報，錯誤寫進回應並記錄
-            logger.exception("診斷端點組 llm_routes 失敗")
+            logger.exception("診斷端點組 capability_routes 失敗")
             return {"error": f"{type(error).__name__}: {error}"}, None
-        return {"routes": routes, "db_unavailable": not read_ok}, global_route
+        return {"routes": routes, "db_unavailable": not read_ok}, global_llm
 
     @staticmethod
     def _llm_endpoints() -> dict[str, Any]:
@@ -209,6 +131,8 @@ class RuntimeConfigService:
                     "base_url": endpoint.base_url,
                     "listed": endpoint.listed,
                     "models": [{"name": o.name, "efforts": list(o.efforts)} for o in endpoint.models],
+                    "audio_models": [o.name for o in endpoint.audio_models],
+                    "audio_transport": endpoint.audio_transport,
                 }
                 for endpoint in sorted(load_endpoints().values(), key=lambda endpoint: endpoint.id)
             ],

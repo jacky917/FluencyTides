@@ -157,16 +157,16 @@ class STTDiffEvaluator(BaseAudioEvaluator):
             transcription client.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, whisper: WhisperClient) -> None:
         """初始化 STTDiffEvaluator。
 
         Initialize the STTDiffEvaluator.
 
-        Raises:
-            STTServiceError: STT_SERVER_URL 未設定時拋出。Raised when
-                STT_SERVER_URL is not configured.
+        Args:
+            whisper: 轉錄用的 Whisper 客戶端（能力路由的 ``stt``）。The
+                Whisper client from the ``stt`` capability route.
         """
-        self._whisper = WhisperClient()
+        self._whisper = whisper
         logger.info("STT Diff Evaluator 初始化完成")
 
     async def evaluate_audio(
@@ -220,7 +220,7 @@ class STTDiffEvaluator(BaseAudioEvaluator):
 
         if not reference_answers:
             raise AudioNotScoredError(
-                "這張卡沒有參考答案，比對模式無法評分；管理員可用 /setconfig 改用 stt_llm。"
+                "這張卡沒有參考答案，比對模式無法評分；管理員可用 /setconfig 把錄音評分策略改成 stt_llm 或 listen。"
             )
 
         norm_transcript, transcript_map = _normalize_with_map(transcript)

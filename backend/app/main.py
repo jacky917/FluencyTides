@@ -48,7 +48,8 @@ from app.api.example.verb_pair import router as example_verb_pair_router
 from app.api.webhook import router as webhook_router
 from app.api.config import router as config_router
 from app.api.jp_tokenizer import router as jp_tokenizer_router
-from app.api.llm_routes import router as llm_routes_router
+from app.api.capability_routes import router as capability_routes_router
+from app.api.cards import router as cards_router
 from app.api.jp_verb_readings import router as jp_verb_readings_router
 from app.bot.dispatcher import create_bot, setup_dispatcher
 from app.core.config import settings
@@ -60,7 +61,7 @@ from app.infrastructure.database.database import (
 )
 from app.infrastructure.database.corpus_database import dispose_corpus_engine
 from app.infrastructure.llm.endpoints import log_endpoint_summary
-from app.services import llm_route_service
+from app.services import capability_route_service
 from app.infrastructure.storage.minio_client import MinioClient
 from app.schemas.card import ErrorResponse
 
@@ -119,7 +120,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 全域 LLM 客戶端依「全域 *（DB）→ .env」建立，只給診斷端點用（標籤與 CLI 探測，
     # 模型路由計畫 D9）；各用途的生成每次依自己的用途鍵建立。建立失敗（缺金鑰、找不到 CLI、
     # effort 設定錯誤）不阻止啟動：設為 None 並記 WARNING
-    await llm_route_service.refresh_global_client(app.state)
+    await capability_route_service.refresh_global_client(app.state)
+
+    # 錄音評分器每次評分時依能力路由建立（見 app/services/recording_eval.py）；這裡先試建一次
+    # 流程鍵的評分器，設定有誤時在啟動 log 就看得到，不阻止啟動
+    try:
+        from app.services import recording_eval
+
+        _, plan = await recording_eval.evaluator_for(recording_eval.RECORDING_EVAL.key)
+        logger.info("✅ 錄音評分器可用（recording_eval → %s）。", plan.strategy_name)
+    except Exception as e:  # noqa: BLE001 - 不阻止啟動；評分時會再建一次並回報給使用者
+        logger.warning("⚠️ 錄音評分器目前無法建立（TG 錄音評分會失敗，改設定後即可）：%s", e)
 
     # MinioClient 初始化同理，不應阻止應用啟動。
     try:
@@ -130,17 +141,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "⚠️ MinioClient 初始化失敗（Storage 相關端點將不可用）: %s", e
         )
         app.state.minio_client = None
-
-    # 初始化 AudioEvaluator Singleton (Strategy Pattern)
-    try:
-        from app.infrastructure.audio_evaluator.factory import create_audio_evaluator
-        app.state.audio_evaluator = create_audio_evaluator()
-        logger.info("✅ AudioEvaluator Singleton 已初始化。")
-    except Exception as e:
-        logger.warning(
-            "⚠️ AudioEvaluator 初始化失敗（Workflow B 語音評分將不可用）: %s", e
-        )
-        app.state.audio_evaluator = None
 
     # 初始化並啟動 Telegram Bot (Polling)
     bot = create_bot()
@@ -370,7 +370,8 @@ app.include_router(example_verb_pair_router, prefix="/api/v1/example")
 app.include_router(config_router, prefix="/api/v1")
 app.include_router(jp_verb_readings_router, prefix="/api/v1")
 app.include_router(jp_tokenizer_router, prefix="/api/v1")
-app.include_router(llm_routes_router, prefix="/api/v1")
+app.include_router(capability_routes_router, prefix="/api/v1")
+app.include_router(cards_router, prefix="/api/v1")
 
 # 註冊 Webhook Router路由 (不受 prefix 限制，完全依照 TG_WEBHOOK_PATH 設定)
 app.include_router(webhook_router)

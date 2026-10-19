@@ -40,6 +40,7 @@ MySQL compatibility notes:
 import logging
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import Connection, inspect
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -53,6 +54,11 @@ from app.core.config import settings
 import app.infrastructure.database.conventions  # noqa: F401
 
 logger = logging.getLogger(__name__)
+
+# 已被 Alembic 遷移取代、卻還留在資料庫裡的舊表 → 取代它的遷移版本。
+# create_all 只會建出空的新表，不會搬資料；沒跑遷移時舊表的資料會被無聲地略過。
+# Legacy tables superseded by a migration, mapped to that revision.
+_LEGACY_TABLES = {"llm_routes": "c3a9e5d1f7b2"}
 
 # 建立非同步引擎
 # - echo: 僅在 DEBUG 模式下輸出 SQL 日誌
@@ -95,7 +101,30 @@ async def create_db_and_tables() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
+        legacy = await conn.run_sync(find_legacy_tables)
     logger.info("資料庫表結構建立完成。")
+    for table in legacy:
+        logger.error(
+            "資料庫仍有舊表 '%s'：它的資料要由 Alembic 遷移 %s 搬到新表，在那之前不會被讀取。"
+            "請在 backend 目錄執行 `alembic upgrade head`。",
+            table,
+            _LEGACY_TABLES[table],
+        )
+
+
+def find_legacy_tables(sync_conn: Connection) -> list[str]:
+    """列出還在資料庫裡、已被遷移取代的舊表。
+
+    Lists legacy tables that a migration has superseded but which still exist.
+
+    Args:
+        sync_conn: 同步連線（經 ``run_sync`` 傳入）。A sync connection.
+
+    Returns:
+        舊表名稱，依名稱排序。The legacy table names, sorted.
+    """
+    names = set(inspect(sync_conn).get_table_names())
+    return sorted(table for table in _LEGACY_TABLES if table in names)
 
 
 async def dispose_engine() -> None:

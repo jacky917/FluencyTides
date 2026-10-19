@@ -24,7 +24,7 @@ from app.services.task_handlers.shared.cloze_positioning import (
 )
 from app.infrastructure.utils.id_generator import generate_unique_card_id
 from app.core.dependencies import get_template_engine
-from app.infrastructure.llm.routing import llm_route
+from app.infrastructure.llm.routing import route
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.services.task_handlers.shared.anki_transaction import AnkiNoteTransaction
 from app.schemas.relation import CardRelationCreate
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # LLM 用途鍵（生效設定的解析見 app.infrastructure.llm.routing）
-CHILD_CARD_LLM = llm_route("jp_verb_pair", "自他動詞子卡生成")
+CHILD_CARD_LLM = route("jp_verb_pair", "自他動詞子卡生成", capabilities={"llm"})
 
 @register_handler
 class JPVerbPairHandler(BaseHandler):

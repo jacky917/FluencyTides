@@ -103,25 +103,6 @@ def test_anthropic_stub_without_overrides_has_no_echo_suffix():
     assert "收到覆寫" not in str(exc_info.value)
 
 
-@pytest.mark.parametrize(
-    "provider", factory.providers_supporting_effort(), ids=factory.providers_supporting_effort()
-)
-def test_effort_setting_cannot_be_changed_through_setconfig(provider):
-    """支援 effort 的 CLI provider，其 effort 設定鍵必須以 LLM_ 開頭，才會被 /setconfig 排除。
-
-    LLM 模型與 effort 一律由 /models 依用途設定（模型路由計畫 D8）；/setconfig 改了 effort 卻
-    不經路由，各用途與診斷端點的標籤就會和實際不符。由註冊表推導，下一個 provider 的設定鍵
-    若不是 LLM_ 開頭，會在這裡被擋下。
-    """
-    from app.core import dynamic_config
-
-    client_cls = factory.resolve_client_class(provider)
-    prefix = getattr(client_cls, "SETTINGS_PREFIX", None)
-    if prefix is None:  # 非 CLI 型（如 anthropic 實作後）的 effort 設定鍵另行約定
-        pytest.skip(f"{provider} 沒有 SETTINGS_PREFIX")
-    assert f"{prefix}_EFFORT".startswith(dynamic_config._RESERVED_PREFIX)
-
-
 # ----------------------------------------------------------------------
 # 指定端點（模型路由計畫 D5）
 # ----------------------------------------------------------------------
@@ -360,16 +341,16 @@ def test_routes_use_three_endpoints_at_once(declare_route_key):
     from app.infrastructure.llm import routing
     from app.infrastructure.llm.routing import RouteChoice
 
-    first = declare_route_key("test.multi.first")
-    second = declare_route_key("test.multi.second")
-    third = declare_route_key("test.multi.third")
+    first = declare_route_key("test.multi_first")
+    second = declare_route_key("test.multi_second")
+    third = declare_route_key("test.multi_third")
     rows = {
         first.key: RouteChoice("yinli", "m1", None),
         second.key: RouteChoice("or2", "m2", None),
         third.key: RouteChoice("gem", "gemini-3.5-flash", None),
     }
     with _endpoint_env(), \
-         mock.patch.object(routing, "_fetch_choices", mock.AsyncMock(return_value=rows)), \
+         mock.patch.object(routing, "_fetch_choices", mock.AsyncMock(return_value={"llm": rows})), \
          mock.patch("app.infrastructure.llm.gemini_native_client.genai.Client") as fake_sdk:
         routing.invalidate_cache()
         yinli, or2, gem = (asyncio.run(route.client()) for route in (first, second, third))

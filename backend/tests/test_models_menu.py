@@ -1,9 +1,10 @@
-"""TG ``/models`` 選單的測試（模型路由計畫 D7）。
+"""TG ``/setconfig`` 選單的測試（能力路由計畫 §8.5；前身為模型路由計畫 D7 的 ``/models``）。
 
-Tests for the stateless ``/models`` menu: callback data size, version and
-arity checks, the layered endpoint → model → effort flow (auto-skipping
-effort), pagination, admin gating, stale buttons, database-down behaviour,
-error reporting, and full click-throughs that write to a real temporary table.
+Tests for the stateless ``/setconfig`` menu: callback data size, version and
+arity checks, the layered capability → provider → model → effort flow
+(auto-skipping model and effort), pagination, admin gating, stale buttons,
+database-down behaviour, error reporting, and full click-throughs that write
+to a real temporary table.
 """
 
 import asyncio
@@ -23,46 +24,56 @@ from app.bot.handlers.models_menu import (
     CALLBACK_DATA_LIMIT,
     CLOSE_DATA,
     NO_EFFORT,
+    NO_MODEL,
     Action,
     MenuContext,
+    MenuKey,
     StaleMenuError,
     build_context,
     callback,
     parse_callback,
     render_models,
+    render_providers,
     resolve_selection,
 )
 from app.core.config import settings
 from app.core.exceptions import LLMServiceError
-from app.infrastructure.database.models import LLMRouteSetting
+from app.infrastructure.database.models import CapabilityRouteSetting
 from app.infrastructure.llm import routing
+from app.infrastructure.llm.capabilities import CAPABILITIES, CAPABILITY_ORDER, ProviderOption, list_providers
 from app.infrastructure.llm.claude_code_client import ClaudeCodeLLMClient
-from app.infrastructure.llm.endpoints import Endpoint, ModelOption
-from app.services import llm_route_service
-from app.services.llm_route_service import RouteKeyEntry
+from app.infrastructure.llm.endpoints import ModelOption
+from app.services import capability_route_service
 
 ADMIN_ID = 42
 KEY = "test.menu"
+STALE = "選單已過期，請重新輸入 /setconfig。"
 
-_ENDPOINTS = [
-    Endpoint(id="claude-code", type="claude-code", models=(
-        ModelOption("opus", ("low", "high")),
-        ModelOption("sonnet", ("high",)),
-        ModelOption("haiku"),
-    )),
-]
-_KEYS = [RouteKeyEntry("*", "全域", True), RouteKeyEntry(KEY, "選單測試", True)]
+_PROVIDERS = {
+    "llm": (
+        ProviderOption("claude-code", "claude-code", (
+            ModelOption("opus", ("low", "high")),
+            ModelOption("sonnet", ("high",)),
+            ModelOption("haiku"),
+        )),
+    ),
+    "audio_eval": tuple(list_providers("audio_eval")),
+    "audio_llm": (),
+    "stt": (),
+}
+_KEYS = [MenuKey("*", CAPABILITY_ORDER, CAPABILITIES), MenuKey(KEY, ("llm",), frozenset({"llm"}))]
 
 
 @pytest.fixture(autouse=True)
 def _admin_and_key(declare_route_key):
+    """管理員與測試用途；錄音評分預設 stt_diff、STT 已設定（不必有音訊金鑰，清單不會因此標 ⚠️）。"""
     declare_route_key(KEY, "選單測試")
-    with mock.patch.object(settings, "TG_ADMIN_CHAT_ID", ADMIN_ID):
+    with mock.patch.object(settings, "TG_ADMIN_CHAT_ID", ADMIN_ID),          mock.patch.object(settings, "AUDIO_EVALUATOR_PROVIDER", "stt_diff"),          mock.patch.object(settings, "STT_SERVER_URL", "http://stt.test/v1"):
         yield
 
 
-def _ctx() -> MenuContext:
-    return build_context(_KEYS, _ENDPOINTS)
+def _ctx(keys=None, providers=None) -> MenuContext:
+    return build_context(keys or _KEYS, providers or _PROVIDERS)
 
 
 # ----------------------------------------------------------------------
@@ -72,13 +83,13 @@ def _ctx() -> MenuContext:
 
 def test_callback_data_fits_telegram_limit():
     """最長的動作（儲存）帶大序號也不超過 64 位元組。"""
-    data = callback(_ctx(), Action.SAVE, 9999, 9999, 9999, 99)
+    data = callback(_ctx(), Action.SAVE, 9999, 9, 9999, 9999, 99)
     assert len(data.encode("utf-8")) <= CALLBACK_DATA_LIMIT
 
 
 @pytest.mark.parametrize(
     "data",
-    ["lr:k:000000:1", "setcfg_val:x:y", "lr:zz:{v}", "lr:k:{v}", "lr:s:{v}:1:0", "lr:k:{v}:1:2"],
+    ["lr:k:000000:1", "setcfg_val:x:y", "lr:zz:{v}", "lr:k:{v}", "lr:s:{v}:1:0:0:0", "lr:k:{v}:1:2"],
     ids=["other-version", "other-prefix", "unknown-action", "missing-arg", "short-save", "extra-arg"],
 )
 def test_parse_rejects_outdated_or_malformed(data):
@@ -91,45 +102,75 @@ def test_parse_rejects_outdated_or_malformed(data):
 def test_parse_accepts_valid_data():
     ctx = _ctx()
     assert parse_callback(callback(ctx, Action.DETAIL, 1), ctx) == (Action.DETAIL, ["1"])
+    assert parse_callback(callback(ctx, Action.CAPABILITY, 1, 0), ctx) == (Action.CAPABILITY, ["1", "0"])
 
 
 def test_version_is_derived_and_changes_with_lists():
-    """版本由清單算出；白名單或用途清單改變時跟著變，舊按鈕因此失效。"""
+    """版本由清單算出；白名單、用途清單或策略限縮改變時跟著變，舊按鈕因此失效。"""
     base = _ctx()
-    changed_models = build_context(
-        _KEYS, [Endpoint(id="claude-code", type="claude-code", models=(ModelOption("opus", ("low",)),))]
-    )
-    more_keys = build_context([*_KEYS, RouteKeyEntry("zz", None, False)], _ENDPOINTS)
-    assert len({base.version, changed_models.version, more_keys.version}) == 3
+    changed_models = _ctx(providers={
+        **_PROVIDERS, "llm": (ProviderOption("claude-code", "claude-code", (ModelOption("opus", ("low",)),)),),
+    })
+    more_keys = _ctx(keys=[*_KEYS, MenuKey("zz", ("llm",))])
+    restricted = _ctx(keys=[_KEYS[0], MenuKey(KEY, ("audio_eval",), frozenset({"audio_eval"}), frozenset({"stt_diff"}))])
+    assert len({base.version, changed_models.version, more_keys.version, restricted.version}) == 4
 
 
 def test_context_requires_global_key_first():
     """用途清單第一項必須是全域 *。"""
     with pytest.raises(ValueError):
-        build_context([RouteKeyEntry(KEY, "x", True)], _ENDPOINTS)
+        _ctx(keys=[MenuKey(KEY, ("llm",), frozenset({"llm"}))])
 
 
 def test_model_buttons_skip_effort_when_not_needed():
     """多個 effort 去選 effort；只有一個自動選上；不使用 effort 直接到確認。"""
     ctx = _ctx()
-    _, markup = render_models(ctx, 1, 0)
+    _, markup = render_models(ctx, 1, 0, 0)
     actions = [row[0].callback_data for row in markup.inline_keyboard[:3]]
     assert actions == [
-        callback(ctx, Action.EFFORTS, 1, 0, 0),
-        callback(ctx, Action.CONFIRM, 1, 0, 1, 0),
-        callback(ctx, Action.CONFIRM, 1, 0, 2, NO_EFFORT),
+        callback(ctx, Action.EFFORTS, 1, 0, 0, 0),
+        callback(ctx, Action.CONFIRM, 1, 0, 0, 1, 0),
+        callback(ctx, Action.CONFIRM, 1, 0, 0, 2, NO_EFFORT),
     ]
 
 
-@pytest.mark.parametrize(
-    ("model_index", "token"),
-    [(0, NO_EFFORT), (2, "0"), (0, "5"), (9, "0"), (0, "x")],
-    ids=["missing-effort", "effort-on-plain-model", "effort-out-of-range", "model-out-of-range", "garbage"],
-)
-def test_invalid_selection_is_stale(model_index, token):
-    """序號或 effort 記號對不上白名單：視為過期，不會存錯的組合。"""
+def test_strategy_buttons_skip_model_and_effort():
+    """評分策略不選模型：選了直接到確認（模型、effort 記號都是「不選」）。"""
+    ctx = _ctx()
+    _, markup = render_providers(ctx, 0, 1)  # 全域 * 的 audio_eval
+    actions = [row[0].callback_data for row in markup.inline_keyboard[:3]]
+    assert actions == [callback(ctx, Action.CONFIRM, 0, 1, index, NO_MODEL, NO_EFFORT) for index in range(3)]
+    provider, model, effort = resolve_selection(ctx, 0, 1, 1, NO_MODEL, NO_EFFORT)
+    assert (provider.id, model, effort) == ("stt_diff", "", None)
+
+
+def test_strategies_follow_the_keys_restriction():
+    """用途鍵限縮了策略時，只列允許的策略（序號依過濾後的清單）。"""
+    key = MenuKey("shadow", ("audio_eval",), frozenset({"audio_eval"}), frozenset({"stt_diff"}))
+    ctx = _ctx(keys=[_KEYS[0], key])
+    assert [option.id for option in ctx.providers_for(1, 0)] == ["stt_diff"]
     with pytest.raises(StaleMenuError):
-        resolve_selection(_ctx(), 0, model_index, token)
+        ctx.provider_at(1, 0, 1)
+
+
+@pytest.mark.parametrize(
+    ("model_token", "effort_token"),
+    [("0", NO_EFFORT), ("2", "0"), ("0", "5"), ("9", "0"), ("0", "x"), (NO_MODEL, NO_EFFORT)],
+    ids=[
+        "missing-effort", "effort-on-plain-model", "effort-out-of-range", "model-out-of-range", "garbage",
+        "model-required",
+    ],
+)
+def test_invalid_selection_is_stale(model_token, effort_token):
+    """序號或記號對不上白名單：視為過期，不會存錯的組合。"""
+    with pytest.raises(StaleMenuError):
+        resolve_selection(_ctx(), 1, 0, 0, model_token, effort_token)
+
+
+def test_model_token_on_a_strategy_is_stale():
+    """策略沒有模型：帶了模型序號就是過期的按鈕。"""
+    with pytest.raises(StaleMenuError):
+        resolve_selection(_ctx(), 0, 1, 0, "0", NO_EFFORT)
 
 
 # ----------------------------------------------------------------------
@@ -158,7 +199,9 @@ def _buttons(markup) -> dict[str, str]:
 
 
 def _button_starting(markup, prefix: str) -> str:
-    return next(data for text, data in _buttons(markup).items() if text.startswith(prefix))
+    found = [data for text, data in _buttons(markup).items() if text.startswith(prefix)]
+    assert found, f"沒有以 {prefix!r} 開頭的按鈕：{list(_buttons(markup))}"
+    return found[0]
 
 
 def _click(data: str):
@@ -173,14 +216,14 @@ def _click(data: str):
 
 def _open_menu():
     message = _message()
-    asyncio.run(models_menu.command_models_handler(message))
+    asyncio.run(models_menu.command_setconfig_handler(message))
     return message.answer.await_args.args[0], message.answer.await_args.kwargs.get("reply_markup")
 
 
 def _stored_rows(session_factory):
     async def fetch():
         async with session_factory() as session:
-            return list((await session.execute(select(LLMRouteSetting))).scalars())
+            return list((await session.execute(select(CapabilityRouteSetting))).scalars())
 
     return asyncio.run(fetch())
 
@@ -188,7 +231,7 @@ def _stored_rows(session_factory):
 def _insert(session_factory, **fields) -> None:
     async def insert():
         async with session_factory() as session:
-            session.add(LLMRouteSetting(updated_by="test", **fields))
+            session.add(CapabilityRouteSetting(updated_by="test", capability="llm", **fields))
             await session.commit()
 
     asyncio.run(insert())
@@ -199,17 +242,24 @@ def _db_down():
     return mock.patch.object(routing, "_fetch_choices", mock.AsyncMock(side_effect=error))
 
 
-def _to_model_screen(model_prefix: str):
-    """從 /models 點到指定模型之後的畫面。"""
+def _to_capability(key_prefix: str, capability_prefix: str = "文字 LLM"):
+    """從 /setconfig 點到某用途的某能力詳情，回傳 (畫面文字, 鍵盤)。"""
     _, markup = _open_menu()
-    _, markup, _ = _click(_button_starting(markup, f"{KEY}："))
+    _, markup, _ = _click(_button_starting(markup, key_prefix))
+    text, markup, _ = _click(_button_starting(markup, capability_prefix))
+    return text, markup
+
+
+def _to_model_screen(model_prefix: str):
+    """從 /setconfig 點到指定模型之後的畫面。"""
+    _, markup = _to_capability(f"{KEY}：")
     _, markup, _ = _click(_button_starting(markup, "⚙️ 設定"))
     _, markup, _ = _click(_button_starting(markup, "claude-code"))
     return _click(_button_starting(markup, model_prefix))
 
 
 def test_full_flow_saves_choice(llm_route_db, llm_whitelist):
-    """/models → 用途 → 設定 → 端點 → 模型 → effort → 確認 → 儲存，寫入資料表並回報新設定。"""
+    """/setconfig → 用途 → 能力 → 設定 → 端點 → 模型 → effort → 確認 → 儲存，寫入資料表並回報新設定。"""
     _, markup, _ = _to_model_screen("opus")
     text, markup, _ = _click(_button_starting(markup, "low"))
     assert "(claude-code)opus@low" in text
@@ -218,9 +268,35 @@ def test_full_flow_saves_choice(llm_route_db, llm_whitelist):
     assert "已儲存" in text and "(claude-code)opus@low" in text
     query.answer.assert_awaited_once_with()
     [row] = _stored_rows(llm_route_db)
-    assert (row.route_key, row.endpoint, row.model, row.effort, row.updated_by) == (
-        KEY, "claude-code", "opus", "low", f"tg:{ADMIN_ID}",
+    assert (row.route_key, row.capability, row.provider, row.model, row.effort, row.updated_by) == (
+        KEY, "llm", "claude-code", "opus", "low", f"tg:{ADMIN_ID}",
     )
+
+
+def test_strategy_flow_saves_without_model(llm_route_db, llm_whitelist):
+    """錄音評分：選策略後直接確認、儲存；存的模型是 NULL，下一次評分即改用新策略。"""
+    _, markup = _to_capability("recording_eval：", "評分策略")
+    _, markup, _ = _click(_button_starting(markup, "⚙️ 設定"))
+    text, markup, _ = _click(_button_starting(markup, "stt_diff"))
+    assert "評分策略" in text and "stt_diff" in text
+    text, _, query = _click(_button_starting(markup, "✅ 儲存"))
+
+    assert "已儲存" in text and "stt_diff" in text
+    query.answer.assert_awaited_once_with()
+    [row] = _stored_rows(llm_route_db)
+    assert (row.route_key, row.capability, row.provider, row.model) == ("recording_eval", "audio_eval", "stt_diff", None)
+    assert asyncio.run(routing.resolve("recording_eval.speaking_trilingual", "audio_eval")).provider == "stt_diff"
+
+
+def test_branch_keys_are_indented_and_list_their_capabilities(llm_route_db, llm_whitelist):
+    """分支鍵縮排在流程鍵之下；詳情列出它宣告的每個能力。"""
+    _, markup = _open_menu()
+    labels = list(_buttons(markup))
+    flow = next(index for index, label in enumerate(labels) if label.startswith("recording_eval："))
+    assert labels[flow + 1].startswith("　└ recording_eval.speaking_trilingual：")
+    text, markup, _ = _click(_button_starting(markup, "　└ recording_eval.speaking_trilingual："))
+    assert all(title in text for title in ("文字 LLM", "評分策略", "聽音檔的模型", "語音轉文字"))
+    assert "（來源：.env）" in text
 
 
 def test_single_effort_model_skips_effort_and_back_returns_to_models(llm_route_db, llm_whitelist):
@@ -234,9 +310,8 @@ def test_single_effort_model_skips_effort_and_back_returns_to_models(llm_route_d
 
 def test_restore_default_deletes_row(llm_route_db, llm_whitelist):
     """恢復預設：刪掉該列並顯示退回後生效的設定。"""
-    asyncio.run(llm_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
-    _, markup = _open_menu()
-    text, markup, _ = _click(_button_starting(markup, f"{KEY}："))
+    asyncio.run(capability_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
+    text, markup = _to_capability(f"{KEY}：")
     assert "本用途的設定" in text
     text, _, _ = _click(_button_starting(markup, "↩️ 恢復預設"))
 
@@ -245,16 +320,15 @@ def test_restore_default_deletes_row(llm_route_db, llm_whitelist):
 
 
 def test_orphan_delete_then_back_to_list(llm_route_db, llm_whitelist):
-    """孤兒鍵：詳情沒有「設定」只有「恢復預設」；刪除後清單變短，「返回清單」仍可用。"""
-    _insert(llm_route_db, route_key="zz.orphan", endpoint="yinli", model="m1")
-    _, markup = _open_menu()
-    _, markup, _ = _click(_button_starting(markup, "⚠️ zz.orphan"))
+    """孤兒鍵：能力詳情沒有「設定」只有「恢復預設」；刪除後清單變短，「返回清單」仍可用。"""
+    _insert(llm_route_db, route_key="zz.orphan", provider="yinli", model="m1")
+    _, markup = _to_capability("⚠️ zz.orphan")
     assert not any(text.startswith("⚙️ 設定") for text in _buttons(markup))
     text, markup, _ = _click(_button_starting(markup, "↩️ 恢復預設"))
     assert "已刪除" in text and "zz.orphan" in text
     text, markup, query = _click(_button_starting(markup, "⬅️ 返回清單"))
 
-    assert "LLM 模型設定" in text
+    assert "工具設定" in text
     query.answer.assert_awaited_once_with()
     assert not any("zz.orphan" in label for label in _buttons(markup))
     assert _stored_rows(llm_route_db) == []
@@ -286,7 +360,7 @@ def test_pagination(llm_route_db, llm_whitelist, declare_route_key):
         lambda ctx: f"lr:k:{ctx.version}",
         lambda ctx: f"lr:k:{ctx.version}:abc",
         lambda ctx: callback(ctx, Action.DETAIL, 99),
-        lambda ctx: callback(ctx, Action.SAVE, 1, 0, 0, NO_EFFORT),
+        lambda ctx: callback(ctx, Action.SAVE, 1, 0, 0, 0, NO_EFFORT),
     ],
     ids=["unknown-action", "missing-arg", "non-integer", "key-out-of-range", "effort-token-mismatch"],
 )
@@ -296,7 +370,7 @@ def test_malformed_buttons_are_stale_and_do_nothing(llm_route_db, llm_whitelist,
     text, _, query = _click(build(ctx))
 
     assert text is None
-    query.answer.assert_awaited_once_with("選單已過期，請重新輸入 /models。", show_alert=True)
+    query.answer.assert_awaited_once_with(STALE, show_alert=True)
     assert _stored_rows(llm_route_db) == []
 
 
@@ -333,7 +407,7 @@ def test_stale_button_after_whitelist_change(llm_route_db, llm_whitelist):
         text, _, query = _click(old_button)
 
     assert text is None
-    query.answer.assert_awaited_once_with("選單已過期，請重新輸入 /models。", show_alert=True)
+    query.answer.assert_awaited_once_with(STALE, show_alert=True)
 
 
 def test_db_failure_while_saving_says_outcome_unknown(llm_route_db, llm_whitelist):
@@ -341,7 +415,7 @@ def test_db_failure_while_saving_says_outcome_unknown(llm_route_db, llm_whitelis
     _, markup, _ = _to_model_screen("haiku")
     save = _button_starting(markup, "✅ 儲存")
     error = OperationalError("INSERT ...", {}, Exception("database is locked"))
-    with mock.patch.object(llm_route_service, "_session_factory", side_effect=error):
+    with mock.patch.object(capability_route_service, "_session_factory", side_effect=error):
         _, _, query = _click(save)
 
     alert = query.answer.await_args.args[0]
@@ -349,7 +423,7 @@ def test_db_failure_while_saving_says_outcome_unknown(llm_route_db, llm_whitelis
 
 
 def test_db_down_menu_is_read_only(llm_route_db, llm_whitelist):
-    """讀不到資料庫：/models 仍列出清單並附警示，但任何按鈕都只提示讀不到 DB、不做操作。"""
+    """讀不到資料庫：/setconfig 仍列出清單並附警示，但任何按鈕都只提示讀不到 DB、不做操作。"""
     _, markup = _open_menu()
     button = _button_starting(markup, f"{KEY}：")
     with _db_down():
@@ -368,7 +442,7 @@ def test_non_admin_is_blocked(llm_route_db, llm_whitelist, admin_id):
     """未設定管理員、或不是管理員：指令與按鈕（含關閉鈕）都被擋下。"""
     with mock.patch.object(settings, "TG_ADMIN_CHAT_ID", admin_id):
         message = _message(user_id=7)
-        asyncio.run(models_menu.command_models_handler(message))
+        asyncio.run(models_menu.command_setconfig_handler(message))
         query = _callback_query("lr:l:000000:0", user_id=7)
         asyncio.run(models_menu.handle_menu(query))
         close = _callback_query(CLOSE_DATA, user_id=7)
@@ -386,25 +460,25 @@ def test_message_without_user_is_blocked(llm_route_db, llm_whitelist):
     """訊息沒有發送者（例如頻道訊息）：擋下。"""
     message = _message()
     message.from_user = None
-    asyncio.run(models_menu.command_models_handler(message))
+    asyncio.run(models_menu.command_setconfig_handler(message))
     assert "只有管理員" in message.answer.await_args.args[0]
 
 
 def test_command_error_is_reported(llm_route_db, llm_whitelist, caplog):
-    """開啟 /models 時發生非預期錯誤：回覆錯誤訊息並記錄 traceback（不是一片沉默）。"""
+    """開啟 /setconfig 時發生非預期錯誤：回覆錯誤訊息並記錄 traceback（不是一片沉默）。"""
     message = _message()
-    with mock.patch.object(models_menu.llm_route_service, "views_from", side_effect=RuntimeError("boom")):
-        asyncio.run(models_menu.command_models_handler(message))
+    with mock.patch.object(models_menu.capability_route_service, "views_from", side_effect=RuntimeError("boom")):
+        asyncio.run(models_menu.command_setconfig_handler(message))
 
-    assert "無法開啟 LLM 模型設定" in message.answer.await_args.args[0]
-    assert "/models 開啟失敗" in caplog.text
+    assert "無法開啟工具設定" in message.answer.await_args.args[0]
+    assert "/setconfig 開啟失敗" in caplog.text
 
 
 def test_command_error_reply_is_valid_html(llm_route_db, llm_whitelist):
     """錯誤訊息很長且含特殊字元：先截斷再跳脫，回覆裡不會留下截一半的 HTML 實體。"""
     message = _message()
-    with mock.patch.object(models_menu.llm_route_service, "views_from", side_effect=RuntimeError("'" * 400)):
-        asyncio.run(models_menu.command_models_handler(message))
+    with mock.patch.object(models_menu.capability_route_service, "views_from", side_effect=RuntimeError("'" * 400)):
+        asyncio.run(models_menu.command_setconfig_handler(message))
 
     reply = message.answer.await_args.args[0]
     assert "&" not in re.sub(r"&(?:#x?[0-9a-fA-F]+|[a-z]+);", "", reply)
@@ -414,7 +488,7 @@ def test_unexpected_error_is_reported_with_context(llm_route_db, llm_whitelist, 
     """服務層拋出非預期例外：彈出錯誤訊息，log 帶 user id 與用途鍵。"""
     _, markup = _open_menu()
     button = _button_starting(markup, f"{KEY}：")
-    with mock.patch.object(models_menu.llm_route_service, "describe", side_effect=RuntimeError("boom")):
+    with mock.patch.object(models_menu.capability_route_service, "describe", side_effect=RuntimeError("boom")):
         _, _, query = _click(button)
 
     message = query.answer.await_args.args[0]
@@ -432,6 +506,13 @@ def test_unchanged_message_is_not_an_error(llm_route_db, llm_whitelist):
     asyncio.run(models_menu.handle_menu(query))
 
     query.answer.assert_awaited_once_with()
+
+
+def test_legacy_setconfig_buttons_say_expired():
+    """舊 /setconfig 留在聊天裡的按鈕：回覆已過期，不讓按鈕一直轉圈。"""
+    query = _callback_query("setconfig_key:AUDIO_MODEL_NAME")
+    asyncio.run(models_menu.handle_legacy_setconfig(query))
+    query.answer.assert_awaited_once_with(STALE, show_alert=True)
 
 
 def test_close_button_goes_to_close_handler_only():
@@ -453,6 +534,9 @@ def test_close_button_goes_to_close_handler_only():
 
     assert matching(CLOSE_DATA) == {"handle_close"}
     assert matching(f"lr:l:{_ctx().version}:0") == {"handle_menu"}
+    # 舊 /setconfig 的按鈕由 handle_legacy_setconfig 接住，回覆已過期
+    assert matching("setconfig_key:AUDIO_MODEL_NAME") == {"handle_legacy_setconfig"}
+    assert matching("setcfg_val:AUDIO_MODEL_NAME:x") == {"handle_legacy_setconfig"}
 
 
 @pytest.mark.parametrize("target", ["restore", "save"])
@@ -461,10 +545,9 @@ def test_db_down_blocks_writes_from_old_buttons(llm_route_db, llm_whitelist, tar
 
     這兩個動作在服務層不先讀 DB（已宣告鍵的刪除、寫入），只靠選單的唯讀防線擋下：DB 間歇故障
     時，版本相同的舊按鈕不能真的改到設定。"""
-    asyncio.run(llm_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
+    asyncio.run(capability_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
     if target == "restore":
-        _, markup = _open_menu()
-        _, markup, _ = _click(_button_starting(markup, f"{KEY}："))
+        _, markup = _to_capability(f"{KEY}：")
         button = _button_starting(markup, "↩️ 恢復預設")
     else:
         _, markup, _ = _to_model_screen("haiku")
@@ -477,24 +560,23 @@ def test_db_down_blocks_writes_from_old_buttons(llm_route_db, llm_whitelist, tar
     assert text is None
     assert "讀不到資料庫" in query.answer.await_args.args[0]
     [row] = _stored_rows(llm_route_db)
-    assert (row.endpoint, row.model) == ("yinli", "m1")
+    assert (row.provider, row.model) == ("yinli", "m1")
 
 
 def test_detail_shows_skipped_layer(llm_route_db, llm_whitelist):
-    """DB 中已不在白名單的設定：清單標 ⚠️、詳情列出被略過的原因。"""
-    _insert(llm_route_db, route_key=KEY, endpoint="yinli", model="retired-model")
-    _, markup = _open_menu()
-    text, _, _ = _click(_button_starting(markup, f"⚠️ {KEY}："))
+    """DB 中已不在白名單的設定：清單標 ⚠️、能力詳情列出被略過的原因。"""
+    _insert(llm_route_db, route_key=KEY, provider="yinli", model="retired-model")
+    text, _ = _to_capability(f"⚠️ {KEY}：")
 
     assert "已略過" in text and "retired-model" in text
 
 
 def test_missing_package_does_not_lock_the_menu(llm_route_db, llm_whitelist):
-    """生效端點需要的套件沒裝：/models 照常開啟，該列標 ⚠️、詳情說明原因，其他按鈕照常可用
+    """生效端點需要的套件沒裝：/setconfig 照常開啟，該列標 ⚠️、詳情說明原因，其他按鈕照常可用
     （管理員才能把設定改到能用的端點）。"""
     from app.infrastructure.llm import factory
 
-    _insert(llm_route_db, route_key=KEY, endpoint="claude-code", model="opus", effort="low")
+    _insert(llm_route_db, route_key=KEY, provider="claude-code", model="opus", effort="low")
     real = factory.resolve_client_class
 
     def resolve(provider=None):
@@ -504,7 +586,8 @@ def test_missing_package_does_not_lock_the_menu(llm_route_db, llm_whitelist):
 
     with mock.patch.object(factory, "resolve_client_class", side_effect=resolve):
         _, markup = _open_menu()
-        text, markup, query = _click(_button_starting(markup, f"⚠️ {KEY}："))
+        _, markup, _ = _click(_button_starting(markup, f"⚠️ {KEY}："))
+        text, markup, query = _click(_button_starting(markup, "文字 LLM"))
 
     assert "套件未安裝（jsonschema）" in text
     query.answer.assert_awaited_once_with()
@@ -512,10 +595,9 @@ def test_missing_package_does_not_lock_the_menu(llm_route_db, llm_whitelist):
 
 
 def _restore_default_screen(patch) -> str:
-    """設好本用途後，從 /models 點到「恢復預設」；按下時套用 ``patch``，回傳結果畫面文字。"""
-    asyncio.run(llm_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
-    _, markup = _open_menu()
-    _, markup, _ = _click(_button_starting(markup, f"{KEY}："))
+    """設好本用途後，從 /setconfig 點到「恢復預設」；按下時套用 ``patch``，回傳結果畫面文字。"""
+    asyncio.run(capability_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
+    _, markup = _to_capability(f"{KEY}：")
     button = _button_starting(markup, "↩️ 恢復預設")
     with patch:
         text, _, _ = _click(button)
@@ -551,13 +633,12 @@ def test_restore_default_shows_problem_of_the_next_layer(llm_route_db, llm_white
 
 def test_restore_default_says_when_state_is_unavailable(llm_route_db, llm_whitelist):
     """恢復預設已完成、但組不出之後的狀態：結果畫面明說無法顯示，而不是只有標題（與孤兒鍵
-    刪除後沒有狀態區分；服務層如何產生這個結果見 test_llm_route_service）。"""
-    asyncio.run(llm_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
-    _, markup = _open_menu()
-    _, markup, _ = _click(_button_starting(markup, f"{KEY}："))
+    刪除後沒有狀態區分；服務層如何產生這個結果見 test_capability_route_service）。"""
+    asyncio.run(capability_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
+    _, markup = _to_capability(f"{KEY}：")
     button = _button_starting(markup, "↩️ 恢復預設")
-    unavailable = llm_route_service.DeleteResult(True, None, view_unavailable=True)
-    with mock.patch.object(llm_route_service, "delete_route", mock.AsyncMock(return_value=unavailable)):
+    unavailable = capability_route_service.DeleteResult(True, None, view_unavailable=True)
+    with mock.patch.object(capability_route_service, "delete_route", mock.AsyncMock(return_value=unavailable)):
         text, _, _ = _click(button)
 
     assert "已恢復預設" in text and "無法顯示目前生效的設定" in text
@@ -568,11 +649,11 @@ def test_admin_close_button_closes(llm_route_db, llm_whitelist):
     query = _callback_query(CLOSE_DATA)
     asyncio.run(models_menu.handle_close(query))
 
-    query.message.edit_text.assert_awaited_once_with("已關閉 LLM 模型設定。")
+    query.message.edit_text.assert_awaited_once_with("已關閉工具設定。")
 
 
 def test_models_router_runs_before_catch_all_text_router():
-    """/models 的 router 掛在 dispatcher 上，且排在接住所有文字的 messages router 之前。
+    """/setconfig 的 router 掛在 dispatcher 上，且排在接住所有文字的 messages router 之前。
 
     aiogram 的 router 只能掛一次，測試後解除掛載，避免影響之後（例如 lifespan）的 setup。"""
     from app.bot.dispatcher import setup_dispatcher
@@ -593,8 +674,7 @@ def test_saving_the_global_key_rebuilds_the_global_client(llm_route_db, llm_whit
     from types import SimpleNamespace
 
     app = SimpleNamespace(state=SimpleNamespace(llm_client=None))
-    _, markup = _open_menu()
-    _, markup, _ = _click(_button_starting(markup, "*："))
+    _, markup = _to_capability("*：")
     _, markup, _ = _click(_button_starting(markup, "⚙️ 設定"))
     _, markup, _ = _click(_button_starting(markup, "yinli"))
     _, markup, _ = _click(_button_starting(markup, "m2"))
@@ -609,7 +689,7 @@ def test_long_error_alert_fits_telegram_limit(llm_route_db, llm_whitelist):
     """非預期錯誤的訊息很長：彈出提示截在 Telegram 的 200 字元上限內（超過會被拒收、管理員什麼都看不到）。"""
     _, markup = _open_menu()
     button = _button_starting(markup, f"{KEY}：")
-    with mock.patch.object(models_menu.llm_route_service, "describe", side_effect=RuntimeError("x" * 500)):
+    with mock.patch.object(models_menu.capability_route_service, "describe", side_effect=RuntimeError("x" * 500)):
         _, _, query = _click(button)
 
     assert len(query.answer.await_args.args[0]) <= 200
@@ -648,10 +728,9 @@ def test_restoring_the_global_key_rebuilds_the_global_client(llm_route_db, llm_w
     """在選單恢復全域 * 的預設後，重建 app.state.llm_client，改回 .env 那一層。"""
     from types import SimpleNamespace
 
-    asyncio.run(llm_route_service.set_route("*", "yinli", "m2", None, updated_by="api"))
+    asyncio.run(capability_route_service.set_route("*", "yinli", "m2", None, updated_by="api"))
     app = SimpleNamespace(state=SimpleNamespace(llm_client=None))
-    _, markup = _open_menu()
-    _, markup, _ = _click(_button_starting(markup, "*："))
+    _, markup = _to_capability("*：")
     query = _callback_query(_button_starting(markup, "↩️ 恢復預設"))
     asyncio.run(models_menu.handle_menu(query, app=app))
 
@@ -661,8 +740,7 @@ def test_restoring_the_global_key_rebuilds_the_global_client(llm_route_db, llm_w
 
 def test_global_change_without_app_is_logged(llm_route_db, llm_whitelist, caplog):
     """改了全域 * 卻沒有注入 app（dispatcher 組法變了）：無法重建，但要記 WARNING，不是無聲略過。"""
-    _, markup = _open_menu()
-    _, markup, _ = _click(_button_starting(markup, "*："))
+    _, markup = _to_capability("*：")
     _, markup, _ = _click(_button_starting(markup, "⚙️ 設定"))
     _, markup, _ = _click(_button_starting(markup, "yinli"))
     _, markup, _ = _click(_button_starting(markup, "m2"))

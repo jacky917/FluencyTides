@@ -8,8 +8,8 @@ Script-side LLM model label.
 Success records take ``llm_model`` from the generation API response; this
 module only serves failure records and the missing-field fallback.
 
-【來源】後端每個用途的模型由 ``/models``（DB）決定，本機 ``.env`` 推不出來。所以先問後端
-``GET /api/v1/llm-routes``，取該用途鍵生效的標籤（模型路由計畫
+【來源】後端每個用途的模型由 ``/setconfig``（DB）決定，本機 ``.env`` 推不出來。所以先問後端
+``GET /api/v1/capability-routes``，取該用途鍵 ``llm`` 能力生效的標籤（模型路由計畫
 llm_model_routing_FEAT_2026-10-15.md D9）；查不到時（後端未啟動、版本太舊、認證失敗）
 才退回以**本機** settings 推算，並印出警告——兩份 ``.env`` 可能不一致（2026-08-28 曾因此
 錯標 190 筆 DB 紀錄）。同一個用途鍵在一次執行中只查一次。
@@ -47,7 +47,7 @@ def backend_headers() -> dict[str, str]:
 
 
 def local_llm_model_label() -> str:
-    """依**本機** settings 推算 ``.env`` 那一層的標籤（不知道後端 ``/models`` 的設定）。
+    """依**本機** settings 推算 ``.env`` 那一層的標籤（不知道後端 ``/setconfig`` 的設定）。
 
     Derive the ``.env``-layer label from the local settings.
 
@@ -72,15 +72,18 @@ def _fetch_backend_label(route_key: str) -> str:
         ValueError: 回應格式不符。
     """
     base_url = getattr(settings, "SCRIPTS_API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
-    response = httpx.get(f"{base_url}/api/v1/llm-routes", headers=backend_headers(), timeout=_TIMEOUT_SECONDS)
+    response = httpx.get(f"{base_url}/api/v1/capability-routes", headers=backend_headers(), timeout=_TIMEOUT_SECONDS)
     response.raise_for_status()
     for route in response.json()["routes"]:
         if route["route_key"] == route_key:
-            label = route["label"]
+            state = route["capabilities"].get("llm")
+            if state is None:
+                raise LookupError(f"後端用途鍵 '{route_key}' 沒有 llm 能力")
+            label = state["label"]
             if not isinstance(label, str) or not label:
                 raise ValueError(f"用途 '{route_key}' 的標籤格式不符：{label!r}")
-            if route.get("problem"):
-                logger.warning("⚠️ 後端用途 '%s' 目前無法使用：%s", route_key, route["problem"])
+            if state.get("problem"):
+                logger.warning("⚠️ 後端用途 '%s' 目前無法使用：%s", route_key, state["problem"])
             return label
     raise LookupError(f"後端沒有用途鍵 '{route_key}'")
 
@@ -105,7 +108,7 @@ def build_llm_model_label(route_key: str) -> str:
         fallback = local_llm_model_label()
         logger.warning(
             "⚠️ 無法向後端查詢用途 '%s' 的模型標籤（%s: %s），失敗紀錄改用本機 .env 推算的 '%s'——"
-            "若後端在 /models 改過這個用途，標籤會不一致。",
+            "若後端在 /setconfig 改過這個用途，標籤會不一致。",
             route_key, type(error).__name__, error, fallback,
         )
         return fallback

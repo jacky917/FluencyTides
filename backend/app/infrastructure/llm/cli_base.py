@@ -478,8 +478,8 @@ class HeadlessCliLLMClient(BaseLLMClient):
             LLMServiceError: 執行超時或無法啟動進程時。
         """
         command = self._build_command(system_prompt, schema_text)
-        # 每次呼叫才讀設定（不在建構時快取）：/setconfig 只改 settings、不重建
-        # singleton，執行期調整的逾時必須下一次呼叫即生效（與層級化前一致）
+        # 每次呼叫才讀設定（不在建構時快取）：測試或執行期改了 settings，下一次呼叫即生效
+        # （與層級化前一致）
         timeout = self._runtime().timeout_seconds
 
         def _run() -> subprocess.CompletedProcess[bytes]:

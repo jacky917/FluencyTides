@@ -37,7 +37,6 @@ from app.bot.utils.formatting import anki_field_to_tg_text, escape_tg
 from app.bot.utils.texts import (
     ANKI_UNREACHABLE,
     CARD_NOT_FOUND,
-    NO_MODIFIABLE_CONFIGS,
     error_detail,
     field_label,
     state_minutes,
@@ -56,8 +55,6 @@ from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from app.schemas.anki import AnkiNote, AnkiNoteOptions
 from app.schemas.speaking import NewCardPayload, ReferenceItem
 from app.services.relation_service import RelationService
-from app.core.dynamic_config import get_modifiable_configs
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 logger = logging.getLogger(__name__)
 
 router = Router(name="commands_router")
@@ -404,19 +401,17 @@ async def command_help_handler(message: Message) -> None:
         "點擊 Anki 卡片上的刪除按鈕，即可遠端刪除特定的參考範本或歷史錄音。\n\n"
         "4️⃣ <b>同步清理</b>\n"
         "輸入 /sync 手動清理資料庫中已不存在於 Anki 的孤兒關聯。\n\n"
-        "5️⃣ <b>動態設定（管理員限定）</b>\n"
-        "輸入 /setconfig 開啟設定選單，不需重啟即可切換：\n"
-        "  • <b>語音評分模式</b>（AUDIO_EVALUATOR_PROVIDER）：\n"
-        "    ├ <code>gemini_native</code> — Gemini 多模態直接聽音檔（預設）\n"
-        "    ├ <code>openai</code> — OpenAI 相容 API 聽音檔\n"
+        "5️⃣ <b>工具設定（管理員限定）</b>\n"
+        "輸入 /setconfig 為每個用途（例如自他動詞子卡、錄音評分）或全域指定要用的工具：\n"
+        "  • <b>文字 LLM</b>：端點、模型與思考深度\n"
+        "  • <b>評分策略</b>（錄音評分）：\n"
+        "    ├ <code>listen</code> — 多模態模型直接聽音檔\n"
         "    ├ <code>stt_diff</code> — 本地 Whisper 轉文字＋逐字比對，零 API 費用、秒回\n"
         "    └ <code>stt_llm</code> — 本地 Whisper 轉文字＋輕量 LLM 評分，低成本\n"
-        "  • <b>模型切換</b>：AUDIO_MODEL_NAME / STT_LLM_MODEL_NAME\n"
-        "<i>設定僅本次執行期間有效，重啟後回到 .env 預設值。生成用的 LLM 模型改用下方的 /models。</i>\n\n"
-        "6️⃣ <b>LLM 模型設定（管理員限定）</b>\n"
-        "輸入 /models 為每個用途（例如自他動詞子卡、讀音判斷）或全域指定端點、模型與思考深度。"
-        "選項來自 .env 的白名單；設定存在資料庫，重啟後仍有效。恢復預設後改用全域設定，"
-        "全域也沒設定時用 .env 預設。"
+        "  • <b>聽音檔的模型</b>、<b>語音轉文字</b>：評分策略用到的模型\n"
+        "三語卡另有自己的錄音評分設定，沒設時沿用錄音評分的。"
+        "選項來自 .env 的白名單；<b>設定存在資料庫，重啟後仍有效</b>。恢復預設後改用上一層"
+        "（三語卡 → 錄音評分 → 全域），都沒設定時用 .env 預設。"
     )
     await message.answer(help_text)
 
@@ -450,35 +445,3 @@ async def command_sync_handler(
     except (AnkiConnectError, FluencyTidesError) as e:
         logger.exception("Telegram Bot 同步發生未預期錯誤: %s", e)
         await status_msg.edit_text(f"❌ 清理失敗：{error_detail(e)}")
-
-
-@router.message(Command("setconfig"))
-async def command_setconfig_handler(message: Message) -> None:
-    """處理 /setconfig 指令，顯示可動態修改的設定清單按鈕。
-
-    Handle the /setconfig command: show buttons listing dynamically
-    modifiable settings.
-
-    Args:
-        message: Telegram 訊息物件。The Telegram message object.
-    """
-    if message.from_user is None or settings.TG_ADMIN_CHAT_ID is None:
-        await message.answer("⛔ 系統未設定管理員，此指令目前無法使用。")
-        return
-
-    if message.from_user.id != settings.TG_ADMIN_CHAT_ID:
-        await message.answer("⛔ 您沒有權限使用此指令。")
-        return
-
-    modifiable = get_modifiable_configs()
-    if not modifiable:
-        await message.answer(NO_MODIFIABLE_CONFIGS)
-        return
-
-    # 建立 Inline Keyboard 顯示所有可用的設定
-    buttons = []
-    for key in modifiable.keys():
-        buttons.append([InlineKeyboardButton(text=f"⚙️ {key}", callback_data=f"setconfig_key:{key}")])
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer("請選擇要動態修改的設定項目（重啟後將失效）：", reply_markup=keyboard)

@@ -168,7 +168,7 @@ def test_misspelled_field_is_reported(tmp_path, caplog):
 
     assert loaded["relay"].models == ()
     assert "LLM_ENDPOINTS__RELAY__MODEL 不是已知欄位" in caplog.text
-    assert "LLM_ENDPOINTS__RELAY__MODELS 為空" in caplog.text
+    assert "LLM_ENDPOINTS__RELAY__MODELS 與 AUDIO_MODELS 都是空的" in caplog.text
 
 
 def test_malformed_cli_whitelist_does_not_break_settings(tmp_path, caplog):
@@ -628,6 +628,6 @@ def test_top_level_value_does_not_break_settings(tmp_path, top_line, caplog):
         loaded = load_endpoints()
         is_custom = env_endpoint_is_custom()
 
-    assert set(loaded) == {"google", "claude-code", "antigravity"}
+    assert set(loaded) == {"google", "claude-code", "antigravity", "audio"}
     assert is_custom is False
     assert "LLM_ENDPOINTS 不應直接設值" in caplog.text

@@ -12,7 +12,7 @@ from app.infrastructure.llm import routing
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _CALL = re.compile(r"build_llm_model_label\(\s*[\"']([^\"']+)[\"']\s*\)")
-_DECLARATION = re.compile(r"=\s*llm_route\(")
+_DECLARATION = re.compile(r"=\s*route\(")
 
 
 def _declared_keys() -> set[str]:

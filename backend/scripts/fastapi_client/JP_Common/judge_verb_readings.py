@@ -20,7 +20,7 @@ surface has multiple readings.
 （標籤以後端回應為準）。
 
 用哪個模型由後端用途鍵 ``jp_verb_reading`` 決定：要換模型或思考深度，先在 TG
-``/models`` 設定 ``jp_verb_reading``，跑完再「恢復預設」。腳本不再有 ``--model`` /
+``/setconfig`` 設定 ``jp_verb_reading``，跑完再「恢復預設」。腳本不再有 ``--model`` /
 ``--effort``（模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D8）。
 
 快取規則：是否跳過只看 ``(script_id, 表層)`` 是否已有紀錄，**不比對模型**；
@@ -35,7 +35,7 @@ surface has multiple readings.
 Usage:
     python judge_verb_readings.py --project jp_verb_pair --dry-run
     python judge_verb_readings.py --project jp_verb_pair --surface 汚す 止める
-    python judge_verb_readings.py --project jp_verb_pair --rejudge-empty   # 先在 /models 換成較強的模型
+    python judge_verb_readings.py --project jp_verb_pair --rejudge-empty   # 先在 /setconfig 換成較強的模型
 """
 
 import argparse
@@ -274,7 +274,7 @@ async def _run() -> None:
         for p in plans:
             logger.info("  " + p.summary(args.batch_size))
         logger.info(f"  合計 {len(plans)} 個表層、待判 {total_pending} 句、{total_batches} 次呼叫"
-                    "（模型依後端 /models 的 jp_verb_reading 設定）")
+                    "（模型依後端 /setconfig 的 jp_verb_reading 設定）")
 
         if args.dry_run:
             logger.info("\n🧪 dry-run 結束，未呼叫 LLM、未寫入。")

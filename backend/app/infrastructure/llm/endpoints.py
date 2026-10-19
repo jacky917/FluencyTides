@@ -6,10 +6,10 @@ ID 識別；卡片標籤的 ``(前綴)`` 就是端點 ID。每個端點帶一份
 「模型 + effort」組合。端點與白名單全部來自 ``.env``——DB 只記「目前選了哪一組」
 （見 :mod:`app.infrastructure.llm.routing`）。
 
-端點的三個來源：
+端點的四個來源：
 
 - **自訂端點**：``LLM_ENDPOINTS__<ID>__TYPE / BASE_URL / API_KEY / MODELS /
-  SAFETY_SETTINGS``，任意多個
+  SAFETY_SETTINGS / AUDIO_MODELS / AUDIO_TRANSPORT``，任意多個
 - **內建 CLI 端點**：``claude-code`` / ``antigravity``，白名單為
   ``LLM_CLAUDE_CODE_MODELS`` / ``LLM_ANTIGRAVITY_MODELS``
 - **舊式單組設定**：``LLM_PROVIDER`` / ``LLM_BASE_URL`` / ``LLM_API_KEY`` /
@@ -17,6 +17,16 @@ ID 識別；卡片標籤的 ``(前綴)`` 就是端點 ID。每個端點帶一份
   這一組（含 CLI 的 ``LLM_*_EFFORT``）自動加進白名單，所以現有 ``.env`` 不必改。
   ``LLM_ENDPOINTS`` 定義了與 ``LLM_PROVIDER`` 同 ID 的端點時改用它（工廠在不指定
   端點時也會走它，見 :func:`env_endpoint_is_custom`）
+- **內建 audio 端點**（能力路由計畫 capability_routing_FEAT_2026-10-19.md §6.3）：由
+  ``AUDIO_API_KEY`` / ``AUDIO_BASE_URL`` / ``AUDIO_EVALUATOR_PROVIDER`` 合成，ID 固定為
+  ``audio``。音訊模型白名單為 ``AUDIO_MODELS`` 加上 ``AUDIO_MODEL_NAME``；文字模型白名單
+  為同一份清單加上 ``STT_LLM_MODEL_NAME``（錄音評分 ``stt_llm`` 策略用）。沒有
+  ``AUDIO_API_KEY`` 時不可選（``.env`` 那一層用到它時客戶端照舊報金鑰未設定）
+
+**音訊模型**（能力路由的 ``audio_llm``）另有一份白名單 ``audio_models``：只有標明能聽
+音檔的模型才能拿去評分錄音。``audio_transport`` 決定 openai 類端點怎麼送音檔：
+``input_audio``（OpenAI 的音訊輸入）或 ``image_url``（偽裝成圖片，給只收圖片的中轉站，
+即原本的 ``proxy`` 評分器）。
 
 白名單每項寫成卡片標籤的 ``模型@effort`` 形式：``"opus@low|high"`` 允許兩個
 effort，不帶 ``@`` 表示此模型不使用 effort。以**最後一個** ``@`` 切開，讓模型名本身
@@ -68,13 +78,27 @@ ALL_TYPES: frozenset[str] = frozenset(
     {TYPE_OPENAI, TYPE_GEMINI_NATIVE, TYPE_CLAUDE_CODE, TYPE_ANTIGRAVITY, TYPE_ANTHROPIC}
 )
 CUSTOM_TYPES: frozenset[str] = frozenset({TYPE_OPENAI, TYPE_GEMINI_NATIVE})
+# 能聽音檔的端點類型（有對應的語音評分器）
+AUDIO_TYPES: frozenset[str] = frozenset({TYPE_OPENAI, TYPE_GEMINI_NATIVE})
 
 # 自訂端點不可使用的 ID：對應非 OpenAI 相容客戶端的 provider 值。google / openai 不在
 # 內——它們本來就是 OpenAI 相容類的合法 ID，可用 LLM_ENDPOINTS 重新定義
 # IDs naming non-OpenAI-compatible clients; google / openai stay definable.
+# 內建 audio 端點的 ID（由 AUDIO_* 合成），自訂端點不可使用
+AUDIO_ENDPOINT_ID = "audio"
+
 RESERVED_IDS: frozenset[str] = frozenset(
-    {TYPE_CLAUDE_CODE, TYPE_ANTIGRAVITY, TYPE_GEMINI_NATIVE, TYPE_ANTHROPIC}
+    {TYPE_CLAUDE_CODE, TYPE_ANTIGRAVITY, TYPE_GEMINI_NATIVE, TYPE_ANTHROPIC, AUDIO_ENDPOINT_ID}
 )
+
+# openai 類端點送音檔的方式：OpenAI 的 input_audio，或偽裝成 image_url（只收圖片的中轉站）
+# How an openai-type endpoint receives audio.
+AUDIO_TRANSPORT_INPUT_AUDIO = "input_audio"
+AUDIO_TRANSPORT_IMAGE_URL = "image_url"
+AUDIO_TRANSPORTS: frozenset[str] = frozenset({AUDIO_TRANSPORT_INPUT_AUDIO, AUDIO_TRANSPORT_IMAGE_URL})
+
+# 沒有 AUDIO_BASE_URL 時 openai 類 audio 端點的網址（與能力路由之前 AsyncOpenAI 的預設相同）
+OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
 # 各端點類型接受的 effort 值（唯一來源，CLI 客戶端的 VALID_EFFORTS 取自這裡）；
 # 不在表內的類型不支援 effort
@@ -95,11 +119,11 @@ NO_SAFETY_SETTINGS_IDS: frozenset[str] = frozenset({"google", "openai", ""})
 ENDPOINT_ID_MAX_LENGTH = 32
 _ID_PATTERN = re.compile(rf"(?!.*__)[a-z0-9_]{{1,{ENDPOINT_ID_MAX_LENGTH}}}")
 
-# 與 llm_routes.endpoint / model / effort 欄位長度一致（ENDPOINT_ID_MAX_LENGTH 見上）
+# 與 capability_routes.provider / model / effort 欄位長度上限相容（ENDPOINT_ID_MAX_LENGTH 見上）
 MODEL_NAME_MAX_LENGTH = 128
 EFFORT_MAX_LENGTH = 16
 
-_KNOWN_FIELDS = "TYPE / BASE_URL / API_KEY / MODELS / SAFETY_SETTINGS"
+_KNOWN_FIELDS = "TYPE / BASE_URL / API_KEY / MODELS / SAFETY_SETTINGS / AUDIO_MODELS / AUDIO_TRANSPORT"
 _TRUE_WORDS = frozenset({"true", "1", "yes", "on"})
 _FALSE_WORDS = frozenset({"false", "0", "no", "off"})
 
@@ -154,8 +178,12 @@ class Endpoint:
         models: 白名單，模型名不重複。The whitelist.
         send_safety_settings: 是否送 safety_settings（只有 openai 類可為 True）。
             Whether to send safety_settings (openai type only).
-        listed: 是否可在管理介面選擇；``LLM_PROVIDER`` 留空時的合成端點與 anthropic
-            佔位端點為 False。Whether selectable in the admin menu.
+        listed: 是否可在管理介面選擇；``LLM_PROVIDER`` 留空時的合成端點、anthropic
+            佔位端點、沒有金鑰的 audio 端點為 False。Whether selectable in the admin menu.
+        audio_models: 能聽音檔的模型（能力路由的 ``audio_llm``），不帶 effort。
+            Audio-capable models, without effort.
+        audio_transport: openai 類送音檔的方式（:data:`AUDIO_TRANSPORTS`）；其他類型為 None。
+            How an openai-type endpoint receives audio.
         api_key_setting: 金鑰的設定名（錯誤訊息用）。Setting name of the key.
         base_url_setting: 網址的設定名（錯誤訊息用）。Setting name of the URL.
     """
@@ -169,6 +197,8 @@ class Endpoint:
     listed: bool = True
     api_key_setting: str = "LLM_API_KEY"
     base_url_setting: str = "LLM_BASE_URL"
+    audio_models: tuple[ModelOption, ...] = ()
+    audio_transport: str | None = None
 
     def __post_init__(self) -> None:
         if self.type not in ALL_TYPES:
@@ -182,6 +212,15 @@ class Endpoint:
         for option in self.models:
             if not set(option.efforts) <= allowed:
                 raise ValueError(f"端點 {self.id!r} 的模型 {option.name!r} 含此類型不支援的 effort")
+        audio_names = [option.name for option in self.audio_models]
+        if len(set(audio_names)) != len(audio_names) or any(option.efforts for option in self.audio_models):
+            raise ValueError(f"端點 {self.id!r} 的音訊白名單有重複模型或帶 effort：{audio_names}")
+        if self.audio_models and self.type not in AUDIO_TYPES:
+            raise ValueError(f"端點 {self.id!r}（{self.type}）不能聽音檔")
+        if (self.audio_transport is not None) != (self.type == TYPE_OPENAI and bool(self.audio_models)):
+            raise ValueError(f"端點 {self.id!r} 的 audio_transport 只在有音訊模型的 openai 類端點設定")
+        if self.audio_transport is not None and self.audio_transport not in AUDIO_TRANSPORTS:
+            raise ValueError(f"端點 {self.id!r} 的 audio_transport 無效：{self.audio_transport!r}")
 
     def find_model(self, name: str) -> ModelOption | None:
         """白名單中名為 ``name`` 的模型。The whitelisted model named ``name``."""
@@ -191,6 +230,10 @@ class Endpoint:
         """``(model, effort)`` 是否在白名單內。Whether ``(model, effort)`` is whitelisted."""
         option = self.find_model(model)
         return option is not None and option.allows(effort)
+
+    def find_audio_model(self, name: str) -> ModelOption | None:
+        """音訊白名單中名為 ``name`` 的模型。The audio-whitelisted model named ``name``."""
+        return next((option for option in self.audio_models if option.name == name), None)
 
 
 def _report(message: str, level: int = logging.ERROR) -> None:
@@ -317,6 +360,82 @@ def parse_whitelist(
     return tuple(ModelOption(name, tuple(efforts)) for name, efforts in merged.items())
 
 
+def parse_audio_whitelist(entries: tuple[str, ...] | list[str], *, setting_name: str) -> tuple[ModelOption, ...]:
+    """把音訊模型白名單解析成 :class:`ModelOption`（不帶 effort，重複的只留一個）。
+
+    Parse an audio-model whitelist: plain names, duplicates dropped; an
+    entry carrying ``@effort`` or an over-long name is skipped and reported.
+    """
+    names: list[str] = []
+    for raw in entries:
+        name = str(raw).strip()
+        if not name or name in names:
+            continue
+        if "@" in name:
+            _report(f"{setting_name} 的項目 {name!r} 帶了 effort（音訊模型不使用 effort），已跳過。")
+            continue
+        if len(name) > MODEL_NAME_MAX_LENGTH:
+            _report(f"{setting_name} 的模型名超過 {MODEL_NAME_MAX_LENGTH} 字元，已跳過：{name[:40]}…")
+            continue
+        names.append(name)
+    return tuple(ModelOption(name) for name in names)
+
+
+def _with_extra_models(models: tuple[ModelOption, ...], *names: str) -> tuple[ModelOption, ...]:
+    """把不帶 effort 的模型名補進白名單（已有的不重複加，空的、太長的略過）。
+
+    Append plain model names that are not whitelisted yet.
+    """
+    result = list(models)
+    for raw in names:
+        name = (raw or "").strip()
+        if name and len(name) <= MODEL_NAME_MAX_LENGTH and all(option.name != name for option in result):
+            result.append(ModelOption(name))
+    return tuple(result)
+
+
+def _audio_endpoint() -> Endpoint:
+    """由 ``AUDIO_*`` 合成內建 audio 端點（能力路由計畫 §6.3）。
+
+    Synthesize the built-in ``audio`` endpoint from the ``AUDIO_*`` settings.
+
+    類型：``AUDIO_EVALUATOR_PROVIDER`` 為 ``gemini_native`` 時為 gemini-native；其他（``openai`` /
+    ``proxy`` / ``stt_diff`` / ``stt_llm``）為 openai，沒有 ``AUDIO_BASE_URL`` 時用 OpenAI 官方網址——
+    與能力路由之前的評分器相同（``stt_llm`` 原本就以 ``AUDIO_*`` 建 OpenAI 相容客戶端）。``proxy``
+    以 ``image_url`` 送音檔，其餘以 ``input_audio``。沒有 ``AUDIO_API_KEY`` 時不可選。啟動時記一行
+    選定的類型（:func:`log_endpoint_summary`）。
+    """
+    provider = (settings.AUDIO_EVALUATOR_PROVIDER or "").strip().lower()
+    base_url = (settings.AUDIO_BASE_URL or "").strip()
+    endpoint_type = TYPE_GEMINI_NATIVE if provider == "gemini_native" else TYPE_OPENAI
+
+    entries = coerce_entries(settings.AUDIO_MODELS, setting_name="AUDIO_MODELS")
+    if entries is None:
+        _report("AUDIO_MODELS 格式錯誤，audio 端點的音訊白名單只剩 AUDIO_MODEL_NAME。")
+        entries = ()
+    audio_models = _with_extra_models(
+        parse_audio_whitelist(entries, setting_name="AUDIO_MODELS"), settings.AUDIO_MODEL_NAME
+    )
+    api_key = (settings.AUDIO_API_KEY or "").strip()
+    is_openai = endpoint_type == TYPE_OPENAI
+    return Endpoint(
+        id=AUDIO_ENDPOINT_ID,
+        type=endpoint_type,
+        base_url=(base_url or OPENAI_DEFAULT_BASE_URL) if is_openai else None,
+        api_key=SecretStr(api_key) if api_key else None,
+        models=_with_extra_models(audio_models, settings.STT_LLM_MODEL_NAME),
+        listed=bool(api_key),
+        api_key_setting="AUDIO_API_KEY",
+        base_url_setting="AUDIO_BASE_URL",
+        audio_models=audio_models,
+        audio_transport=(
+            (AUDIO_TRANSPORT_IMAGE_URL if provider == "proxy" else AUDIO_TRANSPORT_INPUT_AUDIO)
+            if is_openai and audio_models
+            else None
+        ),
+    )
+
+
 def _with_env_option(endpoint: Endpoint, extra: ModelOption) -> Endpoint:
     """把「.env 那一層」的組合併進端點的白名單。
 
@@ -404,8 +523,21 @@ def _custom_endpoint(raw_id: str, raw: Any) -> Endpoint | str:
             )
 
     models = parse_whitelist(entries, endpoint_id=endpoint_id, endpoint_type=endpoint_type)
-    if not models:
-        _report(f"{prefix}__MODELS 為空，此端點不會出現在管理介面。", logging.WARNING)
+    audio_entries = coerce_entries(config.audio_models, setting_name=f"{prefix}__AUDIO_MODELS")
+    if audio_entries is None:
+        return skip("AUDIO_MODELS 格式錯誤")
+    audio_models = parse_audio_whitelist(audio_entries, setting_name=f"{prefix}__AUDIO_MODELS")
+    if not models and not audio_models:
+        _report(f"{prefix}__MODELS 與 AUDIO_MODELS 都是空的，此端點不會出現在管理介面。", logging.WARNING)
+
+    raw_transport = (config.audio_transport or "").strip().lower()
+    audio_transport: str | None = None
+    if endpoint_type == TYPE_OPENAI and audio_models:
+        audio_transport = raw_transport or AUDIO_TRANSPORT_INPUT_AUDIO
+        if audio_transport not in AUDIO_TRANSPORTS:
+            return skip(f"AUDIO_TRANSPORT='{config.audio_transport}' 無效（可用：{', '.join(sorted(AUDIO_TRANSPORTS))}）")
+    elif raw_transport:
+        _report(f"{prefix}__AUDIO_TRANSPORT 只對有 AUDIO_MODELS 的 openai 類端點有效，已忽略。", logging.WARNING)
 
     return Endpoint(
         id=endpoint_id,
@@ -416,6 +548,8 @@ def _custom_endpoint(raw_id: str, raw: Any) -> Endpoint | str:
         send_safety_settings=send_safety,
         api_key_setting=f"{prefix}__API_KEY",
         base_url_setting=f"{prefix}__BASE_URL",
+        audio_models=audio_models,
+        audio_transport=audio_transport,
     )
 
 
@@ -511,6 +645,8 @@ def _load() -> tuple[dict[str, Endpoint], dict[str, str]]:
             models=parse_whitelist(entries, endpoint_id=cli_type, endpoint_type=cli_type),
         )
 
+    endpoints[AUDIO_ENDPOINT_ID] = _audio_endpoint()
+
     provider = env_endpoint_id()
     option = _env_option(provider)
     existing = endpoints.get(provider)
@@ -519,7 +655,7 @@ def _load() -> tuple[dict[str, Endpoint], dict[str, str]]:
         # 讓「.env 那一層」明確失敗（工廠報端點不存在），而不是默默換一組憑證
         pass
     elif existing is not None:
-        if existing.type not in (TYPE_CLAUDE_CODE, TYPE_ANTIGRAVITY) and (
+        if existing.type not in (TYPE_CLAUDE_CODE, TYPE_ANTIGRAVITY) and existing.id != AUDIO_ENDPOINT_ID and (
             settings.LLM_BASE_URL or settings.LLM_API_KEY
         ):
             _report(
@@ -600,6 +736,17 @@ def list_endpoints() -> list[Endpoint]:
     )
 
 
+def list_audio_endpoints() -> list[Endpoint]:
+    """可選來聽音檔的端點（音訊白名單非空），依 ID 排序。
+
+    Endpoints selectable for the ``audio_llm`` capability, by ID.
+    """
+    return sorted(
+        (endpoint for endpoint in load_endpoints().values() if endpoint.listed and endpoint.audio_models),
+        key=lambda endpoint: endpoint.id,
+    )
+
+
 def log_endpoint_summary() -> None:
     """載入一次端點並記一行摘要（後端啟動時呼叫）；設定錯誤在此首次記 ERROR。
 
@@ -609,10 +756,19 @@ def log_endpoint_summary() -> None:
     loaded, skipped = _load()
     summary = ", ".join(
         f"{endpoint.id or '（空）'}[{endpoint.type}, {len(endpoint.models)} 個模型"
+        f"{f'、{len(endpoint.audio_models)} 個音訊模型' if endpoint.audio_models else ''}"
         f"{'' if endpoint.listed else '，不可選'}]"
         for endpoint in sorted(loaded.values(), key=lambda endpoint: endpoint.id)
     )
     logger.info("LLM 端點已載入（.env 那一層：'%s'）：%s", env_endpoint_id(), summary)
+    audio = loaded.get(AUDIO_ENDPOINT_ID)
+    if audio is not None:
+        logger.info(
+            "內建 audio 端點：%s%s（依 AUDIO_EVALUATOR_PROVIDER=%r 決定；gemini_native 為 gemini-native，其餘為 openai）",
+            audio.type,
+            f"，{audio.base_url}，送音檔方式 {audio.audio_transport}" if audio.base_url else "",
+            settings.AUDIO_EVALUATOR_PROVIDER,
+        )
     if skipped:
         logger.warning(
             "LLM 端點設定有誤已跳過：%s",

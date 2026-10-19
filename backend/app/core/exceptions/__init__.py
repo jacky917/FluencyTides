@@ -19,6 +19,7 @@ from .infrastructure import (
     AnkiServiceError,
     AnkiFieldCorruptedError,
     STTServiceError,
+    AudioEvaluatorUnavailableError,
     StorageServiceError,
 )
 from .bot import (
@@ -36,10 +37,14 @@ from .services import (
     AuthenticationError,
     LLMGenerationError,
     ClozePositioningError,
-    LLMRouteError,
-    LLMRouteNotFoundError,
-    InvalidLLMRouteError,
-    LLMRouteStoreUnavailableError,
+    RouteError,
+    RouteNotFoundError,
+    InvalidRouteError,
+    RouteStoreUnavailableError,
+    CardNotFoundError,
+    InvalidMediaFilenameError,
+    MediaFileNotFoundError,
+    InvalidAnkiSearchError,
 )
 
 __all__ = [
@@ -53,6 +58,7 @@ __all__ = [
     "AnkiServiceError",
     "AnkiFieldCorruptedError",
     "STTServiceError",
+    "AudioEvaluatorUnavailableError",
     "StorageServiceError",
     "BotBaseError",
     "BotStateError",
@@ -66,8 +72,12 @@ __all__ = [
     "AuthenticationError",
     "LLMGenerationError",
     "ClozePositioningError",
-    "LLMRouteError",
-    "LLMRouteNotFoundError",
-    "InvalidLLMRouteError",
-    "LLMRouteStoreUnavailableError",
+    "RouteError",
+    "RouteNotFoundError",
+    "InvalidRouteError",
+    "RouteStoreUnavailableError",
+    "CardNotFoundError",
+    "InvalidMediaFilenameError",
+    "MediaFileNotFoundError",
+    "InvalidAnkiSearchError",
 ]

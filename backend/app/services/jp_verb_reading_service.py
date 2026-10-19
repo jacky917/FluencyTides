@@ -5,7 +5,7 @@ multiple readings.
 
 渲染 ``JP_VerbReading_Judge.j2``、以用途鍵 ``jp_verb_reading`` 生效的 LLM client
 呼叫，並把輸出收斂成安全的結果：讀音不在該句候選內、或缺漏的句子，一律視為
-「無法判定」（空字串），寧缺勿錯。要換模型請用 TG ``/models`` 設定這個用途
+「無法判定」（空字串），寧缺勿錯。要換模型請用 TG ``/setconfig`` 設定這個用途
 （模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D8：請求不再能覆寫模型 / effort）。
 Renders the judge template, calls the client of the ``jp_verb_reading``
 route, and normalizes the output: readings outside the item's
@@ -17,7 +17,7 @@ candidates, or missing items, become "" (undetermined).
 import logging
 
 from app.core.dependencies import get_template_engine
-from app.infrastructure.llm.routing import llm_route
+from app.infrastructure.llm.routing import route
 from app.schemas.llm.jp_verb_reading import (
     JudgeReadingItem,
     JudgeReadingsResponse,
@@ -28,7 +28,7 @@ from app.schemas.llm.jp_verb_reading import (
 logger = logging.getLogger(__name__)
 
 # LLM 用途鍵（生效設定的解析見 app.infrastructure.llm.routing）
-JUDGE_LLM = llm_route("jp_verb_reading", "讀音判斷")
+JUDGE_LLM = route("jp_verb_reading", "讀音判斷", capabilities={"llm"})
 
 TEMPLATE_PATH = "prompts/anki/JP_VerbReading_Judge.j2"
 SYSTEM_PROMPT = (
