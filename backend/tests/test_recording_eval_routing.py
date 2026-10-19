@@ -188,7 +188,7 @@ def test_branch_inherits_strategy_restriction_and_env_defaults(declare_route_key
     try:
         assert routing.allowed_strategies("shadow_test.branch") == {"stt_diff"}
         assert routing.check_choice(RouteChoice("listen", "", None), "audio_eval", route_key="shadow_test.branch")
-        assert routing.env_choice_for("shadow_test.branch", "llm") == RouteChoice("audio", "x", None)
+        assert routing.declared_default_for("shadow_test.branch", "llm") == RouteChoice("audio", "x", None)
     finally:
         routing._DECLARED.pop("shadow_test", None)
         routing._DECLARED.pop("shadow_test.branch", None)

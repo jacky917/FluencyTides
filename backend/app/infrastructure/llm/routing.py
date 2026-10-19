@@ -59,7 +59,6 @@ from app.infrastructure.llm.capabilities import (
     CAPABILITIES,
     CAPABILITY_AUDIO_EVAL,
     CAPABILITY_LLM,
-    CAPABILITY_ORDER,
     STRATEGIES,
     RouteChoice,
     env_default,
@@ -248,11 +247,6 @@ class Route:
         if self.env_defaults is not None and not set(self.env_defaults) <= self.capabilities:
             raise ValueError(f"用途鍵 {self.key!r} 的 env_defaults 含未宣告的能力。")
 
-    @property
-    def ordered_capabilities(self) -> tuple[str, ...]:
-        """依顯示順序排列的能力。The capabilities in display order."""
-        return tuple(capability for capability in CAPABILITY_ORDER if capability in self.capabilities)
-
     async def resolve(self, capability: str = CAPABILITY_LLM) -> ResolvedRoute:
         """此用途某個能力目前生效的設定。The effective setting for this route."""
         return await resolve(self.key, capability)
@@ -376,16 +370,6 @@ def declared_default_for(route_key: str, capability: str) -> RouteChoice | None:
             if choice is not None:
                 return choice
     return None
-
-
-def env_choice_for(route_key: str, capability: str) -> RouteChoice | None:
-    """``.env`` 那一層的選擇：用途鍵（或流程鍵）宣告的預設優先，否則為該能力的一般預設。
-
-    The env layer's choice: a default declared by the key or its flow key,
-    else the capability's general default (None for plain ``llm``).
-    """
-    declared = declared_default_for(route_key, capability)
-    return declared if declared is not None else env_default(capability)
 
 
 # ----------------------------------------------------------------------

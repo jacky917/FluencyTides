@@ -6,7 +6,7 @@ Capability route settings API.
 - ``PUT    /api/v1/capability-routes/{route_key}/{capability}``  寫入一組選擇（白名單＋試建客戶端檢查）
 - ``DELETE /api/v1/capability-routes/{route_key}/{capability}``  恢復預設（退回全域，或 ``.env``）
 
-能力見 :mod:`app.infrastructure.llm.capabilities`。全域設定的用途鍵是 ``*``（URL 中寫成 ``%2A``）；寫入或刪除它之後
+能力見 :mod:`app.infrastructure.llm.capabilities`。全域設定的用途鍵是 ``*``（URL 中寫成 ``%2A``）；寫入或刪除它的 ``llm`` 之後
 （不論成敗）會重建 ``app.state.llm_client``（診斷端點用，模型路由計畫 D9）。認證與其他 API 相同，
 掛在 ``verify_api_key`` 之下（部署上的存取控制見 README 的「API 認證」）。可選項目只列 provider
 ID、類型與白名單，不含金鑰。
@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, Request
 
 from app.core.auth import verify_api_key
 from app.infrastructure.llm import routing
-from app.infrastructure.llm.capabilities import CAPABILITY_AUDIO_EVAL, CAPABILITY_ORDER, list_providers
+from app.infrastructure.llm.capabilities import CAPABILITY_AUDIO_EVAL, CAPABILITY_LLM, CAPABILITY_ORDER, list_providers
 from app.infrastructure.llm.routing import GLOBAL_ROUTE_KEY
 from app.schemas.capability_route import (
     CapabilityRoutesResponse,
@@ -55,12 +55,14 @@ _INVALID = {
 _UNAVAILABLE = {503: {"model": ErrorResponse, "description": "讀不到資料庫，或寫入／刪除時資料庫異常（結果未知）"}}
 
 
-async def _refresh_global_client_if(route_key: str, request: Request) -> None:
-    """改的是全域 ``*`` 時重建診斷用的全域客戶端；不論寫入成敗都做（503 結果未知時 DB 可能已改）。
+async def _refresh_global_client_if(route_key: str, capability: str, request: Request) -> None:
+    """改的是全域 ``*`` 的 ``llm`` 時重建診斷用的全域客戶端（與 TG 選單相同）；不論寫入成敗都做
+    （503 結果未知時 DB 可能已改）。其他能力與這個客戶端無關，不重建。
 
-    Rebuild the diagnostics' global client after any attempt to change ``*``.
+    Rebuild the diagnostics' global client after any attempt to change the
+    global ``llm`` row.
     """
-    if route_key == GLOBAL_ROUTE_KEY:
+    if route_key == GLOBAL_ROUTE_KEY and capability == CAPABILITY_LLM:
         await capability_route_service.refresh_global_client(request.app.state)
 
 
@@ -117,7 +119,7 @@ async def put_capability_route(route_key: str, capability: str, body: RouteUpdat
             route_key, body.provider, body.model, body.effort, updated_by="api", capability=capability
         )
     finally:
-        await _refresh_global_client_if(route_key, request)
+        await _refresh_global_client_if(route_key, capability, request)
     return capability_route_service.to_read(view)
 
 
@@ -141,7 +143,7 @@ async def delete_capability_route(route_key: str, capability: str, request: Requ
     try:
         result = await capability_route_service.delete_route(route_key, updated_by="api", capability=capability)
     finally:
-        await _refresh_global_client_if(route_key, request)
+        await _refresh_global_client_if(route_key, capability, request)
     return RouteDeleteResponse(
         deleted=result.deleted,
         route=capability_route_service.to_read(result.view) if result.view is not None else None,

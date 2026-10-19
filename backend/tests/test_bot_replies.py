@@ -415,9 +415,11 @@ def test_voice_without_task_mentions_the_time_limit():
 
 
 def test_missing_evaluator_keeps_recording_mode_and_says_so():
-    """依設定建不出評分器：狀態沒清，說明原因，改好設定後可在時限內重傳。"""
+    """依設定建不出評分器：狀態沒清，說明原因，改好設定後可在時限內重傳；音檔還沒存進 Anki。"""
     manager = _recording_state()
-    _, status = _voice(manager, evaluator=None)
+    anki = _anki()
+    _, status = _voice(manager, evaluator=None, anki=anki)
+    anki.store_media_file.assert_not_called()
     last = _sent(status.edit_text)[-1]
     _assert_tg_html(last)
     assert "AUDIO_API_KEY 未設定" in last and "改好設定後" in last

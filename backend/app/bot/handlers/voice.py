@@ -53,7 +53,8 @@ from app.bot.utils.texts import CARD_NOT_FOUND, error_detail, state_minutes
 from app.core.exceptions import AnkiFieldCorruptedError, AudioEvaluatorUnavailableError
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
-from app.infrastructure.audio_evaluator.base import AudioNotScoredError
+from app.infrastructure.audio_evaluator.base import AudioNotScoredError, BaseAudioEvaluator
+from app.infrastructure.audio_evaluator.factory import EvaluatorPlan
 from app.services import recording_eval
 from app.services.card_service import CardService
 from app.services.relation_service import RelationService
@@ -211,24 +212,15 @@ async def process_voice_handler(
         user_state_manager.clear_state(chat_id)
         return
 
-    # ── Step 3: 共用邏輯：上傳音檔至 Anki Media ──
-    try:
-        audio_base64 = base64.b64encode(audio_data).decode("utf-8")
-        from app.schemas.anki import AnkiStoreMediaParams
-        await anki_client.store_media_file(params=AnkiStoreMediaParams(filename=audio_filename, data=audio_base64))
-        logger.info(f"✅ 已上傳 {audio_filename} 至 Anki Media")
-    except AnkiConnectError as e:
-        logger.error("上傳音檔失敗: %s", e)
-        await status_msg.edit_text(f"❌ 上傳音檔到 Anki 失敗：{error_detail(e)}\n{_RETRY_FROM_ANKI}")
-        user_state_manager.clear_state(chat_id)
-        return
-
-    # ── Step 4: 分支處理 ──
+    # ── Step 2.5: 錄音評分先取得評分器（在上傳音檔之前）──
+    # 設定有問題時在這裡就停下：不會先把音檔存進 Anki、留下沒有紀錄引用的檔案（重傳時也不會越存越多）
+    # 三語卡與對話卡各用自己的 handler，評分器依 handler 的用途鍵建立（可設不同策略）
+    handler_name = "speaking_trilingual" if trilingual_lang else "speaking_coach"
+    audio_evaluator: BaseAudioEvaluator | None = None
+    plan: EvaluatorPlan | None = None
     if state.action == "recording":
-        # 三語卡與對話卡各用自己的 handler，評分器依 handler 的用途鍵建立（可設不同策略）
-        handler_name = "speaking_trilingual" if trilingual_lang else "speaking_coach"
         try:
-            audio_evaluator, _plan = await recording_eval.evaluator_for_handler(handler_name)
+            audio_evaluator, plan = await recording_eval.evaluator_for_handler(handler_name)
         except AudioEvaluatorUnavailableError as e:
             # 狀態沒清（仍在錄音模式）：改好設定後可在時限內直接重傳
             logger.error("錄音評分器無法建立（%s）：%s", handler_name, e.message)
@@ -243,6 +235,21 @@ async def process_voice_handler(
             await status_msg.edit_text("❌ 語音評分服務發生錯誤（詳見伺服器日誌），這次沒有評分。請稍後在錄音模式內重傳語音。")
             return
 
+    # ── Step 3: 共用邏輯：上傳音檔至 Anki Media ──
+    try:
+        audio_base64 = base64.b64encode(audio_data).decode("utf-8")
+        from app.schemas.anki import AnkiStoreMediaParams
+        await anki_client.store_media_file(params=AnkiStoreMediaParams(filename=audio_filename, data=audio_base64))
+        logger.info(f"✅ 已上傳 {audio_filename} 至 Anki Media")
+    except AnkiConnectError as e:
+        logger.error("上傳音檔失敗: %s", e)
+        await status_msg.edit_text(f"❌ 上傳音檔到 Anki 失敗：{error_detail(e)}\n{_RETRY_FROM_ANKI}")
+        user_state_manager.clear_state(chat_id)
+        return
+
+    # ── Step 4: 分支處理 ──
+    if state.action == "recording":
+        assert audio_evaluator is not None and plan is not None  # Step 2.5 已取得
         await status_msg.edit_text("⏳ 評分中…")
 
         try:
@@ -343,7 +350,7 @@ async def process_voice_handler(
         # 各 evaluator 自行回報的模式/模型標籤；缺省時退回評分策略名
         # Mode/model label self-reported by the evaluator; falls back to
         # the strategy name when absent.
-        evaluator_label = html.escape(result.evaluator_label or _plan.strategy_name)
+        evaluator_label = html.escape(result.evaluator_label or plan.strategy_name)
 
         await status_msg.edit_text(
             f"✅ <b>錄音評分完成！</b>\n\n"

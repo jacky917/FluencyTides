@@ -534,6 +534,9 @@ def test_close_button_goes_to_close_handler_only():
 
     assert matching(CLOSE_DATA) == {"handle_close"}
     assert matching(f"lr:l:{_ctx().version}:0") == {"handle_menu"}
+    # 舊 /setconfig 的按鈕由 handle_legacy_setconfig 接住，回覆已過期
+    assert matching("setconfig_key:AUDIO_MODEL_NAME") == {"handle_legacy_setconfig"}
+    assert matching("setcfg_val:AUDIO_MODEL_NAME:x") == {"handle_legacy_setconfig"}
 
 
 @pytest.mark.parametrize("target", ["restore", "save"])

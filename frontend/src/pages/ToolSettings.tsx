@@ -179,7 +179,7 @@ export default function ToolSettings() {
               <RouteCard
                 key={route.route_key}
                 route={route}
-                isBranch={parentKey(route.route_key) !== null && listedKeys.has(parentKey(route.route_key) ?? '')}
+                isBranch={listedKeys.has(parentKey(route.route_key) ?? '')}
                 providers={data.providers}
                 strategies={data.strategies ?? {}}
                 readOnly={readOnly}
@@ -527,10 +527,12 @@ function CapabilityEditor({
 
   const provider = providers.find((item) => item.id === providerId)
   const needsModel = (provider?.models.length ?? 0) > 0
+  // 還沒選 provider 時，只有這個能力有要選模型的 provider 才先顯示模型欄（評分策略永遠不顯示）
+  const showModel = needsModel || (!provider && providers.some((item) => item.models.length > 0))
   const model = provider?.models.find((item) => item.name === modelName)
   const needsEffort = (model?.efforts.length ?? 0) > 0
   const choice: RouteUpdate | null = buildChoice(providers, { provider: providerId, model: modelName, effort })
-  const columns = 1 + (needsModel || !provider ? 1 : 0) + (needsEffort ? 1 : 0)
+  const columns = 1 + (showModel ? 1 : 0) + (needsEffort ? 1 : 0)
 
   const selectModel = (name: string, from: ProviderOption | undefined) => {
     setModelName(name)
@@ -590,7 +592,7 @@ function CapabilityEditor({
             ))}
           </select>
         </div>
-        {(needsModel || !provider) && (
+        {showModel && (
           <div className="space-y-2">
             <label className="text-sm font-medium" htmlFor={`model-${idPrefix}`}>
               模型
