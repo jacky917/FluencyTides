@@ -17,7 +17,30 @@
  * The bridge proxies media through the parent because the opaque-origin
  * frame may not carry the login cookie. CSS `url()`, `srcset` and fonts are
  * not covered.
+ *
+ * 模板也會直接呼叫 AnkiConnect（`fetch('http://127.0.0.1:8765', …)`）：「查看母卡片」等按鈕用
+ * `guiBrowse` 在 Anki 瀏覽器中打開某張筆記。橋接腳本攔下這些請求，不讓它們打到使用者電腦上的
+ * Anki：`guiBrowse` 改請網頁在這個頁面中切換到那張卡片，其他動作（寫入欄位等）回覆不支援並請
+ * 網頁顯示提示。
+ *
+ * 攔截只為了讓按鈕有作用；真正擋住連線的是卡面文件的 CSP（`connect-src 'none'`、
+ * `form-action 'none'`，見 {@link CARD_FRAME_CSP}）：模板用任何寫法（其他網址寫法、子 iframe、
+ * 表單）都連不出去。媒體檔本來就經 postMessage 由網頁下載，不受影響。
+ *
+ * Templates also call AnkiConnect directly. The bridge intercepts those
+ * calls: `guiBrowse` becomes in-page navigation, anything else is refused
+ * with a notice. The document's CSP is what actually blocks connections, so
+ * nothing reaches an Anki running on the viewer's machine.
  */
+
+/**
+ * 卡面文件的 CSP：不准發出連線與送出表單（卡面不需要；媒體經 postMessage）。
+ * The card document's CSP: no connections, no form submissions.
+ */
+export const CARD_FRAME_CSP = "connect-src 'none'; form-action 'none'"
+
+/** `guiBrowse` 一次最多打開幾張筆記的 ID（超過的不理會）。Max note IDs per guiBrowse. */
+export const MAX_BROWSE_NOTES = 20
 
 /** iframe → 網頁：請代為下載一個媒體檔。Frame → parent: fetch a media file. */
 export interface MediaRequestMessage {
@@ -38,6 +61,20 @@ export interface FrameHeightMessage {
 /** iframe → 網頁：卡面腳本出錯（含橋接腳本本身）。Frame → parent: a script error. */
 export interface FrameErrorMessage {
   type: 'anki-frame-error'
+  nonce: string
+  message: string
+}
+
+/** iframe → 網頁：模板要在 Anki 瀏覽器中搜尋（`guiBrowse`）。Frame → parent: a guiBrowse search. */
+export interface BrowseRequestMessage {
+  type: 'anki-browse'
+  nonce: string
+  query: string
+}
+
+/** iframe → 網頁：模板呼叫了網頁版不支援的 AnkiConnect 動作。Frame → parent: an unsupported call. */
+export interface FrameNoticeMessage {
+  type: 'anki-frame-notice'
   nonce: string
   message: string
 }
@@ -72,6 +109,57 @@ export function isLocalMediaName(value: unknown): value is string {
 }
 
 /**
+ * 解析模板對 AnkiConnect 的呼叫：網址指向本機（`127.x.x.x`、`localhost`、`[::1]`、`0.0.0.0`，
+ * 以瀏覽器的網址解析為準，`127.1` 之類的寫法也算），埠為 8765 或省略時，從請求內容取出
+ * `action` 與 `params`；其他請求回傳 null（照常送出，CSP 仍會擋）。是 AnkiConnect 但內容讀不懂
+ * 時，`action` 為空字串（仍然攔下，不送出）。
+ * 這個函式會原樣注入 iframe，只能用到 JavaScript 內建功能。
+ *
+ * Parses a template's AnkiConnect call. Returns null for other URLs, and an
+ * empty action for an unreadable body. Injected verbatim into the frame.
+ *
+ * @param url - 請求網址。The request URL.
+ * @param body - 請求內容（JSON 字串）。The request body.
+ * @returns 動作與參數，或 null。The action and params, or null.
+ */
+export function parseAnkiConnectCall(url: unknown, body: unknown): { action: string; params: unknown } | null {
+  let parsed
+  try {
+    // 相對網址（含 //host 這種寫法）以 http 解析；iframe 內的 location 是 about:srcdoc
+    parsed = new URL(String(url ?? '').trim(), 'http://frame.invalid/')
+  } catch {
+    return null
+  }
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, '')
+  const isLocal = /^127\./.test(host) || host === 'localhost' || host === '[::1]' || host === '0.0.0.0'
+  if (!/^https?:$/.test(parsed.protocol) || !isLocal || (parsed.port !== '8765' && parsed.port !== '')) return null
+  try {
+    const data = typeof body === 'string' ? JSON.parse(body) : null
+    if (data && typeof data === 'object' && typeof data.action === 'string') {
+      return { action: data.action, params: data.params ?? null }
+    }
+  } catch {
+    // 讀不懂的內容一樣攔下
+  }
+  return { action: '', params: null }
+}
+
+/**
+ * 從 `guiBrowse` 的搜尋語句取出筆記 ID：只接受 `nid:<ID>` 或 `nid:<ID>,<ID>…`（模板都用這種寫法），
+ * 其他搜尋回傳 null；最多取前 {@link MAX_BROWSE_NOTES} 個。
+ * Extracts note IDs from a guiBrowse query of the form `nid:1,2`.
+ * @param query - 搜尋語句。The query.
+ * @returns 筆記 ID（依原順序、去掉重複），或 null。The note IDs, or null.
+ */
+export function parseNoteQuery(query: string): number[] | null {
+  const match = /^\s*nid:(\d+(?:,\d+)*)\s*$/i.exec(query)
+  if (!match) return null
+  const ids = match[1].split(',').map(Number)
+  if (!ids.every((id) => Number.isSafeInteger(id) && id > 0)) return null
+  return [...new Set(ids)].slice(0, MAX_BROWSE_NOTES)
+}
+
+/**
  * 網頁願意代為下載的檔名：只接受媒體資料夾中的單一檔名（不含 `/` `\` NUL、不是 `.` `..`）。
  * 後端 `validate_media_filename` 是權威版本；這裡先擋，省一趟請求並回覆明確的原因。
  *
@@ -91,8 +179,11 @@ export function isBareMediaName(name: string): boolean {
  *
  * - 攔下媒體 `src`（見模組說明），同一檔名只請求一次（失敗也會記住，重新打開卡面才重試）；
  *   超過 30 秒沒有回覆視為失敗。
- * - `play()` 等檔案到了才播放；檔案載入失敗時以真正的原因 reject。
- * - 點擊 `data-anki-sound` 播放鈕時播放該檔案。
+ * - `play()` 等檔案到了才播放；檔案已經下載過就同步換上 blob URL、直接播放（不經過 Promise，
+ *   點擊的使用者手勢才不會失效——Safari 只認同步呼叫）；檔案載入失敗時以真正的原因 reject。
+ * - 攔下對 AnkiConnect 的 `fetch`、`XMLHttpRequest`、`sendBeacon`（見模組說明）；`guiBrowse`
+ *   只在使用者剛點過時才請網頁切換卡片，卡面載入時自己呼叫的不會跳走。
+ * - 點擊 `data-anki-sound` 播放鈕時播放該檔案；這些檔案在卡面載入時就先下載。
  * - 回報內容高度，並把 iframe 內的腳本錯誤轉給網頁顯示。
  *
  * The bridge script, injected before the template scripts.
@@ -110,6 +201,8 @@ export const FRAME_BRIDGE_SCRIPT = String.raw`(() => {
   try {
     const isLocalName = ${isLocalMediaName.toString()};
     const cache = new Map();
+    // 已下載好的檔名 → blob URL：再次設定時同步換上
+    const resolved = new Map();
     const waiting = new Map();
     let nextId = 0;
     window.addEventListener('message', (event) => {
@@ -137,18 +230,30 @@ export const FRAME_BRIDGE_SCRIPT = String.raw`(() => {
           });
           post({ type: 'anki-media-request', id, name });
         });
+        promise.then((url) => resolved.set(name, url), () => undefined);
         cache.set(name, promise);
       }
       return promise;
     };
     const pendingKey = Symbol('ankiMediaPending');
+    const readyKey = Symbol('ankiMediaReady');
     const mediaTypes = [HTMLImageElement, HTMLMediaElement, HTMLSourceElement];
     // 各類型原本的 src setter：拿到 blob URL 後用它設定，不會再被攔一次
     const setters = new Map();
     const redirect = (element, name) => {
       const Ctor = mediaTypes.find((type) => element instanceof type);
       const setter = setters.get(Ctor);
-      const pending = load(name).then((url) => setter.call(element, url));
+      if (resolved.has(name)) {
+        element[pendingKey] = null;
+        element[readyKey] = true;
+        setter.call(element, resolved.get(name));
+        return;
+      }
+      element[readyKey] = false;
+      const pending = load(name).then((url) => {
+        setter.call(element, url);
+        if (element[pendingKey] === pending) element[readyKey] = true;
+      });
       // 失敗原因已由網頁顯示；這裡只避免 unhandled rejection，play() 仍會拿到真正的原因
       pending.catch(() => undefined);
       element[pendingKey] = pending;
@@ -185,13 +290,20 @@ export const FRAME_BRIDGE_SCRIPT = String.raw`(() => {
     const originalPlay = HTMLMediaElement.prototype.play;
     HTMLMediaElement.prototype.play = function () {
       const pending = this[pendingKey];
-      return pending ? pending.then(() => originalPlay.call(this)) : originalPlay.call(this);
+      return pending && !this[readyKey] ? pending.then(() => originalPlay.call(this)) : originalPlay.call(this);
     };
     document.addEventListener('click', (event) => {
       const button = event.target instanceof Element ? event.target.closest('[data-anki-sound]') : null;
       if (!button) return;
       event.preventDefault();
       new window.Audio(button.getAttribute('data-anki-sound')).play().catch(() => undefined);
+    });
+    // 播放鈕的檔案先下載，第一次點擊就能同步播放
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('[data-anki-sound]').forEach((button) => {
+        const name = button.getAttribute('data-anki-sound');
+        if (isLocalName(name)) load(name).catch(() => undefined);
+      });
     });
     const fixElement = (element) => {
       if (!isMediaElement(element)) return;
@@ -208,6 +320,64 @@ export const FRAME_BRIDGE_SCRIPT = String.raw`(() => {
         }
       }
     }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] });
+    const parseCall = ${parseAnkiConnectCall.toString()};
+    const reported = new Set();
+    // 攔下的 AnkiConnect 呼叫：guiBrowse 請網頁切換卡片，其他動作提示一次「不支援」；回傳值給模板
+    const handleCall = (call) => {
+      if (call.action === 'guiBrowse' && call.params && typeof call.params.query === 'string') {
+        // 沒有 userActivation 的瀏覽器照樣放行
+        const activation = navigator.userActivation;
+        if (!activation || activation.isActive) post({ type: 'anki-browse', query: call.params.query });
+        return { result: [], error: null };
+      }
+      const action = call.action || '（無法辨識的請求）';
+      if (!reported.has(action)) {
+        reported.add(action);
+        post({ type: 'anki-frame-notice', message: '網頁版不支援卡面呼叫的 Anki 功能（' + action + '），用到它的按鈕在這裡沒有作用。' });
+      }
+      return { result: null, error: 'unsupported in the web viewer: ' + action };
+    };
+    const originalFetch = window.fetch;
+    window.fetch = function (input, init) {
+      const url = input instanceof Request ? input.url : input;
+      if (parseCall(url, '') === null) return originalFetch.apply(this, arguments);
+      const bodyPromise = init && init.body !== undefined
+        ? Promise.resolve(init.body)
+        : input instanceof Request ? input.clone().text() : Promise.resolve(null);
+      return bodyPromise.then((body) => {
+        const reply = handleCall(parseCall(url, typeof body === 'string' ? body : null));
+        return new Response(JSON.stringify(reply), { headers: { 'Content-Type': 'application/json' } });
+      });
+    };
+    const xhrUrlKey = Symbol('ankiConnectUrl');
+    const xhrAsyncKey = Symbol('ankiConnectAsync');
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      this[xhrUrlKey] = parseCall(url, '') === null ? null : url;
+      this[xhrAsyncKey] = arguments.length < 3 || Boolean(arguments[2]);
+      return originalOpen.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function (body) {
+      const url = this[xhrUrlKey];
+      if (!url) return originalSend.apply(this, arguments);
+      handleCall(parseCall(url, typeof body === 'string' ? body : null));
+      // 不送出，當成連線失敗：非同步請求之後收到 error 與 loadend（readyState 停在 1、status 0），
+      // 同步請求直接返回
+      if (!this[xhrAsyncKey]) return;
+      setTimeout(() => {
+        this.dispatchEvent(new ProgressEvent('error'));
+        this.dispatchEvent(new ProgressEvent('loadend'));
+      }, 0);
+    };
+    if (navigator.sendBeacon) {
+      const originalBeacon = navigator.sendBeacon.bind(navigator);
+      navigator.sendBeacon = (url, data) => {
+        if (parseCall(url, '') === null) return originalBeacon(url, data);
+        handleCall(parseCall(url, typeof data === 'string' ? data : null));
+        return true;
+      };
+    }
     // 模板常設定 html/body 的高度與 margin，兩者都量，取較大者
     const reportHeight = () => {
       const body = document.body;
@@ -237,7 +407,7 @@ const FRAME_BASE_STYLE = `html{overflow-wrap:anywhere}
 .replay-button[data-anki-sound]:hover{opacity:1}`
 
 /**
- * 組出 iframe 的 `srcdoc`。`<body>` 帶上 Anki 審閱畫面的 `card card{n}` class，模板的 `.card`
+ * 組出 iframe 的 `srcdoc`（最前面是 {@link CARD_FRAME_CSP}）。`<body>` 帶上 Anki 審閱畫面的 `card card{n}` class，模板的 `.card`
  * 樣式才會套用（不含 `nightMode`）；`<base target="_blank">` 讓連結開新分頁，這要搭配
  * iframe 的 `allow-popups` 才有效。
  *
@@ -252,7 +422,7 @@ const FRAME_BASE_STYLE = `html{overflow-wrap:anywhere}
 export function buildCardDocument(faceHtml: string, ord: number, nonce: string): string {
   return [
     '<!doctype html>',
-    '<html><head><meta charset="utf-8">',
+    `<html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${CARD_FRAME_CSP}">`,
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<base target="_blank">',
     `<script>${FRAME_BRIDGE_SCRIPT.replace('__NONCE__', nonce)}</script>`,
@@ -277,6 +447,10 @@ export interface FrameMessageDeps {
   onHeight: (height: number) => void
   onMediaFailed: (name: string, reason: string, error?: unknown) => void
   onFrameError: (message: string) => void
+  /** 模板要打開這些筆記（「查看母卡片」等按鈕）。The template asks to open these notes. */
+  onBrowse: (noteIds: number[]) => void
+  /** 模板呼叫了網頁版不支援的功能。The template used something the web viewer lacks. */
+  onNotice: (message: string) => void
   /** 這份文件是否仍是目前顯示的那份（換文件後，進行中的下載不再回覆）。Still current? */
   isActive: () => boolean
 }
@@ -299,7 +473,15 @@ export function createFrameMessageHandler(deps: FrameMessageDeps): (event: Messa
     const frameWindow = deps.frameWindow()
     if (!frameWindow || event.source !== frameWindow) return
     // 來自 iframe 的資料不可信：先當成鬆散的形狀，逐欄檢查
-    const data = event.data as { type?: unknown; nonce?: unknown; height?: unknown; message?: unknown; id?: unknown; name?: unknown } | null
+    const data = event.data as {
+      type?: unknown
+      nonce?: unknown
+      height?: unknown
+      message?: unknown
+      id?: unknown
+      name?: unknown
+      query?: unknown
+    } | null
     if (typeof data !== 'object' || data === null || data.nonce !== deps.nonce) return
 
     if (data.type === 'anki-frame-height') {
@@ -310,6 +492,17 @@ export function createFrameMessageHandler(deps: FrameMessageDeps): (event: Messa
     }
     if (data.type === 'anki-frame-error') {
       deps.onFrameError(String(data.message ?? ''))
+      return
+    }
+    if (data.type === 'anki-frame-notice') {
+      deps.onNotice(String(data.message ?? ''))
+      return
+    }
+    if (data.type === 'anki-browse') {
+      const query = typeof data.query === 'string' ? data.query : ''
+      const noteIds = parseNoteQuery(query)
+      if (noteIds) deps.onBrowse(noteIds)
+      else deps.onNotice(`網頁版只能打開指定筆記 ID 的卡片（nid:…），不支援這個搜尋：${query.slice(0, 100)}`)
       return
     }
     if (data.type !== 'anki-media-request' || typeof data.id !== 'number' || typeof data.name !== 'string') return

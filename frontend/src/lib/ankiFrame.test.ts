@@ -4,8 +4,12 @@ import {
   MAX_FRAME_HEIGHT,
   buildCardDocument,
   createFrameMessageHandler,
+  CARD_FRAME_CSP,
+  MAX_BROWSE_NOTES,
   isBareMediaName,
   isLocalMediaName,
+  parseAnkiConnectCall,
+  parseNoteQuery,
   type FrameMessageDeps,
 } from './ankiFrame'
 
@@ -29,6 +33,53 @@ describe('media names', () => {
   })
 })
 
+describe('AnkiConnect calls', () => {
+  const browse = JSON.stringify({ action: 'guiBrowse', version: 6, params: { query: 'nid:1788443669167' } })
+
+  it.each([
+    'http://127.0.0.1:8765',
+    'http://localhost:8765/',
+    'HTTP://127.0.0.1',
+    ' http://127.0.0.1:8765 ',
+    'http://127.0.0.1:8765?x=1',
+    'http://127.0.0.1:8765#x',
+    '//127.0.0.1:8765',
+    'http://127.1:8765',
+    'http://2130706433:8765',
+    'http://0x7f.0.0.1:8765',
+    'http://localhost.:8765',
+    'http://[::1]:8765',
+    'http://0.0.0.0:8765',
+  ])(
+    'intercepts %j',
+    (url) => {
+      expect(parseAnkiConnectCall(url, browse)).toEqual({ action: 'guiBrowse', params: { query: 'nid:1788443669167' } })
+    },
+  )
+
+  it.each(['https://ft.example/api', 'http://127.0.0.1:8000', 'http://10.0.0.1:8765', 'blob:x', 'ftp://127.0.0.1:8765', null])(
+    'lets %j through',
+    (url) => {
+      expect(parseAnkiConnectCall(url, browse)).toBeNull()
+    },
+  )
+
+  it('still intercepts an AnkiConnect call whose body it cannot read', () => {
+    expect(parseAnkiConnectCall('http://127.0.0.1:8765', '{not json')).toEqual({ action: '', params: null })
+    expect(parseAnkiConnectCall('http://127.0.0.1:8765', null)).toEqual({ action: '', params: null })
+  })
+
+  it('reads note IDs from nid: queries only', () => {
+    expect(parseNoteQuery('nid:12')).toEqual([12])
+    expect(parseNoteQuery(' nid:12,34,12 ')).toEqual([12, 34])
+    for (const query of ['deck:日本語', 'nid:', 'nid:12 deck:x', 'nid:0', 'nid:99999999999999999999', '']) {
+      expect(parseNoteQuery(query)).toBeNull()
+    }
+    const many = Array.from({ length: MAX_BROWSE_NOTES + 5 }, (_, index) => index + 1)
+    expect(parseNoteQuery(`nid:${many.join(',')}`)).toEqual(many.slice(0, MAX_BROWSE_NOTES))
+  })
+})
+
 describe('bridge script', () => {
   it('is valid JavaScript after the nonce is filled in', () => {
     // String.raw 模板中誤寫的 ${ 會被插值成別的內容，tsc 與 eslint 都看不到
@@ -38,6 +89,7 @@ describe('bridge script', () => {
   it('builds the frame document with the bridge before the card', () => {
     const doc = buildCardDocument('<div id="face">x</div>', 1, 'n0nce')
 
+    expect(doc.indexOf(CARD_FRAME_CSP)).toBeLessThan(doc.indexOf('<script>'))
     expect(doc.indexOf('<script>')).toBeLessThan(doc.indexOf('<div id="face">'))
     expect(doc).toContain("const nonce = 'n0nce'")
     expect(doc).not.toContain('__NONCE__')
@@ -57,6 +109,8 @@ describe('createFrameMessageHandler', () => {
       onHeight: vi.fn(),
       onMediaFailed: vi.fn(),
       onFrameError: vi.fn(),
+      onBrowse: vi.fn(),
+      onNotice: vi.fn(),
       isActive: () => true,
       ...overrides,
     }
@@ -92,6 +146,18 @@ describe('createFrameMessageHandler', () => {
     send({ type: 'anki-frame-error', nonce: 'n1', message: 'TypeError: x' })
 
     expect(deps.onFrameError).toHaveBeenCalledWith('TypeError: x')
+  })
+
+  it('opens the notes of a nid: search and explains other searches', () => {
+    const { deps, send } = setup()
+
+    send({ type: 'anki-browse', nonce: 'n1', query: 'nid:5,6' })
+    send({ type: 'anki-browse', nonce: 'n1', query: 'deck:x' })
+    send({ type: 'anki-frame-notice', nonce: 'n1', message: '網頁版不支援：updateNoteFields' })
+
+    expect(deps.onBrowse).toHaveBeenCalledExactlyOnceWith([5, 6])
+    expect(deps.onNotice).toHaveBeenCalledTimes(2)
+    expect(deps.onNotice).toHaveBeenLastCalledWith('網頁版不支援：updateNoteFields')
   })
 
   it('answers names with a path with an error instead of leaving the frame waiting', () => {

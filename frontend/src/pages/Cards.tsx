@@ -7,15 +7,21 @@
  * 與筆記欄位。不經過 task handler，任何筆記類型都能看。選取狀態放在網址（見
  * `lib/cardBrowse.ts`），可以重新整理或分享連結。
  *
+ * 卡面上的「查看母卡片」「查看情境卡」等按鈕在 Anki 中會打開另一張筆記；這裡改成在右側切換到
+ * 那張卡片（左側的牌組與清單不變），並記下跳轉紀錄，可以一路「返回」到原本的卡片。跳轉會新增
+ * 一筆瀏覽器歷史，所以瀏覽器的上一頁也能返回。
+ *
  * Left: the deck tree; middle: the cards of the selected deck (sub-decks
  * included); right: the Anki-rendered face and the note fields. Selection
- * lives in the URL.
+ * lives in the URL. Card-face buttons that open another note switch the
+ * viewer to it, keeping a trail to go back along.
  */
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router-dom'
-import { ChevronDown, ChevronRight, FolderTree, RefreshCw, Search } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useLocation, useNavigate, useSearchParams, type NavigateOptions } from 'react-router-dom'
+import { toast } from 'sonner'
+import { ArrowLeft, ChevronDown, ChevronRight, FolderTree, RefreshCw, Search } from 'lucide-react'
 import { FluencyTidesAPI } from '../api/client'
 import { CardDetailModal } from '../components/CardDetailModal'
 import { CardFrame } from '../components/CardFrame'
@@ -24,12 +30,20 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import { Skeleton } from '../components/ui/skeleton'
 import { describeApiError, retryTransient } from '../lib/apiError'
-import { parseBrowseParams } from '../lib/cardBrowse'
+import { parseBrowseParams, pickNoteCard, pushTrail, type CardSide } from '../lib/cardBrowse'
 import { cardPreview } from '../lib/cardFields'
 import { buildDeckTree, deckAncestors, relativeDeckPath, type DeckNode } from '../lib/deckTree'
 import { cn } from '../lib/utils'
 
 const PAGE_SIZE = 50
+
+/** 卡面與清單並排的最小寬度（Tailwind `xl`）；更窄時卡面在清單下方。Width where the viewer sits beside the list. */
+const SIDE_BY_SIDE_QUERY = '(min-width: 1280px)'
+
+/** 跳轉時放進瀏覽器歷史的狀態：從哪張卡片跳過來。History state of a jump. */
+interface JumpState {
+  jumpFrom?: number
+}
 
 /**
  * 錯誤提示。An inline error.
@@ -52,10 +66,22 @@ function ErrorNote({ title, error }: { title: string; error: unknown }) {
  */
 export default function Cards() {
   const [params, setParams] = useSearchParams()
-  const { deck, search, page, cardId } = parseBrowseParams(params)
+  const { deck, search, page, cardId, side, trail } = parseBrowseParams(params)
+  const location = useLocation()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  // 跳轉要等一次查詢：期間網址若變了（使用者另選了卡片、換頁等），結果作廢。
+  // 存最新的網址與 update，非同步完成時才不會用到舊的。
+  const latestRef = useRef({ paramsKey: params.toString() })
+  const jumpingRef = useRef(false)
+  // 已經對這筆歷史按過「返回」：重新渲染前再按一次不會連退兩頁
+  const backFromRef = useRef<string | null>(null)
+  useEffect(() => {
+    latestRef.current = { paramsKey: params.toString() }
+  })
 
   /** 改網址參數；值為 null 或空字串時移除。Update URL params; null or '' removes one. */
-  const update = (changes: Record<string, string | null>) =>
+  const update = (changes: Record<string, string | null>, options?: NavigateOptions) =>
     setParams((prev) => {
       const next = new URLSearchParams(prev)
       for (const [key, value] of Object.entries(changes)) {
@@ -63,7 +89,55 @@ export default function Cards() {
         else next.set(key, value)
       }
       return next
-    })
+    }, options)
+
+  /**
+   * 卡面要打開這些筆記：找出它們的卡片，切換過去並記下目前這張。
+   * Opens the notes a card face asks for, remembering the current card.
+   */
+  const openNotes = async (noteIds: number[]) => {
+    if (cardId === null || jumpingRef.current) return
+    jumpingRef.current = true
+    const startedAt = latestRef.current.paramsKey
+    try {
+      const result = await queryClient.fetchQuery({
+        queryKey: ['note-cards', noteIds.join(',')],
+        queryFn: () => FluencyTidesAPI.browseCards({ q: `nid:${noteIds.join(',')}`, pageSize: PAGE_SIZE }),
+        staleTime: 30_000,
+        retry: retryTransient,
+      })
+      if (latestRef.current.paramsKey !== startedAt) return
+      const target = pickNoteCard(result.cards, noteIds)
+      if (target === null) {
+        toast.error('找不到這張筆記', { description: `筆記 ${noteIds.join('、')} 不存在，可能已被刪除。` })
+      } else if (target !== cardId) {
+        const state: JumpState = { jumpFrom: cardId }
+        update({ card: String(target), trail: pushTrail(trail, cardId) }, { state })
+      }
+    } catch (error) {
+      if (latestRef.current.paramsKey === startedAt) {
+        toast.error('無法打開這張筆記', { description: describeApiError(error).message })
+      }
+    } finally {
+      jumpingRef.current = false
+    }
+  }
+
+  /**
+   * 回到跳轉前的卡片：上一筆瀏覽器歷史就是跳轉前的狀態時直接返回（前進也能用），否則（例如
+   * 重新整理或從連結打開）改網址。
+   * Goes back to the card before the last jump.
+   */
+  const goBack = () => {
+    const previous = trail[trail.length - 1]
+    if (previous === undefined || backFromRef.current === location.key) return
+    backFromRef.current = location.key
+    if ((location.state as JumpState | null)?.jumpFrom === previous) {
+      navigate(-1)
+    } else {
+      update({ card: String(previous), trail: trail.slice(0, -1).join(',') }, { replace: true })
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -74,18 +148,29 @@ export default function Cards() {
         </p>
       </div>
 
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[16rem_22rem_minmax(0,1fr)]">
-        <DeckPanel selected={deck} onSelect={(name) => update({ deck: name, page: null, card: null })} />
+      {/* 卡面固定約寬螢幕手機的寬度，清單吃剩下的寬度；比 xl 窄時卡面移到下方 */}
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[17rem_minmax(0,1fr)] xl:grid-cols-[17rem_minmax(0,1fr)_26rem] 2xl:grid-cols-[20rem_minmax(0,1fr)_27rem]">
+        <DeckPanel selected={deck} onSelect={(name) => update({ deck: name, page: null, card: null, trail: null })} />
         <CardListPanel
           deck={deck}
           search={search}
           page={page}
           selectedCardId={cardId}
-          onSearch={(q) => update({ q, page: null, card: null })}
+          onSearch={(q) => update({ q, page: null, card: null, trail: null })}
           onPage={(next) => update({ page: next > 1 ? String(next) : null })}
-          onSelect={(id) => update({ card: String(id) })}
+          onSelect={(id) => update({ card: String(id), trail: null })}
         />
-        <CardViewPanel cardId={cardId} deck={deck} onDeleted={() => update({ card: null })} />
+        <CardViewPanel
+          cardId={cardId}
+          deck={deck}
+          side={side}
+          trailLength={trail.length}
+          // 保留這筆歷史的跳轉狀態，翻面後「返回」仍能直接退回上一頁
+          onSide={(value) => update({ side: value === 'answer' ? value : null }, { replace: true, state: location.state })}
+          onBrowse={openNotes}
+          onBack={goBack}
+          onDeleted={() => update({ card: null, trail: null })}
+        />
       </div>
     </div>
   )
@@ -262,9 +347,7 @@ function CardListPanel({ deck, search, page, selectedCardId, onSearch, onPage, o
   return (
     <Card className="lg:max-h-[calc(100vh-10rem)] lg:overflow-auto">
       <CardHeader className="pb-2 space-y-3">
-        <CardTitle className="text-base truncate" title={deck ?? '全部牌組'}>
-          {deck ?? '全部牌組'}
-        </CardTitle>
+        <CardTitle className="text-base break-all">{deck ?? '全部牌組'}</CardTitle>
         <form onSubmit={submit} className="flex gap-2">
           <Input
             value={draft}
@@ -316,7 +399,9 @@ function CardListPanel({ deck, search, page, selectedCardId, onSearch, onPage, o
                         selectedCardId === card.card_id ? 'border-primary bg-primary/5' : 'hover:bg-accent',
                       )}
                     >
-                      <span className="block truncate font-medium">{cardPreview(card.fields) || '（沒有文字欄位）'}</span>
+                      <span className="line-clamp-2 font-medium [overflow-wrap:anywhere]">
+                        {cardPreview(card.fields) || '（沒有文字欄位）'}
+                      </span>
                       <span className="block truncate text-xs text-muted-foreground">
                         {card.model_name}
                         {subDeck && ` · ${subDeck}`}
@@ -346,22 +431,39 @@ function CardListPanel({ deck, search, page, selectedCardId, onSearch, onPage, o
   )
 }
 
+/** {@link CardViewPanel} 的 props。Props of {@link CardViewPanel}. */
+interface CardViewPanelProps {
+  /** 選取的卡片；null 時顯示提示。The selected card. */
+  cardId: number | null
+  /** 目前選取的牌組。The selected deck. */
+  deck: string | null
+  side: CardSide
+  /** 跳轉紀錄有幾張（大於 0 才顯示「返回」）。Trail length. */
+  trailLength: number
+  onSide: (side: CardSide) => void
+  /** 卡面要打開這些筆記。Opens the notes a card face asks for. */
+  onBrowse: (noteIds: number[]) => void
+  /** 回到跳轉前的卡片。Goes back along the trail. */
+  onBack: () => void
+  /** 筆記被刪除後。Called after the note is deleted. */
+  onDeleted: () => void
+}
+
 /**
  * 卡面與筆記欄位面板。The card face and note fields panel.
- * @param props.cardId - 選取的卡片；null 時顯示提示。The selected card.
- * @param props.deck - 目前選取的牌組。The selected deck.
- * @param props.onDeleted - 筆記被刪除後。Called after the note is deleted.
  * @returns 面板 JSX。Panel JSX.
  */
-function CardViewPanel({ cardId, deck, onDeleted }: { cardId: number | null; deck: string | null; onDeleted: () => void }) {
-  const [side, setSide] = useState<'question' | 'answer'>('question')
+function CardViewPanel({ cardId, deck, side, trailLength, onSide, onBrowse, onBack, onDeleted }: CardViewPanelProps) {
   const [fieldsOpen, setFieldsOpen] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
 
-  // 窄畫面三欄疊成一欄，卡面在清單下方：選卡時捲過去。瀏覽器也不會更新畫面外的
-  // 跨來源 iframe，卡面要進到畫面內才會回報高度。
+  // 窄畫面卡面在清單下方：選卡時捲過去。瀏覽器也不會更新畫面外的跨來源 iframe，卡面要進到
+  // 畫面內才會回報高度。並排時卡面有自己的捲軸，換卡時捲回頂端。
   useEffect(() => {
-    if (cardId !== null && window.matchMedia('(max-width: 1023px)').matches) {
+    if (cardId === null) return
+    if (window.matchMedia(SIDE_BY_SIDE_QUERY).matches) {
+      panelRef.current?.scrollTo({ top: 0 })
+    } else {
       panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
   }, [cardId])
@@ -383,17 +485,27 @@ function CardViewPanel({ cardId, deck, onDeleted }: { cardId: number | null; dec
     retry: retryTransient,
   })
 
+  // 卡面約寬螢幕手機的寬度：窄畫面置中，並排時填滿第三欄並有自己的捲軸
+  const panelClass =
+    'w-full max-w-[27rem] justify-self-center lg:col-span-2 xl:col-span-1 xl:max-w-none xl:max-h-[calc(100vh-10rem)] xl:overflow-auto'
+
   if (cardId === null) {
     return (
-      <Card>
+      <Card className={panelClass}>
         <CardContent className="pt-6 text-sm text-muted-foreground">從清單選一張卡片查看。</CardContent>
       </Card>
     )
   }
 
   return (
-    <Card ref={panelRef}>
-      <CardHeader className="pb-3">
+    <Card ref={panelRef} className={panelClass}>
+      <CardHeader className="px-4 pb-3 space-y-2">
+        {trailLength > 0 && (
+          <Button size="sm" variant="ghost" className="-ml-2 h-7 self-start px-2" onClick={onBack}>
+            <ArrowLeft className="h-4 w-4" />
+            返回上一張卡片{trailLength > 1 && `（${trailLength}）`}
+          </Button>
+        )}
         {data ? (
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 space-y-1">
@@ -408,7 +520,7 @@ function CardViewPanel({ cardId, deck, onDeleted }: { cardId: number | null; dec
                   <button
                     key={value}
                     type="button"
-                    onClick={() => setSide(value)}
+                    onClick={() => onSide(value)}
                     aria-pressed={side === value}
                     className={cn(
                       'rounded px-3 py-1 text-sm',
@@ -428,7 +540,7 @@ function CardViewPanel({ cardId, deck, onDeleted }: { cardId: number | null; dec
           <CardTitle className="text-base">Card {cardId}</CardTitle>
         )}
       </CardHeader>
-      <CardContent>
+      <CardContent className="px-3 pb-3">
         {isPending ? (
           <Skeleton className="h-60 w-full" />
         ) : isError ? (
@@ -439,6 +551,7 @@ function CardViewPanel({ cardId, deck, onDeleted }: { cardId: number | null; dec
             html={side === 'question' ? data.question : data.answer}
             ord={data.ord}
             title={`${data.model_name} ${side === 'question' ? '正面' : '背面'}`}
+            onBrowse={onBrowse}
           />
         )}
       </CardContent>

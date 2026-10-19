@@ -23,13 +23,30 @@ const newNonce = () => Math.random().toString(36).slice(2) + Date.now().toString
  * @param props.html - 正面或背面的 HTML。The rendered face.
  * @param props.ord - 卡片模板序號。Template ordinal.
  * @param props.title - iframe 的無障礙名稱。Accessible name.
+ * @param props.onBrowse - 卡面要打開這些筆記（「查看母卡片」等按鈕）。Opens the notes a template asks for.
  * @returns iframe，以及媒體或腳本錯誤的提示。The frame and any errors.
  */
-export function CardFrame({ html, ord, title }: { html: string; ord: number; title: string }) {
+export function CardFrame({
+  html,
+  ord,
+  title,
+  onBrowse,
+}: {
+  html: string
+  ord: number
+  title: string
+  onBrowse: (noteIds: number[]) => void
+}) {
   const frameRef = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(MIN_HEIGHT)
   const [failedMedia, setFailedMedia] = useState<MediaFailure[]>([])
   const [frameErrors, setFrameErrors] = useState<string[]>([])
+  const [notices, setNotices] = useState<string[]>([])
+  // 用 ref 取最新的 onBrowse：不必因為父元件重新渲染就重掛訊息處理函式
+  const onBrowseRef = useRef(onBrowse)
+  useEffect(() => {
+    onBrowseRef.current = onBrowse
+  }, [onBrowse])
   // 內容一變就換 nonce：舊文件還在進行中的下載不會被新文件誤收
   const { srcDoc, nonce } = useMemo(() => {
     const documentNonce = newNonce()
@@ -40,6 +57,7 @@ export function CardFrame({ html, ord, title }: { html: string; ord: number; tit
     let active = true
     setFailedMedia([])
     setFrameErrors([])
+    setNotices([])
     setHeight(MIN_HEIGHT)
     const onMessage = createFrameMessageHandler({
       frameWindow: () => frameRef.current?.contentWindow,
@@ -55,6 +73,8 @@ export function CardFrame({ html, ord, title }: { html: string; ord: number; tit
         setFailedMedia((prev) => (prev.some((item) => item.name === name) ? prev : [...prev, { name, reason }]))
       },
       onFrameError: (message) => setFrameErrors((prev) => (prev.includes(message) ? prev : [...prev, message])),
+      onBrowse: (noteIds) => onBrowseRef.current(noteIds),
+      onNotice: (message) => setNotices((prev) => (prev.includes(message) ? prev : [...prev, message])),
     })
     window.addEventListener('message', onMessage)
     return () => {
@@ -75,6 +95,8 @@ export function CardFrame({ html, ord, title }: { html: string; ord: number; tit
           // allow-popups 讓 target=_blank 的連結（TG 深連結）能開新分頁；escape-sandbox 讓開出去
           // 的外部頁面不受這個 sandbox 限制，正常運作。
           sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+          // 跨來源 iframe 預設不能自己播放有聲音的媒體；點頭像播放語音需要這個權限
+          allow="autoplay"
           className="block w-full"
           style={{ height }}
         />
@@ -90,6 +112,13 @@ export function CardFrame({ html, ord, title }: { html: string; ord: number; tit
             ))}
           </ul>
         </div>
+      )}
+      {notices.length > 0 && (
+        <ul className="text-xs text-muted-foreground break-all" role="status">
+          {notices.map((message) => (
+            <li key={message}>{message}</li>
+          ))}
+        </ul>
       )}
       {frameErrors.length > 0 && (
         <p className="text-xs text-amber-700 break-all" role="status">
