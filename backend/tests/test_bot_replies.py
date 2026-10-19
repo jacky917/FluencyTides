@@ -1,4 +1,4 @@
-"""TG bot 回覆文字的測試（docs/wip/tg_bot_copy_review_2026-10-18.md 第 3 節與第 6 節）。
+"""TG bot 回覆文字的測試（docs/archive/tg_bot_copy_review_2026-10-18.md 第 3 節與第 6 節）。
 
 Tests for the Telegram bot replies: dynamic content is escaped so messages
 are always deliverable, texts match the actual state, backticks are gone,

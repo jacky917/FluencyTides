@@ -108,6 +108,7 @@ td code{white-space:nowrap}
   <h1>LLM 客戶端層級化：抽象基底、CLI 中間層，與兩個新 provider</h1>
   <p class="lede">把文字 LLM 軸線的三個裸類別掛上 <code>BaseLLMClient</code>，以 <code>HeadlessCliLLMClient</code> 承載 subprocess 共用流程，接入 Gemini 原生 SDK 與 Antigravity CLI（<code>agy -p</code>）。既有兩條路徑逐位元不變。</p>
   <dl class="meta">
+    <dt>狀態</dt><dd>✅ P1–P3 實作完成並合併（PR #20、#21、#22）；2026-10-19 歸檔，後續項目移到 <code>docs/wip/backlog.md</code>。文中的 <code>/setconfig</code>、<code>MODIFY_*</code> 已由模型路由與能力路由取代。</dd>
     <dt>範圍</dt><dd><code>app/infrastructure/llm/</code>（六個新檔、四個改檔）、<code>app/core/exceptions/infrastructure.py</code>、<code>app/core/config.py</code>、<code>app/core/dependencies.py</code>、<code>app/services/runtime_config_service.py</code>、<code>scripts/common/llm_label.py</code>、<code>.env.example</code>、<code>.gitignore</code></dd>
     <dt>不動</dt><dd><code>generate_structured_data</code> 簽名與 <code>LLMGenerateResult</code>；既有標籤字串；既有錯誤訊息文字；<code>scripts/fastapi_client/**</code>；各 handler 的 prompt 與建卡邏輯；語音軸線；API schema</dd>
     <dt>關聯</dt><dd><code>docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md</code>（§D11 Anthropic 指引仍有效）、ADR 004（ABC 策略模式先例）、F043（fence 清理重複）、<code>audio_evaluator/base.py</code>（ABC 而非 Protocol 的原始論證）。Markdown 原稿：<code>docs/wip/llm_provider_hierarchy_FEAT_2026-09-06.md</code></dd>

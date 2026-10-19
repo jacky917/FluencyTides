@@ -3,9 +3,10 @@
 | 欄位 | 內容 |
 |---|---|
 | **創建日期** | 2026-10-18 |
-| **性質** | 盤點 + 分階段計畫書（尚未修改程式，待確認） |
+| **性質** | 盤點 + 分階段計畫書 |
+| **狀態** | 🚧 階段 A（卡片瀏覽）完成（df224ed，之後 765f913～9c2b85e 持續改進）；階段 B 的 `/setconfig` 部分改由能力路由完成（PR #25）；階段 B 其餘、C、D、E 尚未開始。2026-10-19 依能力路由 R2 更新階段 B、C 的內容 |
 | **範圍** | `frontend/`；為了讓 TG 與網頁共用，需要調整 `backend/app/services/`、`backend/app/api/`、`backend/app/bot/handlers/` |
-| **基準** | 分支 `claude/beautiful-lamarr-96c769`。它接在 `feat/llm-model-routing`（859031f）之上，已含網頁版 `/models`（f3e3f22、db8be22） |
+| **基準** | 分支 `claude/beautiful-lamarr-96c769`（PR #25）。它接在 `feat/llm-model-routing`（859031f，PR #24 已合併）之上，已含網頁版工具設定頁（f3e3f22、db8be22，能力路由 R1／R2 擴充） |
 | **原則** | 邏輯只寫一份：抽到 service 層，TG handler 與 REST 端點呼叫同一個函式；網頁的流程是無狀態的請求，所需參數一次帶齊 |
 
 ---
@@ -17,7 +18,7 @@
   - 儲存與刪除都送到 `/cards/undefined`。
   - 網頁上只看得到 `vocabulary_mining` 的卡，而且只在知識圖譜中以節點出現。沒有任何卡片清單。
 - **就算修好欄位，大多數筆記類型仍需要模板的 JavaScript 才看得懂。** JSON 欄位（錄音、參考答案、對話）、ruby、音檔都要靠模板。最省工、也最不會漏的做法，是直接用 Anki 已經渲染好的卡面（`cardsInfo` 的 `question`/`answer`），放進 sandbox iframe 顯示，再補一個 Anki 媒體代理端點。
-- **TG 能力中，後端已有 REST 的只有 `/sync` 與 `/models`。** 錄音評分、上傳音檔、刪除 JSON 條目、`/setconfig` 寫入、外語糾錯的預覽與重複處理、對話卡的建立細節都寫在 TG handler 裡，要先抽成 service。
+- **TG 能力中，後端已有 REST 的只有 `/sync` 與 `/models`（現為 `/setconfig`，對應 `/api/v1/capability-routes`）。** 錄音評分、上傳音檔、刪除 JSON 條目、`/setconfig` 寫入、外語糾錯的預覽與重複處理、對話卡的建立細節都寫在 TG handler 裡，要先抽成 service。
 - **建議順序：** 卡片瀏覽 → 小型管理功能 → 錄音評分 → 上傳音檔 → 建卡流程。前兩項不碰 TG handler，風險最低；錄音評分與上傳音檔是口說練習的核心，接著做。
 
 ---
@@ -33,7 +34,7 @@
 | 3 | 上傳音檔到 References / Prompt_Audios（頭像、說話者） | 寫入欄位的部分共用（`execute_update(action=add_audio)`）；**頭像清單、自訂頭像、選 handler 只在 TG**（`callbacks.py`、`messages.py`、`media.py`） | 只有 `add_audio`，而且檔案要已經在 Anki 媒體庫 | `GET /avatars`、`POST /avatars`、multipart `POST /cards/{note_id}/audio` |
 | 4 | 刪除 JSON 欄位條目（含三語 `_ZH/_JA/_EN`） | **只在 `commands.py:241 _handle_delete_entry`** | 只有 Recordings 的 `delete_recording` | `DELETE /cards/{note_id}/fields/{field}/{index}`，背後是新的 service 函式 |
 | 5a | `/sync`（清理失效關聯） | `relation_service.sync_with_anki` | `POST /relations/sync`；前端已有 `syncRelations` | 只缺網頁上的按鈕 |
-| 5b | `/setconfig`（MODIFY_* 執行期設定） | 讀取在 `runtime_config_service.py`；**寫入只在 `callbacks_config.py:124`**（含重建 `audio_evaluator` 與失敗回滾） | `GET /config`、`GET /config/{key}`（**沒有認證**） | 改由能力路由取代（`capability_routing_FEAT_2026-10-19.md`）：三項設定搬進資料庫、舊 `/setconfig` 移除，網頁用工具設定頁 |
+| 5b | `/setconfig`（MODIFY_* 執行期設定） | ✅ 已由能力路由取代（`docs/archive/capability_routing_FEAT_2026-10-19.md`，PR #25）：舊 `/setconfig`、`callbacks_config.py`、`MODIFY_*` 已移除 | `GET /config` 只剩診斷用的 `runtime` | TG `/setconfig` 與網頁工具設定頁（`/api/v1/capability-routes`），設定存在資料庫 |
 | 5c | `/models` | `llm_route_service.py`，已共用 | `GET/PUT/DELETE /llm-routes` | 已完成（`LlmRoutes.tsx`） |
 | 6 | `/start`、`/help`、`/newcard` 選單；TTS、`gen` 按鈕 | 選單與說明；TTS 與 `gen` 都回覆「尚未開放」 | — | 網頁不需要對應。TTS 在兩邊都沒有實作 |
 
@@ -105,14 +106,16 @@ cd backend && python -m pytest tests -q
 ### 階段 B：小型管理功能
 
 - 網頁加「同步關聯」按鈕（用既有的 `POST /relations/sync`）。
-- `/setconfig`：不在本計畫處理。改由 `capability_routing_FEAT_2026-10-19.md` 取代：評分策略與模型搬進能力路由的資料表，舊的暫時設定移除，TG `/models` 改名為 `/setconfig`，網頁的 LLM 模型設定頁擴充成工具設定頁。
+- ~~`/setconfig`~~：✅ 已由能力路由完成（`docs/archive/capability_routing_FEAT_2026-10-19.md`，PR #25）：評分策略與模型搬進能力路由的資料表，舊的暫時設定移除，TG `/models` 改名為 `/setconfig`，網頁的 LLM 模型設定頁擴充成工具設定頁。
 - 刪除 JSON 條目：抽出 service 函式（含三語欄位白名單、`last` 索引、`AnkiJsonFieldManager`、寫入前後同步）；新增 `DELETE /cards/{note_id}/fields/{field}/{index}`，TG 的 `_handle_delete_entry` 改呼叫它。
-- 前端：設定頁（MODIFY_* 清單與修改）；卡片頁對 Recordings、References、Prompt_Audios 每一筆提供刪除。
+- 前端：卡片頁對 Recordings、References、Prompt_Audios 每一筆提供刪除。（原本的「設定頁（MODIFY_* 清單與修改）」已由工具設定頁取代。）
+- `execute_update` 的 `ValueError` 改成 `FluencyTidesError` 子類、回 4xx（§5 決策 5）。
 
 ### 階段 C：錄音評分（口說核心）
 
-- 抽出 `RecordingService.evaluate_and_save(note_id, field, audio_bytes, filename)`，把 `voice.py` 的步驟 2～4 移進去（同步、讀取、三語分支、存媒體、評分、寫回、錯誤對應）。TG 的 `process_voice_handler` 改呼叫它。
-- 新增 `POST /cards/{note_id}/recordings`（multipart），並在 `core/dependencies.py` 補上 `get_audio_evaluator`（可能為 None，要回 503 而不是 500）。
+- 抽出 `RecordingService.evaluate_and_save(note_id, field, audio_bytes, filename)`，把 `voice.py` 的步驟 2～4 移進去（同步、讀取、三語分支、**取得評分器**、存媒體、評分、寫回、錯誤對應）。TG 的 `process_voice_handler` 改呼叫它。
+- **評分器已改由能力路由提供**（R2）：依卡片的 handler 呼叫 `services/recording_eval.py` 的 `evaluator_for_handler()`，建不出來時拋 `AudioEvaluatorUnavailableError`（503）；不再有 `app.state.audio_evaluator`，也不需要 `get_audio_evaluator`。評分器要在存媒體之前取得（TG 目前就是這個順序），設定有問題時不留下沒有紀錄引用的音檔。
+- 新增 `POST /cards/{note_id}/recordings`（multipart）。
 - **音檔格式：** 瀏覽器 `MediaRecorder` 錄出 webm/opus（Chrome）或 mp4（Safari），但評分器假設 `.ogg`。後端用 ffmpeg 轉成 ogg/opus（`FfmpegClient` 目前只有 `convert_to_mp3`，要補一個方法）。
 - 前端：卡片頁上的錄音按鈕（錄音、試聽、送出），顯示分數、逐字稿、評語。請求要有長逾時，STT 加 LLM 可能要幾十秒。
 - 測試：service 層以假評分器測試三語分支與寫回；端點測試；TG 的既有測試要全過。
@@ -132,7 +135,7 @@ cd backend && python -m pytest tests -q
 
 ## 5. 需要確認的決策
 
-1. **（已由能力路由計畫取代）** `/config` 不再新增寫入端點；設定的寫入走能力路由的 API（與現在的 `/llm-routes` 一樣掛 `verify_api_key`）。`GET /config` 仍是診斷用的唯讀端點，目前沒有認證，是否補上另議。
+1. **（已由能力路由計畫取代）** `/config` 不再新增寫入端點；設定的寫入走能力路由的 API（`/api/v1/capability-routes`，掛 `verify_api_key`）。`GET /config` 仍是診斷用的唯讀端點，目前沒有認證，是否補上另議。
 2. **卡面用 iframe 顯示 Anki 的渲染結果，還是逐一寫 React 渲染器。** **建議：** 先用 iframe，一次涵蓋所有類型；需要互動的部分（錄音、刪除條目、上傳音檔）放在 iframe 外的 React 操作面板，不去改模板。
 3. **卡片詳情 API 的格式。** 改後端會影響 `/handlers/cards/{id}` 的其他使用者（腳本），改前端只動網頁。**建議：** 前端改型別，後端不動。
 4. **對話卡的 Card_ID 格式。** TG 用 `SC_%Y%m%d_%H%M%S`，handler 用 uuid4。**建議：** 統一用 handler 的 uuid4（同一秒建兩張不會撞）。

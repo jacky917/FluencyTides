@@ -7,7 +7,7 @@
 | **狀態** | 🚧 程式碼實作完成、本機驗證通過(2026-09-03);餘下三項驗收需部署新映像後執行 |
 | **範圍** | 新表 `jp_verb_reading_judgments`;新的**日文專用、專案無關**判讀腳本 `JP_Common/judge_verb_readings.py --project …`;後端新增 `jp/` 命名空間下的判讀端點與模板;VerbPair 生成腳本加「查表過濾」(CoreVerb 同機制,待其出現同表層動詞時接);移除 `generated_sentences_log.search_keyword` |
 | **不動** | `generated_sentences_log` 的唯一鍵與 `verb_lemma` 語意;兩層去重;**生成模板**;fugashi 四關與 `ignore_reading` 設定;CoreVerb 管線(無同表層動詞,端點日後可複用);非同表層動詞的一切行為 |
-| **PR / 進度** | 尚未開始 |
+| **PR / 進度** | 程式已合併(PR #18);§6 未勾選的三項驗收待執行 |
 | **關聯文件** | `docs/archive/verb_lemma_backfill_FIX_2026-09-02.md`(**前置**:存量拼寫修復,必須先執行)、`docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md`(去重鍵三個寫入點的教訓)、`docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md`(§6.5 讀音關與 `ignore_reading` 的由來) |
 
 ---
@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS jp_verb_reading_judgments (
 - 請求:`{items: [{script_id, surface, candidates: [讀音…], line, context_before: [..], context_after: [..]}], model?: str, effort?: str}`,`items` 單次 ≤ 40 筆(超過回 422)。
 - 回應:`{llm_model, results: [{script_id, reading}]}`,`reading` ∈ candidates 或 `""`;`llm_model` 為**實際使用**的模型標籤(含覆寫後的值),腳本寫入表時以此為準。
 - **模型/深度覆寫(已移除,見 §3.1 開頭的更新說明)**:`model` / `effort` 任一有給時,後端以該組合建立**請求範圍**的 LLM client(不動 `app.state.llm_client`、不寫回設定);兩者皆缺則用既有 client。覆寫值的合法性由後端驗證(不在白名單 → 422 並列出可選值),腳本只負責傳遞。
-- **模型白名單的耦合**:`model` 覆寫值以後端 .env 的 `MODIFY_LLM_MODEL_NAME` 為白名單(有設才限制)。該清單是 Telegram 動態設定的既有機制,內容隨 provider 而異——provider 為 claude-code 時須在其中加入 claude 模型名,否則覆寫一律 422(錯誤訊息已附此提示;2026-09-03 本機實測即因清單只列 Gemini 模型而被擋)。`effort` 由 client 自身的白名單驗證,不經此清單。
+- ~~**模型白名單的耦合**~~(隨覆寫一起移除;模型改由能力路由的用途鍵 `jp_verb_reading` 決定,TG `/setconfig` 設定):`model` 覆寫值以後端 .env 的 `MODIFY_LLM_MODEL_NAME` 為白名單(有設才限制)。該清單是 Telegram 動態設定的既有機制,內容隨 provider 而異——provider 為 claude-code 時須在其中加入 claude 模型名,否則覆寫一律 422(錯誤訊息已附此提示;2026-09-03 本機實測即因清單只列 Gemini 模型而被擋)。`effort` 由 client 自身的白名單驗證,不經此清單。
 - 新模板 `JP_VerbReading_Judge.j2`:給上下文與候選讀音,要求逐句判定;無法確定時明確回 `""`,**不猜**。模板只做這一件事,生成模板不動。
 - 為什麼不讓腳本直連 LLM:專案原則是腳本不自組 LLM client、不讀 LLM 的 .env、標籤以後端回應為準(2026-08-28 曾因腳本自行推導標籤錯標 190 筆);claude-code 的認證也只在後端/容器配置。覆寫參數走端點,既保留單一事實來源,又給了每次執行指定模型的自由。
 

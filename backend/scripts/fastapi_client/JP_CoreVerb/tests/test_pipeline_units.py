@@ -983,7 +983,7 @@ def test_classify_collocation_uses_window_start():
 # =============================================================================
 # UniDic 把異體字統一到同一語彙素（揚げる/挙げる → lemma 上げる），而驗證器是
 # 「lemma 或 orthBase 任一相符」，於是規範表記的母卡會吃掉變體表記的句子。
-# 詳見 docs/wip/es_sudachi_normalizedform_FIX_2026-09-05.md §2.2。
+# 詳見 docs/archive/es_sudachi_normalizedform_FIX_2026-09-05.md §2.2。
 
 class TestOrthSiblingGuard:
     """以真實 UniDic 分詞驗證表記兄弟防護。Real-UniDic sibling guard."""

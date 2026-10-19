@@ -4,6 +4,7 @@
 |---|---|
 | **創建日期** | 2026-10-19 |
 | **性質** | 設計計畫書；R1、R2 已實作（實作紀錄見 §11） |
+| **狀態** | ✅ R1、R2 完成，PR #25；2026-10-19 歸檔。接下來的錄音評分網頁化屬 `docs/wip/web_ui_parity_FEAT_2026-10-18.md` 階段 C；各練法自己的 `recording_eval.<handler>` 隨 `docs/wip/speaking_card_types_PROPOSAL_2026-10-18.md` 的新卡一起宣告 |
 | **範圍** | `backend/app/infrastructure/llm/routing.py`、`llm_route_service.py`、`api/llm_routes.py`、`bot/handlers/models_menu.py`、`/setconfig`（`commands.py`、`callbacks_config.py`、`core/dynamic_config.py`）、`infrastructure/audio_evaluator/`、`infrastructure/stt/`、`bot/handlers/voice.py`、資料表 `llm_routes` 與其 alembic 遷移、網頁的 LLM 模型設定頁、`scripts/common/llm_label.py`、`scripts/fastapi_client/query_backend_model.py` |
 | **前置** | `feat/llm-model-routing`（P1～P4 的模型路由，`docs/archive/llm_model_routing_FEAT_2026-10-15.md`） |
 | **相關** | `docs/wip/web_ui_parity_FEAT_2026-10-18.md`：本計畫取代其階段 B 的 `/setconfig` 部分，也是其階段 C（錄音評分）的前提。`docs/wip/speaking_card_types_PROPOSAL_2026-10-18.md`：各練法用自己的筆記類型與 handler |
