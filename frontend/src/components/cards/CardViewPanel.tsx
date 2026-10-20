@@ -14,8 +14,8 @@ import { FaceTransition } from '../FaceTransition'
 import { Button } from '../ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card'
 import { Skeleton } from '../ui/skeleton'
-import { ErrorNote } from './ErrorNote'
-import { STICKY_HEADER, panelScrollClass } from './panelStyles'
+import { ErrorNote } from '../shared/ErrorNote'
+import { STICKY_HEADER, panelScrollClass } from '../shared/panelStyles'
 
 /** {@link CardViewPanel} 的 props。Props of {@link CardViewPanel}. */
 interface CardViewPanelProps {

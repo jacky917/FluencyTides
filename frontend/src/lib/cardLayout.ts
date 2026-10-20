@@ -1,17 +1,11 @@
 /**
- * 卡片瀏覽頁的版面：依內容區的實際寬度（會隨左側選單收合而變）決定欄數，以及可拖曳面板的寬度。
- * Layout of the card browsing page: the column mode follows the content
- * width (which changes when the sidebar collapses), plus the panel widths.
+ * 各頁的分欄版面設定：卡片瀏覽頁三欄（牌組、清單、卡面），Generate、Graph 兩欄（牌組、主區塊）。
+ * 計算本身在 `lib/splitLayout.ts`。
+ * The split layouts of the pages: three columns on the card browsing page,
+ * two (deck tree and main area) on Generate and Graph.
  */
 
-/** 版面模式：三欄並排、牌組與清單並排而卡面在下方、全部疊成一欄。The layout mode. */
-export type LayoutMode = 'three' | 'two' | 'stacked'
-
-/** 可拖曳面板的寬度（px）。Widths of the resizable panels, in pixels. */
-export interface PanelWidths {
-  deck: number
-  viewer: number
-}
+import type { PanelSpec, SplitPageConfig } from './splitLayout'
 
 /** 視窗寬度不超過這個值時卡面預設 {@link VIEWER_DEFAULT}，更寬時 {@link VIEWER_DEFAULT_WIDE}。 */
 export const WIDE_SCREEN = 1920
@@ -29,52 +23,38 @@ export const LIST_MIN = 240
 
 /** 內容區至少這麼寬才三欄並排。Content width needed for three columns. */
 export const THREE_COLUMN_MIN = 1200
-/** 內容區至少這麼寬才讓牌組與清單並排。Content width needed for two columns. */
+/** 內容區至少這麼寬才讓牌組與旁邊的區塊並排。Content width needed for two columns. */
 export const TWO_COLUMN_MIN = 640
 
-/**
- * 依內容區寬度決定版面模式。The layout mode for a content width.
- * @param width - 內容區寬度（px）。Content width in pixels.
- * @returns 版面模式。The mode.
- */
-export function layoutMode(width: number): LayoutMode {
-  if (width >= THREE_COLUMN_MIN) return 'three'
-  if (width >= TWO_COLUMN_MIN) return 'two'
-  return 'stacked'
-}
+/** 牌組樹面板（三頁共用）。The deck tree panel, shared by the three pages. */
+export const DECK_PANEL: Readonly<PanelSpec> = Object.freeze({
+  min: DECK_MIN,
+  max: DECK_MAX,
+  defaultWidth: () => DECK_DEFAULT,
+})
 
-/**
- * 預設寬度：卡面依視窗寬度是 768 或 1080px。
- * The default widths; the viewer depends on the window width.
- * @param windowWidth - 視窗寬度（px）。The window width.
- * @returns 預設寬度。The defaults.
- */
-export function defaultPanelWidths(windowWidth: number): PanelWidths {
-  return { deck: DECK_DEFAULT, viewer: windowWidth > WIDE_SCREEN ? VIEWER_DEFAULT_WIDE : VIEWER_DEFAULT }
-}
+/** 卡片瀏覽頁：牌組、清單、卡面三欄；卡面寬度依視窗而定。The card browsing page. */
+export const CARD_LAYOUT: SplitPageConfig<'deck' | 'viewer'> = Object.freeze({
+  id: 'cards',
+  specs: Object.freeze({
+    deck: DECK_PANEL,
+    viewer: Object.freeze({
+      min: VIEWER_MIN,
+      max: VIEWER_MAX,
+      defaultWidth: (windowWidth: number) => (windowWidth > WIDE_SCREEN ? VIEWER_DEFAULT_WIDE : VIEWER_DEFAULT),
+    }),
+  }),
+  breakpoints: Object.freeze({ full: THREE_COLUMN_MIN, partial: TWO_COLUMN_MIN }),
+})
 
-const LIMITS: Record<keyof PanelWidths, [number, number]> = {
-  deck: [DECK_MIN, DECK_MAX],
-  viewer: [VIEWER_MIN, VIEWER_MAX],
-}
+/** Generate、Graph 頁共用的面板與斷點：牌組樹＋主區塊。Panels and breakpoints of the two-column pages. */
+const SIDE_LAYOUT = {
+  specs: Object.freeze({ deck: DECK_PANEL }),
+  breakpoints: Object.freeze({ full: TWO_COLUMN_MIN }),
+} as const
 
-/**
- * 整理存下來的面板寬度：只留下使用者拖曳過的面板（沒存的用預設，預設才會跟著螢幕大小變），
- * 不是有限數字的丟掉、超出範圍的拉回範圍內。
- * Sanitizes stored widths, keeping only valid entries (clamped); missing
- * entries fall back to the screen-dependent defaults.
- * @param raw - localStorage 讀出的值。The stored value.
- * @returns 使用者設定過的寬度。The widths the user set.
- */
-export function sanitizePanelWidths(raw: unknown): Partial<PanelWidths> {
-  const value = (typeof raw === 'object' && raw !== null ? raw : {}) as Partial<Record<keyof PanelWidths, unknown>>
-  const result: Partial<PanelWidths> = {}
-  for (const key of Object.keys(LIMITS) as (keyof PanelWidths)[]) {
-    const size = value[key]
-    if (typeof size === 'number' && Number.isFinite(size)) {
-      const [min, max] = LIMITS[key]
-      result[key] = Math.min(max, Math.max(min, Math.round(size)))
-    }
-  }
-  return result
-}
+/** Card Generator 頁。The card generator page. */
+export const GENERATE_LAYOUT: SplitPageConfig<'deck'> = Object.freeze({ id: 'generate', ...SIDE_LAYOUT })
+
+/** Knowledge Graph 頁。The knowledge graph page. */
+export const GRAPH_LAYOUT: SplitPageConfig<'deck'> = Object.freeze({ id: 'graph', ...SIDE_LAYOUT })

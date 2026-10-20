@@ -6,22 +6,22 @@ import { useRevealSelected } from '../../hooks/useRevealSelected'
 import { buildDeckTree, deckAncestors, type DeckNode } from '../../lib/deckTree'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '../ui/card'
 import { Skeleton } from '../ui/skeleton'
 import { ErrorNote } from './ErrorNote'
-import { STICKY_HEADER, panelScrollClass } from './panelStyles'
+import { Panel } from './Panel'
 
 /**
- * 牌組樹面板（Anki 牌組名以 `::` 分層，可展開）。展開狀態由呼叫端保存：版面模式改變時面板會
- * 重新掛載，狀態才不會遺失。
- * The deck tree panel; the expansion state is owned by the caller.
+ * 牌組樹面板（Anki 牌組名以 `::` 分層，可展開），Cards、Generate、Graph 三頁共用。展開狀態由
+ * 呼叫端保存（各頁分開記）：版面模式改變時面板會重新掛載，狀態才不會遺失。
+ * The deck tree panel shared by the three pages; the expansion state is owned
+ * by the caller.
  * @param props.scrollable - 面板自己捲動（標題列固定）。The panel scrolls itself.
  * @param props.toggled - 使用者手動展開或收合過的節點。Nodes the user toggled by hand.
  * @param props.selected - 目前選取的牌組；null 為全部。The selected deck.
  * @param props.onSelect - 選取牌組。Selects a deck.
  * @returns 面板 JSX。Panel JSX.
  */
-export function DeckPanel({
+export function DeckTreePanel({
   scrollable,
   toggled,
   onToggled,
@@ -47,48 +47,52 @@ export function DeckPanel({
   useRevealSelected(panelRef, data !== undefined, scrollable)
 
   return (
-    <Card ref={panelRef} className={panelScrollClass(scrollable)}>
-      <CardHeader className={cn('pb-2 flex-row items-center justify-between space-y-0', scrollable && STICKY_HEADER)}>
-        <CardTitle className="text-base flex items-center gap-2">
+    <Panel
+      ref={panelRef}
+      scrollable={scrollable}
+      title={
+        <>
           <FolderTree className="h-4 w-4" />
           牌組
-        </CardTitle>
+        </>
+      }
+      actions={
         <Button variant="ghost" size="icon" onClick={() => refetch()} disabled={isFetching} aria-label="重新整理牌組">
           <RefreshCw className={cn('h-4 w-4', isFetching && 'animate-spin')} />
         </Button>
-      </CardHeader>
-      <CardContent className="text-sm">
-        {isPending ? (
-          <div className="space-y-2">
-            <Skeleton className="h-5 w-full" />
-            <Skeleton className="h-5 w-3/4" />
-            <Skeleton className="h-5 w-2/3" />
-          </div>
-        ) : isError ? (
-          <ErrorNote title="無法載入牌組" error={error} />
-        ) : (
-          <ul role="tree" aria-label="牌組">
-            <li role="treeitem" aria-selected={selected === null}>
-              <div className="flex items-center">
-                <span className="inline-block w-[18px]" />
-                <DeckButton label="全部牌組" active={selected === null} onClick={() => onSelect(null)} />
-              </div>
-            </li>
-            {tree.map((node) => (
-              <DeckItem
-                key={node.fullName}
-                node={node}
-                depth={0}
-                selected={selected}
-                isOpen={isOpen}
-                onToggle={(name, open) => onToggled((prev) => ({ ...prev, [name]: open }))}
-                onSelect={onSelect}
-              />
-            ))}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
+      }
+      contentClassName="text-sm"
+    >
+      {isPending ? (
+        <div className="space-y-2">
+          <Skeleton className="h-5 w-full" />
+          <Skeleton className="h-5 w-3/4" />
+          <Skeleton className="h-5 w-2/3" />
+        </div>
+      ) : isError ? (
+        <ErrorNote title="無法載入牌組" error={error} />
+      ) : (
+        <ul role="tree" aria-label="牌組">
+          <li role="treeitem" aria-selected={selected === null}>
+            <div className="flex items-center">
+              <span className="inline-block w-[18px]" />
+              <DeckButton label="全部牌組" active={selected === null} onClick={() => onSelect(null)} />
+            </div>
+          </li>
+          {tree.map((node) => (
+            <DeckItem
+              key={node.fullName}
+              node={node}
+              depth={0}
+              selected={selected}
+              isOpen={isOpen}
+              onToggle={(name, open) => onToggled((prev) => ({ ...prev, [name]: open }))}
+              onSelect={onSelect}
+            />
+          ))}
+        </ul>
+      )}
+    </Panel>
   )
 }
 

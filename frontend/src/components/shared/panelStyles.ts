@@ -1,5 +1,5 @@
 /**
- * 卡片瀏覽頁三個面板共用的樣式。Shared styles of the card browsing panels.
+ * 分欄頁面中各面板共用的樣式。Shared styles of the split-layout panels.
  */
 
 /** 自己捲動的面板，標題列固定在上方。Sticky header of a self-scrolling panel. */

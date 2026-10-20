@@ -6,6 +6,7 @@ import { FluencyTidesAPI } from '../api/client'
 import { describeApiError, failureTitle, isBackendError, retryTransient } from '../lib/apiError'
 import { changedFields, fieldEditPolicy, isStructuredField, orderedFields } from '../lib/cardFields'
 import type { CardDetail } from '../types/api'
+import { ConfirmDialog } from './shared/ConfirmDialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 
@@ -71,6 +72,11 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading, error,
     [cardDetail],
   )
   const [fields, setFields] = useState<Record<string, string>>({})
+  // 刪除前的確認視窗（頁面內的，不用 window.confirm：瀏覽器顯示原生對話框前會退出全螢幕）
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  useEffect(() => {
+    if (!isOpen) setConfirmingDelete(false)
+  }, [isOpen])
 
   useEffect(() => {
     setFields(original)
@@ -124,9 +130,7 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading, error,
   const canDelete = Boolean(target && policy?.canDelete && !busy && !isLoading)
 
   const handleDelete = () => {
-    if (target && window.confirm('確定要刪除這則筆記嗎？此操作無法復原，相關的圖譜連線也會移除。')) {
-      deleteMutation.mutate(target)
-    }
+    if (target) setConfirmingDelete(true)
   }
 
   return (
@@ -228,6 +232,19 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading, error,
           </div>
         </div>
       </div>
+      {confirmingDelete && target && (
+        <ConfirmDialog
+          title="刪除筆記"
+          message="確定要刪除這則筆記嗎？此操作無法復原，相關的圖譜連線也會移除。"
+          confirmLabel="刪除"
+          destructive
+          onCancel={() => setConfirmingDelete(false)}
+          onConfirm={() => {
+            setConfirmingDelete(false)
+            deleteMutation.mutate(target)
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -12,8 +12,8 @@ import { Button } from '../ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card'
 import { Input } from '../ui/input'
 import { Skeleton } from '../ui/skeleton'
-import { ErrorNote } from './ErrorNote'
-import { STICKY_HEADER, panelScrollClass } from './panelStyles'
+import { ErrorNote } from '../shared/ErrorNote'
+import { STICKY_HEADER, panelScrollClass } from '../shared/panelStyles'
 
 /** {@link CardListPanel} 的 props。Props of {@link CardListPanel}. */
 interface CardListPanelProps {
