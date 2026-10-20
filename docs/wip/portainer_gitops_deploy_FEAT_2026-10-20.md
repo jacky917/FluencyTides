@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-10-20 |
 | **性質** | 部署流程重新設計 + 實作工作項（含 NAS 端手動步驟） |
-| **狀態** | 🚧 實作中（P0～P2、P1 完成，進行 P3） |
+| **狀態** | 🚧 實作中（P0～P3 完成，進行 P4） |
 | **範圍** | `.github/workflows/main.yml`、`frontend/nginx.conf.template`、`deploy_local.sh`（退役）、`README.md`；NAS 端：Portainer 掛載、兩個 Portainer Git stack、CasaOS 外部連結；GitHub：secrets 與 workflow 啟用狀態 |
 | **不動** | 後端 / 前端應用程式碼；`backend/docker-compose.yml` 與 `frontend/docker-compose.yml` 的服務定義（映像、掛載、網路、`env_file` 路徑全部照舊）；Cloudflare Tunnel 既有 hostname；Portainer 版本升級；資料庫內容 |
-| **PR / 進度** | P0 → [#28](https://github.com/jacky917/FluencyTides/pull/28)（已合併 2026-10-20，034d4de）；P1 完成 2026-10-20 |
+| **PR / 進度** | P0 → [#28](https://github.com/jacky917/FluencyTides/pull/28)（已合併 2026-10-20，034d4de）；P1、P3 完成 2026-10-20；後端 stack 改名 → [#29](https://github.com/jacky917/FluencyTides/pull/29)（已合併 2026-10-20，59151a4） |
 | **關聯文件** | `docs/bk/05_DevOps_and_Deployment.md`（舊部署說明，F059 即「部署失敗不報錯」）、`docs/archive/claude_cli_in_container_FEAT_2026-08-29.md` §5（記載「CI 已停用」） |
 
 ---
@@ -42,6 +42,7 @@ GitHub Actions 的 CI/CD 自 2026-08-27 起被手動停用，之後正式站靠�
 - G2 部署任何一步失敗，GitHub Actions 必定顯示紅燈，不再有「假綠燈」。
 - G3 FluencyTides 的容器只有一個管理者（Portainer），設定變更有固定做法，且不會讓自動部署失效。
 - G4 CasaOS 主畫面保留點擊即開網頁的入口，但 CasaOS 無法修改、重建或解除安裝 FluencyTides。
+  > 2026-10-20 實機結果：部分達成。CasaOS 沒有設定、重建、解除安裝的按鈕，但兩個容器列在「Legacy app」區塊並有「Import to CasaOS」動作（需二次確認），見 D5 更正與 R11。
 - G5 每個步驟都有回復方式，切換過程資料零遺失。
 
 **非目標**
@@ -110,6 +111,8 @@ Portainer 本來就掛著 `docker.sock`（等同主機 root），多掛一個目
 
 CasaOS 列 app 的方式是依容器標籤記錄的 compose 檔路徑，到主機上讀檔（`CasaOS-AppManagement` 的 `service/compose_service.go` `List()`，讀不到就跳過）。
 Portainer stack 的 compose 檔路徑是 Portainer 容器內的 `/data/compose/<編號>/...`，主機上不存在，所以 **CasaOS 不會把 FluencyTides 列為自己的 app，也就沒有任何按鈕能動到它**。這正是想要的效果。
+
+> **2026-10-20 實機更正（部分不成立）**：切換後 CasaOS 確實不再把它們當成 compose app，但改列在主畫面獨立的「**Legacy app (To be rebuilt)**」區塊，顯示為 `fluencytides-backend`、`fluencytides-frontend`（通用圖示）。原因：`CasaOS-AppManagement` 的 `service/container.go` `GetContainerAppList()` 會列出主機上**所有**容器，`route/v2/internal_web.go` `GetAppGrid()` 只排除屬於可讀 compose app 的容器，其餘一律以 `container` 類型回傳，沒有可用來排除的標籤。游標移上去提示「Import to CasaOS」，點擊會開啟匯入面板（`CasaOS-UI` `AppSection.vue` 的 `@importApp="showContainerPanel"`），需在面板內再確認才會匯入。**規則：不要匯入這兩個 Legacy app**，匯入會讓 CasaOS 接手、與 Portainer 搶管理權。
 
 入口改用 CasaOS 內建的「Add External Link/APP」（`CasaOS-UI` 的 `ExternalLinkPanel.vue`），只存網址、名稱、圖示，與容器無關。
 連結網址要在網域變更時人工更新，列入 §8 檢查清單。
@@ -435,9 +438,20 @@ gh run rerun <P3-1 的 run id> --failed
 
 預期 deploy 綠燈，且兩個容器的啟動時間更新為剛才（驗證 Force redeployment 在 Git 無新 commit 時也會重建）。
 
+> **實作紀錄（2026-10-20）**：先依使用者要求把後端改名為 `fluencytides-backend`（#29：刪除舊 stack id 1、重建為 stack id 3），使用者再設定兩個 secret。重跑 #29 合併後 run（39357834857）的失敗 job：後端 webhook 回 **HTTP 204**，deploy 綠燈；後端容器 ID 由 `b978c86584a2` 換成 `d3fa3373bafc`、映像換成該 run 新建的 `1d5263ad4a72`，Git commit 不變（`59151a4`）——證實 Re-pull image + Force redeployment 在無新 commit 時也會重建。
+> 時間對照：webhook 在 02:44:59.37 回 204，新容器 02:45:06.74 才啟動——**stack webhook 是非同步的**，CI 綠燈只代表觸發成功（見 §9 R1）。
+> 後端重建時拿回同一個 IP（172.19.0.2），所以 D7「後端換 IP 後前端仍可連」本次沒有真正被測到；前端 `/api/` 在後端重建後正常。
+>
+> **端到端（2026-10-20）**：在 main 手動觸發（run 39360681810），六個 job 全綠，前後端 webhook 都回 204；兩個容器都換成新 ID 與新映像（後端 `66035c9a8ced`、前端 `458e1e89c71f`），0 次重啟。瀏覽器開 `ft.jacky917.com` 卡片頁正常、`/api/` 全部 200、console 無錯誤。
+
 ### P4 收尾 👤🤖
 
 1. 👤 CasaOS 主畫面 → 「+」→ Add External Link/APP：位址 `https://ft.jacky917.com`、名稱 `FluencyTides`、圖示網址自選。需要的話再加一個後端 API 文件入口 `https://ft-backend.jacky917.com/docs`。
+   > **實作紀錄（2026-10-20）**：由 Claude 經瀏覽器新增（實際選單名稱為「+」→ **Add external link**），兩筆：
+   > - `FluencyTides` → `https://ft.jacky917.com`，圖示沿用舊 `x-casaos` 的 nginx 圖示
+   > - `FluencyTides API` → `https://ft-backend.jacky917.com/docs`，圖示沿用 FastAPI 圖示
+   >
+   > CasaOS API `GET /v1/users/current/custom/link` 確認兩筆已存；點擊圖示時 CasaOS 以 `window.open` 開啟上述網址（內建瀏覽器窗格不允許另開視窗，改以攔截 `window.open` 確認網址正確）。
 2. 🤖 做一次端到端驗證：一個無害的小改動（例如後端 log 文字或前端頁尾版本號）走完整流程，確認從合併到網頁顯示新版本全自動。
 3. 🤖 本文件狀態改 ✅、補驗收結果、移入 `docs/archive/`。
 4. 👤 穩定運作一週後，刪除 `/home/jacky917/FluencyTides` 與 `data.bak-20261020`。
@@ -451,7 +465,7 @@ sudo nano /DATA/AppData/FluencyTides/backend/.env
 ```
 
 改完到 Portainer → Stacks → `fluencytides-backend` → 重新部署（Pull and redeploy）。`env_file` 只在建立容器時讀取，重新部署才會生效。
-**不要**再用 `docker compose up --force-recreate` 或 CasaOS 操作這組容器。
+**不要**再用 `docker compose up --force-recreate` 或 CasaOS 操作這組容器，也**不要**在 CasaOS 對「Legacy app」區塊的 `fluencytides-backend`、`fluencytides-frontend` 按「Import to CasaOS」。
 
 ### 7.2 手動重新部署（CI 掛掉或想立即重跑）
 
@@ -495,7 +509,7 @@ sudo docker compose -f /home/jacky917/FluencyTides/frontend/docker-compose.yml u
 
 | # | 風險 | 應對 |
 |---|---|---|
-| R1 | Force redeployment / Re-pull image 的實際行為（是否每次都重建容器、webhook 是同步完成還是背景執行）未在本環境驗證 | P3-4 的「重跑 deploy 後容器啟動時間更新」就是這項的驗證；若 webhook 是背景執行，CI 綠燈不代表部署完成，需在 P4 端到端驗證時觀察時間差，必要時在 deploy job 加輪詢確認 |
+| R1 | **（2026-10-20 已確認）** stack webhook 是非同步的：收到請求即回 204，重建在背景進行（實測晚約 7 秒）。CI 綠燈只代表「觸發成功」；若 Portainer 端部署失敗（拉映像失敗、compose 錯誤），CI 仍是綠燈 | 重建行為已驗證（Re-pull + Force 在無新 commit 時也會重建）。部署結果的驗證**未實作**，列為後續工作：deploy job 在呼叫 webhook 後輪詢一個能反映版本的端點（例如讓 `/api/health` 回傳映像的 commit sha），直到等於本次 commit 或逾時才算成功 |
 | R2 | Portainer 掛載 `/DATA/AppData/FluencyTides` 時需重建 Portainer 容器 | Portainer 資料在 `/DATA/AppData/portainer-ee/data`（bind mount），重建不影響；CasaOS 若儲存失敗，Portainer 停擺不影響 FluencyTides 運作 |
 | R3 | stack 拉到舊映像（F7） | P3-1 先手動觸發推出新映像，P3-3 才建 stack |
 | R4 | P2 合併、P3-1 時 deploy job 預期紅燈 | 已寫明屬預期；P3-4 以 rerun 轉綠 |
@@ -504,6 +518,7 @@ sudo docker compose -f /home/jacky917/FluencyTides/frontend/docker-compose.yml u
 | R7 | Cloudflare service token 過期 → deploy 收到 302 或 403 | deploy 現在會紅燈並印出狀態碼；P1 先確認到期日 |
 | R8 | GitOps 開啟後在 Portainer 介面改 compose 會被 Git 覆蓋 | §7.3 緊急回滾的做法已包含「先關 GitOps」；compose 修改一律走 git |
 | R9 | 切換期間服務中斷 | P3-2 到 P3-3 約數分鐘；挑使用者不在使用時進行 |
+| R11 | **（2026-10-20 發現）** CasaOS 把這兩個容器列為「Legacy app」，提供「Import to CasaOS」動作（見 D5 更正） | 匯入需在面板內二次確認；規則寫入 §7.1 與 D5；若日後要完全避免，可改走「路徑對齊」讓 CasaOS 讀到 compose 檔（會變成一般 app、按鈕更多，風險不同），目前不採用 |
 | R10 | **（2026-10-20 已發生）** CasaOS 儲存 Portainer 設定會依 `latest` 標籤重新拉映像，Portainer 從 2.39.2 被升到 2.45.2，且重建後所有登入狀態失效 | 升級後確認：容器 running、新掛載生效、版本 2.45.2 LTS；P3-3 建 stack 前重新確認 Git stack 選項在新版仍存在。日後若要避免，CasaOS 裡把 Portainer 的 Tag 改成固定版本號 |
 
 ## 10. 驗收標準
@@ -515,5 +530,5 @@ sudo docker compose -f /home/jacky917/FluencyTides/frontend/docker-compose.yml u
 - [ ] 手動觸發 workflow（main）→ deploy 綠燈，且兩個容器確實重建（啟動時間更新）
 - [ ] 把 webhook secret 暫時改成錯誤值再觸發 → deploy 紅燈並顯示狀態碼（驗證不再假綠燈），驗完改回
 - [ ] 端到端：合併一個只改後端的小變更 → 不需人工介入，網頁上看得到新版本；前端 `/api/` 無 502
-- [ ] CasaOS 主畫面有 FluencyTides 外部連結，點擊開啟正式站；CasaOS 的 app 清單中沒有可操作的 FluencyTides
+- [x] CasaOS 主畫面有 FluencyTides 外部連結，點擊開啟正式站（2026-10-20，另加 FluencyTides API）；~~CasaOS 的 app 清單中沒有可操作的 FluencyTides~~（2026-10-20 更正：兩個容器會出現在「Legacy app」區塊，見 D5、R11）
 - [ ] `deploy_local.sh` 已從 repo 移除；README 的部署說明與現況一致
