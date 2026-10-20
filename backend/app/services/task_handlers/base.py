@@ -29,6 +29,8 @@ from app.services.task_handlers.capabilities import GraphSpec, HandlerCapabiliti
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
 
+    from pydantic import BaseModel
+
     from app.services.card_service import CardService
     from app.services.relation_service import RelationService
 
@@ -54,6 +56,9 @@ class BaseHandler(ABC):
         JSON_FIELDS: JSON 欄位名稱；建卡與改欄位都不能直接寫（D3）。JSON field names.
         MEDIA_FIELDS: 媒體欄位名稱；同上。Media field names.
         CREATE_TAGS: 標準建立加上的標籤。Tags the standard create adds.
+        CREATE_PARAMS: 覆寫建立的 handler 的建立參數模型（D3）；服務層以它驗證參數、產生網頁表單。
+            標準建立不用它（參數就是筆記欄位）。The create parameter model of a
+            handler overriding ``execute_create``.
     """
 
     CAPABILITIES: ClassVar[HandlerCapabilities] = HandlerCapabilities()
@@ -62,6 +67,7 @@ class BaseHandler(ABC):
     JSON_FIELDS: ClassVar[tuple[str, ...]] = ()
     MEDIA_FIELDS: ClassVar[tuple[str, ...]] = ()
     CREATE_TAGS: ClassVar[tuple[str, ...]] = ("HandlerGenerated",)
+    CREATE_PARAMS: ClassVar[type[BaseModel] | None] = None
 
     @property
     @abstractmethod

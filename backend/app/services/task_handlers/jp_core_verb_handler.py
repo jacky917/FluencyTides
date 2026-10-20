@@ -22,6 +22,12 @@ import re
 from typing import override, TYPE_CHECKING
 
 from app.services.task_handlers.base import BaseHandler
+from app.services.task_handlers.capabilities import (
+    CreateCapability,
+    GraphCapability,
+    HandlerCapabilities,
+    Operation,
+)
 from app.services.task_handlers.registry import register_handler
 from app.services.task_handlers.shared.cloze_positioning import (
     assemble_dialog_turns,
@@ -50,6 +56,17 @@ class JPCoreVerbHandler(BaseHandler):
     Dedicated handler for Japanese core verbs (high-frequency polysemous
     verbs).
     """
+
+    # 子卡由本機批次腳本產生（D7）；母卡 JSON 與查重紀錄互相參照，網頁只能檢視（D4）
+    CAPABILITIES = HandlerCapabilities(
+        create=CreateCapability(channels=("script",), reason="子卡由本機批次腳本 generate_child_cards.py 產生"),
+        update_fields=Operation(reason="由本機批次腳本管理，網頁只能檢視"),
+        delete=Operation(
+            reason="由本機批次腳本管理；刪除請用 scripts/local_anki/JP_CoreVerb/delete_child_cards.py"
+            "（會一併更新母卡 JSON 與查重紀錄）"
+        ),
+        graph=GraphCapability(reason="尚未實作"),
+    )
 
     @property
     @override
@@ -105,27 +122,6 @@ class JPCoreVerbHandler(BaseHandler):
             },
             "required": ["word"]
         }
-
-    @override
-    async def execute_create(self, card_service: "CardService", relation_service: "RelationService", deck_name: str, model_name: str, parameters: dict) -> int | list[int]:
-        """建立空白 Master 母卡片（母卡建立由腳本側 create_master_card.py 負責）。
-
-        Create an empty master card (actual creation is handled by the
-        script-side create_master_card.py).
-
-        Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            deck_name: 目標牌組名稱。Target deck name.
-            model_name: Anki 模型名稱。Anki model name.
-            parameters: 建卡參數。Creation parameters.
-
-        Returns:
-            int | list[int]: 建立的 note id（目前未實作，回傳空清單）。
-                Created note ID(s); currently unimplemented, returns [].
-        """
-        # TODO: Implement creating empty Master card only
-        return []
 
     @override
     async def execute_generate(self, card_service: "CardService", relation_service: "RelationService", parameters: dict) -> dict:
@@ -437,33 +433,6 @@ class JPCoreVerbHandler(BaseHandler):
         }
 
     @override
-    async def execute_update(self, card_service: "CardService", relation_service: "RelationService", note_id: int, parameters: dict) -> None:
-        """更新卡片（目前無更新需求，保留擴充點）。
-
-        Update a card (no current use case; extension point reserved).
-
-        Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            note_id: 目標 note id。Target note ID.
-            parameters: 更新參數。Update parameters.
-        """
-        pass
-
-    @override
-    async def execute_delete(self, card_service: "CardService", relation_service: "RelationService", note_id: int) -> None:
-        """刪除指定的卡片。
-
-        Delete the given card.
-
-        Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            note_id: 要刪除的 note id。Note ID to delete.
-        """
-        await card_service.delete_note(note_id)
-
-    @override
     async def execute_read_list(self, card_service: "CardService", relation_service: "RelationService", deck_name: str | None = None) -> list[dict]:
         """讀取卡片清單（目前未實作）。
 
@@ -478,20 +447,3 @@ class JPCoreVerbHandler(BaseHandler):
             list[dict]: 卡片清單（目前為空）。Card list (currently empty).
         """
         return []
-
-    @override
-    async def execute_read_graph(self, card_service: "CardService", relation_service: "RelationService", deck_name: str | None = None) -> dict:
-        """讀取卡片關聯圖譜（目前未實作）。
-
-        Read the relation graph (not implemented).
-
-        Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            deck_name: 篩選的牌組名稱。Deck name filter.
-
-        Returns:
-            dict: 包含 nodes 與 links 的圖譜結構（目前為空）。Graph struct
-                with nodes and links (currently empty).
-        """
-        return {"nodes": [], "links": []}

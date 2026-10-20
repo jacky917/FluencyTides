@@ -156,7 +156,7 @@ async def read_graph(
     deck_name: str | None = None,
     card_service: CardService = Depends(get_card_service),
     relation_service: RelationService = Depends(get_relation_service),
-) -> dict[str, list[dict[str, object]]]:
+) -> dict[str, object]:
     """Controller: 讀取圖譜。
 
     Controller: read the handler-specific knowledge graph.
@@ -168,8 +168,8 @@ async def read_graph(
         relation_service: 注入的 RelationService。Injected RelationService.
 
     Returns:
-        圖譜資料字典 {"nodes": [...], "links": [...]}。
-        Graph data dict {"nodes": [...], "links": [...]}.
+        圖譜資料字典 {"nodes", "links", "label_fields", "label_field"}。
+        Graph data dict with nodes, links and the label fields.
 
     Raises:
         HTTPException: 該 Handler 不支援圖譜讀取時回傳 400。

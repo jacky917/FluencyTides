@@ -210,6 +210,13 @@ def validate_handler(handler: BaseHandler) -> None:
     if "script" in create.channels and not callable(getattr(handler, "execute_generate", None)):
         problems.append("create.channels 含 script，但沒有 execute_generate")
 
+    # 覆寫建立的參數不是筆記欄位，要有 CREATE_PARAMS 才能驗證與產生表單；標準建立則不該宣告它
+    overrides_create = cls.execute_create is not BaseHandler.execute_create
+    if overrides_create and create.supported and handler.CREATE_PARAMS is None:
+        problems.append("開放建卡且覆寫了 execute_create，但沒有宣告 CREATE_PARAMS")
+    if handler.CREATE_PARAMS is not None and not overrides_create:
+        problems.append("宣告了 CREATE_PARAMS，但用的是標準建立（參數就是筆記欄位）")
+
     # 基底的 execute_update 只做 update_fields；具名動作一定要覆寫
     if caps.actions and cls.execute_update is BaseHandler.execute_update:
         problems.append(f"宣告了動作 {list(caps.actions)}，但沒有覆寫 execute_update")

@@ -23,19 +23,30 @@ overwrites). All field I/O goes through ``CardService`` /
 ``AnkiJsonFieldManager``.
 """
 
-from typing import override, TYPE_CHECKING
 import json
 import logging
 import uuid
+from typing import TYPE_CHECKING, override
 
+from pydantic import BaseModel, Field
+
+from app.core.config import settings
+from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.anki.search import note_types_query
 from app.services.task_handlers.base import BaseHandler
+from app.services.task_handlers.capabilities import (
+    CreateCapability,
+    GraphCapability,
+    HandlerCapabilities,
+    Operation,
+)
 from app.services.task_handlers.registry import register_handler
 from app.services.task_handlers.shared.trilingual_lang import (
     LANG_CODES,
     recordings_field,
     references_field,
 )
+from app.services.task_handlers.speaking_coach_handler import SPEAKING_ACTIONS
 
 if TYPE_CHECKING:
     from app.services.card_service import CardService
@@ -43,8 +54,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-from app.core.config import settings
-from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
+
+class SpeakingTrilingualCreateParams(BaseModel):
+    """三語對話卡的建立參數（D3）。語言由欄位決定，所以沒有語言參數；``tg_bot`` 由服務層傳入。
+
+    Create parameters of a trilingual speaking card.
+    """
+
+    prompt: str = Field(
+        min_length=1,
+        title="情境提示",
+        description="共通口說情境提示（三語共用）",
+        json_schema_extra={"x-ui": "textarea"},
+    )
+    context: str = Field(
+        default="", title="情境", description="情境描述（選填）", json_schema_extra={"x-ui": "textarea"}
+    )
 
 
 @register_handler
@@ -61,6 +86,15 @@ class SpeakingTrilingualHandler(BaseHandler):
     and updates of per-language JSON fields (Recordings x3 /
     References x3) plus Prompt_Audios (with lang keys).
     """
+
+    CAPABILITIES = HandlerCapabilities(
+        create=CreateCapability(reason="網頁建卡尚未開放"),
+        update_fields=Operation(reason="三語對話卡的欄位修改尚未開放"),
+        delete=Operation(reason="三語對話卡的刪除尚未開放"),
+        actions=SPEAKING_ACTIONS,
+        graph=GraphCapability(reason="口說卡沒有知識圖譜"),
+    )
+    CREATE_PARAMS = SpeakingTrilingualCreateParams
 
     @property
     @override
@@ -110,7 +144,7 @@ class SpeakingTrilingualHandler(BaseHandler):
         deck_name: str,
         model_name: str,
         parameters: dict
-    ) -> int:
+    ) -> list[int]:
         """建立一張空的三語口說卡片（七個 JSON 欄位皆為空陣列）。
 
         Create an empty trilingual speaking card (all seven JSON fields
@@ -125,7 +159,7 @@ class SpeakingTrilingualHandler(BaseHandler):
                 'prompt'; optional 'context', 'tg_bot'.
 
         Returns:
-            建立成功的 Note ID。ID of the created note.
+            建立成功的 Note ID（單元素陣列）。The created note ID, as a list.
         """
         prompt_text = parameters.get("prompt", "")
         context_text = parameters.get("context", "")
@@ -146,12 +180,13 @@ class SpeakingTrilingualHandler(BaseHandler):
             fields[references_field(lang)] = empty_json_array
 
         logger.info("建立三語口說卡片 (Model: %s) -> Prompt: %s", model_name, prompt_text)
-        return await card_service.create_note(
+        note_id = await card_service.create_note(
             deck_name=deck_name,
             model_name=model_name,
             fields=fields,
             tags=["Speaking_Trilingual", "HandlerGenerated"],
         )
+        return [note_id]
 
     async def execute_read_list(
         self,
@@ -194,20 +229,6 @@ class SpeakingTrilingualHandler(BaseHandler):
                 "recordings_count": recordings_count,
             })
         return results
-
-    @override
-    async def execute_read_graph(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        deck_name: str | None = None
-    ) -> dict:
-        """三語口說卡片不需要知識圖譜，回傳空結構。
-
-        Trilingual speaking cards need no knowledge graph; returns an
-        empty struct.
-        """
-        return {"nodes": [], "links": []}
 
     @override
     async def execute_update(
@@ -327,22 +348,3 @@ class SpeakingTrilingualHandler(BaseHandler):
             return
 
         raise ValueError(f"不支援的更新操作: {action}")
-
-    @override
-    async def execute_delete(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        note_id: int
-    ) -> None:
-        """刪除三語口說卡片並清除關聯。
-
-        Delete a trilingual speaking card and clean up its relations.
-
-        Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            note_id: 目標 Note ID。Target note ID.
-        """
-        await card_service.delete_note(note_id)
-        await relation_service.delete_relations_for_note(note_id)

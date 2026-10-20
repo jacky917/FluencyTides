@@ -705,9 +705,9 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
 
 ## 9. 實作順序
 
-0. 殘骸清除（D8）：`verb_pair_example` 一整組、`POST /verb-pair/create`、`PUT /verb-pair/{id}/update`、`supported_models` 裡的舊版 TOEIC、`Default`、`Speaking_Coach_Light`。先做，讓第 1 步的註冊表檢查不必顧慮範例 handler。
-1. 後端基底：錯誤類別（`HandlerOperationUnsupportedError`、`NoteNotFoundError`、`NoteTypeNotCreatableError`、`NoteNotOwnedByHandlerError`、`FieldNotEditableError`）；`BaseHandler` 的標準 CRUD 與標準圖譜（`query_notes`、`GraphSpec`）、`RelationGraphMixin`（由現在 `vocabulary_mining` 的圖譜邏輯抽出）、`RELATION_LABEL_FIELD`、`JSON_FIELDS`／`MEDIA_FIELDS` 名稱宣告；`RelationService.update_labels_for_note`；預設拋不支援的方法、移除的方法、`CAPABILITIES`；註冊表檢查與「筆記類型 → handler」對照；`task_handlers/__init__.py` 統一註冊。
-2. 各 handler：依 §5 宣告能力（`title` 已在第 1 步加上）；口說卡、外語糾錯的 `CreateParams`；刪掉空實作與各自的 `execute_delete`（`execute_read_list`、`get_input_schema` 留到第 5 步）；`execute_create` 回傳改 `list[int]`；單字卡刪掉 `execute_create`、`execute_update`、`execute_read_graph` 覆寫，改掛 `RelationGraphMixin`，宣告 `GRAPH`、`RELATION_LABEL_FIELD`、`JSON_FIELDS`、`MEDIA_FIELDS`。jp 兩個只動到這些，`execute_generate` 不碰；本步結束就跑 §8 的腳本保護測試。
+0. ✅ 殘骸清除（D8）：`verb_pair_example` 一整組、`POST /verb-pair/create`、`PUT /verb-pair/{id}/update`、`supported_models` 裡的舊版 TOEIC、`Default`、`Speaking_Coach_Light`。先做，讓第 1 步的註冊表檢查不必顧慮範例 handler。
+1. ✅ 後端基底：錯誤類別（`HandlerOperationUnsupportedError`、`NoteNotFoundError`、`NoteTypeNotCreatableError`、`NoteNotOwnedByHandlerError`、`FieldNotEditableError`）；`BaseHandler` 的標準 CRUD 與標準圖譜（`query_notes`、`GraphSpec`）、`RelationGraphMixin`（由現在 `vocabulary_mining` 的圖譜邏輯抽出）、`RELATION_LABEL_FIELD`、`JSON_FIELDS`／`MEDIA_FIELDS` 名稱宣告；`RelationService.update_labels_for_note`；預設拋不支援的方法、移除的方法、`CAPABILITIES`；註冊表檢查與「筆記類型 → handler」對照；`task_handlers/__init__.py` 統一註冊。
+2. ✅ 各 handler：依 §5 宣告能力（`title` 已在第 1 步加上）；口說卡、外語糾錯的 `CreateParams`；刪掉空實作與各自的 `execute_delete`（`execute_read_list`、`get_input_schema` 留到第 5 步）；`execute_create` 回傳改 `list[int]`；單字卡刪掉 `execute_create`、`execute_update`、`execute_read_graph` 覆寫，改掛 `RelationGraphMixin`，宣告 `GRAPH`、`RELATION_LABEL_FIELD`、`JSON_FIELDS`、`MEDIA_FIELDS`。jp 兩個只動到這些，`execute_generate` 不碰；本步結束就跑 §8 的腳本保護測試。
 3. `NoteService`（含寫入後同步的提醒邏輯、歸屬檢查）與它的測試。
 4. TG 的 5 處改呼叫 `NoteService`（§7 表格），`bot/dependencies.py` 注入；`_sync_with_warning` 改為包裝服務層；TG 既有測試全過。
 5. REST 端點：`/handlers`、`/handlers/{name}/notes/...`、`/notes/{note_id}`、`/decks`，移除舊路徑；從 `BaseHandler` 與各 handler 移除 `get_input_schema`、`execute_read_list`；`main.py` 掛新路由；測試。`api/verb_pair.py`、`api/core_verb.py` 的 `generate-child-cards` 不動。
@@ -745,6 +745,30 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
 審查後修正（2026-10-20）：開放能力的預設原因、修改時重複讀筆記、`fields` 格式錯誤回 500、`rowcount` 未回報、缺定義檔的錯誤訊息、重複的欄位讀取與筆記類型檢查、單字卡仍用舊的單端標籤更新，都已照上面各點修正。
 
 驗證：`ruff` 通過；`pytest tests` 1003 個（原 948 ＋ 新 55）、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常；app 的 OpenAPI 仍有兩個 `generate-child-cards` 端點。
+
+**第 2 步實作結果（2026-10-20）**：
+
+- 6 個 handler 依 §5 宣告 `CAPABILITIES`；能力以快照測試鎖定（`tests/test_handler_declarations.py`）。`JP_Context_Dark` 兩個 jp handler 的讀取、改欄位、刪除、動作相同，註冊檢查通過。
+- **單字卡（試點）**：改繼承 `RelationGraphMixin`，`execute_create`、`execute_update`、`execute_delete`、`execute_read_graph` 全部刪掉，增刪改查都是基底。宣告 `GRAPH = GraphSpec(subtitle="Target_Translation", pos="Target_POS")`、`RELATION_LABEL_FIELD = "Expression"`、`JSON_FIELDS`（三個 JSON 欄位）、`MEDIA_FIELDS`（`Word_Audio`、`Target_Example_Audio`）、`CREATE_TAGS = ("VocabularyMining", "HandlerGenerated")`（沿用原本的標籤）。
+- **建立參數**：`BaseHandler` 新增類別屬性 `CREATE_PARAMS`。口說卡 `SpeakingCoachCreateParams`（`prompt` 必填；`target_language` 預設 `en-US`，`examples` 三個值、`pattern` 驗證，validator 與 TG 共用正規化）、三語卡 `SpeakingTrilingualCreateParams`（`prompt` 必填）、外語糾錯 `ExpressionCreateParams`（只有 `original_text` 必填；預設值與 handler 讀參數時的預設相同，例如語言預設「中文」「日文」，所以 `model_dump()` 交給 `execute_create` 結果不變）。都不含 `tg_bot`。
+- 註冊檢查新增兩條：開放建卡且覆寫了 `execute_create` → 必須宣告 `CREATE_PARAMS`；宣告了 `CREATE_PARAMS` → 必須覆寫 `execute_create`（標準建立的參數就是筆記欄位）。
+- 語言代碼的正規化從 `bot/handlers/fsm/speaking_fsm.py` 的 `_normalize_language_code` 搬到 `app/schemas/language.py` 的 `normalize_language_code`（連同 `LANG_CODE_PATTERN`），TG 與 `CreateParams` 共用；服務層不能反過來 import TG 模組。
+- 口說卡、三語卡的 `execute_create` 改回傳單元素陣列；外語糾錯的回傳型別改為 `list[int]`（本來就回陣列）；母卡牌組抽成常數 `MASTER_DECK`。口說卡兩個 handler 共用動作清單 `SPEAKING_ACTIONS`。
+- 刪掉的空實作與重複實作：口說卡、三語卡、外語糾錯的 `execute_read_graph`、`execute_delete`；jp 兩個的 `execute_create`、`execute_update`、`execute_delete`、`execute_read_graph`。`get_input_schema`、`execute_read_list` 依第 1 步的決定留到第 5 步。jp 兩個的 `execute_generate` 以 AST 比對與改前**完全相同**。
+- 舊的 `GET /handlers/{name}/graph` 回傳型別改為 `dict[str, object]`：圖譜回應多了 `label_fields`、`label_field`，舊的型別標註會讓 FastAPI 的回應驗證失敗。
+- **本機腳本保護測試**（§8）：以真實 app、設定了 `API_SECRET_KEY` 打兩個 `generate-child-cards`，不帶 `X-API-Key` 回 200；回應形狀 `{"status", "message", "data"}` 且 `data` 原樣回傳；請求欄位不變、`core-verb` 的 `target_verb_span` 可省略、少欄位回 422；`execute_generate` 的參數名不變；`channels` 含 `script` 的 handler 都有 `execute_generate`；D8 移除的三個殘骸端點回 404／405。
+
+這一步造成的行為變化（舊的 REST 端點與 TG 都還沒改，第 3～5 步才接上服務層）：
+
+| 地方 | 改前 | 改後 |
+|---|---|---|
+| 單字卡圖譜 | 節點副標、詞性永遠空白（讀不存在的 `Meaning`、`PartOfSpeech`） | 有值；回應多 `label_fields`、`label_field` |
+| 單字卡改欄位（`PUT /handlers/vocabulary_mining/cards/{id}`） | 任何欄位都寫 | JSON、媒體欄位回 400 `FIELD_NOT_EDITABLE`；值沒變的欄位不寫 |
+| 單字卡建卡（網頁 Generate、TG） | 寫 `Meaning`、`Context` → `FIELD_MISMATCH` | 傳的是 `{"word": …}` → 仍是 `FIELD_MISMATCH`。網頁第 8 步、TG 第 4 步改傳欄位後才能建 |
+| 外語糾錯、jp 的刪除（舊 `DELETE` 端點） | 只刪筆記 | 先刪筆記再刪關聯（jp 的 `execute_generate` 會建關聯，原本刪卡會留下孤兒關聯）。網頁的刪除按鈕要到第 6 步才依能力關閉 |
+| jp 的改欄位（舊 `PUT` 端點，`update_fields`） | 空實作，回 200 但什麼都沒改 | 基底的標準修改會真的寫入。網頁不顯示編輯（`FIELD_EDIT_HANDLERS` 不含 jp），只有直接呼叫 API 會碰到；第 3 步的服務層、第 5 步的新端點依能力擋下 |
+
+驗證：`ruff` 通過；`pytest tests` 1041 個（第 2 步新增 38 個）、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常；`scripts/local_anki/Expression_Correction/generate_expression_cards.py` 可正常 import；OpenAPI 仍有兩個 `generate-child-cards` 端點。
 
 每一步結束都要通過：
 
