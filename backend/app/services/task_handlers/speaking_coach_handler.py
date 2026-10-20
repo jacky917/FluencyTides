@@ -19,7 +19,6 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import settings
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
-from app.infrastructure.anki.search import note_types_query
 from app.schemas.language import LANG_CODE_PATTERN, TargetLanguage, normalize_language_code
 from app.services.task_handlers.base import BaseHandler
 from app.services.task_handlers.capabilities import (
@@ -121,23 +120,6 @@ class SpeakingCoachHandler(BaseHandler):
         return ["Speaking_Coach_Dark"]
 
     @override
-    def get_input_schema(self) -> dict:
-        """回傳前端需要的參數 Schema。
-
-        Return the parameter JSON schema required by the frontend.
-        """
-        return {
-            "type": "object",
-            "properties": {
-                "prompt": {"type": "string", "description": "口說情境對白的目標台詞"},
-                "context": {"type": "string", "description": "情境描述 (選填)"},
-                "target_language": {"type": "string", "description": "目標語言 (選填)"},
-                "tg_bot": {"type": "string", "description": "TG Bot ID (選填)"},
-            },
-            "required": ["prompt"]
-        }
-
-    @override
     async def execute_create(
         self,
         card_service: "CardService",
@@ -194,50 +176,6 @@ class SpeakingCoachHandler(BaseHandler):
             tags=["Speaking_Coach", "HandlerGenerated"]
         )
         return [note_id]
-
-    async def execute_read_list(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        deck_name: str | None = None
-    ) -> list[dict]:
-        """讀取口說卡片列表，過濾並清洗成前端好讀的結構。
-
-        Read speaking cards, filtered and cleaned into a frontend-friendly
-        structure.
-
-        Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            deck_name: 可選的牌組篩選。Optional deck filter.
-
-        Returns:
-            卡片摘要字典列表。List of card summary dicts.
-        """
-        query = note_types_query(self.supported_models, deck_name)
-            
-        note_ids = await card_service.find_notes(query)
-        notes_info = await card_service.get_notes_info(note_ids)
-        
-        results = []
-        for n in notes_info:
-            fields = n.get("fields", {})
-            prompt = fields.get("Prompt", {}).get("value", "")
-            context = fields.get("Context", {}).get("value", "")
-            
-            # 安全解析 JSON 欄位
-            rec_str = fields.get("Recordings", {}).get("value", "[]")
-            recordings = AnkiJsonFieldManager.parse_field_string(rec_str)
-                
-            results.append({
-                "note_id": n["noteId"],
-                "model_name": n["modelName"],
-                "prompt": prompt,
-                "context": context,
-                "recordings_count": len(recordings),
-                "recordings": recordings
-            })
-        return results
 
     @override
     async def execute_update(

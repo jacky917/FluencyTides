@@ -710,7 +710,7 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
 2. ✅ 各 handler：依 §5 宣告能力（`title` 已在第 1 步加上）；口說卡、外語糾錯的 `CreateParams`；刪掉空實作與各自的 `execute_delete`（`execute_read_list`、`get_input_schema` 留到第 5 步）；`execute_create` 回傳改 `list[int]`；單字卡刪掉 `execute_create`、`execute_update`、`execute_read_graph` 覆寫，改掛 `RelationGraphMixin`，宣告 `GRAPH`、`RELATION_LABEL_FIELD`、`JSON_FIELDS`、`MEDIA_FIELDS`。jp 兩個只動到這些，`execute_generate` 不碰；本步結束就跑 §8 的腳本保護測試。
 3. ✅ `NoteService`（含寫入後同步的提醒邏輯、歸屬檢查）與它的測試。
 4. ✅ TG 的 5 處改呼叫 `NoteService`（§7 表格），`bot/dependencies.py` 注入；`_sync_with_warning` 改為包裝服務層；TG 既有測試全過。
-5. REST 端點：`/handlers`、`/handlers/{name}/notes/...`、`/notes/{note_id}`、`/decks`，移除舊路徑；從 `BaseHandler` 與各 handler 移除 `get_input_schema`、`execute_read_list`；`main.py` 掛新路由；測試。`api/verb_pair.py`、`api/core_verb.py` 的 `generate-child-cards` 不動。
+5. ✅ REST 端點：`/handlers`、`/handlers/{name}/notes/...`、`/notes/{note_id}`、`/decks`，移除舊路徑；從 `BaseHandler` 與各 handler 移除 `get_input_schema`、`execute_read_list`；`main.py` 掛新路由；測試。`api/verb_pair.py`、`api/core_verb.py` 的 `generate-child-cards` 不動。
 6. 前端：client 與型別；從 Cards 抽出共用元件（D13），Cards 改用後畫面與行為不變；`CardViewPanel` 與 `CardDetailModal`；工具設定頁的「Handler 能力」區塊。
 7. 前端：Knowledge Graph 改用共用版面（左側牌組樹）、新的圖譜參數與點開卡片、全螢幕（D12、D13）。
 8. 前端：Generate 頁改用共用版面，依 `channels` 與 `create_schema` 產生下拉與表單（§6、D13）。
@@ -824,6 +824,39 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
 - 部署後要照 §10 在 TG 逐項實測：建單字卡、外語糾錯（含覆蓋舊卡）、錄音評分、上傳音檔（對話卡與三語卡各一次，含自訂頭像）。
 
 驗證：`ruff` 通過；`pytest tests` 1088 個（第 4 步新增 8 個）、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常；所有 TG handler 模組與 app 可正常載入。
+
+**第 5 步實作結果（2026-10-20）**：
+
+- `app/api/handlers.py` 改寫：`GET /handlers`、`POST /handlers/{name}/notes`（201）、`GET`／`PATCH`／`DELETE /handlers/{name}/notes/{note_id}`、`GET /handlers/{name}/graph?deck=&note_type=&label_field=`，全部經 `NoteService`；原本的 `HTTPException` 全部移除，錯誤一律是服務層拋的 `FluencyTidesError`（D6）。
+- 新增 `app/api/notes.py`：`GET /notes/{note_id}`（通用讀取，附 `handler`、`permissions`）、`GET /decks`；與 `/handlers` 一樣掛 `verify_api_key`。`main.py` 掛上。
+- 新增 `app/schemas/notes.py`：請求與回應都改成 Pydantic 模型（`HandlerInfo`、`CapabilitiesOut`、`NoteDetail`、`GenericNoteDetail`、`CreateNoteRequest`／`Response`、`UpdateNoteRequest`／`Response`、`DeleteNoteResponse`、`GraphResponse`、`DeckInfo`），OpenAPI 不再是 `dict`（§1 問題 5）。`NoteDetail` 允許額外的鍵，成組卡片的 handler 讀取之後可以附上整組。圖譜的節點、連線形狀依 handler 而定，維持 `dict`。
+- 建立參數驗證失敗：攔下 `ValidationError`，把每項錯誤的 `loc` 前面接上 `("body", "params")` 後改拋 `RequestValidationError`，回應是 FastAPI 標準的 422（`detail[].loc` 為 `["body", "params", 欄位名]`）。錯誤不帶 `ctx`（validator 拋的例外物件不能轉成 JSON）。
+- 舊路徑在同一步移除，不留別名：`POST /handlers/{name}/create`、`GET /handlers/{name}/cards`、`PUT`／`DELETE /handlers/{name}/cards/{id}`、`GET /handlers/cards/{id}`、`GET /handlers/decks`。`GET /handlers/` 由 `redirect_slashes` 轉到 `/handlers`。
+- `BaseHandler` 與 6 個 handler 移除 `get_input_schema`、`execute_read_list`，註冊表移除 `list_all_handlers`；抽象方法只剩 `handler_name`、`supported_models`、`title`（D7）。順帶清掉因此沒人用的 import。
+- `/verb-pair`、`/core-verb` 的 `generate-child-cards` 不動（OpenAPI 確認仍在）。
+- **測試**：
+  - 新增 `tests/test_handlers_api.py` 40 個：用真實 app（不進 lifespan），只把 Anki 與關聯服務換成假的。涵蓋：
+    - D6 的每個狀態碼與錯誤代碼。
+    - 422 的 `loc`。
+    - 不開放、不歸屬時 Anki 與關聯都沒被動到。
+    - jp 建立回 400 且 `message` 是宣告的原因。
+    - 牌組不存在時自動建立。
+    - 新路由要 `X-API-Key`。
+    - 舊路徑回 404／405。
+  - `test_card_browse_api.py` 原本斷言舊路徑 `/handlers/cards/{id}` 的 camelCase 形狀，改為斷言 `/notes/{id}` 的新形狀與舊路徑 404。
+- **接本機 Anki 的唯讀實測**：在本機以這個分支的程式起後端（port 8001、`TG_BOT_TOKEN=""`、沿用本機 `.env`），只呼叫讀取端點，不寫入。
+  - `GET /handlers`：6 個 handler 的能力與 §5 相同；單字卡的 `create_schema` 由實際的 `_v2` 欄位產生（9 個欄位，JSON 與音檔欄位不列，`Expression` 必填）。
+  - `GET /handlers/vocabulary_mining/graph`：799 個節點，**全部都有副標（翻譯）**；改前因為讀不存在的 `Meaning`，全部是空的。本機資料庫沒有關聯資料，所以連線為 0。
+  - `GET /notes/{id}`：
+    - 單字卡：`handler` 為 `vocabulary_mining`，改、刪都允許。
+    - 對話卡：兩項都不允許，附原因。
+    - `JP_Context_Dark`：歸 `jp_verb_pair`，附刪除工具路徑。
+    - `Notion_SRS_Dark`：`handler` 為 null，原因是「沒有 handler 負責 Notion_SRS_Dark」。
+  - handler 讀取：`jp_core_verb` 讀 `JP_Context_Dark` 回 200；用單字卡的 handler 讀對話卡回 `NOTE_NOT_OWNED_BY_HANDLER`。
+  - `GET /decks` 回 83 個牌組。
+- **部署注意**：前端還在呼叫舊路徑，第 6～8 步改完之前，網頁的 Cards 詳情、Generate、Graph 都會壞。第 5～8 步要一起部署（R3）。
+
+驗證：`ruff` 通過；`pytest tests` 1128 個（第 5 步新增 40 個）、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常。
 
 每一步結束都要通過：
 

@@ -136,8 +136,6 @@ def make_handler(name: str = "demo", models=(V2,), base: type = BaseHandler, **a
         "handler_name": property(lambda self: name),
         "title": property(lambda self: "示範"),
         "supported_models": property(lambda self: list(models)),
-        "get_input_schema": lambda self: {},
-        "execute_read_list": lambda self, *a, **k: [],
         **attrs,
     }
     return type(f"Handler_{name}", (base,), namespace)()

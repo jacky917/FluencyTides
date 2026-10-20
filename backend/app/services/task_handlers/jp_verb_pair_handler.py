@@ -87,22 +87,6 @@ class JPVerbPairHandler(BaseHandler):
         return ["JP_VerbPair_Master_Dark", "JP_Context_Dark", "JP_VerbPair_Cloze_Dark"]
 
     @override
-    def get_input_schema(self) -> dict:
-        """回傳建立母卡片所需的輸入參數 JSON Schema。
-
-        Return the input JSON schema for creating the master card.
-        """
-        return {
-            "type": "object",
-            "properties": {
-                "intransitive": {"type": "string"},
-                "transitive": {"type": "string"},
-                "context_text": {"type": "string"}
-            },
-            "required": ["intransitive", "transitive"]
-        }
-
-    @override
     async def execute_generate(self, card_service: "CardService", relation_service: "RelationService", parameters: dict) -> dict:
         """根據文本生成 Context 和 Cloze 子卡片，並將結果追加至母卡片 JSON 中。
 
@@ -393,11 +377,3 @@ class JPVerbPairHandler(BaseHandler):
             "llm_model": raw_result.model_name,
             "relation_failed": relation_failed
         }
-
-    @override
-    async def execute_read_list(self, card_service: "CardService", relation_service: "RelationService", deck_name: str | None = None) -> list[dict]:
-        """讀取卡片清單（目前未實作，回傳空清單）。
-
-        Read the card list (not implemented; returns an empty list).
-        """
-        return []

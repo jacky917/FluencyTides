@@ -131,27 +131,6 @@ class ExpressionCorrectionHandler(BaseHandler):
         """
         return ["Expression_Master_Dark", "Expression_Micro_Dark"]
 
-    @override
-    def get_input_schema(self) -> dict:
-        """回傳前端需要的參數 Schema。
-
-        Return the parameter JSON schema required by the frontend.
-        """
-        return {
-            "type": "object",
-            "properties": {
-                "native_language": {"type": "string"},
-                "target_language": {"type": "string"},
-                "original_text": {"type": "string"},
-                "context": {"type": "string"},
-                "source_tag": {"type": "string"},
-                "user_grammar_correction": {"type": "string"},
-                "user_reorganization": {"type": "string"},
-                "tg_bot": {"type": "string"},
-            },
-            "required": ["native_language", "target_language", "original_text"]
-        }
-
     async def execute_generate(
         self,
         parameters: dict[str, str]
@@ -380,19 +359,6 @@ class ExpressionCorrectionHandler(BaseHandler):
                 )
 
             return list(tx.created_ids)
-
-    @override
-    async def execute_read_list(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        deck_name: str | None = None
-    ) -> list[dict]:
-        """讀取卡片清單（目前未實作，回傳空清單）。
-
-        Read the card list (not implemented; returns an empty list).
-        """
-        return []
 
     @override
     async def execute_update(

@@ -93,25 +93,6 @@ class BaseHandler(ABC):
         The Anki note types this handler owns.
         """
 
-    @abstractmethod
-    def get_input_schema(self) -> dict[str, object]:
-        """舊的建立參數 Schema，給現行的 ``GET /handlers/`` 用；第 5 步改用 ``create_schema`` 後移除。
-
-        Legacy create schema, removed once the REST layer is rewritten.
-        """
-
-    @abstractmethod
-    async def execute_read_list(
-        self,
-        card_service: CardService,
-        relation_service: RelationService,
-        deck_name: str | None = None,
-    ) -> list[dict[str, object]]:
-        """舊的卡片列表，給現行的 ``GET /handlers/{name}/cards`` 用；第 5 步移除該端點後一併移除。
-
-        Legacy card list, removed together with its endpoint.
-        """
-
     # =========================================================================
     # 標準 CRUD（單一筆記）
     # Standard CRUD (single note)

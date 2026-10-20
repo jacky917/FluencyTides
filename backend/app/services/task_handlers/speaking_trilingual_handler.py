@@ -32,7 +32,6 @@ from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
-from app.infrastructure.anki.search import note_types_query
 from app.services.task_handlers.base import BaseHandler
 from app.services.task_handlers.capabilities import (
     CreateCapability,
@@ -121,22 +120,6 @@ class SpeakingTrilingualHandler(BaseHandler):
         return ["Speaking_Trilingual_Dark"]
 
     @override
-    def get_input_schema(self) -> dict:
-        """回傳前端需要的參數 Schema。
-
-        Return the parameter JSON schema required by the frontend.
-        """
-        return {
-            "type": "object",
-            "properties": {
-                "prompt": {"type": "string", "description": "共通口說情境提示（三語共用）"},
-                "context": {"type": "string", "description": "情境描述 (選填)"},
-                "tg_bot": {"type": "string", "description": "TG Bot ID (選填)"},
-            },
-            "required": ["prompt"],
-        }
-
-    @override
     async def execute_create(
         self,
         card_service: "CardService",
@@ -187,48 +170,6 @@ class SpeakingTrilingualHandler(BaseHandler):
             tags=["Speaking_Trilingual", "HandlerGenerated"],
         )
         return [note_id]
-
-    async def execute_read_list(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        deck_name: str | None = None
-    ) -> list[dict]:
-        """讀取三語口說卡片列表（各語言錄音數統計）。
-
-        Read the trilingual speaking card list with per-language
-        recording counts.
-
-        Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            deck_name: 可選的牌組篩選。Optional deck filter.
-
-        Returns:
-            卡片摘要字典列表。List of card summary dicts.
-        """
-        query = note_types_query(self.supported_models, deck_name)
-
-        note_ids = await card_service.find_notes(query)
-        notes_info = await card_service.get_notes_info(note_ids)
-
-        results = []
-        for n in notes_info:
-            fields = n.get("fields", {})
-            recordings_count = {}
-            for lang in LANG_CODES:
-                rec_str = fields.get(recordings_field(lang), {}).get("value", "[]")
-                recordings_count[lang] = len(
-                    AnkiJsonFieldManager.parse_field_string(rec_str)
-                )
-            results.append({
-                "note_id": n["noteId"],
-                "model_name": n["modelName"],
-                "prompt": fields.get("Prompt", {}).get("value", ""),
-                "context": fields.get("Context", {}).get("value", ""),
-                "recordings_count": recordings_count,
-            })
-        return results
 
     @override
     async def execute_update(

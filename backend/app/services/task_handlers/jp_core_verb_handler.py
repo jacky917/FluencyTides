@@ -106,24 +106,6 @@ class JPCoreVerbHandler(BaseHandler):
         return ["JP_CoreVerb_Master_Dark", "JP_Context_Dark", "JP_CoreVerb_Cloze_Dark"]
 
     @override
-    def get_input_schema(self) -> dict:
-        """回傳建立母卡片所需的輸入參數 JSON Schema。
-
-        Return the input JSON schema for creating the master card.
-
-        Returns:
-            dict: JSON Schema 描述。JSON schema description.
-        """
-        return {
-            "type": "object",
-            "properties": {
-                "word": {"type": "string"},
-                "context_text": {"type": "string"}
-            },
-            "required": ["word"]
-        }
-
-    @override
     async def execute_generate(self, card_service: "CardService", relation_service: "RelationService", parameters: dict) -> dict:
         """根據文本生成 Context 和 Cloze 子卡片，並將結果追加至母卡片 JSON 中。
 
@@ -431,19 +413,3 @@ class JPCoreVerbHandler(BaseHandler):
             "llm_model": raw_result.model_name,
             "relation_failed": relation_failed
         }
-
-    @override
-    async def execute_read_list(self, card_service: "CardService", relation_service: "RelationService", deck_name: str | None = None) -> list[dict]:
-        """讀取卡片清單（目前未實作）。
-
-        Read the card list (not implemented).
-
-        Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            deck_name: 篩選的牌組名稱。Deck name filter.
-
-        Returns:
-            list[dict]: 卡片清單（目前為空）。Card list (currently empty).
-        """
-        return []

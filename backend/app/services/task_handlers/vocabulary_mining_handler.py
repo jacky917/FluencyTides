@@ -11,7 +11,7 @@ standard ``BaseHandler`` CRUD without overrides; the graph comes from
 ``RelationGraphMixin``.
 """
 
-from typing import TYPE_CHECKING, override
+from typing import override
 
 from app.services.task_handlers.capabilities import (
     CreateCapability,
@@ -22,11 +22,6 @@ from app.services.task_handlers.capabilities import (
 )
 from app.services.task_handlers.registry import register_handler
 from app.services.task_handlers.relation_graph import RelationGraphMixin
-from app.infrastructure.anki.search import note_types_query
-
-if TYPE_CHECKING:
-    from app.services.card_service import CardService
-    from app.services.relation_service import RelationService
 
 NOTE_TYPE = "TOEIC_Coach_Dark_v2"
 
@@ -84,34 +79,3 @@ class VocabularyMiningHandler(RelationGraphMixin):
         Supported Anki model names.
         """
         return [NOTE_TYPE]
-
-    @override
-    def get_input_schema(self) -> dict[str, object]:
-        """舊的建立參數 Schema（第 5 步移除）。Legacy create schema."""
-        return {
-            "type": "object",
-            "properties": {
-                "Expression": {"type": "string", "description": "單字或片語"},
-            },
-            "required": ["Expression"],
-        }
-
-    @override
-    async def execute_read_list(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        deck_name: str | None = None
-    ) -> list[dict[str, object]]:
-        """舊的卡片列表（第 5 步移除）。Legacy card list.
-
-        Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            deck_name: 可選的牌組篩選。Optional deck filter.
-
-        Returns:
-            AnkiConnect 的筆記資訊。Note info from AnkiConnect.
-        """
-        note_ids = await card_service.find_notes(note_types_query(self.supported_models, deck_name))
-        return await card_service.get_notes_info(note_ids)
