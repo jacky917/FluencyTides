@@ -10,6 +10,7 @@
 #   1. 偵測哪些路徑發生變更 (detect-changes)
 #   2. 後端：Lint + 測試 → Build & Push Docker Image → 觸發 Portainer stack webhook 重新佈署
 #   3. 前端：Type Check → Build & Push Docker Image → 觸發 Portainer stack webhook 重新佈署
+#   4. deploy 輪詢後端 /api/health 與前端 /version.json，回報的 git_sha 等於本次 commit 才算成功
 #
 # 所需 GitHub Secrets (在 Settings → Secrets and variables → Actions 中設定)：
 #   - PORTAINER_WEBHOOK_BACKEND  : 後端 stack（fluencytides-backend）的 GitOps webhook URL
@@ -155,6 +156,9 @@ jobs:
           tags: |
             ghcr.io/jacky917/fluencytides-backend:latest
             ghcr.io/jacky917/fluencytides-backend:${{ github.sha }}
+          # 寫入映像，/api/health 回報此值；deploy job 據此確認新版已上線
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           # 利用 GitHub Actions Cache 加速後續建置
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -191,6 +195,9 @@ jobs:
           tags: |
             ghcr.io/jacky917/fluencytides-frontend:latest
             ghcr.io/jacky917/fluencytides-frontend:${{ github.sha }}
+          # 寫入 /version.json；deploy job 據此確認新版已上線
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
@@ -210,7 +217,14 @@ jobs:
     env:
       CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+      # 部署後輪詢的版本端點（經 Cloudflare Access，帶上方 service token）
+      BACKEND_HEALTH_URL: https://ft.jacky917.com/api/health
+      FRONTEND_VERSION_URL: https://ft.jacky917.com/version.json
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+
       - name: Define webhook helper
         # 只有 2xx 才算成功。舊版 curl 未檢查狀態碼，webhook 回 500 時 CI 照樣綠燈（F059）；
         # 也不能只靠 --fail：Cloudflare Access 拒絕時回 302 轉登入頁，不屬於 4xx/5xx。
@@ -253,6 +267,17 @@ jobs:
         env:
           WEBHOOK_URL: ${{ secrets.PORTAINER_WEBHOOK_FRONTEND }}
         run: '"$RUNNER_TEMP/trigger_webhook.sh" frontend "$WEBHOOK_URL"'
+
+      # webhook 是非同步的：Portainer 收到就回 204，約數秒後才重建完，重建失敗也不會
+      # 反映在回應上。因此再輪詢版本端點，等到回報的 sha 等於本次 commit 才算部署成功；
+      # 逾時（5 分鐘）則紅燈並印出最後看到的狀態碼或 sha。
+      - name: Verify Backend Is Live
+        if: needs.backend-docker.result == 'success'
+        run: python3 .github/scripts/wait_for_deploy.py backend "$BACKEND_HEALTH_URL" "$GITHUB_SHA" --timeout 300
+
+      - name: Verify Frontend Is Live
+        if: needs.frontend-docker.result == 'success'
+        run: python3 .github/scripts/wait_for_deploy.py frontend "$FRONTEND_VERSION_URL" "$GITHUB_SHA" --timeout 300
 
       - name: Deployment Summary
         if: always()
