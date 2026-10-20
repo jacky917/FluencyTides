@@ -1,17 +1,28 @@
 # =============================================================================
 # FluencyTides CI/CD Pipeline
 # =============================================================================
-# 觸發條件：推送至 main 分支時執行完整的 CI/CD 流程
+# 觸發條件：
+#   - push 到 main：完整 CI/CD（只建置、部署有變更的一側）
+#   - PR 到 main：只跑 lint / 測試 / 前端建置，不推映像、不部署
+#   - 手動觸發 (workflow_dispatch)：選 main 時前後端都重建並部署；
+#     選其他分支只跑 lint / 測試 / 前端建置
 # 流程概覽：
 #   1. 偵測哪些路徑發生變更 (detect-changes)
-#   2. 後端：Lint → Build & Push Docker Image → 觸發 Portainer Webhook 重新佈署
-#   3. 前端：Type Check → Build & Push Docker Image → 觸發 Portainer Webhook 重新佈署
+#   2. 後端：Lint + 測試 → Build & Push Docker Image → 觸發 Portainer stack webhook 重新佈署
+#   3. 前端：Type Check → Build & Push Docker Image → 觸發 Portainer stack webhook 重新佈署
 #
 # 所需 GitHub Secrets (在 Settings → Secrets and variables → Actions 中設定)：
-#   - PORTAINER_WEBHOOK_BACKEND  : 後端 Portainer Webhook URL
-#   - PORTAINER_WEBHOOK_FRONTEND : 前端 Portainer Webhook URL
+#   - PORTAINER_WEBHOOK_BACKEND  : 後端 stack（fluencytides）的 GitOps webhook URL
+#   - PORTAINER_WEBHOOK_FRONTEND : 前端 stack（fluencytides-frontend）的 GitOps webhook URL
 #   - CF_ACCESS_CLIENT_ID        : Cloudflare Zero Trust Client ID
 #   - CF_ACCESS_CLIENT_SECRET    : Cloudflare Zero Trust Client Secret
+#
+# 【部署端】正式站由 Portainer 的 Git stack 管理（compose 取自本 repo 的 main），
+# GitOps updates 設為 Webhook + Re-pull image + Force redeployment。
+# 不要在 Portainer 之外（docker compose、CasaOS）重建這兩組容器，以免與 stack 搶管理權。
+# 設定與操作細節見 docs/wip/portainer_gitops_deploy_FEAT_2026-10-20.md。
+# 2026-08 以前用的是綁「容器 ID」的 container webhook，容器在外部被重建後
+# webhook 失效、呼叫回 HTTP 500，部署因此全數失敗（curl 又未檢查狀態碼，CI 照樣綠燈）。
 # =============================================================================
 
 name: CI/CD Pipeline
@@ -21,11 +32,13 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
-# 同一分支的新推送會自動取消舊的 workflow，節省 runner 資源
+# 同一分支的新推送會取消舊的 workflow，節省 runner 資源。
+# 只對 PR 取消：main 上的部署跑到一半被取消，可能只推了映像卻沒重建容器。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # 設定 GitHub Token 權限，允許推送到 GHCR
 permissions:
@@ -38,15 +51,18 @@ permissions:
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
-    # 僅在 push 事件才偵測 (PR 事件全部執行 lint/build)
-    if: github.event_name == 'push'
+    # PR 事件不需要偵測（lint / build 全部執行，且不部署）。
+    # 限定 main：手動觸發可選任意分支，不能讓未合併的分支部署到正式站。
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     outputs:
-      backend: ${{ steps.filter.outputs.backend }}
-      frontend: ${{ steps.filter.outputs.frontend }}
+      # 手動觸發時一律視為前後端都有變更
+      backend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.backend == 'true' }}
+      frontend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.frontend == 'true' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
+        if: github.event_name == 'push'
         with:
           filters: |
             backend:
@@ -59,17 +75,24 @@ jobs:
   # =============================================================================
   backend-lint-test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          # 與 backend/Dockerfile 的 python:3.13-slim 一致
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
       - name: Install dependencies
+        # 以 requirements.lock 安裝（與 Dockerfile 相同），測試環境才等同正式映像。
+        # ruff 不在鎖定檔內，另外釘版本：新版 ruff 可能新增檢查而讓 CI 無預警變紅。
         run: |
           python -m pip install --upgrade pip
-          pip install ruff
-          if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
+          pip install -r requirements.lock ruff==0.15.16
       - name: Lint with Ruff
         # 掃描範圍含 scripts/ 與 tests/：S004（使用 re 卻未 import）正是發生在
         # scripts/ 底下，只掃 app/ 無法攔下這類必定崩潰的錯誤。
@@ -77,8 +100,10 @@ jobs:
         # The scan covers scripts/ and tests/ as well: S004 (using `re` without
         # importing it) happened under scripts/, so linting only app/ cannot
         # catch such guaranteed crashes. Rule set lives in backend/ruff.toml.
-        run: |
-          cd backend && ruff check app scripts tests
+        run: ruff check app scripts tests
+      - name: Run tests
+        # 只收集 tests/：scripts/ 底下有 test_*.py 檔名的手動工具，不是單元測試
+        run: python -m pytest tests -q
 
   # =============================================================================
   # Job 3: 前端 Type Check & Build 驗證
@@ -89,10 +114,11 @@ jobs:
       run:
         working-directory: ./frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
+          # 與 frontend/Dockerfile 的 node:20-alpine 一致
           node-version: "20"
       - name: Install dependencies
         run: npm ci
@@ -100,30 +126,28 @@ jobs:
         run: npm run build
 
   # =============================================================================
-  # Job 4: 後端 Docker Image 建構 & 推送至 Docker Hub
+  # Job 4: 後端 Docker Image 建構 & 推送至 GHCR
   # =============================================================================
   backend-docker:
     runs-on: ubuntu-latest
-    # 僅在 push to main 且後端有變更時執行；lint 必須先通過
+    # 非 PR 且後端有變更時執行；lint 與測試必須先通過
     needs: [ detect-changes, backend-lint-test ]
-    if: |
-      github.event_name == 'push' &&
-      needs.detect-changes.outputs.backend == 'true'
+    if: needs.detect-changes.outputs.backend == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Push Backend Image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./backend
           file: ./backend/Dockerfile
@@ -134,34 +158,32 @@ jobs:
           # 利用 GitHub Actions Cache 加速後續建置
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # 支援多架構 (與 docker-compose.yml 中 x-casaos.architectures 對齊)
+          # 多架構 (NAS 為 amd64；arm64 供 ARM 主機使用)
           platforms: linux/amd64,linux/arm64
 
   # =============================================================================
-  # Job 5: 前端 Docker Image 建構 & 推送至 Docker Hub
+  # Job 5: 前端 Docker Image 建構 & 推送至 GHCR
   # =============================================================================
   frontend-docker:
     runs-on: ubuntu-latest
-    # 僅在 push to main 且前端有變更時執行；build 驗證必須先通過
+    # 非 PR 且前端有變更時執行；build 驗證必須先通過
     needs: [ detect-changes, frontend-build ]
-    if: |
-      github.event_name == 'push' &&
-      needs.detect-changes.outputs.frontend == 'true'
+    if: needs.detect-changes.outputs.frontend == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Push Frontend Image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
@@ -183,30 +205,57 @@ jobs:
     # 條件：至少有一個 docker job 成功完成 (非 skip/failure)
     if: |
       always() &&
-      github.event_name == 'push' &&
+      github.event_name != 'pull_request' &&
       (needs.backend-docker.result == 'success' || needs.frontend-docker.result == 'success')
+    env:
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
     steps:
+      - name: Define webhook helper
+        # 只有 2xx 才算成功。舊版 curl 未檢查狀態碼，webhook 回 500 時 CI 照樣綠燈（F059）；
+        # 也不能只靠 --fail：Cloudflare Access 拒絕時回 302 轉登入頁，不屬於 4xx/5xx。
+        run: |
+          cat > "$RUNNER_TEMP/trigger_webhook.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          name="$1"
+          url="$2"
+          if [ -z "$url" ]; then
+            echo "::error::$name 的 webhook secret 未設定"
+            exit 1
+          fi
+          echo "🚀 Triggering $name container redeploy via Portainer webhook..."
+          status=$(curl -sS -o "$RUNNER_TEMP/webhook_response.txt" -w "%{http_code}" \
+            --max-time 300 \
+            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+            -X POST "$url")
+          echo "HTTP Status: $status"
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "::error::$name webhook 回應 HTTP $status"
+            head -c 1000 "$RUNNER_TEMP/webhook_response.txt" || true
+            echo
+            exit 1
+          fi
+          EOF
+          chmod +x "$RUNNER_TEMP/trigger_webhook.sh"
+
       - name: Trigger Backend Redeploy
         # 僅當後端 image 成功推送時才觸發
         if: needs.backend-docker.result == 'success'
-        run: |
-          echo "🚀 Triggering backend container redeploy via Portainer webhook..."
-          curl -s -o /dev/null -w "HTTP Status: %{http_code}\n" \
-            -H "CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}" \
-            -H "CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}" \
-            -X POST "${{ secrets.PORTAINER_WEBHOOK_BACKEND }}"
+        env:
+          WEBHOOK_URL: ${{ secrets.PORTAINER_WEBHOOK_BACKEND }}
+        run: '"$RUNNER_TEMP/trigger_webhook.sh" backend "$WEBHOOK_URL"'
 
       - name: Trigger Frontend Redeploy
         # 僅當前端 image 成功推送時才觸發
         if: needs.frontend-docker.result == 'success'
-        run: |
-          echo "🚀 Triggering frontend container redeploy via Portainer webhook..."
-          curl -s -o /dev/null -w "HTTP Status: %{http_code}\n" \
-            -H "CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}" \
-            -H "CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}" \
-            -X POST "${{ secrets.PORTAINER_WEBHOOK_FRONTEND }}"
+        env:
+          WEBHOOK_URL: ${{ secrets.PORTAINER_WEBHOOK_FRONTEND }}
+        run: '"$RUNNER_TEMP/trigger_webhook.sh" frontend "$WEBHOOK_URL"'
 
       - name: Deployment Summary
+        if: always()
         run: |
           echo "============================================="
           echo "  FluencyTides Deployment Summary"

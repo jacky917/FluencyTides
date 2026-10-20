@@ -77,7 +77,7 @@ async def main() -> None:
 
     if resp.status_code == 404:
         print("❌ 後端回 404:此後端版本尚未包含 config API。")
-        print("   需部署含 PR #14 之後程式碼的映像(容器記得 --force-recreate)。")
+        print("   需部署含 PR #14 之後程式碼的映像(到 Portainer 對 stack 重新部署)。")
         return
     if resp.status_code != 200:
         print(f"❌ 後端回應異常 ({resp.status_code}): {resp.text[:200]}")

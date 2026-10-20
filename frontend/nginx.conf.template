@@ -21,7 +21,13 @@ server {
     # ==========================================
     location /api/ {
         # 使用 Docker 內部網路解析後端容器名稱，徹底解決所有防火牆/Hairpin NAT 問題
-        proxy_pass http://fluencytides-backend:8000;
+        # 透過 Docker 內建 DNS（127.0.0.11）每次請求動態解析：proxy_pass 寫死主機名稱時，
+        # nginx 只在啟動時解析一次並快取 IP；前後端分開部署後，只重建後端會讓前端拿著
+        # 舊 IP 一直回 502，直到前端也重啟。proxy_pass 不帶 URI，改用變數後轉送路徑不變。
+        # 變數名不會被 envsubst 代換（只代換已定義的環境變數）。
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $backend_upstream http://fluencytides-backend:8000;
+        proxy_pass $backend_upstream;
 
         # S009 修復：由反向代理層注入 API 金鑰，瀏覽器端完全不接觸金鑰。
         # 若改在前端 axios 帶 header，金鑰會被打包進 JS bundle，任何人開 F12 都看得到。
