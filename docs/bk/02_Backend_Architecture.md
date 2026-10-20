@@ -68,7 +68,7 @@ backend/
 │   │   └── prompts/*.j2            #   5 個 System Prompt 模板
 │   ├── infrastructure/             # 外部系統客戶端（lifespan 單例，DB session 除外）
 │   │   ├── anki/                   #   client.py（組合類）+ transport.py + 6 領域 Mixin + utils.py（查詢跳脫）
-│   │   ├── audio_evaluator/        #   base(Template Method) + factory + gemini/openai_client + prompts
+│   │   ├── audio_evaluator/        #   base(ABC) + factory + gemini/openai/proxy_client + stt_diff/stt_llm_evaluator（prompt 為 templates/prompts/audio_evaluator.j2）
 │   │   ├── database/               #   database.py + models.py（CardRelation/RelationType，2026-10 加 CapabilityRouteSetting）+ conventions.py
 │   │   ├── llm/                    #   LLM 客戶端（2026-10 現狀，見 §5.3）
 │   │   │   ├── base.py client.py gemini_native_client.py claude_code_client.py antigravity_client.py …
@@ -512,13 +512,41 @@ graph LR
 - lifespan 初始化失敗時降級為 `None` 不阻擋啟動（`main.py:139-146`）；2026-07-09 起 `get_minio_client` 為 None 時 raise `ServiceUnavailableError`(503)（F006 統一契約），不再以裸 AttributeError 500。憑證預設由 `minioadmin` 改為 `None`，`MinioClient` 初始化加明確 None 防護（F020）。
 - 目前只服務 `/api/v1/storage`，尚未接入生卡流程。上傳端點 2026-07-09 加大小上限（`STORAGE_MAX_UPLOAD_MB`，超限 413）、副檔名/Content-Type 白名單（415）、prefix 正則（422）與客戶端檔名 `sanitize_filename()`（F024/F032）。
 
-### 5.3 LLM（OpenAI 相容 / Gemini）— `infrastructure/llm/client.py`
+### 5.3 LLM（文字生成）— `infrastructure/llm/`
 
-- `AsyncOpenAI` 指向 OpenAI 相容端點（實務上為 Gemini 相容層），`response_format=json_schema` 強制結構化輸出，回傳 `LLMGenerateResult`（含原始文字、解析結果、重試次數）。
-- 內建重試 + 模組級 `strip_markdown_fences` 圍欄清理（2026-07-08 統一，原三處重複實作收斂於此）。
-- **F041 已於 2026-07-08 修復**：僅對 `RateLimitError` / `APIConnectionError` / `APITimeoutError` / 5xx 重試且改指數退避（2/4/8 秒）；401/400 等確定性錯誤立即包裝 `LLMServiceError` 拋出，不再盲目重試。
+> 2026-10-20 依現行程式碼改寫（原稿 2026-10-14，見 `docs/archive/llm_provider_hierarchy_FEAT_2026-09-06.md`）。用哪個端點、哪個模型由 §5.3.1 的模型路由決定；本節只講客戶端本身。
 
-以上三點是 2026-07 的描述（當時只有 OpenAI 相容的單一客戶端）。之後 `infrastructure/llm/` 已擴充為 `BaseLLMClient` 加多個 provider 客戶端（OpenAI 相容、Gemini 原生、claude-code / antigravity 本機 CLI）與註冊表工廠 `factory.py`；`strip_markdown_fences` 現位於 `schema_utils.py`。
+文字 LLM 以抽象基底 + 註冊表工廠組織，**按傳輸協定分組**（不是按母公司）：
+
+```mermaid
+graph TD
+    F["create_llm_client(endpoint=, model=, effort=)<br/>factory.py 註冊表<br/>依端點類型延遲匯入"] --> B["BaseLLMClient (ABC)<br/>base.py<br/>generate_structured_data() → LLMGenerateResult"]
+    B --> L["LLMClient<br/>client.py<br/>OpenAI 相容 HTTP（Google 相容端點 / 中轉站）"]
+    B --> G["GeminiNativeLLMClient<br/>gemini_native_client.py<br/>google-genai 原生 SDK"]
+    B --> A["AnthropicLLMClient<br/>anthropic_client.py<br/>（佔位 stub）"]
+    B --> H["HeadlessCliLLMClient (ABC)<br/>cli_base.py<br/>subprocess 驅動本機 CLI"]
+    H --> C["ClaudeCodeLLMClient<br/>claude -p"]
+    H --> AG["AntigravityLLMClient<br/>agy（stream-json stdin）"]
+```
+
+| 端點類型（`endpoints.py` 的 `TYPE_*`） | 客戶端 | 要點 |
+|---|---|---|
+| `openai`（含舊式 `LLM_PROVIDER=google` / 其他未註冊值） | `LLMClient` | `AsyncOpenAI` + `response_format=json_schema`；Google 的 OpenAI 相容端點**無法設定 `safety_settings`**（收到會 400），只有端點標明支援時才經 `extra_body` 帶 |
+| `gemini-native` | `GeminiNativeLLMClient` | 原生 SDK，`safety_settings` 四類 `BLOCK_NONE`、`system_instruction`、`response_json_schema` |
+| `claude-code` | `ClaudeCodeLLMClient` | 本機 Claude Code CLI，訂閱額度 |
+| `antigravity` | `AntigravityLLMClient` | 本機 Antigravity CLI；stdin 走 stream-json、HOME 隔離、關閉自動更新 |
+| `anthropic` | `AnthropicLLMClient` | 佔位，建構即拋「尚未實作」 |
+
+- **共同契約**（`BaseLLMClient`）：唯一公開方法 `generate_structured_data(system_prompt, user_prompt, response_schema)`；`model` / `effort` 覆寫由工廠傳入，不支援 effort 的 provider 由基底拒絕；`model_label` 是寫入 Anki tag 的標籤（`labels.py`）。
+- **工廠註冊表**（`factory.py`）：每列帶靜態 `is_cli` / `supports_effort` 旗標，`is_cli_provider()` / `providers_supporting_effort()` 為純查表（依賴缺失時診斷端點仍能運作）；載入時核對旗標與類別宣告，不一致即 `RuntimeError`。未註冊的值一律落到 `LLMClient`（backlog L2）。
+- **共用工具**：`schema_utils.py` 的 `resolve_json_schema`（展平 `$defs` / `$ref`）與 `strip_markdown_fences`——文字 LLM 三個客戶端共用同一份。
+- **錯誤分類**（`app/core/exceptions/infrastructure.py`）：`LLMServiceError`(502) 之下有 `LLMRetryExhaustedError`、`LLMQuotaError`、`LLMRefusalError`、`LLMServiceUnavailableError`，各帶 `error_code`；訊息保留生成腳本分級表比對用的子字串。
+- **重試**（各客戶端不同）：
+  - `LLMClient`：`except (openai.OpenAIError, httpx.RequestError)` 一律重試，**固定間隔 2 秒、共 3 次**（`MAX_RETRIES` / `RETRY_DELAY_SECONDS`）；401 / 400 等確定性錯誤同樣會重試。空內容、非 JSON 也走同一個迴圈。
+  - `GeminiNativeLLMClient`：網路層瞬時錯誤走 `BaseLLMClient._retry_transient`（1 秒起倍增的指數退避），非瞬時錯誤不重試。
+  - CLI 型：`HeadlessCliLLMClient` 做帶回饋的修復重試；暫時性失敗（如 agy 的 503）另有 10 / 30 秒退避。
+- **F041（2026-07-08 記為已修復）與現行程式碼不符**：當時記載「僅瞬時錯誤重試、2/4/8 秒指數退避、401/400 立即拋出」，現行 `LLMClient` 三項都不成立（見上一條）。改用 `_retry_transient` 列於 backlog L5（屬行為變更，需獨立驗證）。
+- **建立時機**：每次生成依用途鍵經模型路由取得客戶端（§5.3.1）；`app.state.llm_client` 只給診斷端點用，能力路由寫入時重建。
 
 #### 5.3.1 LLM 模型路由（2026-10，用途鍵 + 端點白名單 + DB 選擇）
 
@@ -603,6 +631,7 @@ graph LR
 
 - voice handler 每則語音依卡片的 handler 從能力路由取得評分器（R2 起不再是 lifespan 單例）；音檔來源為 Telegram 語音（固定 .ogg）。
 - **F043 已於 2026-07-08 修復**：逐字重複的評分 Prompt 抽至共用 `audio_evaluator/prompts.py`；圍欄清理統一使用 `llm/client.py` 的 `strip_markdown_fences`；`BaseAudioEvaluator` 改為 Template Method——`evaluate_audio` 提供統一指數退避重試，子類只實作 `_evaluate_audio_once`。
+  - **2026-10-20 對照現行程式碼，只有 Prompt 共用成立**：Prompt 共用的是 Jinja 樣板 `app/templates/prompts/audio_evaluator.j2`（沒有 `prompts.py`）。其餘不成立——`BaseAudioEvaluator` 只宣告抽象的 `evaluate_audio`，沒有 Template Method 也沒有 `_evaluate_audio_once`；`gemini_client.py`、`openai_client.py`、`proxy_client.py` 各自內嵌一份圍欄清理，沒用 `strip_markdown_fences`；只有 Gemini 評分器有自己的重試迴圈（1 秒、2 秒指數退避，共 3 次），OpenAI / Proxy 評分器不重試。`stt_llm` 透過文字 LLM 客戶端，圍欄清理與重試沿用 §5.3。後續見 backlog L5。
 - **F008 已於 2026-07-09 修復（OpenAI 音訊轉碼）**：OpenAI Chat Completions 的 `input_audio.format` 僅接受 `wav`/`mp3`，但 Telegram 語音固定 `.ogg`——原本走 OpenAI 供應商必然 400。`openai_client.py` 新增 `_transcode_to_wav()`：wav/mp3 直傳，ogg/opus 等經系統 `ffmpeg`（stdin/stdout pipe，不落地暫存）轉碼為 wav；找不到 ffmpeg、轉碼逾時（`asyncio.wait_for`）或非零退出皆轉為 `AudioEvaluationError`，不再送出非法 format。
 - **F098（low）**：`response.choices[0]` 索引移入錯誤邊界。
 - **F097 已於 2026-07-08 修復**：Gemini 改用 `response_schema=AudioEvaluationResult` + `response.parsed`（保留文字解析 fallback；因環境無法安裝 SDK 驗證，docstring 已註明）。
@@ -632,7 +661,7 @@ graph LR
 | F029 | ✅ 已修復（見 10 號文檔） | `backend/app/services/relation_service.py` | `delete_relations_for_note` 重複實作——已刪除 |
 | F046 | ✅ 已修復（見 10 號文檔） | `backend/app/bot/dependencies.py` | LLM 缺失時 Bot 全滅、每 update 重建全套服務——已改優雅降級 + 中介層快取 |
 | F093 | ⏸ 未處理（遷移風險，暫緩） | `backend/app/infrastructure/database/conventions.py:26` | monkeypatch 替換 `SQLModel.metadata`，依賴 import 順序的全域副作用 |
-| F043 | ✅ 已修復（見 10 號文檔） | `backend/app/infrastructure/audio_evaluator/` | Prompt/圍欄清理重複、重試未實作——已抽共用 prompts.py + Template Method 重試 |
+| F043 | ⚠️ 部分完成（2026-10-20 對照程式碼，見 §5.4） | `backend/app/infrastructure/audio_evaluator/` | Prompt/圍欄清理重複、重試未實作——Prompt 已共用（`audio_evaluator.j2`）；圍欄清理仍有 3 份、Template Method 重試不存在 |
 | F088 | ✅ 已修復（見 10 號文檔） | `backend/app/services/card_service.py` | `update_card` 硬編碼主欄位——已加 `primary_field_name` 參數 |
 | F104 | ✅ 已修復（見 10 號文檔） | `backend/app/bot/handlers/commands.py` | /newcard 硬編碼模型名——已改 `TG_SPEAKING_MODEL_NAME` 設定項 |
 | F134 | ✅ 已修復（見 10 號文檔） | `backend/app/infrastructure/anki/` | 25 處 `type: ignore`——`_invoke_typed` 後全數歸零 |
@@ -647,7 +676,7 @@ graph LR
 | ID | 狀態 | 位置 | 問題 |
 |---|---|---|---|
 | F027 | ✅ 已修復（見 10 號文檔） | `backend/app/services/anki_model/manager.py` | `ensure_deck_exists` 隱式觸發 AnkiWeb 同步——已改 `sync_on_missing=False` 預設快速失敗 |
-| F041 | ✅ 已修復（見 10 號文檔） | `backend/app/infrastructure/llm/client.py` | 401/400 盲目重試——已改僅瞬時錯誤指數退避重試 |
+| F041 | ⚠️ 與現行程式碼不符（2026-10-20，見 §5.3） | `backend/app/infrastructure/llm/client.py` | 401/400 盲目重試——現行 `LLMClient` 仍對所有 API 例外固定 2 秒重試 3 次 |
 | F101 | ⏸ 未處理（依風險評估暫緩） | `backend/app/bot/state.py:53` | in-memory 狀態僅單 worker 正確；`--workers N` 下錄音流程隨機失敗；過期狀態僅被動清理 |
 | F076 | ✅ 已修復（見 10 號文檔） | `backend/app/schemas/relation.py` | CardRelationCreate 驗證過鬆——已加 min_length + validator，空值請求回 422 |
 | F077 | ✅ 已修復（見 10 號文檔） | `backend/app/schemas/card.py` | CardUpdateRequest.fields 允許空字典——已拒絕，空更新回 422 |
@@ -699,7 +728,7 @@ graph LR
 | `test_config.py` | Core config（F004/F005） | 生產模式缺 `API_SECRET_KEY` → `ValidationError` 拒啟；已設 webhook URL 但缺 `TG_WEBHOOK_SECRET` → 拒啟；開發模式寬鬆；`is_production` 判定。全部以 `_env_file=None` 建構避免讀到專案 `.env` |
 | `test_anki_escape.py` | Infrastructure anki/utils（F071/F085/F086/F112） | `escape_anki_search_value` 對反斜線/雙引號/空白/冒號/萬用字元的跳脫正確性（查詢注入防護） |
 | `test_relation_sync.py` | Service relation（F002） | `sync_with_anki` 空列表防護：`valid_note_ids` 為空一律回 0 且不刪任何資料。以 in-memory SQLite（StaticPool）真實建表寫入後驅動 RelationService **更正（2026-10-19）**：當時並未修正；2026-10-19 才實作，行為也不是 return 0，而是拒絕清理（API 回 409、TG 說明原因，見 `docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md`）。 |
-| `test_llm_client.py` | Infrastructure llm（F041） | `strip_markdown_fences` 圍欄清理；`_is_retryable_error` 分類（429/連線/逾時/5xx 可重試，401/400 不可重試） |
+| `test_llm_client.py` | Infrastructure llm（F041） | `strip_markdown_fences` 圍欄清理；`_is_retryable_error` 分類（429/連線/逾時/5xx 可重試，401/400 不可重試）。**2026-10-20：此檔與 `_is_retryable_error` 在現行程式碼都不存在**（見 §5.3 F041） |
 | `test_schema_composer.py` | Service schema_composer（F031） | `compose_graph_relations` 正確注入 Graph_Relations 欄位、加入 required、以深拷貝運作不汙染共用快取 Schema |
 | `test_alembic.py` | Alembic（F009） | 以 subprocess 對臨時 SQLite 跑 `alembic upgrade head`，驗證 baseline 鏈建立 `card_relations`/`relation_types`/`alembic_version` 三表 |
 

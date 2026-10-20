@@ -328,6 +328,12 @@ async def ensure_deck_exists(
 ### 3.4 LLM 與語音評分的韌性（F041、F043）
 
 > ✅ **已實施（2026-07-08）**：F041 按方案完成（僅瞬時錯誤重試＋指數退避 2/4/8s，401/400 立即拋 `LLMServiceError`）；F043 完成——Prompt 抽至 `audio_evaluator/prompts.py`、圍欄清理統一為 `llm/client.py` 模組級 `strip_markdown_fences`、`BaseAudioEvaluator` Template Method（子類實作 `_evaluate_audio_once`），F097 的 `response_schema` 一併採納（保留文字解析 fallback，環境無法安裝 SDK 驗證已於 docstring 註明）。詳見 [10_Implementation_Log.md](10_Implementation_Log.md) §3。
+>
+> 🔄 **2026-10-20 對照現行程式碼：上述「已實施」大部分不成立**（只如實標註，不回溯改寫歷史紀錄）：
+> - **F041**：`LLMClient`（`infrastructure/llm/client.py`）以 `except (openai.OpenAIError, httpx.RequestError)` 接住所有 API 例外，**固定間隔 2 秒重試 3 次**——不是 2/4/8 秒指數退避，401/400 也照樣重試；`_is_retryable_error` 與 `tests/test_llm_client.py` 不存在。`GeminiNativeLLMClient` 用的 `BaseLLMClient._retry_transient` 才有瞬時錯誤分類與指數退避。
+> - **F043**：Prompt 共用成立，但形式是 Jinja 樣板 `app/templates/prompts/audio_evaluator.j2`（沒有 `audio_evaluator/prompts.py`）。`BaseAudioEvaluator` 只宣告抽象的 `evaluate_audio`，沒有 Template Method；`gemini_client.py`、`openai_client.py`、`proxy_client.py` 各自內嵌圍欄清理；只有 Gemini 評分器自帶重試（1/2 秒），OpenAI / Proxy 評分器不重試。
+> - 文字 LLM 的圍欄清理則已收斂到 `llm/schema_utils.strip_markdown_fences`（三個客戶端共用）。
+> - 後續：`LLMClient` 與語音評分器改用 `_retry_transient` / `schema_utils`，見 `docs/wip/backlog.md` L5。
 
 **F041 — 重試策略對所有例外一視同仁**（`backend/app/infrastructure/llm/client.py:144`）：`except Exception` 捕捉一切後固定 sleep 2 秒重試 3 次（`client.py:144-153`）。三個具體缺陷：
 
