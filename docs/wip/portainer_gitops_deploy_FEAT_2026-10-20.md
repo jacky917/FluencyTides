@@ -336,7 +336,7 @@ flowchart TD
 | GitHub secrets | 更新 `PORTAINER_WEBHOOK_BACKEND`、`PORTAINER_WEBHOOK_FRONTEND` 為 stack webhook 網址 |
 | GitHub Actions | 重新啟用 workflow |
 | Cloudflare Zero Trust | 確認 service token 有效、`portainer.jacky917.com` 的 Access 規則允許它 |
-| Cloudflare Zero Trust（R1） | 讓同一把 service token 能讀 `ft.jacky917.com/api/health` 與 `ft.jacky917.com/version.json`：建議新增只涵蓋這兩個路徑的 Access 應用程式，政策為 Service Auth、Include 該 service token（只開這兩個路徑，避免 token 取得整個網站與經 nginx 注入金鑰的 `/api/`）。未設定時 deploy 會在輪詢逾時後紅燈並印出 `HTTP 302 → …cloudflareaccess.com…` |
+| Cloudflare Zero Trust（R1） | 讓同一把 service token 能讀 `ft.jacky917.com/api/health` 與 `ft.jacky917.com/version.json`：建議新增只涵蓋這兩個路徑的 Access 應用程式，放兩條政策：① Service Auth、Include 該 service token；② 與既有 `ft.jacky917.com` 應用程式相同的使用者 Allow 政策（路徑較精確的應用程式會取代整站規則，前端 Dashboard 會從瀏覽器呼叫 `/api/health`，少了 ② 會讓 Dashboard 顯示後端連線失敗）。只開這兩個路徑，避免 token 取得整個網站與經 nginx 注入金鑰的 `/api/`。未設定時 deploy 會在輪詢逾時後紅燈並印出 `HTTP 302 → …cloudflareaccess.com…` |
 | CasaOS 主畫面 | 新增外部連結 |
 | 主機 | 舊的 `/home/jacky917/FluencyTides` 目錄於穩定運作一週後可刪除（保留期間作為回復用） |
 
