@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-10-20 |
 | **性質** | 服務層與 API 重新設計 + 實作工作項 |
-| **狀態** | 🚧 實作中（2026-10-20 定案；先做 D13 三頁版面統一與共用元件抽取）。2026-10-20 已定：對照程式碼更正（§12）；本機腳本與網頁分流（D7）；清除殘骸（D8）；網頁建卡只做純手動填表（D9）；能力綁在 handler 上、以開關宣告（D2）；增刪改查都提供 `/handlers/{name}/notes/...` 版本，另保留通用的卡片查詢（D5）；`BaseHandler` 提供標準 CRUD，本次以單字卡 `TOEIC_Coach_Dark_v2` 為試點、不覆寫跑通整套流程（D10）；寫入後等同步完成（D1）；工具設定頁顯示 handler 能力（§6）；前端最後實作；口說卡網頁改欄位本次不開放（§5）；JSON 欄位改另開設計書 `json_field_editor_FEAT_2026-10-20.md`，本計畫只宣告欄位名稱（D3）；圖譜以 handler 的查詢為基礎、基底只畫單點（預設顯示 nid，可選任意欄位）、點節點開啟單張卡片，單字卡以關聯圖譜保留現有功能，本次的圖譜工作以移植現有實作為主，除單字卡外不開放任何 handler 的圖譜（D12）；媒體上傳另開設計書 `media_upload_FEAT_2026-10-20.md`；web_ui_parity 階段 A2（三頁版面統一與共用元件抽取）併入本計畫（D13）。§13 只剩之後再決定、不擋本計畫的事 |
+| **狀態** | 🚧 實作中（2026-10-20 定案；D13 三頁版面統一已完成（dac7670）；§9 第 0 步殘骸清除已完成）。2026-10-20 已定：對照程式碼更正（§12）；本機腳本與網頁分流（D7）；清除殘骸（D8）；網頁建卡只做純手動填表（D9）；能力綁在 handler 上、以開關宣告（D2）；增刪改查都提供 `/handlers/{name}/notes/...` 版本，另保留通用的卡片查詢（D5）；`BaseHandler` 提供標準 CRUD，本次以單字卡 `TOEIC_Coach_Dark_v2` 為試點、不覆寫跑通整套流程（D10）；寫入後等同步完成（D1）；工具設定頁顯示 handler 能力（§6）；前端最後實作；口說卡網頁改欄位本次不開放（§5）；JSON 欄位改另開設計書 `json_field_editor_FEAT_2026-10-20.md`，本計畫只宣告欄位名稱（D3）；圖譜以 handler 的查詢為基礎、基底只畫單點（預設顯示 nid，可選任意欄位）、點節點開啟單張卡片，單字卡以關聯圖譜保留現有功能，本次的圖譜工作以移植現有實作為主，除單字卡外不開放任何 handler 的圖譜（D12）；媒體上傳另開設計書 `media_upload_FEAT_2026-10-20.md`；web_ui_parity 階段 A2（三頁版面統一與共用元件抽取）併入本計畫（D13）。§13 只剩之後再決定、不擋本計畫的事 |
 | **範圍** | 新增 `backend/app/services/note_service.py`（單一服務層）；`backend/app/services/task_handlers/`（能力宣告、標準 CRUD、建立參數、註冊表、`__init__.py` 統一註冊）；`backend/app/api/handlers.py`（重寫）、新增 `backend/app/api/notes.py`、`backend/app/schemas/`、`backend/app/main.py`（掛新路由、移除 example 路由）；`backend/app/core/dependencies.py`、`backend/app/bot/dependencies.py`（注入服務層）；`backend/app/services/relation_service.py`（改名稱時同步更新關聯的兩端標籤，D12）；TG 呼叫 handler 的 5 處改呼叫服務層（§7）；殘骸清除（D8）；`frontend/src/api/client.ts`、`types/api.ts`、`CardGenerator.tsx`、`CardDetailModal.tsx`、`KnowledgeGraph.tsx`、`ToolSettings.tsx`、`lib/cardFields.ts`、`components/cards/`（`DeckPanel`、`CardViewPanel`）；三頁版面統一與共用元件抽取（D13）：`pages/Cards.tsx`、`lib/cardLayout.ts`、`hooks/usePanelWidths.ts`、`components/cards/panelStyles.ts`、`ErrorNote.tsx` 移到共用位置 |
 | **不動** | 有覆寫的 handler 內部邏輯（口說卡的建卡與 JSON 動作、外語糾錯的建卡、jp 的 `execute_generate`）；TG 的對話流程與文字；`speaking_fsm.py` 自己組對話卡的做法（屬 web_ui_parity 階段 E）；`expression_fsm.py` 預覽用的 `execute_generate`（不寫 Anki）與「覆蓋舊卡」時的刪除（§7）；**本機批次腳本走的整條路**（D7）：`POST /verb-pair/generate-child-cards`、`POST /core-verb/generate-child-cards` 的路徑、請求、回應、驗證方式；`/jp/*`；直接呼叫 handler 或 AnkiConnect 的本機腳本；`GET /cards`、`GET /cards/{card_id}`、`/anki-media`、`/relations/*`、`/capability-routes` |
 | **關聯文件** | `docs/wip/web_ui_parity_FEAT_2026-10-18.md` §7（問題 H1–H11 的盤點）、§4 階段 A2（已併入本計畫 D13）、§5 決策 5（`ValueError` 改 4xx，屬階段 B）；`docs/wip/json_field_editor_FEAT_2026-10-20.md`（JSON 欄位的表單編輯）、`docs/wip/media_upload_FEAT_2026-10-20.md`（網頁上傳媒體），兩者都排在本計畫之後 |
@@ -269,13 +269,24 @@ jp 子卡（`JP_Context_Dark`、`JP_VerbPair_Cloze_Dark`、`JP_CoreVerb_Cloze_Da
 | `vocabulary_mining.supported_models` 的 `TOEIC_Coach_Dark`（舊版） | 實機 Anki 有這個筆記類型但 **0 張筆記**；800 張單字卡都在 `TOEIC_Coach_Dark_v2`（欄位不同的改版） | 單字卡只認 `_v2`，handler 的能力才能一體適用（D2） |
 | `vocabulary_mining.supported_models` 的 `Default` | 實機 Anki 沒有這個筆記類型（`Default` 通常是牌組名稱） | 不存在的類型會出現在 `/handlers` |
 | `speaking_coach.supported_models` 的 `Speaking_Coach_Light` | 2026-08-09 第 9 階段重構時寫入的預留名稱；repo 沒有定義檔，實機 Anki 也沒有這個筆記類型 | 同上 |
+| `app/schemas/llm/verb_pair.py`（2026-10-20 實作時補列） | 只有一段 docstring「目前的生成邏輯已移至 example/verb_pair.py」，沒有任何類別 | 指向已移除的 example；唯一的引用者是下一列 |
+| `app/scratch/verify_imports.py`（2026-10-20 實作時補列；原本誤記為「不受影響」） | import 了不存在的 `task_handlers.verb_pair_handler` 與 `schemas.llm.verb_pair.VerbPairGenerationResult`，執行必定失敗；沒有任何地方引用 `scratch/` | 已壞掉的一次性檢查腳本 |
 
 清除後要確認的事：
 
 - 舊版 `TOEIC_Coach_Dark` 只是從 handler 的清單拿掉；Anki 裡的筆記類型本身、repo 的定義檔（`app/anki_models/TOEIC_Coach_Dark*`）與提示詞模板不刪（§13）。
 - `verb_pair_example` 的能力路由用途鍵消失後，資料庫 `capability_routes` 裡若有它的設定列，會變成「孤兒鍵」：工具設定頁照常列出、可刪除，不會出錯（`capability_route_service` 已處理）。
-- `app/scratch/verify_imports.py` import 的是 `app.schemas.llm.verb_pair`（不是 example），不受影響。
 - `/verb-pair/generate-child-cards` 與它的 `GenerateChildCardsRequest` 留在 `api/verb_pair.py`，不動。
+
+**實作結果（2026-10-20，§9 第 0 步）**：
+
+- 確認沒有在用的證據：
+  - repo 內（程式、腳本、前端、測試）除了這些檔案彼此之間，沒有任何引用。
+  - 正式機的請求 log 涵蓋 2026-08-31 至 2026-10-20：`/example/verb-pair/create`、`POST /verb-pair/create`、`PUT /verb-pair/{id}/update` 都是 0 次；同期 `verb-pair`／`core-verb` 的 `generate-child-cards` 合計約 5,700 次（對照組，證明 log 有記錄這類請求）。
+  - 正式機資料庫的 `capability_routes` 表沒有任何設定列，移除 `verb_pair_example` 用途鍵不會留下孤兒鍵。
+  - 筆記類型的筆記數取自本機 Anki（與正式站經 AnkiWeb 同步同一份收藏）。
+- 行為上唯一的差異：TG 建單字卡用的預設筆記類型（`supported_models[0]`）從 `TOEIC_Coach_Dark` 變成 `TOEIC_Coach_Dark_v2`。兩者都缺 `Meaning`、`Context` 欄位，建卡照樣以 `FIELD_MISMATCH` 失敗，直到第 2 步改用基底的標準建立。
+- 驗證：`ruff` 通過；`pytest tests` 948 個、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常；實際載入的 app 只剩兩個 `generate-child-cards` 端點，註冊的 handler 恰為 6 個。
 
 ### D9 建卡入口：網頁只做純手動填表
 

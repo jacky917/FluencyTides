@@ -61,8 +61,7 @@ class SpeakingCoachHandler(BaseHandler):
 
         Supported Anki model names.
         """
-        # 這裡不寫死，可以是任何支援這個欄位結構的模型
-        return ["Speaking_Coach_Dark", "Speaking_Coach_Light"]
+        return ["Speaking_Coach_Dark"]
 
     @override
     def get_input_schema(self) -> dict:

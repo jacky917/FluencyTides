@@ -1,13 +1,13 @@
 """
 單字與片語挖掘任務處理器 (Vocabulary Mining Handler) 模組。
 
-負責 TOEIC_Coach_Dark 等單字類卡片的完整 CRUD 生命週期，
+負責 TOEIC_Coach_Dark_v2 單字卡的完整 CRUD 生命週期，
 以及知識圖譜的拼裝與讀取。
 
 Vocabulary mining handler module.
 
-Owns the full CRUD lifecycle of vocabulary-type cards such as
-TOEIC_Coach_Dark, as well as assembling and reading the knowledge graph.
+Owns the full CRUD lifecycle of TOEIC_Coach_Dark_v2 vocabulary
+cards, as well as assembling and reading the knowledge graph.
 """
 
 import logging
@@ -32,11 +32,11 @@ class VocabularyMiningHandler(BaseHandler):
 
     Vocabulary and phrase mining task handler.
 
-    支援單字與句型的基本卡片 (如 TOEIC_Coach_Dark)，
+    支援單字卡（TOEIC_Coach_Dark_v2；舊版 TOEIC_Coach_Dark 已無筆記，不再列入），
     並且負責生成包含同義詞、搭配詞的知識圖譜。
 
-    Supports basic vocabulary/sentence-pattern cards (e.g.
-    TOEIC_Coach_Dark) and builds the knowledge graph containing synonyms
+    Supports vocabulary cards (TOEIC_Coach_Dark_v2; the old
+    TOEIC_Coach_Dark has no notes left) and builds the knowledge graph containing synonyms
     and collocations.
 
     設計決策：
@@ -62,7 +62,7 @@ class VocabularyMiningHandler(BaseHandler):
 
         Supported Anki model names.
         """
-        return ["TOEIC_Coach_Dark", "TOEIC_Coach_Dark_v2", "Default"]
+        return ["TOEIC_Coach_Dark_v2"]
 
     @override
     def get_input_schema(self) -> dict[str, object]:

@@ -132,7 +132,7 @@ async def process_word(
     try:
         handler = handler_registry.get_handler("vocabulary_mining")
 
-        # 使用 Handler 的第一個 supported_model 作為預設模型 (通常為 TOEIC_Coach_Dark)
+        # 使用 Handler 的第一個 supported_model 作為預設模型 (TOEIC_Coach_Dark_v2)
         default_model = handler.supported_models[0]
         default_deck = "Default"
 

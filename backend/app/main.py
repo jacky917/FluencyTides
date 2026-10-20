@@ -44,7 +44,6 @@ from app.api.relations import router as relations_router
 from app.api.storage import router as storage_router
 from app.api.verb_pair import router as verb_pair_router
 from app.api.core_verb import router as core_verb_router
-from app.api.example.verb_pair import router as example_verb_pair_router
 from app.api.webhook import router as webhook_router
 from app.api.config import router as config_router
 from app.api.jp_tokenizer import router as jp_tokenizer_router
@@ -366,7 +365,6 @@ app.include_router(storage_router, prefix="/api/v1")
 app.include_router(relations_router, prefix="/api/v1")
 app.include_router(verb_pair_router, prefix="/api/v1")
 app.include_router(core_verb_router, prefix="/api/v1")
-app.include_router(example_verb_pair_router, prefix="/api/v1/example")
 app.include_router(config_router, prefix="/api/v1")
 app.include_router(jp_verb_readings_router, prefix="/api/v1")
 app.include_router(jp_tokenizer_router, prefix="/api/v1")

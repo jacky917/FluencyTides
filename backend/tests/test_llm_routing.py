@@ -41,7 +41,6 @@ _PRODUCTION_ROUTES = {
     "expression_correction": "app.services.task_handlers.expression_handler",
     "jp_verb_pair": "app.services.task_handlers.jp_verb_pair_handler",
     "jp_core_verb": "app.services.task_handlers.jp_core_verb_handler",
-    "verb_pair_example": "app.services.task_handlers.example.verb_pair_example_handler",
     "jp_verb_reading": "app.services.jp_verb_reading_service",
 }
 
