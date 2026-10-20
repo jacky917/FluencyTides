@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-10-20 |
 | **性質** | 服務層與 API 重新設計 + 實作工作項 |
-| **狀態** | 🚧 實作中（2026-10-20 定案；D13 三頁版面統一已完成（dac7670）；§9 第 0 步殘骸清除已完成）。2026-10-20 已定：對照程式碼更正（§12）；本機腳本與網頁分流（D7）；清除殘骸（D8）；網頁建卡只做純手動填表（D9）；能力綁在 handler 上、以開關宣告（D2）；增刪改查都提供 `/handlers/{name}/notes/...` 版本，另保留通用的卡片查詢（D5）；`BaseHandler` 提供標準 CRUD，本次以單字卡 `TOEIC_Coach_Dark_v2` 為試點、不覆寫跑通整套流程（D10）；寫入後等同步完成（D1）；工具設定頁顯示 handler 能力（§6）；前端最後實作；口說卡網頁改欄位本次不開放（§5）；JSON 欄位改另開設計書 `json_field_editor_FEAT_2026-10-20.md`，本計畫只宣告欄位名稱（D3）；圖譜以 handler 的查詢為基礎、基底只畫單點（預設顯示 nid，可選任意欄位）、點節點開啟單張卡片，單字卡以關聯圖譜保留現有功能，本次的圖譜工作以移植現有實作為主，除單字卡外不開放任何 handler 的圖譜（D12）；媒體上傳另開設計書 `media_upload_FEAT_2026-10-20.md`；web_ui_parity 階段 A2（三頁版面統一與共用元件抽取）併入本計畫（D13）。§13 只剩之後再決定、不擋本計畫的事 |
+| **狀態** | 🚧 實作完成、待部署驗收（2026-10-20：§9 第 0～8 步全部完成，各步結果見 §9；§10 的驗收要部署後在網頁、TG、本機腳本實測）。2026-10-20 已定：對照程式碼更正（§12）；本機腳本與網頁分流（D7）；清除殘骸（D8）；網頁建卡只做純手動填表（D9）；能力綁在 handler 上、以開關宣告（D2）；增刪改查都提供 `/handlers/{name}/notes/...` 版本，另保留通用的卡片查詢（D5）；`BaseHandler` 提供標準 CRUD，本次以單字卡 `TOEIC_Coach_Dark_v2` 為試點、不覆寫跑通整套流程（D10）；寫入後等同步完成（D1）；工具設定頁顯示 handler 能力（§6）；前端最後實作；口說卡網頁改欄位本次不開放（§5）；JSON 欄位改另開設計書 `json_field_editor_FEAT_2026-10-20.md`，本計畫只宣告欄位名稱（D3）；圖譜以 handler 的查詢為基礎、基底只畫單點（預設顯示 nid，可選任意欄位）、點節點開啟單張卡片，單字卡以關聯圖譜保留現有功能，本次的圖譜工作以移植現有實作為主，除單字卡外不開放任何 handler 的圖譜（D12）；媒體上傳另開設計書 `media_upload_FEAT_2026-10-20.md`；web_ui_parity 階段 A2（三頁版面統一與共用元件抽取）併入本計畫（D13）。§13 只剩之後再決定、不擋本計畫的事 |
 | **範圍** | 新增 `backend/app/services/note_service.py`（單一服務層）；`backend/app/services/task_handlers/`（能力宣告、標準 CRUD、建立參數、註冊表、`__init__.py` 統一註冊）；`backend/app/api/handlers.py`（重寫）、新增 `backend/app/api/notes.py`、`backend/app/schemas/`、`backend/app/main.py`（掛新路由、移除 example 路由）；`backend/app/core/dependencies.py`、`backend/app/bot/dependencies.py`（注入服務層）；`backend/app/services/relation_service.py`（改名稱時同步更新關聯的兩端標籤，D12）；TG 呼叫 handler 的 5 處改呼叫服務層（§7）；殘骸清除（D8）；`frontend/src/api/client.ts`、`types/api.ts`、`CardGenerator.tsx`、`CardDetailModal.tsx`、`KnowledgeGraph.tsx`、`ToolSettings.tsx`、`lib/cardFields.ts`、`components/cards/`（`DeckPanel`、`CardViewPanel`）；三頁版面統一與共用元件抽取（D13）：`pages/Cards.tsx`、`lib/cardLayout.ts`、`hooks/usePanelWidths.ts`、`components/cards/panelStyles.ts`、`ErrorNote.tsx` 移到共用位置 |
 | **不動** | 有覆寫的 handler 內部邏輯（口說卡的建卡與 JSON 動作、外語糾錯的建卡、jp 的 `execute_generate`）；TG 的對話流程與文字；`speaking_fsm.py` 自己組對話卡的做法（屬 web_ui_parity 階段 E）；`expression_fsm.py` 預覽用的 `execute_generate`（不寫 Anki）與「覆蓋舊卡」時的刪除（§7）；**本機批次腳本走的整條路**（D7）：`POST /verb-pair/generate-child-cards`、`POST /core-verb/generate-child-cards` 的路徑、請求、回應、驗證方式；`/jp/*`；直接呼叫 handler 或 AnkiConnect 的本機腳本；`GET /cards`、`GET /cards/{card_id}`、`/anki-media`、`/relations/*`、`/capability-routes` |
 | **關聯文件** | `docs/wip/web_ui_parity_FEAT_2026-10-18.md` §7（問題 H1–H11 的盤點）、§4 階段 A2（已併入本計畫 D13）、§5 決策 5（`ValueError` 改 4xx，屬階段 B）；`docs/wip/json_field_editor_FEAT_2026-10-20.md`（JSON 欄位的表單編輯）、`docs/wip/media_upload_FEAT_2026-10-20.md`（網頁上傳媒體），兩者都排在本計畫之後 |
@@ -713,7 +713,7 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
 5. ✅ REST 端點：`/handlers`、`/handlers/{name}/notes/...`、`/notes/{note_id}`、`/decks`，移除舊路徑；從 `BaseHandler` 與各 handler 移除 `get_input_schema`、`execute_read_list`；`main.py` 掛新路由；測試。`api/verb_pair.py`、`api/core_verb.py` 的 `generate-child-cards` 不動。
 6. ✅ 前端：client 與型別；從 Cards 抽出共用元件（D13），Cards 改用後畫面與行為不變；`CardViewPanel` 與 `CardDetailModal`；工具設定頁的「Handler 能力」區塊。
 7. ✅ 前端：Knowledge Graph 改用共用版面（左側牌組樹）、新的圖譜參數與點開卡片、全螢幕（D12、D13）。
-8. 前端：Generate 頁改用共用版面，依 `channels` 與 `create_schema` 產生下拉與表單（§6、D13）。
+8. ✅ 前端：Generate 頁改用共用版面，依 `channels` 與 `create_schema` 產生下拉與表單（§6、D13）。
 
 **第 1 步實作結果（2026-10-20）**：
 
@@ -920,6 +920,25 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
 - 既有問題（這一步沒動）：圖的區塊用了 `dark:bg-slate-900/50`，系統為深色模式而網頁是淺色時，背景會是深灰色。
 
 驗證：`npm run lint` 0 個錯誤；`npm test` 193 個通過；`npm run build` 成功。
+
+**第 8 步實作結果（2026-10-20）**：
+
+- `pages/CardGenerator.tsx` 改寫（版面在 D13 已完成）：
+  - **卡片類型**改為單選清單，依 `createAvailability`（第 6 步）呈現：可選的能點；不能從網頁建立的反灰，名稱下方顯示 `create.reason`；`channels` 為空的不顯示。選取記在 `localStorage` 的 `generate_handler`；記住的不再可選時改用第一個可選的。
+  - **表單**由 `create_schema` 產生（`lib/createForm.ts`）：`title`、`description`、`required`（標 `*`）、`default`、`examples`（`datalist`，可輸入也可選）、`x-ui: textarea`（多行）；不認得的 `x-ui` 當一般文字欄位。只畫字串欄位，其他型別的參數列在表單下方說明網頁不提供。換卡片類型時表單重設。
+  - **牌組**：`create.deck` 為 `fixed` 時顯示固定牌組、不看牌組樹；否則用牌組樹選的，沒選或已不存在時無法送出並說明。另顯示建出的筆記類型（`create.note_type`），不再有筆記類型下拉。
+  - **送出**：必填欄位空白時按鈕停用；送出期間顯示「建立中、同步中…」並說明最久可能等一分鐘。
+  - **422 錯誤**：`detail[].loc` 為 `["body", "params", 欄位]` 的標在欄位下方；對不到欄位的列在表單下方；其他錯誤（`DUPLICATE_CARD`、`NOTE_TYPE_NOT_CREATABLE` 等）以 toast 顯示後端訊息。
+  - **成功**：toast 顯示建立的筆記數與牌組，有 `sync_warning` 時另以警告提示；表單下方留一段結果，附「到 Cards 頁查看這個牌組」（`/cards?deck=…`）。重新整理圖譜、卡片清單與牌組樹。
+  - `create_schema` 為 null（Anki 連不上，R8）時顯示 `create.reason`，不能送出。
+- `lib/createForm.ts`（`schemaFields`、`initialValues`、`missingRequired`、`formErrorsFrom`）與測試：標準建立的 schema、對話卡的 `CreateParams` schema、可為 null 的字串、略過非字串參數、422 對回欄位與對不到的錯誤、非 422 時不處理。
+- **瀏覽器實測**（只檢視，沒有送出）：
+  - 卡片類型清單：「單字卡」可選；「外語糾錯」「對話卡」「自他動詞」「核心動詞」反灰並各自顯示原因；「三語對話卡」不顯示——與 §6 的預期一致。
+  - 表單欄位就是 Anki 裡 `_v2` 的 9 個欄位（JSON、音檔欄位不列），`Expression` 標必填。
+  - 選「全部牌組」時提示先選牌組、按鈕停用；選了牌組並填 `Expression` 後按鈕可按。
+  - 沒有實際建卡（會寫入本機 Anki 並同步 AnkiWeb）；實際建卡、重複單字、422 標在欄位旁留給 §10 部署後驗收。
+
+驗證：`npm run lint` 0 個錯誤；`npm test` 200 個通過；`npm run build` 成功。
 
 每一步結束都要通過：
 
