@@ -16,6 +16,11 @@ server {
         # 關鍵：若找不到對應的路徑，一律回傳 index.html 交給前端 React 路由處理
         try_files $uri $uri/ /index.html;
     }
+    # 映像版本（Dockerfile 建置時寫入），CI 部署後輪詢用；禁止快取，才讀得到剛上線的值
+    location = /version.json {
+        root   /usr/share/nginx/FluencyTides;
+        add_header Cache-Control "no-store";
+    }
     # ==========================================
     # 3. 後端 FastAPI 反向代理
     # ==========================================

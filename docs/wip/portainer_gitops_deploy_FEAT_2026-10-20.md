@@ -5,9 +5,9 @@
 | **創建日期** | 2026-10-20 |
 | **性質** | 部署流程重新設計 + 實作工作項（含 NAS 端手動步驟） |
 | **狀態** | 🚧 實作中（P0～P3 完成，進行 P4） |
-| **範圍** | `.github/workflows/main.yml`、`frontend/nginx.conf.template`、`deploy_local.sh`（退役）、`README.md`；NAS 端：Portainer 掛載、兩個 Portainer Git stack、CasaOS 外部連結；GitHub：secrets 與 workflow 啟用狀態 |
-| **不動** | 後端 / 前端應用程式碼；`backend/docker-compose.yml` 與 `frontend/docker-compose.yml` 的服務定義（映像、掛載、網路、`env_file` 路徑全部照舊）；Cloudflare Tunnel 既有 hostname；Portainer 版本升級；資料庫內容 |
-| **PR / 進度** | P0 → [#28](https://github.com/jacky917/FluencyTides/pull/28)（已合併 2026-10-20，034d4de）；P1、P3 完成 2026-10-20；後端 stack 改名 → [#29](https://github.com/jacky917/FluencyTides/pull/29)（已合併 2026-10-20，59151a4） |
+| **範圍** | `.github/workflows/main.yml`、`.github/scripts/wait_for_deploy.py`、`frontend/nginx.conf.template`、`deploy_local.sh`（退役）、`README.md`；R1 追加：前後端 Dockerfile、`backend/app/api/health.py`；NAS 端：Portainer 掛載、兩個 Portainer Git stack、CasaOS 外部連結；GitHub：secrets 與 workflow 啟用狀態 |
+| **不動** | 後端 / 前端應用程式碼（例外：R1 為 `/api/health` 加 `git_sha` 欄位）；`backend/docker-compose.yml` 與 `frontend/docker-compose.yml` 的服務定義（映像、掛載、網路、`env_file` 路徑全部照舊）；Cloudflare Tunnel 既有 hostname；Portainer 版本升級；資料庫內容 |
+| **PR / 進度** | P0 → [#28](https://github.com/jacky917/FluencyTides/pull/28)（已合併 2026-10-20，034d4de）；P1、P3 完成 2026-10-20；後端 stack 改名 → [#29](https://github.com/jacky917/FluencyTides/pull/29)（已合併 2026-10-20，59151a4）；R1 部署結果驗證 → [#31](https://github.com/jacky917/FluencyTides/pull/31)（待合併） |
 | **關聯文件** | `docs/bk/05_DevOps_and_Deployment.md`（舊部署說明，F059 即「部署失敗不報錯」）、`docs/archive/claude_cli_in_container_FEAT_2026-08-29.md` §5（記載「CI 已停用」） |
 
 ---
@@ -244,8 +244,10 @@ flowchart TD
     FDI --> DP
     DP["deploy<br/>只呼叫推送成功那一側的 stack webhook"]
     DP --> OK{"每個 webhook<br/>都回 HTTP 2xx？"}
-    OK -->|是| G["綠燈"]
     OK -->|否| R["紅燈，印出狀態碼與回應內容"]
+    OK -->|是| POLL{"5 分鐘內版本端點<br/>回報本次 commit sha？<br/>後端 /api/health、前端 /version.json"}
+    POLL -->|是| G["綠燈"]
+    POLL -->|否| R2["紅燈，印出最後看到的狀態碼或 sha"]
 ```
 
 ### 4.3 一次部署的時序
@@ -268,14 +270,18 @@ sequenceDiagram
     GA->>GHCR: 推送 latest 與 commit sha 兩個標籤
     GA->>CF: POST stack webhook，帶 service token
     CF->>PT: 驗證通過，經 Tunnel 轉送
+    PT-->>CF: 立即回應 204（之後在背景部署）
+    CF-->>GA: 回應 204
     PT->>GH: 拉取最新 compose
     PT->>PT: 讀取 /DATA/AppData/FluencyTides/backend/.env
     PT->>DK: compose pull 再 up
     DK->>GHCR: 拉取新映像
-    DK->>DK: 以新映像重建容器
-    PT-->>CF: 回應 2xx
-    CF-->>GA: 回應 2xx
-    GA->>GA: deploy job 綠燈
+    DK->>DK: 以新映像重建容器（約 7 秒）
+    loop 每 5 秒，最多 5 分鐘
+        GA->>CF: GET /api/health 或 /version.json，帶 service token
+        CF-->>GA: git_sha
+    end
+    GA->>GA: git_sha 等於本次 commit，deploy job 綠燈
     U->>CF: 開啟 ft.jacky917.com，由使用者登入 Access
     CF->>U: 顯示新版網頁
 ```
@@ -309,12 +315,17 @@ flowchart TD
 | `README.md` | CI/CD 一行改為「GitHub Actions → GHCR → Cloudflare Access → Portainer Git stack webhook」；部署說明改指向本文件；順手修正「後端 `python:3.11-slim`」為 3.13；移除 `deploy_local.sh` 相關敘述 | ✅ |
 | `backend/docker-compose.yml`、`frontend/docker-compose.yml` | 不改服務定義。`x-casaos` 區塊保留（Portainer 忽略它，留著可在日後改回 CasaOS 管理時使用），只在其上方註解說明「目前由 Portainer Git stack 部署，此區塊不生效」；`env_file` 與 `DATABASE_URL` 註解中「用 `docker compose --force-recreate` 重建」改為 Portainer 重新部署，並說明 Portainer 需掛載 `/DATA/AppData/FluencyTides` | ✅ |
 | `backend/.env.example`、`backend/scripts/fastapi_client/query_backend_model.py` | 實作時補上（2026-10-20）：重建容器的說明與提示文字改為 Portainer 重新部署，避免照舊指示在 Portainer 外重建容器 | ✅ |
+| `backend/Dockerfile`、`backend/app/api/health.py` | R1：`ARG GIT_SHA` → `ENV APP_GIT_SHA`（放在最後一層，不影響快取）；`/api/health` 回傳新增 `git_sha`（未設時為 `unknown`），仍不需 API 金鑰 | ✅ |
+| `frontend/Dockerfile`、`frontend/nginx.conf.template` | R1：建置時把 `GIT_SHA` 寫進 `/version.json`；nginx 對它加 `Cache-Control: no-store` | ✅ |
+| `.github/workflows/main.yml` | R1：兩個 build-push 步驟傳 `build-args: GIT_SHA=${{ github.sha }}`；deploy 先 sparse checkout `.github/scripts`，呼叫 webhook 後對推送成功的那一側執行輪詢，端點由 job 的 `BACKEND_HEALTH_URL`、`FRONTEND_VERSION_URL` 指定 | ✅ |
+| `.github/scripts/wait_for_deploy.py`（新增） | R1：每 5 秒請求一次端點（帶 CF service token、不跟隨轉址、加時間戳避開快取），`git_sha` 等於本次 commit 即成功；5 分鐘逾時以 `::error::` 印出最後看到的狀態碼或 sha 並失敗 | ✅ |
 
 ### 測試與驗證
 
 - workflow：YAML 解析、webhook 呼叫腳本已用本機模擬伺服器測過 204 / 500 / 302 / secret 未設 / 連不上五種情況，結果符合預期。
 - 後端：`ruff check app scripts tests` 通過；`pytest backend/tests`（於 repo 根目錄執行，避開本機 `.env`）946 項通過。
 - nginx 修改：P2 的 PR 檢查只驗證得到「前端映像能建置」；設定是否生效要到 P3 實機確認（§9 驗收）。
+- R1 輪詢（2026-10-20）：`backend/tests/test_health.py` 新增 3 項（回報 `APP_GIT_SHA`、未設或空字串回 `unknown`、設了 API 金鑰仍免金鑰可讀），`pytest backend/tests` 949 項通過、ruff 通過。`wait_for_deploy.py` 以本機模擬伺服器測過：舊 sha → 502 → 新 sha（成功）、一直是舊 sha、Access 302、200 但為 HTML、JSON 缺 `git_sha`、302 轉到有效 JSON（確認不跟隨轉址）、404、連不上、預期 sha 為空，以及 CF header 確實送出，結果皆符合預期。
 
 ### NAS / 外部設定（由使用者操作）
 
@@ -325,6 +336,7 @@ flowchart TD
 | GitHub secrets | 更新 `PORTAINER_WEBHOOK_BACKEND`、`PORTAINER_WEBHOOK_FRONTEND` 為 stack webhook 網址 |
 | GitHub Actions | 重新啟用 workflow |
 | Cloudflare Zero Trust | 確認 service token 有效、`portainer.jacky917.com` 的 Access 規則允許它 |
+| Cloudflare Zero Trust（R1） | 讓同一把 service token 能讀 `ft.jacky917.com/api/health` 與 `ft.jacky917.com/version.json`：建議新增只涵蓋這兩個路徑的 Access 應用程式，放兩條政策：① Service Auth、Include 該 service token；② 與既有 `ft.jacky917.com` 應用程式相同的使用者 Allow 政策（路徑較精確的應用程式會取代整站規則，前端 Dashboard 會從瀏覽器呼叫 `/api/health`，少了 ② 會讓 Dashboard 顯示後端連線失敗）。只開這兩個路徑，避免 token 取得整個網站與經 nginx 注入金鑰的 `/api/`。未設定時 deploy 會在輪詢逾時後紅燈並印出 `HTTP 302 → …cloudflareaccess.com…` |
 | CasaOS 主畫面 | 新增外部連結 |
 | 主機 | 舊的 `/home/jacky917/FluencyTides` 目錄於穩定運作一週後可刪除（保留期間作為回復用） |
 
@@ -509,7 +521,7 @@ sudo docker compose -f /home/jacky917/FluencyTides/frontend/docker-compose.yml u
 
 | # | 風險 | 應對 |
 |---|---|---|
-| R1 | **（2026-10-20 已確認）** stack webhook 是非同步的：收到請求即回 204，重建在背景進行（實測晚約 7 秒）。CI 綠燈只代表「觸發成功」；若 Portainer 端部署失敗（拉映像失敗、compose 錯誤），CI 仍是綠燈 | 重建行為已驗證（Re-pull + Force 在無新 commit 時也會重建）。部署結果的驗證**未實作**，列為後續工作：deploy job 在呼叫 webhook 後輪詢一個能反映版本的端點（例如讓 `/api/health` 回傳映像的 commit sha），直到等於本次 commit 或逾時才算成功 |
+| R1 | **（2026-10-20 已確認）** stack webhook 是非同步的：收到請求即回 204，重建在背景進行（實測晚約 7 秒）。CI 綠燈只代表「觸發成功」；若 Portainer 端部署失敗（拉映像失敗、compose 錯誤），CI 仍是綠燈 | 重建行為已驗證（Re-pull + Force 在無新 commit 時也會重建）。**部署結果的驗證已實作（2026-10-20，#31）**：映像以 build-arg 寫入 commit sha（後端 `/api/health` 的 `git_sha`、前端 `/version.json`），deploy job 呼叫 webhook 後經 Cloudflare Access（帶 service token）輪詢這兩個端點，sha 等於本次 commit 才轉綠，5 分鐘逾時紅燈並印出最後看到的狀態碼或 sha。改動見 §5 |
 | R2 | Portainer 掛載 `/DATA/AppData/FluencyTides` 時需重建 Portainer 容器 | Portainer 資料在 `/DATA/AppData/portainer-ee/data`（bind mount），重建不影響；CasaOS 若儲存失敗，Portainer 停擺不影響 FluencyTides 運作 |
 | R3 | stack 拉到舊映像（F7） | P3-1 先手動觸發推出新映像，P3-3 才建 stack |
 | R4 | P2 合併、P3-1 時 deploy job 預期紅燈 | 已寫明屬預期；P3-4 以 rerun 轉綠 |

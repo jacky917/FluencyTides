@@ -43,6 +43,12 @@ RUN mkdir -p /usr/share/nginx/FluencyTides
 # 4. 從 builder 階段把編譯好的 dist 複製到 Nginx 的根目錄
 COPY --from=builder /app/dist /usr/share/nginx/FluencyTides
 
+# 4.5 寫入映像對應的 git commit（/version.json），供 CI 的 deploy job 輪詢，
+# 確認新版前端已上線（Portainer webhook 是非同步的，回 204 不代表容器已重建）。
+# CI 以 build-args 傳入 github.sha；本機建置未傳時為 unknown。
+ARG GIT_SHA=unknown
+RUN printf '{"git_sha":"%s"}\n' "${GIT_SHA}" > /usr/share/nginx/FluencyTides/version.json
+
 # 5. 宣告對外 Port (與 nginx.conf 一致)
 EXPOSE 80
 

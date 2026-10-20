@@ -56,6 +56,13 @@ COPY . .
 RUN chown -R apiuser /app
 USER apiuser
 
+# 7.5 記錄映像對應的 git commit，由 /api/health 的 git_sha 回報。
+# CI 以 build-args 傳入 github.sha，deploy job 輪詢到這個值才算新版已上線
+# （Portainer webhook 是非同步的，回 204 不代表容器已重建）。
+# 放在最後：每次 commit 值都不同，放前面會讓之後的層全部失去快取。
+ARG GIT_SHA=unknown
+ENV APP_GIT_SHA=${GIT_SHA}
+
 # 8. 宣告對外 Port
 EXPOSE 8000
 
