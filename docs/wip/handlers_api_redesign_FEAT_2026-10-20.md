@@ -712,7 +712,7 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
 4. ✅ TG 的 5 處改呼叫 `NoteService`（§7 表格），`bot/dependencies.py` 注入；`_sync_with_warning` 改為包裝服務層；TG 既有測試全過。
 5. ✅ REST 端點：`/handlers`、`/handlers/{name}/notes/...`、`/notes/{note_id}`、`/decks`，移除舊路徑；從 `BaseHandler` 與各 handler 移除 `get_input_schema`、`execute_read_list`；`main.py` 掛新路由；測試。`api/verb_pair.py`、`api/core_verb.py` 的 `generate-child-cards` 不動。
 6. ✅ 前端：client 與型別；從 Cards 抽出共用元件（D13），Cards 改用後畫面與行為不變；`CardViewPanel` 與 `CardDetailModal`；工具設定頁的「Handler 能力」區塊。
-7. 前端：Knowledge Graph 改用共用版面（左側牌組樹）、新的圖譜參數與點開卡片、全螢幕（D12、D13）。
+7. ✅ 前端：Knowledge Graph 改用共用版面（左側牌組樹）、新的圖譜參數與點開卡片、全螢幕（D12、D13）。
 8. 前端：Generate 頁改用共用版面，依 `channels` 與 `create_schema` 產生下拉與表單（§6、D13）。
 
 **第 1 步實作結果（2026-10-20）**：
@@ -898,6 +898,28 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
   - 沒有實際按儲存、刪除（會寫入本機 Anki）。
 
 驗證：`npm run lint` 0 個錯誤（14 個 `any` 警告都是既有的）；`npm test` 188 個通過；`npm run build` 成功。
+
+**第 7 步實作結果（2026-10-20）**：
+
+- `pages/KnowledgeGraph.tsx`（版面與全螢幕在 D13 已完成，這一步改資料與操作）：
+  - **handler 選單**：只列 `capabilities.graph.supported` 的 handler（本次只有單字卡），記在 `localStorage` 的 `kg_handler`；記住的 handler 不再開放圖譜時改用第一個。
+  - **筆記類型選單**：handler 負責多種筆記類型時才出現（「全部筆記類型」或其中一種，送 `note_type`）；換 handler 時重設。
+  - **名稱欄位選單**：只有標準圖譜（`graph.links` 為 false）出現，選項來自回應的 `label_fields`，「預設」顯示回應的 `label_field`（沒有時是 Note ID）；各 handler 分開記在 `kg_label_fields`。記住的欄位已不存在而回 422 時，錯誤畫面提供「名稱欄位改回預設」。
+  - **點節點**：以 `GET /handlers/{name}/notes/{note_id}` 讀取，權限由 `permissionsFromCapabilities` 依該 handler 的能力算出（與後端 D4 同一規則），交給同一個 `CardDetailModal`；幽靈節點沒有 `note_id`，不開。
+  - **「建立連線」「Sync」（清理失效關聯）、點連線刪除**：只在 `graph.links` 為 true 時出現、生效。
+  - 節點提示：名稱與副標；關聯圖譜另加學習狀態，沒有狀態的幽靈節點標「未建卡」（原本寫 ghost，標準圖譜的節點也會被誤標）。
+  - 錯誤與空狀態照實說明：handler 清單或圖譜載入失敗顯示後端的訊息；沒有任何 handler 開放圖譜時指向工具設定頁；這個牌組沒有該 handler 的筆記時說明。
+  - 視角記憶（縮放、中心、節點位置）依 handler、筆記類型、牌組分開記；單字卡、不限筆記類型時沿用原本以牌組為鍵的紀錄，所以既有的版面不會遺失。
+- 規則抽成 `lib/graphQuery.ts`（`graphHandlers`、`pickGraphHandler`、`graphViewScope`、`nodeTooltip`）並加測試。
+- **瀏覽器實測**（只檢視）：
+  - 選單顯示「單字卡」，有「建立連線」與「Sync」。
+  - 圖譜請求為 `/handlers/vocabulary_mining/graph?deck=…`。
+  - 滑鼠移到節點顯示「refer (參考；查閱；提及) - review」，副標有內容了。
+  - 點節點以 `/handlers/vocabulary_mining/notes/{id}` 讀取並打開卡片詳情，可編輯、可刪除、音檔欄位唯讀，與 Cards 頁一致。
+  - 標準圖譜的選單（筆記類型、名稱欄位）目前沒有 handler 開放，畫面上看不到；邏輯由 `graphQuery` 的單元測試與後端圖譜測試涵蓋，之後開放某種卡片的圖譜時要實際看過。
+- 既有問題（這一步沒動）：圖的區塊用了 `dark:bg-slate-900/50`，系統為深色模式而網頁是淺色時，背景會是深灰色。
+
+驗證：`npm run lint` 0 個錯誤；`npm test` 193 個通過；`npm run build` 成功。
 
 每一步結束都要通過：
 
