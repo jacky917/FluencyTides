@@ -447,6 +447,11 @@ gh run rerun <P3-1 的 run id> --failed
 ### P4 收尾 👤🤖
 
 1. 👤 CasaOS 主畫面 → 「+」→ Add External Link/APP：位址 `https://ft.jacky917.com`、名稱 `FluencyTides`、圖示網址自選。需要的話再加一個後端 API 文件入口 `https://ft-backend.jacky917.com/docs`。
+   > **實作紀錄（2026-10-20）**：由 Claude 經瀏覽器新增（實際選單名稱為「+」→ **Add external link**），兩筆：
+   > - `FluencyTides` → `https://ft.jacky917.com`，圖示沿用舊 `x-casaos` 的 nginx 圖示
+   > - `FluencyTides API` → `https://ft-backend.jacky917.com/docs`，圖示沿用 FastAPI 圖示
+   >
+   > CasaOS API `GET /v1/users/current/custom/link` 確認兩筆已存；點擊圖示時 CasaOS 以 `window.open` 開啟上述網址（內建瀏覽器窗格不允許另開視窗，改以攔截 `window.open` 確認網址正確）。
 2. 🤖 做一次端到端驗證：一個無害的小改動（例如後端 log 文字或前端頁尾版本號）走完整流程，確認從合併到網頁顯示新版本全自動。
 3. 🤖 本文件狀態改 ✅、補驗收結果、移入 `docs/archive/`。
 4. 👤 穩定運作一週後，刪除 `/home/jacky917/FluencyTides` 與 `data.bak-20261020`。
@@ -525,5 +530,5 @@ sudo docker compose -f /home/jacky917/FluencyTides/frontend/docker-compose.yml u
 - [ ] 手動觸發 workflow（main）→ deploy 綠燈，且兩個容器確實重建（啟動時間更新）
 - [ ] 把 webhook secret 暫時改成錯誤值再觸發 → deploy 紅燈並顯示狀態碼（驗證不再假綠燈），驗完改回
 - [ ] 端到端：合併一個只改後端的小變更 → 不需人工介入，網頁上看得到新版本；前端 `/api/` 無 502
-- [ ] CasaOS 主畫面有 FluencyTides 外部連結，點擊開啟正式站；~~CasaOS 的 app 清單中沒有可操作的 FluencyTides~~（2026-10-20 更正：兩個容器會出現在「Legacy app」區塊，見 D5、R11）
+- [x] CasaOS 主畫面有 FluencyTides 外部連結，點擊開啟正式站（2026-10-20，另加 FluencyTides API）；~~CasaOS 的 app 清單中沒有可操作的 FluencyTides~~（2026-10-20 更正：兩個容器會出現在「Legacy app」區塊，見 D5、R11）
 - [ ] `deploy_local.sh` 已從 repo 移除；README 的部署說明與現況一致
