@@ -709,7 +709,7 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
 1. ✅ 後端基底：錯誤類別（`HandlerOperationUnsupportedError`、`NoteNotFoundError`、`NoteTypeNotCreatableError`、`NoteNotOwnedByHandlerError`、`FieldNotEditableError`）；`BaseHandler` 的標準 CRUD 與標準圖譜（`query_notes`、`GraphSpec`）、`RelationGraphMixin`（由現在 `vocabulary_mining` 的圖譜邏輯抽出）、`RELATION_LABEL_FIELD`、`JSON_FIELDS`／`MEDIA_FIELDS` 名稱宣告；`RelationService.update_labels_for_note`；預設拋不支援的方法、移除的方法、`CAPABILITIES`；註冊表檢查與「筆記類型 → handler」對照；`task_handlers/__init__.py` 統一註冊。
 2. ✅ 各 handler：依 §5 宣告能力（`title` 已在第 1 步加上）；口說卡、外語糾錯的 `CreateParams`；刪掉空實作與各自的 `execute_delete`（`execute_read_list`、`get_input_schema` 留到第 5 步）；`execute_create` 回傳改 `list[int]`；單字卡刪掉 `execute_create`、`execute_update`、`execute_read_graph` 覆寫，改掛 `RelationGraphMixin`，宣告 `GRAPH`、`RELATION_LABEL_FIELD`、`JSON_FIELDS`、`MEDIA_FIELDS`。jp 兩個只動到這些，`execute_generate` 不碰；本步結束就跑 §8 的腳本保護測試。
 3. ✅ `NoteService`（含寫入後同步的提醒邏輯、歸屬檢查）與它的測試。
-4. TG 的 5 處改呼叫 `NoteService`（§7 表格），`bot/dependencies.py` 注入；`_sync_with_warning` 改為包裝服務層；TG 既有測試全過。
+4. ✅ TG 的 5 處改呼叫 `NoteService`（§7 表格），`bot/dependencies.py` 注入；`_sync_with_warning` 改為包裝服務層；TG 既有測試全過。
 5. REST 端點：`/handlers`、`/handlers/{name}/notes/...`、`/notes/{note_id}`、`/decks`，移除舊路徑；從 `BaseHandler` 與各 handler 移除 `get_input_schema`、`execute_read_list`；`main.py` 掛新路由；測試。`api/verb_pair.py`、`api/core_verb.py` 的 `generate-child-cards` 不動。
 6. 前端：client 與型別；從 Cards 抽出共用元件（D13），Cards 改用後畫面與行為不變；`CardViewPanel` 與 `CardDetailModal`；工具設定頁的「Handler 能力」區塊。
 7. 前端：Knowledge Graph 改用共用版面（左側牌組樹）、新的圖譜參數與點開卡片、全螢幕（D12、D13）。
@@ -790,6 +790,40 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
 - 測試 `tests/test_note_service.py` 39 個，涵蓋 §8 的 `NoteService` 各項。其中「每個 handler 宣告的每個動作都真的能執行」以 repo 的筆記類型定義檔建出筆記、逐一執行 7 個動作；另有一個測試鎖定動作清單，新增動作時要補測試。
 
 驗證：`ruff` 通過；`pytest tests` 1080 個（第 3 步新增 39 個）、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常。
+
+**第 4 步實作結果（2026-10-20）**：
+
+- TG 的 5 處寫入改經 `NoteService`，對話流程與回覆文字不變：
+
+  | 位置 | 改為 |
+  |---|---|
+  | `fsm/vocabulary_fsm.py` 建單字卡 | `note_service.create("vocabulary_mining", deck="Default", note_type=<handler 宣告的 create.note_type>, params={"Expression": 單字})`。刪掉寫入前的同步 |
+  | `fsm/expression_fsm.py` 建外語糾錯 | `note_service.create("expression_correction", …, tg_bot=bot.me() 的名稱)`；參數與原本傳給 handler 的相同（只少了 `tg_bot`，改用關鍵字參數）。不再傳 `relation_service=None` |
+  | `voice.py` 錄音 | `note_service.run_action(note_id, "add_recording", {"recording": …}（三語卡另帶 "lang"）)` |
+  | `callbacks.py` 系統頭像、跳過頭像後寫回音檔 | `note_service.run_action(note_id, "add_audio", {...})`；刪掉「依欄位名稱猜是不是三語卡」的判斷，改由服務層依筆記類型找 handler |
+  | `messages.py` 自訂頭像輸入說話者名稱後寫回音檔 | 同上。原本寫死用對話卡的 handler，三語卡的自訂頭像因此寫錯格式（web_ui_parity 階段 D 提到的 `messages.py:102`），一併修好。刪掉寫入前的同步 |
+
+- `bot/dependencies.py` 的 `ServiceInjectionMiddleware` 注入 `data["note_service"]`，與注入的 `card_service`、`relation_service` 是同一組。
+- `_sync_with_warning(anki_client)` 改為包裝服務層的 `sync_warning` 再加上開頭換行（`texts.sync_suffix`），提醒文字只剩一份；拿掉沒有人用的 `force` 參數（一律強制同步，與原本所有呼叫點相同）。仍用它的地方：`commands.py` 的刪除、`speaking_fsm.py` 建對話卡、`expression_fsm.py` 覆蓋舊卡後。
+- **同步次數**（逐處確認與服務層一致，沒有同步兩次）：
+  - 建單字卡、錄音、上傳音檔：服務層寫入後同步一次，原本各處自己的 `_sync_with_warning` 刪掉。
+  - 外語糾錯不覆蓋：服務層建卡後同步一次，不再另外同步。
+  - 外語糾錯覆蓋：服務層建卡後同步一次；刪舊卡後再同步一次（把刪除推上 AnkiWeb），提醒取這一次的。比原本多一次同步。
+- **寫入前的同步**：`AnkiClient` 每個方法呼叫前都會 `sync()`（防抖、失敗不擋），所以刪掉 `vocabulary_fsm`、`messages` 兩處多餘的 `anki_client.sync(raise_errors=False)` 行為不變；`callbacks`、`voice` 的同一行計畫沒列，留著不動。
+- 依筆記類型找 handler 與原本依欄位名稱猜的結果相同：三語卡模板的 `Prompt_Audios` 連結一律帶語言碼。唯一的差別在格式錯誤的連結：三語卡的 `Prompt_Audios` 收到非語言碼的 index 時，原本會用對話卡的 handler 寫入一筆沒有 `lang` 的項目（寫壞資料），改後三語卡 handler 拋 `ValueError`、不寫入。
+- 單字卡只輸入空白時不再嘗試建卡（Anki 不允許第一個欄位為空），回「請輸入外語單字或片語：」並停在這一步。
+- 外語糾錯的預覽（`execute_generate`，只呼叫 LLM、不寫入）照舊直接呼叫 handler。`speaking_fsm.py` 自己組對話卡、`commands.py` 的刪除不動。`voice.py` 的 `handler_name` 仍只用來選錄音評分器。
+- **測試**（`tests/test_bot_replies.py`）：
+  - 既有測試改 mock `NoteService`，斷言呼叫的是服務層：
+    - 建單字卡：傳的是 `{"Expression": 單字}` 與 `_v2`。
+    - 外語糾錯：參數與原本相同，`tg_bot` 以關鍵字傳入；不覆蓋時不再同步第二次，覆蓋時先建後刪、刪後再同步一次。
+    - 錄音、兩種頭像流程：呼叫 `run_action`。
+  - 新增：
+    - middleware 確實注入 `note_service`。
+    - **每個 TG handler 要的參數都有人提供**：掃過所有 router 的 handler 簽名，對照 middleware 注入的鍵。少注入一個依賴，平常只會在實際收到訊息時才以 `TypeError` 爆出來。這個測試在實作中途就抓到一次漏注入。
+- 部署後要照 §10 在 TG 逐項實測：建單字卡、外語糾錯（含覆蓋舊卡）、錄音評分、上傳音檔（對話卡與三語卡各一次，含自訂頭像）。
+
+驗證：`ruff` 通過；`pytest tests` 1088 個（第 4 步新增 8 個）、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常；所有 TG handler 模組與 app 可正常載入。
 
 每一步結束都要通過：
 

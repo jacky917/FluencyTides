@@ -2,14 +2,14 @@
 
 本模組實作單字/片語卡的互動式新增流程，取代原本無狀態的兜底生成邏輯。
 流程：
-啟動單字卡流程 -> 等待輸入單字 -> 呼叫 LLM 查字典並生成 Anki 卡片 -> 結束。
+啟動單字卡流程 -> 等待輸入單字 -> 經服務層建立只有單字的 Anki 卡片（尚未呼叫 LLM） -> 結束。
 
 Vocabulary-card creation Telegram Bot FSM handler.
 
 This module implements the interactive creation flow for word/phrase cards,
 replacing the previous stateless fallback generation. Flow:
-start the vocabulary flow -> wait for a word -> call the LLM to look it up
-and generate the Anki card -> finish.
+start the vocabulary flow -> wait for a word -> create an Anki card holding
+only the word through the service layer (no LLM yet) -> finish.
 """
 
 import logging
@@ -20,16 +20,17 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.bot.utils.formatting import escape_tg
-from app.bot.utils.texts import NEWCARD_RESTART, error_detail
+from app.bot.utils.texts import NEWCARD_RESTART, error_detail, sync_suffix
 from app.core.exceptions import FluencyTidesError
-from app.services.card_service import CardService
-from app.services.relation_service import RelationService
-from app.services.task_handlers.registry import handler_registry
-from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
+from app.services.note_service import NoteService
+from app.infrastructure.anki.client import AnkiConnectError
 
 logger = logging.getLogger(__name__)
 
 router = Router(name="vocabulary_fsm")
+
+HANDLER_NAME = "vocabulary_mining"
+DEFAULT_DECK = "Default"
 
 
 class VocabularyStates(StatesGroup):
@@ -102,20 +103,24 @@ async def process_vocab_cancel(callback_query: types.CallbackQuery, state: FSMCo
 async def process_word(
     message: types.Message,
     state: FSMContext,
-    card_service: CardService,
-    relation_service: RelationService,
-    anki_client: AnkiClient
+    note_service: NoteService,
 ) -> None:
-    """處理使用者輸入的單字並呼叫生成邏輯。
+    """處理使用者輸入的單字，經服務層建立單字卡。
 
-    Handle the user-entered word and invoke the generation logic.
+    Handle the user-entered word and create the card through the service
+    layer.
+
+    走與網頁建卡同一條路（``NoteService.create`` → 基底的標準建立）：建在 Default 牌組、
+    handler 宣告的筆記類型（TOEIC_Coach_Dark_v2），只填 ``Expression``，其餘欄位空白；
+    寫入後的同步由服務層負責。
+
+    Same path as web creation: the Default deck, the handler's note type,
+    only ``Expression`` filled; the service layer syncs afterwards.
 
     Args:
         message: 包含單字文字的訊息。The message containing the word text.
         state: aiogram FSM 上下文。The aiogram FSM context.
-        card_service: 卡片服務。The CardService instance.
-        relation_service: 關聯服務。The RelationService instance.
-        anki_client: Anki 客戶端。The AnkiClient instance.
+        note_service: 筆記服務。The NoteService instance.
 
     Returns:
         None
@@ -124,39 +129,30 @@ async def process_word(
         return
 
     word = message.text.strip()
+    if not word:
+        # 只有空白：Anki 不允許第一個欄位為空，維持在這一步讓使用者重新輸入
+        await message.reply("請輸入外語單字或片語：")
+        return
 
-    # 目前的 handler 不呼叫 LLM（只建立 Meaning 為佔位文字的卡片，見 vocabulary_mining_handler），
-    # 不要說成「查字典並生成」
+    # 目前不呼叫 LLM（只建立單字、其餘欄位空白），不要說成「查字典並生成」
     status_msg = await message.reply("⏳ 建立中…")
 
     try:
-        handler = handler_registry.get_handler("vocabulary_mining")
-
-        # 使用 Handler 的第一個 supported_model 作為預設模型 (TOEIC_Coach_Dark_v2)
-        default_model = handler.supported_models[0]
-        default_deck = "Default"
-
-        # 取前同步 (有防抖)
-        await anki_client.sync(raise_errors=False)
-
-        note_id = await handler.execute_create(
-            card_service,
-            relation_service,
-            deck_name=default_deck,
-            model_name=default_model,
-            parameters={"word": word},
+        note_type = note_service.registry.get_handler(HANDLER_NAME).CAPABILITIES.create.note_type or ""
+        result = await note_service.create(
+            HANDLER_NAME,
+            deck=DEFAULT_DECK,
+            note_type=note_type,
+            params={"Expression": word},
         )
-
-        # 建立完成後觸發同步
-        from app.bot.handlers.callbacks import _sync_with_warning
-        sync_warning = await _sync_with_warning(anki_client)
+        sync_warning = sync_suffix(result["sync_warning"])  # type: ignore[arg-type]
 
         # 單字是使用者輸入，要轉義（否則含 < 或 & 時卡片已建、畫面卻停在「建立中」）；
         # 「模型」指 Anki 筆記類型，容易與 /models 的 LLM 模型混淆，不顯示
         await status_msg.edit_text(
             f"✅ <b>單字卡已建立</b>（釋義尚未自動產生）\n"
             f"單字：<b>{escape_tg(word, 100)}</b>\n"
-            f"牌組：<code>{default_deck}</code>{sync_warning}",
+            f"牌組：<code>{DEFAULT_DECK}</code>{sync_warning}",
             parse_mode="HTML"
         )
     except FluencyTidesError as e:

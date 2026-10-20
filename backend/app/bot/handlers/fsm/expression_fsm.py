@@ -38,12 +38,13 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from app.infrastructure.anki.search import deck_term, field_term, note_type_term
 from app.infrastructure.anki.client import AnkiConnectError
 from app.bot.utils.formatting import anki_field_to_tg_text, escape_tg
-from app.bot.utils.texts import FLOW_ENDED_ALERT, NEWCARD_RESTART, error_detail
+from app.bot.utils.texts import FLOW_ENDED_ALERT, NEWCARD_RESTART, error_detail, sync_suffix
 
 from app.services.task_handlers.registry import handler_registry
 from app.schemas.tg.expression import TGExpressionCorrectionRequest
 from app.schemas.llm.expression import LLMExpressionCorrectionResult
 from app.services.card_service import CardService
+from app.services.note_service import NoteService
 
 logger = logging.getLogger(__name__)
 
@@ -737,7 +738,8 @@ def _format_preview(result: LLMExpressionCorrectionResult) -> str:
 async def handle_confirm_all(
     callback_query: types.CallbackQuery,
     state: FSMContext,
-    card_service: CardService
+    card_service: CardService,
+    note_service: NoteService,
 ) -> None:
     """使用者點選「全部添加」：母卡 + 全部子卡寫入 Anki。
 
@@ -755,7 +757,7 @@ async def handle_confirm_all(
     if callback_query.message:
         await callback_query.message.edit_reply_markup(reply_markup=None)
 
-    await _execute_card_creation(callback_query.message, state, card_service, selected_indices=None)
+    await _execute_card_creation(callback_query.message, state, card_service, note_service, selected_indices=None)
     await callback_query.answer()
 
 
@@ -787,7 +789,8 @@ async def handle_abandon_all(
 async def handle_card_selection_text(
     message: types.Message,
     state: FSMContext,
-    card_service: CardService
+    card_service: CardService,
+    note_service: NoteService,
 ) -> None:
     """使用者輸入子卡片編號（如 1,3,5）進行篩選。
 
@@ -849,13 +852,14 @@ async def handle_card_selection_text(
         return
 
     selected.sort()
-    await _execute_card_creation(message, state, card_service, selected_indices=selected)
+    await _execute_card_creation(message, state, card_service, note_service, selected_indices=selected)
 
 
 async def _execute_card_creation(
     message: types.Message,
     state: FSMContext,
     card_service: CardService,
+    note_service: NoteService,
     selected_indices: list[int] | None
 ) -> None:
     """執行最終的 Anki 卡片寫入。
@@ -872,10 +876,17 @@ async def _execute_card_creation(
     ``overwrite`` creates the new cards first and only then deletes the old
     master and its children, so a failed creation never loses the old card.
 
+    建卡經服務層（``NoteService.create``，寫入後會同步一次）；覆蓋時刪舊卡是外語糾錯流程內部的操作，
+    照舊直接刪除，刪完再同步一次把刪除推上 AnkiWeb，提醒取這一次的。
+
+    Creation goes through the service layer, which syncs once; deleting the
+    old cards on overwrite stays direct and is followed by another sync.
+
     Args:
         message: Telegram 訊息物件。
         state: aiogram FSM 上下文。
-        card_service: Anki 卡片操作服務。
+        card_service: Anki 卡片操作服務（覆蓋時刪舊卡用）。
+        note_service: 筆記服務（建卡用）。
         selected_indices: 要寫入的子卡片編號列表，None 代表全部。
 
     Returns:
@@ -896,25 +907,25 @@ async def _execute_card_creation(
     overwrite = duplicate_decision == "overwrite" and bool(old_master_note_id)
 
     try:
-        handler = handler_registry.get_handler("expression_correction")
         bot_user = await message.bot.me() if message.bot else None
 
-        created_ids = await handler.execute_create(
-            card_service=card_service,
-            relation_service=None,  # type: ignore
-            deck_name="日本語::外語糾錯::母卡片",
-            model_name="Expression_Master_Dark",
-            parameters={
+        # 牌組由 handler 宣告為固定的母卡牌組，服務層會改用它
+        result = await note_service.create(
+            "expression_correction",
+            deck="日本語::外語糾錯::母卡片",
+            note_type="Expression_Master_Dark",
+            params={
                 "original_text": data["original_text"],
                 "context": data.get("context", ""),
                 "source_tag": data.get("source_tag", ""),
-                "tg_bot": bot_user.username if bot_user else "",
                 "llm_result": llm_result_dict,
                 "selected_indices": selected_indices,
                 # 覆蓋時舊卡在新卡建好之後才刪，建立當下兩張原文相同，也要繞過重複檢查
                 "allow_duplicate": duplicate_decision == "allow" or overwrite,
-            }
+            },
+            tg_bot=bot_user.username if bot_user else "",
         )
+        created_ids: list[int] = result["note_ids"]  # type: ignore[assignment]
     except Exception as e:
         logger.exception("糾錯任務發生錯誤")
         try:
@@ -929,10 +940,11 @@ async def _execute_card_creation(
     replaced = ""
     if overwrite:
         replaced = await _delete_old_cards(card_service, old_master_note_id)
-
-    # 強制同步，確保新增的卡片立即推送到 AnkiWeb
-    from app.bot.handlers.callbacks import _sync_with_warning
-    sync_warning = await _sync_with_warning(card_service.anki_client)
+        # 服務層建卡後已同步過；刪舊卡之後要再同步一次，把刪除推上 AnkiWeb
+        from app.bot.handlers.callbacks import _sync_with_warning
+        sync_warning = await _sync_with_warning(card_service.anki_client)
+    else:
+        sync_warning = sync_suffix(result["sync_warning"])  # type: ignore[arg-type]
 
     try:
         await writing_msg.delete()

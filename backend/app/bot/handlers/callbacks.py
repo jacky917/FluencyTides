@@ -13,12 +13,17 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 from app.infrastructure.anki.search import field_term
 from app.bot.state import UserState, UserStateManager
 from app.bot.utils.formatting import escape_tg
-from app.bot.utils.texts import CARD_NOT_FOUND, UPLOAD_EXPIRED_ALERT, UPLOAD_RETRY, error_detail, upload_done_text
+from app.bot.utils.texts import (
+    CARD_NOT_FOUND,
+    UPLOAD_EXPIRED_ALERT,
+    UPLOAD_RETRY,
+    error_detail,
+    sync_suffix,
+    upload_done_text,
+)
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
-from app.services.card_service import CardService
 from app.core.exceptions import FluencyTidesError
-from app.services.relation_service import RelationService
-from app.services.task_handlers.registry import HandlerRegistry
+from app.services.note_service import NoteService, sync_warning
 
 logger = logging.getLogger(__name__)
 
@@ -27,41 +32,24 @@ router = Router(name="callbacks_router")
 AVATARS_DIR = Path("app/assets/avatars")
 
 
-async def _sync_with_warning(anki_client: AnkiClient, force: bool = True) -> str:
-    """嘗試觸發 Anki 同步，回傳警告文字（若同步正常則回傳空字串）。
+async def _sync_with_warning(anki_client: AnkiClient) -> str:
+    """寫入後強制同步，回傳接在 TG 回覆後面的提醒（同步成功時為空字串）。
 
-    Try to trigger an Anki sync and return warning text (empty string when
-    the sync succeeds).
+    Force a sync after writing and return the warning suffix for a reply.
 
-    將同步邏輯集中於此，避免在每個 handler 中重複撰寫相同的 try/except 區塊。
+    給還沒經過服務層的寫入點用（``commands.py`` 的刪除、``speaking_fsm.py`` 建對話卡、
+    ``expression_fsm.py`` 覆蓋舊卡後）；提醒文字與服務層是同一份（``note_service.sync_warning``）。
 
-    Centralizes the sync logic so each handler does not repeat the same
-    try/except block.
+    For write paths that do not go through the service layer yet; the
+    warning text is the service layer's.
 
     Args:
         anki_client: AnkiClient 實例。The AnkiClient instance.
-        force: 是否忽略防抖機制，強制同步（通常用於寫入資料後）。
-            Whether to bypass debouncing and force the sync (usually after
-            writing data).
 
     Returns:
-        空字串代表同步成功，否則回傳包含警告 HTML 的字串。
-        An empty string when the sync succeeds, otherwise a string
-        containing the warning HTML.
+        提醒文字（開頭帶換行）；同步成功時為空字串。The warning suffix, or "".
     """
-    try:
-        await anki_client.sync(raise_errors=True, force=force)
-    except AnkiConnectError as e:
-        logger.warning("Anki 同步失敗: %s", e)
-        # 兩種情況資料都已寫進電腦版 Anki，只是沒同步到 AnkiWeb——要說清楚，免得使用者以為沒寫入。
-        # 衝突時「上傳」會以電腦版覆蓋 AnkiWeb（手機上還沒同步的複習紀錄會遺失），不能寫成無副作用
-        if "衝突" in str(e) or "背景同步" in str(e):
-            return (
-                "\n\n⚠️ 已寫入 Anki，但同步衝突：請在電腦版 Anki 手動同步"
-                "（選「上傳」會以電腦版覆蓋 AnkiWeb）。"
-            )
-        return "\n\n⚠️ 已寫入 Anki，但同步 AnkiWeb 失敗；下次操作會再試。"
-    return ""
+    return sync_suffix(await sync_warning(anki_client))
 
 
 async def _execute_final_update(
@@ -73,9 +61,7 @@ async def _execute_final_update(
     speaker_name: str,
     user_state_manager: UserStateManager,
     anki_client: AnkiClient,
-    handler_registry: HandlerRegistry,
-    card_service: CardService,
-    relation_service: RelationService,
+    note_service: NoteService,
 ) -> None:
     """共用邏輯：完成頭像與名稱設定後，寫回 Anki 並觸發同步。
 
@@ -91,9 +77,7 @@ async def _execute_final_update(
         speaker_name: 說話者名稱。The speaker's name.
         user_state_manager: 使用者狀態管理器。The UserStateManager instance.
         anki_client: AnkiClient 實例。The AnkiClient instance.
-        handler_registry: 任務處理器註冊表。The HandlerRegistry instance.
-        card_service: 卡片服務。The CardService instance.
-        relation_service: 關聯服務。The RelationService instance.
+        note_service: 筆記服務；寫入與同步經過它。The NoteService instance.
     """
     await callback.message.edit_text(status_msg_text)
 
@@ -117,20 +101,6 @@ async def _execute_final_update(
 
         field_name = state.extra.get("field_name")
         index_str = state.extra.get("index")
-
-        # 三語卡分流：欄位帶語言後綴 (References_JA 等)，
-        # 或 Prompt_Audios 的 index 槽位為語言碼 (ZH/JA/EN)
-        from app.services.task_handlers.shared.trilingual_lang import (
-            is_lang_code,
-            lang_from_field,
-        )
-
-        is_trilingual = bool(lang_from_field(str(field_name or ""))) or (
-            field_name == "Prompt_Audios" and is_lang_code(str(index_str or ""))
-        )
-        speaking_handler = handler_registry.get_handler(
-            "speaking_trilingual" if is_trilingual else "speaking_coach"
-        )
         audio_filename = state.extra.get("audio_filename")
 
         import base64
@@ -145,12 +115,11 @@ async def _execute_final_update(
                     params=AnkiStoreMediaParams(filename=avatar_filename, data=avatar_b64)
                 )
 
-        await speaking_handler.execute_update(
-            card_service,
-            relation_service,
+        # 服務層依筆記類型找 handler（對話卡或三語卡），寫入後同步並回傳提醒
+        warning = await note_service.run_action(
             note_id,
+            "add_audio",
             {
-                "action": "add_audio",
                 "field_name": field_name,
                 "index": index_str,
                 "audio": audio_filename,
@@ -158,11 +127,9 @@ async def _execute_final_update(
                 "speaker": speaker_name
             },
         )
+        sync_warning = sync_suffix(warning)
 
         user_state_manager.clear_state(chat_id)
-
-        # 寫入完成後觸發同步
-        sync_warning = await _sync_with_warning(anki_client)
 
         await callback.message.edit_text(upload_done_text(field_name, speaker_name, sync_warning))
     except (AnkiConnectError, FluencyTidesError) as e:
@@ -229,9 +196,7 @@ async def handle_avatar_sys_select(
     callback: CallbackQuery,
     user_state_manager: UserStateManager,
     anki_client: AnkiClient,
-    handler_registry: HandlerRegistry,
-    card_service: CardService,
-    relation_service: RelationService,
+    note_service: NoteService,
 ) -> None:
     """處理系統頭像選擇並完成寫回。
 
@@ -241,9 +206,7 @@ async def handle_avatar_sys_select(
         callback: 回呼查詢物件。The callback query object.
         user_state_manager: 使用者狀態管理器。The UserStateManager instance.
         anki_client: AnkiClient 實例。The AnkiClient instance.
-        handler_registry: 任務處理器註冊表。The HandlerRegistry instance.
-        card_service: 卡片服務。The CardService instance.
-        relation_service: 關聯服務。The RelationService instance.
+        note_service: 筆記服務。The NoteService instance.
     """
     chat_id = callback.message.chat.id
     state = user_state_manager.get_state(chat_id)
@@ -267,7 +230,7 @@ async def handle_avatar_sys_select(
         chat_id,
         f"⏳ 以「{escape_tg(speaker_name, 50)}」寫入 Anki 中…",
         callback, state, filename, speaker_name,
-        user_state_manager, anki_client, handler_registry, card_service, relation_service
+        user_state_manager, anki_client, note_service
     )
 
 
@@ -301,9 +264,7 @@ async def handle_avatar_skip(
     callback: CallbackQuery,
     user_state_manager: UserStateManager,
     anki_client: AnkiClient,
-    handler_registry: HandlerRegistry,
-    card_service: CardService,
-    relation_service: RelationService,
+    note_service: NoteService,
 ) -> None:
     """處理跳過頭像設定並完成寫回（預設說話者為 User）。
 
@@ -314,9 +275,7 @@ async def handle_avatar_skip(
         callback: 回呼查詢物件。The callback query object.
         user_state_manager: 使用者狀態管理器。The UserStateManager instance.
         anki_client: AnkiClient 實例。The AnkiClient instance.
-        handler_registry: 任務處理器註冊表。The HandlerRegistry instance.
-        card_service: 卡片服務。The CardService instance.
-        relation_service: 關聯服務。The RelationService instance.
+        note_service: 筆記服務。The NoteService instance.
     """
     chat_id = callback.message.chat.id
     state = user_state_manager.get_state(chat_id)
@@ -330,7 +289,7 @@ async def handle_avatar_skip(
         chat_id,
         "⏳ 不使用頭像，寫入 Anki 中…",
         callback, state, "", "User",
-        user_state_manager, anki_client, handler_registry, card_service, relation_service
+        user_state_manager, anki_client, note_service
     )
 
 

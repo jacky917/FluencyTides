@@ -5,7 +5,7 @@ Telegram Bot 語音訊息處理模組 (Workflow B)。
 是否為 Recording 流程，並執行以下完整管線：
 1. 下載 .ogg 語音檔
 2. 交由 AudioEvaluator 進行語音辨識與評分
-3. 透過 SpeakingCoachHandler.execute_update 寫回 Anki
+3. 透過服務層的 ``add_recording`` 動作寫回 Anki（依筆記類型找對話卡或三語卡的 handler）
 4. 顯示進度與結果
 5. 清除使用者狀態
 
@@ -23,7 +23,7 @@ Receives user voice messages, checks the UserStateManager state to decide
 whether this is the Recording flow, and runs the full pipeline:
 1. Download the .ogg voice file
 2. Let AudioEvaluator transcribe and score the audio
-3. Write back to Anki via SpeakingCoachHandler.execute_update
+3. Write back to Anki through the service layer's ``add_recording`` action
 4. Show progress and results
 5. Clear the user state
 
@@ -50,16 +50,14 @@ from app.infrastructure.anki.search import field_term
 from app.core.exceptions import FluencyTidesError
 
 from app.bot.state import UserStateManager
-from app.bot.utils.texts import CARD_NOT_FOUND, error_detail, state_minutes
+from app.bot.utils.texts import CARD_NOT_FOUND, error_detail, state_minutes, sync_suffix
 from app.core.exceptions import AnkiFieldCorruptedError, AudioEvaluatorUnavailableError
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.audio_evaluator.base import AudioNotScoredError, BaseAudioEvaluator
 from app.infrastructure.audio_evaluator.factory import EvaluatorPlan
 from app.services import recording_eval
-from app.services.card_service import CardService
-from app.services.relation_service import RelationService
-from app.services.task_handlers.registry import HandlerRegistry
+from app.services.note_service import NoteService
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +71,8 @@ _RETRY_FROM_ANKI = "請回 Anki 卡片重新點按鈕。"
 async def process_voice_handler(
     message: Message,
     anki_client: AnkiClient,
-    handler_registry: HandlerRegistry,
+    note_service: NoteService,
     user_state_manager: UserStateManager,
-    card_service: CardService,
-    relation_service: RelationService,
 ) -> None:
     """處理使用者發送的語音訊息。
 
@@ -92,11 +88,9 @@ async def process_voice_handler(
     Args:
         message: Telegram 語音訊息物件。The Telegram voice message object.
         anki_client: 注入的 AnkiClient 實例。Injected AnkiClient instance.
-        handler_registry: 注入的 HandlerRegistry。Injected HandlerRegistry.
+        note_service: 注入的筆記服務；錄音紀錄經它寫回並同步。Injected NoteService.
         user_state_manager: 注入的 UserStateManager 實例。
             Injected UserStateManager instance.
-        card_service: 注入的 CardService。Injected CardService instance.
-        relation_service: 注入的 RelationService。Injected RelationService.
     """
     chat_id = message.chat.id
     state = user_state_manager.get_state(chat_id)
@@ -301,24 +295,12 @@ async def process_voice_handler(
                 "comment": result.feedback_anki_html or result.feedback,
                 "score": result.score,
             }
-            speaking_handler = handler_registry.get_handler(handler_name)
             if trilingual_lang:
-                update_params = {
-                    "action": "add_recording",
-                    "lang": trilingual_lang,
-                    "recording": new_recording,
-                }
+                action_params = {"lang": trilingual_lang, "recording": new_recording}
             else:
-                update_params = {
-                    "action": "add_recording",
-                    "recording": new_recording,
-                }
-            await speaking_handler.execute_update(
-                card_service,
-                relation_service,
-                note_id,
-                update_params,
-            )
+                action_params = {"recording": new_recording}
+            # 服務層依筆記類型找 handler，寫入後同步並回傳提醒
+            sync_warning = sync_suffix(await note_service.run_action(note_id, "add_recording", action_params))
         except FluencyTidesError as e:
             logger.error("寫回 Anki 失敗: %s", e)
             await status_msg.edit_text(f"❌ 寫回 Anki 失敗：{error_detail(e)}\n{_RETRY_FROM_ANKI}")
@@ -334,10 +316,6 @@ async def process_voice_handler(
 
         score = result.score
         score_emoji = "🟢" if score >= 90 else ("🟡" if score >= 60 else "🔴")
-
-        # 嘗試觸發同步
-        from app.bot.handlers.callbacks import _sync_with_warning
-        sync_warning = await _sync_with_warning(anki_client)
 
         # feedback_anki_html 存在時，feedback 為 evaluator 自行組裝的 TG 安全
         # 標記（stt_diff 差異），不可再轉義也不可截斷（避免切斷標籤）；
