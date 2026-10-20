@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-10-20 |
 | **性質** | 部署流程重新設計 + 實作工作項（含 NAS 端手動步驟） |
-| **狀態** | 🚧 實作中（P0 完成，進行 P2） |
+| **狀態** | 🚧 實作中（P0～P2、P1 完成，進行 P3） |
 | **範圍** | `.github/workflows/main.yml`、`frontend/nginx.conf.template`、`deploy_local.sh`（退役）、`README.md`；NAS 端：Portainer 掛載、兩個 Portainer Git stack、CasaOS 外部連結；GitHub：secrets 與 workflow 啟用狀態 |
 | **不動** | 後端 / 前端應用程式碼；`backend/docker-compose.yml` 與 `frontend/docker-compose.yml` 的服務定義（映像、掛載、網路、`env_file` 路徑全部照舊）；Cloudflare Tunnel 既有 hostname；Portainer 版本升級；資料庫內容 |
-| **PR / 進度** | 分支 `fix/ci-pipeline-revival`；PR 待開 |
+| **PR / 進度** | P0 → [#28](https://github.com/jacky917/FluencyTides/pull/28)（已合併 2026-10-20，034d4de）；P1 完成 2026-10-20 |
 | **關聯文件** | `docs/bk/05_DevOps_and_Deployment.md`（舊部署說明，F059 即「部署失敗不報錯」）、`docs/archive/claude_cli_in_container_FEAT_2026-08-29.md` §5（記載「CI 已停用」） |
 
 ---
@@ -25,7 +25,7 @@ GitHub Actions 的 CI/CD 自 2026-08-27 起被手動停用，之後正式站靠�
 | F2 | **自動部署從未成功過**：抽查 08-10 ~ 08-15 共 5 次綠燈的 run，Portainer webhook 全部回 HTTP 500；curl 沒檢查狀態碼，所以 CI 照樣綠燈 | 舊 `main.yml` deploy job 的 `curl -s -o /dev/null -w ...`（無 `--fail`）；各 run 的 log `HTTP Status: 500` | 已定位 |
 | F3 | Portainer 裡目前**一個 webhook 都沒有**，也沒有 FluencyTides 的 stack | Portainer API `GET /api/webhooks?filters={"EndpointID":3}` 回空陣列、`GET /api/stacks` 無相關項目 | 已定位 |
 | F4 | 正式站兩個容器是 `deploy_local.sh` 在主機上以 compose 建立（工作目錄 `/home/jacky917/FluencyTides/{backend,frontend}`），不屬於 Portainer，也不屬於 CasaOS | 容器標籤 `com.docker.compose.project.working_dir`；CasaOS 安裝的 app 都在 `/var/lib/casaos/apps/<名稱>` 且帶 `icon` 標籤，FluencyTides 兩者皆無 | 已定位 |
-| F5 | 500 的成因：Portainer 的 container webhook 綁的是**容器 ID**，`deploy_local.sh`（2026-08-09 加入）每次 `--force-recreate` 都換掉容器 ID，webhook 便指向不存在的容器 | 時間線吻合（08-10 第一次記錄就是 500）；Portainer CE 原始碼中 token 不存在時回 404 而非 500，代表當時 webhook 存在但目標失效。container webhook 是 BE 閉源功能，無法看原始碼確認 | **推測**（證據一致，未重現） |
+| F5 | 500 的成因：Portainer 的 container webhook 綁的是**容器 ID**，`deploy_local.sh`（2026-08-09 加入）每次 `--force-recreate` 都換掉容器 ID，webhook 便指向不存在的容器 | 時間線吻合（08-10 第一次記錄就是 500）；Portainer CE 原始碼中 token 不存在時回 404 而非 500，代表當時 webhook 存在但目標失效。container webhook 是 BE 閉源功能，無法看原始碼確認。**2026-10-20 實證**：合併 #28 後的 run（39354521704）呼叫舊 webhook，Portainer 回 `Error updating service … No such container: 1524ccc117dd…` | **已定位**（2026-10-20 由新版 deploy 印出的回應證實） |
 | F6 | 08-27 讓 CI 變紅的 ruff 錯誤（`LLMClient` 未定義）已修好 | 本機 `ruff check app scripts tests` 全過 | 已定位 |
 | F7 | GHCR 上的 `:latest` 停在 08-15，比正式站舊很多 | GHCR 最後一次推送是 08-15 的 run | 已定位 |
 | F8 | GHCR 映像是公開的，NAS 拉取不需登入；NAS 為 x86_64 | 匿名取 manifest 回 200；Portainer `docker/info` | 已定位 |
@@ -51,6 +51,7 @@ GitHub Actions 的 CI/CD 自 2026-08-27 起被手動停用，之後正式站靠�
 - 不改映像標籤策略（仍部署 `:latest`；`:<commit sha>` 標籤照舊推送，供回滾用）。
 - 不處理「測試會讀到本機 `backend/.env`」的隔離問題（在 `backend/` 目錄執行 pytest 時有 2 個測試因本機 `.env` 失敗；CI 沒有 `.env` 不受影響）。另案處理。
 - 不升級 Portainer（2.39.2 LTS → 2.45.2）。
+  > **2026-10-20 實作時已被動升級**：P1 在 CasaOS 儲存 Portainer 設定時，因映像標籤為 `latest` 而重新拉取，Portainer 升到 2.45.2 LTS（資料庫一併遷移，無法降版）。升級後運作正常，詳見 §9 R10。
 
 ## 3. 設計決策
 
@@ -81,10 +82,17 @@ GitHub Actions 的 CI/CD 自 2026-08-27 起被手動停用，之後正式站靠�
 
 注意：GitOps 開啟後，在 Portainer 介面直接修改 stack 內容，會在下次部署時被 Git 的版本覆蓋（表單上的官方警語）。**compose 的修改一律走 git。**
 
+> **2026-10-20 實作時的介面差異（Portainer 2.45.2 LTS）**：P1 時 Portainer 被升到 2.45.2（§9 R10），新增 stack 的表單和上表不同：
+> - Git repository 不再直接填網址，改成先到 **App Delivery → Sources** 建立 Git Source（本次建立 `fluencytides`：`https://github.com/jacky917/FluencyTides`，關閉 Authentication、不開 polling，存取控制 Administrators），stack 表單再選這個 Source。
+> - 原本的「GitOps updates + Mechanism」改成單一開關 **Create a Webhook**，開啟後才出現 **Re-pull image**、**Force redeployment**；Polling 改在 Source 上設定（本計畫不開）。
+> - Compose path 是下拉自動完成欄位，列出 repo 內所有 compose 檔。
+
 ### D3 前後端拆成兩個 stack
 
 沿用現有兩份 compose 與兩個 secret（`PORTAINER_WEBHOOK_BACKEND` / `_FRONTEND`），只改了後端時不重建前端，反之亦然。
-stack 名稱與 compose 的 `name:` 一致：`fluencytides`、`fluencytides-frontend`（Portainer 以 stack 名稱作為 compose 專案名稱）。
+stack 名稱與 compose 的 `name:` 一致：`fluencytides-backend`、`fluencytides-frontend`（Portainer 以 stack 名稱作為 compose 專案名稱）。
+
+> **2026-10-20 改名**：後端原沿用 compose 既有的 `name: fluencytides`，與前端命名不對稱；切換後依使用者要求把 compose 的 `name:` 與 stack 一併改為 `fluencytides-backend`。Portainer 不能直接改 stack 名稱，做法是刪除舊 stack（只刪容器，bind mount 資料不動）再以新名稱重建，webhook 網址也因此重新產生。
 
 ### D4 `env_file`：把 `/DATA/AppData/FluencyTides` 以相同路徑掛進 Portainer
 
@@ -340,6 +348,8 @@ sudo docker inspect portainer-ee --format '{{range .Mounts}}{{.Source}} -> {{.De
 **2. 確認 Cloudflare service token**：Zero Trust → Access → Service Auth → Service Tokens，確認 GitHub 用的那把 token 未過期；`portainer.jacky917.com` 的 Access 應用程式中有允許該 token 的 Service Auth 規則。
 （08 月的呼叫曾通過 Access 抵達 Portainer，所以設定當時是對的；這步確認的是到期日。）
 
+> **實作紀錄（2026-10-20）**：掛載由 Claude 經瀏覽器在 CasaOS 設定完成，Portainer API 確認 `/DATA/AppData/FluencyTides -> /DATA/AppData/FluencyTides` 生效；Cloudflare service token 由使用者確認有效。副作用見 §9 R10。
+
 ### P2 開 PR、啟用 workflow 🤖
 
 1. commit 並 push `fix/ci-pipeline-revival`，開 PR。
@@ -354,6 +364,8 @@ gh workflow enable "CI/CD Pipeline"
 ### P3 切換 👤🤖
 
 **P3-1 推出新映像** 🤖：在 main 手動觸發一次，前後端都重建並推到 GHCR（解決 F7，避免 stack 一建立就拉到 8 月的舊映像）。
+
+> **實作紀錄（2026-10-20）**：#28 同時改到 `backend/` 與 `frontend/` 的檔案，合併後的 run（39354521704）就已建好並推送前後端映像，這一步省略。該 run 的 deploy 依預期紅燈（見 F5 的實證）。
 
 ```bash
 gh workflow run "CI/CD Pipeline" --ref main
@@ -381,7 +393,7 @@ sudo cp -a /DATA/AppData/FluencyTides/backend/data /DATA/AppData/FluencyTides/ba
 
 | 欄位 | 後端 | 前端 |
 |---|---|---|
-| Name | `fluencytides` | `fluencytides-frontend` |
+| Name | `fluencytides-backend` | `fluencytides-frontend` |
 | Repository URL | `https://github.com/jacky917/FluencyTides` | 同左 |
 | Repository reference | `refs/heads/main` | 同左 |
 | Compose path | `backend/docker-compose.yml` | `frontend/docker-compose.yml` |
@@ -397,6 +409,12 @@ sudo cp -a /DATA/AppData/FluencyTides/backend/data /DATA/AppData/FluencyTides/ba
 - 資料庫內容在（卡片、設定都在）。
 
 任一項不正常 → 走 §7.3 回復。
+
+> **實作紀錄（2026-10-20）**：兩個 stack 由 Claude 經瀏覽器建立（stack id 1 `fluencytides`、id 2 `fluencytides-frontend`，commit `034d4de`）。確認結果：
+> - 後端：82 個環境變數從 `env_file` 讀入（證實 Portainer 掛載 `/DATA/AppData/FluencyTides` 有效）；`data`、`logs` 掛載正確；log 顯示啟動完成、Telegram Webhook 綁定成功；容器工作目錄為 Portainer 內部的 `/data/compose/1/<commit>/backend`。
+> - 前端：nginx 正常啟動、0 次重啟，接在 `fluencytides_net`，主機 8080。
+> - 瀏覽器（使用者已登入 Cloudflare Access）：`ft.jacky917.com` Dashboard 的 Backend API Connection 為 OK；卡片瀏覽顯示 17,942 張、牌組清單完整；知識圖譜載入；`/api/health`、`/api/v1/cards`、`/api/v1/handlers/decks`、`/api/v1/relations/types`、`/api/v1/config` 皆 200；`ft-backend.jacky917.com/docs` 正常。
+> - 舊容器由使用者以 `docker compose down` 移除，資料已先備份。
 
 **P3-4 更新 secret、驗證自動部署** 👤🤖：
 
@@ -432,7 +450,7 @@ gh run rerun <P3-1 的 run id> --failed
 sudo nano /DATA/AppData/FluencyTides/backend/.env
 ```
 
-改完到 Portainer → Stacks → `fluencytides` → 重新部署（Pull and redeploy）。`env_file` 只在建立容器時讀取，重新部署才會生效。
+改完到 Portainer → Stacks → `fluencytides-backend` → 重新部署（Pull and redeploy）。`env_file` 只在建立容器時讀取，重新部署才會生效。
 **不要**再用 `docker compose up --force-recreate` 或 CasaOS 操作這組容器。
 
 ### 7.2 手動重新部署（CI 掛掉或想立即重跑）
@@ -486,11 +504,12 @@ sudo docker compose -f /home/jacky917/FluencyTides/frontend/docker-compose.yml u
 | R7 | Cloudflare service token 過期 → deploy 收到 302 或 403 | deploy 現在會紅燈並印出狀態碼；P1 先確認到期日 |
 | R8 | GitOps 開啟後在 Portainer 介面改 compose 會被 Git 覆蓋 | §7.3 緊急回滾的做法已包含「先關 GitOps」；compose 修改一律走 git |
 | R9 | 切換期間服務中斷 | P3-2 到 P3-3 約數分鐘；挑使用者不在使用時進行 |
+| R10 | **（2026-10-20 已發生）** CasaOS 儲存 Portainer 設定會依 `latest` 標籤重新拉映像，Portainer 從 2.39.2 被升到 2.45.2，且重建後所有登入狀態失效 | 升級後確認：容器 running、新掛載生效、版本 2.45.2 LTS；P3-3 建 stack 前重新確認 Git stack 選項在新版仍存在。日後若要避免，CasaOS 裡把 Portainer 的 Tag 改成固定版本號 |
 
 ## 10. 驗收標準
 
 - [ ] GitHub 上 workflow 為啟用狀態，PR 檢查（ruff、pytest、前端建置）綠燈
-- [ ] Portainer 有 `fluencytides`、`fluencytides-frontend` 兩個 Git stack，GitOps 為 Webhook + Re-pull image + Force redeployment
+- [ ] Portainer 有 `fluencytides-backend`、`fluencytides-frontend` 兩個 Git stack，GitOps 為 Webhook + Re-pull image + Force redeployment
 - [ ] 正式站資料完整：切換前後卡片數量、設定一致
 - [ ] `https://ft.jacky917.com` 網頁正常，`/api/` 請求成功；`https://ft-backend.jacky917.com/docs` 可開；TG bot 正常回應
 - [ ] 手動觸發 workflow（main）→ deploy 綠燈，且兩個容器確實重建（啟動時間更新）
