@@ -708,7 +708,7 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
 0. ✅ 殘骸清除（D8）：`verb_pair_example` 一整組、`POST /verb-pair/create`、`PUT /verb-pair/{id}/update`、`supported_models` 裡的舊版 TOEIC、`Default`、`Speaking_Coach_Light`。先做，讓第 1 步的註冊表檢查不必顧慮範例 handler。
 1. ✅ 後端基底：錯誤類別（`HandlerOperationUnsupportedError`、`NoteNotFoundError`、`NoteTypeNotCreatableError`、`NoteNotOwnedByHandlerError`、`FieldNotEditableError`）；`BaseHandler` 的標準 CRUD 與標準圖譜（`query_notes`、`GraphSpec`）、`RelationGraphMixin`（由現在 `vocabulary_mining` 的圖譜邏輯抽出）、`RELATION_LABEL_FIELD`、`JSON_FIELDS`／`MEDIA_FIELDS` 名稱宣告；`RelationService.update_labels_for_note`；預設拋不支援的方法、移除的方法、`CAPABILITIES`；註冊表檢查與「筆記類型 → handler」對照；`task_handlers/__init__.py` 統一註冊。
 2. ✅ 各 handler：依 §5 宣告能力（`title` 已在第 1 步加上）；口說卡、外語糾錯的 `CreateParams`；刪掉空實作與各自的 `execute_delete`（`execute_read_list`、`get_input_schema` 留到第 5 步）；`execute_create` 回傳改 `list[int]`；單字卡刪掉 `execute_create`、`execute_update`、`execute_read_graph` 覆寫，改掛 `RelationGraphMixin`，宣告 `GRAPH`、`RELATION_LABEL_FIELD`、`JSON_FIELDS`、`MEDIA_FIELDS`。jp 兩個只動到這些，`execute_generate` 不碰；本步結束就跑 §8 的腳本保護測試。
-3. `NoteService`（含寫入後同步的提醒邏輯、歸屬檢查）與它的測試。
+3. ✅ `NoteService`（含寫入後同步的提醒邏輯、歸屬檢查）與它的測試。
 4. TG 的 5 處改呼叫 `NoteService`（§7 表格），`bot/dependencies.py` 注入；`_sync_with_warning` 改為包裝服務層；TG 既有測試全過。
 5. REST 端點：`/handlers`、`/handlers/{name}/notes/...`、`/notes/{note_id}`、`/decks`，移除舊路徑；從 `BaseHandler` 與各 handler 移除 `get_input_schema`、`execute_read_list`；`main.py` 掛新路由；測試。`api/verb_pair.py`、`api/core_verb.py` 的 `generate-child-cards` 不動。
 6. 前端：client 與型別；從 Cards 抽出共用元件（D13），Cards 改用後畫面與行為不變；`CardViewPanel` 與 `CardDetailModal`；工具設定頁的「Handler 能力」區塊。
@@ -769,6 +769,27 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
 | jp 的改欄位（舊 `PUT` 端點，`update_fields`） | 空實作，回 200 但什麼都沒改 | 基底的標準修改會真的寫入。網頁不顯示編輯（`FIELD_EDIT_HANDLERS` 不含 jp），只有直接呼叫 API 會碰到；第 3 步的服務層、第 5 步的新端點依能力擋下 |
 
 驗證：`ruff` 通過；`pytest tests` 1041 個（第 2 步新增 38 個）、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常；`scripts/local_anki/Expression_Correction/generate_expression_cards.py` 可正常 import；OpenAPI 仍有兩個 `generate-child-cards` 端點。
+
+**第 3 步實作結果（2026-10-20）**：
+
+- 新增 `app/services/note_service.py` 的 `NoteService`：`list_handlers`、`create`、`read`、`get`、`update_fields`、`run_action`、`delete`、`graph`、`sync_after_write`，行為依 D1、§4。`core/dependencies.py` 新增 `get_note_service`。REST 與 TG 還沒接上（第 4、5 步）。
+- **寫入後同步**：模組函式 `sync_warning(anki_client) -> str | None`，`sync(raise_errors=True, force=True)` 並等它完成；失敗時回傳純文字提醒（衝突與一般失敗兩種，文字沿用 TG 的 `_sync_with_warning`，去掉開頭換行）。做成模組函式是為了第 4 步讓 `_sync_with_warning` 直接包裝它，不必為還沒經過服務層的寫入點建立 `NoteService`。
+- **標準建立的參數驗證**：依 Anki 查到的欄位（`get_model_field_names`）動態產生 Pydantic 模型 `standard_params_model`（依參數快取）：
+  - 每個欄位是選填字串（預設空字串），第一個欄位必填、去掉前後空白後不能為空。
+  - JSON、媒體欄位不列。
+  - 欄位名以別名對應，含空白的欄位名也能用。
+  - **多餘的鍵不在這裡擋**：照原樣交給 handler 與 `CardService`，分別回 `FIELD_NOT_EDITABLE`、`FIELD_MISMATCH`（D6）。
+  - `list_handlers` 的 `create_schema` 用同一個模型的 JSON Schema，表單與驗證不會不一致。
+- **覆寫建立的參數**：`CREATE_PARAMS.model_validate(params).model_dump()`，再補上 `tg_bot`（預設 `settings.TG_BOT_USERNAME`，可由關鍵字參數覆寫）。`deck` 為 `fixed` 時改用 `fixed_deck`，回應的 `deck` 是實際建立的牌組。
+- **歸屬檢查**：
+  - 讀取：先讀再檢查（讀取沒有副作用，省一次查詢）。
+  - 修改、刪除：先查筆記再檢查，不符就不寫入。標準修改內部會再讀一次筆記做比對，所以修改總共讀兩次；修改之後還要強制同步（數秒），多這一次查詢可以接受。
+- `run_action`：依筆記類型找 handler（`handler_for_note_type`），動作不在 `actions` 內、或沒有 handler 負責時回 `HANDLER_OPERATION_UNSUPPORTED`；`update_fields` 不是動作，也會被擋。
+- `list_handlers`：Anki 連不上時，只有該 handler 的 `create_schema` 為 null、`create.reason` 改為「無法連線 Anki，暫時無法取得建卡表單」，其餘能力照常回傳（R8）。
+- `get_note_service` 在函式內 import `NoteService`：`note_service` 經註冊表載入所有 handler，而外語糾錯與 jp 的 handler 在模組層 import `core.dependencies`，放在檔案開頭會循環 import。
+- 測試 `tests/test_note_service.py` 39 個，涵蓋 §8 的 `NoteService` 各項。其中「每個 handler 宣告的每個動作都真的能執行」以 repo 的筆記類型定義檔建出筆記、逐一執行 7 個動作；另有一個測試鎖定動作清單，新增動作時要補測試。
+
+驗證：`ruff` 通過；`pytest tests` 1080 個（第 3 步新增 39 個）、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常。
 
 每一步結束都要通過：
 
