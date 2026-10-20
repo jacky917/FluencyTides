@@ -66,6 +66,12 @@ class JPCoreVerbHandler(BaseHandler):
 
     @property
     @override
+    def title(self) -> str:
+        """中文名稱。Display title."""
+        return "核心動詞"
+
+    @property
+    @override
     def supported_models(self) -> list[str]:
         """回傳本處理器支援的 Anki 模型名稱清單。
 

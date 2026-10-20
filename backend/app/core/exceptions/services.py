@@ -234,3 +234,74 @@ class RelationSyncNeedsForceError(RelationSyncRefusedError):
         super().__init__(message)
         self.to_delete = to_delete
         self.considered = considered
+
+
+# ============================================================================
+# Handler 能力與筆記操作（handlers 計畫書 D6）
+# Handler capabilities and note operations (handlers plan D6)
+# ============================================================================
+
+
+class HandlerOperationUnsupportedError(ServiceBaseError):
+    """這個 handler 沒有開放這項操作或動作；`message` 為能力宣告的原因，前端直接顯示。
+
+    The handler does not offer this operation or action; the message is the
+    reason from its capability declaration.
+    """
+    error_code = "HANDLER_OPERATION_UNSUPPORTED"
+    status_code = 400
+
+
+class NoteNotFoundError(ServiceBaseError):
+    """Anki 中找不到這張筆記（可能已刪除或尚未同步）。
+
+    The note does not exist in Anki.
+    """
+    error_code = "NOTE_NOT_FOUND"
+    status_code = 404
+
+
+class NoteTypeNotCreatableError(ServiceBaseError):
+    """建立時指定的筆記類型不是這個 handler 能建立的類型。
+
+    The requested note type is not the one this handler creates.
+    """
+    error_code = "NOTE_TYPE_NOT_CREATABLE"
+    status_code = 422
+
+
+class NoteNotOwnedByHandlerError(ServiceBaseError):
+    """筆記的類型不歸網址上的這個 handler 負責。
+
+    The note's type is not handled by the handler in the URL.
+    """
+    error_code = "NOTE_NOT_OWNED_BY_HANDLER"
+    status_code = 400
+
+
+class FieldNotEditableError(ServiceBaseError):
+    """這個欄位被 handler 宣告為 JSON 或媒體欄位，不能直接以文字修改或在建卡時填寫。
+
+    The field is declared as a JSON or media field and cannot be written as
+    plain text.
+    """
+    error_code = "FIELD_NOT_EDITABLE"
+    status_code = 400
+
+
+class InvalidNoteQueryError(ServiceBaseError):
+    """依 handler 查筆記（含圖譜）的參數不適用：筆記類型不歸它、名稱欄位不存在、關聯圖譜指定了名稱欄位。
+
+    A query parameter does not apply to this handler's notes (graph included).
+    """
+    error_code = "INVALID_NOTE_QUERY"
+    status_code = 422
+
+
+class InvalidNoteFieldsError(ServiceBaseError):
+    """要寫入的欄位不是 ``{欄位名: 值}`` 的形式。
+
+    The fields to write are not a mapping of field names to values.
+    """
+    error_code = "INVALID_NOTE_FIELDS"
+    status_code = 422

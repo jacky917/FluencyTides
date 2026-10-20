@@ -11,12 +11,11 @@ cards, as well as assembling and reading the knowledge graph.
 """
 
 import logging
-import re
 
 from typing import override, TYPE_CHECKING
 
 from app.infrastructure.anki.search import note_types_query
-from app.services.task_handlers.base import BaseHandler
+from app.services.task_handlers.base import BaseHandler, clean_html
 from app.services.task_handlers.registry import register_handler
 
 if TYPE_CHECKING:
@@ -54,6 +53,12 @@ class VocabularyMiningHandler(BaseHandler):
         Handler name.
         """
         return "vocabulary_mining"
+
+    @property
+    @override
+    def title(self) -> str:
+        """中文名稱。Display title."""
+        return "單字卡"
 
     @property
     @override
@@ -225,10 +230,10 @@ class VocabularyMiningHandler(BaseHandler):
                 if not expression:
                     continue
 
-                translation = _clean_html(
+                translation = clean_html(
                     fields.get("Meaning", {}).get("value", "")
                 )
-                pos = _clean_html(
+                pos = clean_html(
                     fields.get("PartOfSpeech", {}).get("value", "")
                 )
                 status = card_status_map.get(note.noteId, "new")
@@ -316,10 +321,10 @@ class VocabularyMiningHandler(BaseHandler):
             str_fields = {k: str(v) for k, v in update_fields.items()}
             await card_service.update_note_fields(note_id, str_fields)
 
-            # 若 Expression 改變，同步更新 SQLite 內的冗餘標籤
+            # 若 Expression 改變，同步更新關聯表兩端的冗餘標籤（圖譜節點以去掉前後空白的文字辨認）
             if "Expression" in str_fields:
-                await relation_service.update_source_label(
-                    note_id, str_fields["Expression"]
+                await relation_service.update_labels_for_note(
+                    note_id, str_fields["Expression"].strip()
                 )
 
     @override
@@ -340,25 +345,3 @@ class VocabularyMiningHandler(BaseHandler):
         """
         await card_service.delete_note(note_id)
         await relation_service.delete_relations_for_note(note_id)
-
-
-def _clean_html(html_str: object) -> str:
-    """移除 Anki 可能加入的 HTML 標籤與跳脫字元。
-
-    Strip HTML tags and escape entities that Anki may have added.
-
-    Args:
-        html_str: 可能包含 HTML 的原始字串。Raw string that may contain
-            HTML.
-
-    Returns:
-        清洗後的純文字。Cleaned plain text.
-    """
-    text = re.sub(r"<[^>]+>", "", str(html_str))
-    return (
-        text.replace("&quot;", '"')
-        .replace("&nbsp;", " ")
-        .replace("<br>", "")
-        .replace("<div>", "")
-        .replace("</div>", "")
-    )

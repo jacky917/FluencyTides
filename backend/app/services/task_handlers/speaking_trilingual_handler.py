@@ -73,6 +73,12 @@ class SpeakingTrilingualHandler(BaseHandler):
 
     @property
     @override
+    def title(self) -> str:
+        """中文名稱。Display title."""
+        return "三語對話卡"
+
+    @property
+    @override
     def supported_models(self) -> list[str]:
         """支援的 Anki 模型名稱清單。
 

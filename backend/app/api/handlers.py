@@ -26,10 +26,6 @@ from app.services.relation_service import RelationService
 from app.services.task_handlers.registry import handler_registry
 from app.schemas.card import ErrorResponse
 
-# 導入 Handler 模組以觸發 @register_handler 裝飾器
-import app.services.task_handlers.speaking_coach_handler
-import app.services.task_handlers.vocabulary_mining_handler
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(

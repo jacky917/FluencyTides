@@ -17,6 +17,8 @@ from typing import Type
 
 from app.core.exceptions import FluencyTidesError
 from app.services.task_handlers.base import BaseHandler
+from app.services.task_handlers.model_fields import model_field_names
+from app.services.task_handlers.relation_graph import RelationGraphMixin
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +67,13 @@ class HandlerRegistry:
         Initialize an empty registry.
         """
         self._handlers: dict[str, BaseHandler] = {}
+        self._by_note_type: dict[str, list[BaseHandler]] = {}
 
     def register(self, handler: BaseHandler) -> None:
-        """註冊一個 Handler 實例。
+        """檢查宣告後註冊一個 Handler 實例；檢查不過時不會留下任何註冊。
 
-        Register a handler instance.
+        Validate and register a handler instance; nothing is registered on
+        failure.
 
         Args:
             handler: 要註冊的 Handler 實例。Handler instance to register.
@@ -77,11 +81,65 @@ class HandlerRegistry:
         Raises:
             ValueError: 若 handler_name 已存在。If handler_name already
                 exists.
+            RuntimeError: 能力宣告沒有實作支撐，或與共用筆記類型的 handler 不一致（D2、D4）。
+                When the declarations are not backed by the implementation
+                or conflict with a handler sharing a note type.
         """
         if handler.handler_name in self._handlers:
             raise ValueError(f"Handler '{handler.handler_name}' 已經被註冊過了。")
+        validate_handler(handler)
+        self._check_shared_note_types(handler)
         self._handlers[handler.handler_name] = handler
+        for note_type in handler.supported_models:
+            self._by_note_type.setdefault(note_type, []).append(handler)
         logger.info("已註冊 Handler: %s (支援: %s)", handler.handler_name, handler.supported_models)
+
+    def _check_shared_note_types(self, handler: BaseHandler) -> None:
+        """同一筆記類型有多個 handler 時，對既有筆記的能力必須相同（D4）。
+
+        Handlers sharing a note type must offer the same operations on
+        existing notes.
+
+        Raises:
+            RuntimeError: 能力不同。When they differ.
+        """
+        ops = handler.CAPABILITIES.existing_note_ops()
+        for note_type in handler.supported_models:
+            for other in self._by_note_type.get(note_type, []):
+                if other.CAPABILITIES.existing_note_ops() != ops:
+                    raise RuntimeError(
+                        f"Handler '{handler.handler_name}' 與 '{other.handler_name}' 共用筆記類型 {note_type}，"
+                        "但讀取、改欄位、刪除、動作的能力不同"
+                    )
+
+    def handler_for_note_type(self, note_type: str) -> BaseHandler | None:
+        """負責這個筆記類型的 handler；有多個時取第一個註冊的（它們的能力相同，D4）。
+
+        The handler owning a note type; the first registered when several do.
+
+        Args:
+            note_type: 筆記類型。The note type.
+
+        Returns:
+            Handler；沒有 handler 負責時為 None。None when no handler owns it.
+        """
+        handlers = self._by_note_type.get(note_type)
+        return handlers[0] if handlers else None
+
+    def handlers_for_note_type(self, note_type: str) -> list[BaseHandler]:
+        """負責這個筆記類型的所有 handler，依註冊順序。All handlers owning a note type.
+
+        Args:
+            note_type: 筆記類型。The note type.
+
+        Returns:
+            Handler 清單（可能為空）。The handlers, possibly none.
+        """
+        return list(self._by_note_type.get(note_type, []))
+
+    def all_handlers(self) -> list[BaseHandler]:
+        """所有已註冊的 handler，依註冊順序。All registered handlers, in order."""
+        return list(self._handlers.values())
 
     def get_handler(self, handler_name: str) -> BaseHandler:
         """根據名稱取得對應的 Handler 實例。
@@ -119,6 +177,90 @@ class HandlerRegistry:
             }
             for name, handler in self._handlers.items()
         ]
+
+
+def validate_handler(handler: BaseHandler) -> None:
+    """檢查 handler 的宣告有實作支撐（handlers 計畫書 D2 的表格）。
+
+    Check that a handler's declarations are backed by its implementation.
+
+    只檢查「宣告開放 → 必須有實作」：有實作但宣告不開放是允許的。宣告本身的形狀（例如不開放時
+    必有原因）在 ``capabilities`` 的資料類別建立時就檢查過。
+
+    Only "declared → implemented" is checked; implemented-but-closed is fine.
+
+    Args:
+        handler: 要檢查的 handler。The handler to check.
+
+    Raises:
+        RuntimeError: 列出所有不一致之處。Listing every problem found.
+    """
+    caps = handler.CAPABILITIES
+    cls = type(handler)
+    problems: list[str] = []
+
+    if not handler.title:
+        problems.append("title 為空")
+    if not handler.supported_models:
+        problems.append("supported_models 為空")
+
+    create = caps.create
+    if create.supported and create.note_type not in handler.supported_models:
+        problems.append(f"create.note_type={create.note_type!r} 不在 supported_models 內")
+    if "script" in create.channels and not callable(getattr(handler, "execute_generate", None)):
+        problems.append("create.channels 含 script，但沒有 execute_generate")
+
+    # 基底的 execute_update 只做 update_fields；具名動作一定要覆寫
+    if caps.actions and cls.execute_update is BaseHandler.execute_update:
+        problems.append(f"宣告了動作 {list(caps.actions)}，但沒有覆寫 execute_update")
+
+    uses_relation_graph = isinstance(handler, RelationGraphMixin)
+    if caps.graph.supported and caps.graph.links != uses_relation_graph:
+        problems.append("graph.links 必須與是否使用 RelationGraphMixin 一致")
+    if uses_relation_graph and not handler.RELATION_LABEL_FIELD:
+        problems.append("使用 RelationGraphMixin 時必須宣告 RELATION_LABEL_FIELD")
+
+    problems.extend(_unknown_declared_fields(handler))
+
+    if problems:
+        raise RuntimeError(f"Handler '{handler.handler_name}' 的宣告與實作不一致: {'; '.join(problems)}")
+
+
+def _unknown_declared_fields(handler: BaseHandler) -> list[str]:
+    """宣告的欄位名要存在於至少一個負責的筆記類型（以 repo 的定義檔為準）。
+
+    Declared field names must exist in at least one of the handler's note
+    types, per the repo's definition files.
+
+    Returns:
+        問題描述。The problems found.
+    """
+    declared = {
+        "RELATION_LABEL_FIELD": (handler.RELATION_LABEL_FIELD,) if handler.RELATION_LABEL_FIELD else (),
+        "JSON_FIELDS": handler.JSON_FIELDS,
+        "MEDIA_FIELDS": handler.MEDIA_FIELDS,
+        "GRAPH": handler.GRAPH.field_names(),
+    }
+    if not any(declared.values()):
+        return []
+    known: set[str] = set()
+    missing_files: list[str] = []
+    for model in handler.supported_models:
+        names = model_field_names(model)
+        if names is None:
+            missing_files.append(model)
+        else:
+            known.update(names)
+    if missing_files:
+        # 少了定義檔就無法判斷欄位對不對，直接指出缺的檔案，不誤報成欄位寫錯
+        return [f"宣告了欄位，但 {missing_files} 在 app/anki_models 沒有定義檔，無法檢查"]
+    return [
+        f"{source} 的欄位 {name!r} 不存在於 {handler.supported_models} 的定義檔"
+        for source, names in declared.items()
+        for name in names
+        if name not in known
+    ]
+
 
 # 全域的 Singleton 實例
 handler_registry = HandlerRegistry()
