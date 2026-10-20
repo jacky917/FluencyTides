@@ -2,63 +2,141 @@
  * FluencyTides API 型別定義。
  * FluencyTides API type definitions.
  *
- * Phase 9 更新：新增 Handler-based API 型別，
- * 與後端 FastAPI (Pydantic models + HandlerRegistry) 的回傳結構嚴格對齊。
+ * 與後端的 Pydantic 模型對齊；handler 與筆記的部分見 `backend/app/schemas/notes.py`
+ * （handlers 計畫書 §4）。
+ * Mirrors the backend Pydantic models.
  */
 
 // ============================================================================
-// Handler-Based API (Phase 9)
+// Handler 與能力（GET /handlers）
 // ============================================================================
 
-/** 後端 HandlerRegistry 回傳的處理器資訊。Handler info returned by the backend HandlerRegistry. */
+/** 建卡管道。Where a card can be created from. */
+export type CreateChannel = 'web' | 'tg' | 'script';
+
+/** 一項操作是否開放；不開放時 `reason` 必有值。Whether an operation is offered. */
+export interface Operation {
+  supported: boolean;
+  reason: string | null;
+}
+
+/** 建卡能力（計畫書 D2）。The create capability. */
+export interface CreateCapability extends Operation {
+  /** 含 web 可選；非空但不含 web 反灰並顯示 reason；空陣列不顯示。 */
+  channels: CreateChannel[];
+  flow: 'form' | 'preview' | null;
+  deck: 'selected' | 'fixed' | null;
+  fixed_deck: string | null;
+  /** 建卡建出的筆記類型。The note type created. */
+  note_type: string | null;
+}
+
+/** 圖譜能力；`links` 表示有關聯連線。The graph capability. */
+export interface GraphCapability extends Operation {
+  links: boolean;
+}
+
+/** 一個 handler 的全部能力。All capabilities of a handler. */
+export interface HandlerCapabilities {
+  create: CreateCapability;
+  read: Operation;
+  update_fields: Operation;
+  delete: Operation;
+  actions: string[];
+  graph: GraphCapability;
+}
+
+/** `GET /handlers` 的一項。One handler. */
 export interface HandlerInfo {
-  handler_name: string;
-  supported_models: string[];
-  input_schema: Record<string, unknown>;
-}
-
-/** 透過 Handler 建立卡片的請求 Payload。Request payload for creating a card through a handler. */
-export interface HandlerCreatePayload {
-  deck_name: string;
-  model_name: string;
-  parameters: Record<string, unknown>;
-}
-
-/** 建立卡片成功的回應。Response for a successful card creation. */
-export interface HandlerCreateResponse {
-  note_id: number;
-  message: string;
-}
-
-/** 通用的操作結果回應。Generic operation result response. */
-export interface HandlerActionResponse {
-  message: string;
-}
-
-/** 後端卡片更新的 parameters (Speaking Coach 範例)。Parameters for backend card updates (Speaking Coach example). */
-export interface HandlerUpdatePayload {
-  action: string;
-  recording?: Record<string, unknown>;
-  index?: number;
-  fields?: Record<string, string>;
+  name: string;
+  /** 中文名稱。Display title. */
+  title: string;
+  /** 負責的筆記類型。The note types it owns. */
+  note_types: string[];
+  capabilities: HandlerCapabilities;
+  /** 網頁建卡表單的 JSON Schema；沒有表單時為 null。The create form schema, or null. */
+  create_schema: Record<string, unknown> | null;
+  /** JSON 欄位：不能直接修改，網頁唯讀顯示。JSON fields, read-only. */
+  json_fields: string[];
+  /** 媒體欄位：同上。Media fields, read-only. */
+  media_fields: string[];
 }
 
 // ============================================================================
-// Anki 基礎查詢 (仍可透過 Handler 或直接端點取得)
+// 筆記（/notes、/handlers/{name}/notes）
+// ============================================================================
+
+/** 一個欄位（依筆記類型的順序）。A field, in note-type order. */
+export interface NoteField {
+  name: string;
+  value: string;
+}
+
+/** 單一筆記（handler 讀取的回應）。A single note. */
+export interface NoteDetail {
+  note_id: number;
+  note_type: string;
+  tags: string[];
+  cards: number[];
+  fields: NoteField[];
+}
+
+/** 能不能做某件事；不允許時 `reason` 必有值。Whether an action is allowed. */
+export interface Permission {
+  allowed: boolean;
+  reason: string | null;
+}
+
+/** 對這張筆記能做的事。What may be done to a note. */
+export interface NotePermissions {
+  update_fields: Permission;
+  delete: Permission;
+}
+
+/** `GET /notes/{note_id}`：附上負責的 handler 與權限。The generic read. */
+export interface GenericNoteDetail extends NoteDetail {
+  /** 負責的 handler；沒有 handler 負責這種筆記類型時為 null。The owning handler, or null. */
+  handler: string | null;
+  permissions: NotePermissions;
+}
+
+/** `POST /handlers/{name}/notes` 的請求。The create request. */
+export interface CreateNoteRequest {
+  /** 牌組；handler 的建卡牌組固定時忽略，不存在時後端自動建立。The deck. */
+  deck: string;
+  /** 必須是該 handler 的 `create.note_type`。Must be the handler's create note type. */
+  note_type: string;
+  /** 標準建立是 `{欄位名: 值}`；其他 handler 依 `create_schema`。The parameters. */
+  params: Record<string, unknown>;
+}
+
+/** 建卡結果。The created notes. */
+export interface CreateNoteResponse {
+  note_ids: number[];
+  /** 實際建立的牌組。The deck actually used. */
+  deck: string;
+  /** 寫入後同步 AnkiWeb 失敗時的提醒；卡片仍已建立。The sync warning, if any. */
+  sync_warning: string | null;
+}
+
+/** `PATCH` 的回應：修改後的完整筆記與同步提醒。The updated note and sync warning. */
+export interface UpdateNoteResponse extends NoteDetail {
+  sync_warning: string | null;
+}
+
+/** `DELETE` 的回應。The delete result. */
+export interface DeleteNoteResponse {
+  sync_warning: string | null;
+}
+
+// ============================================================================
+// 牌組（GET /decks）
 // ============================================================================
 
 /** Anki 牌組基本資訊。Basic Anki deck information. */
 export interface AnkiDeckInfo {
   deck_name: string;
   deck_id: number;
-}
-
-/** Anki 模型 (Note Type) 資訊。Anki model (note type) information. */
-export interface AnkiModelInfo {
-  model_name: string;
-  model_file_name: string;
-  fields: string[];
-  has_llm_schema: boolean;
 }
 
 // ============================================================================
@@ -187,16 +265,20 @@ export interface RouteDeleteResponse {
 // 知識圖譜 (Knowledge Graph)
 // ============================================================================
 
-/** 知識圖譜節點。Knowledge graph node. */
+/**
+ * 知識圖譜節點。標準圖譜的節點只有 `id`、`note_id`、`note_type`、`label`（與宣告了副標時的
+ * `translation`）；關聯圖譜另有 `group`、`val`、`pos`、`status`，幽靈節點沒有 `note_id`。
+ * Knowledge graph node; relation-graph nodes carry more keys.
+ */
 export interface GraphNode {
   id: string;
-  group: number;
-  val: number;
-  label: string;
+  label?: string;
+  note_id?: number | null;
+  note_type?: string;
+  group?: number;
+  val?: number;
   translation?: string;
   pos?: string;
-  source_deck?: string;
-  note_id?: number;
   status?: string;
 }
 
@@ -208,28 +290,14 @@ export interface GraphLink {
   relation_id?: number;
 }
 
-/** 知識圖譜完整資料。Complete knowledge graph data. */
+/** 知識圖譜完整資料（`GET /handlers/{name}/graph`）。Complete knowledge graph data. */
 export interface GraphData {
   nodes: GraphNode[];
   links: GraphLink[];
-}
-
-// ============================================================================
-// 卡片詳情 (Card Detail / RUD)
-// ============================================================================
-
-/**
- * 單一筆記的完整詳情（`GET /handlers/cards/{note_id}`）。欄位名沿用 AnkiConnect `notesInfo`
- * 的 camelCase，與其他 API 的 snake_case 不同。
- * Full details of a single note; keys keep AnkiConnect's camelCase.
- */
-export interface CardDetail {
-  noteId: number;
-  modelName: string;
-  tags: string[];
-  /** 欄位名 → 值與在筆記類型中的順序。Field name → value and position. */
-  fields: Record<string, { value: string; order: number }>;
-  cards: number[];
+  /** 可選的名稱欄位；關聯圖譜為空陣列。Label fields to choose from. */
+  label_fields: string[];
+  /** 實際採用的名稱欄位；null 表示顯示 nid。The label field used, or null for the note ID. */
+  label_field: string | null;
 }
 
 // ============================================================================
@@ -279,28 +347,4 @@ export interface CardRelationCreate {
   relation_type: string;
   source_label: string;
   target_label: string;
-}
-
-// ============================================================================
-// 已棄用 (Deprecated) — 保留供舊代碼過渡期使用
-// ============================================================================
-
-/** @deprecated Phase 9 後不再使用。改用 HandlerCreatePayload。No longer used after Phase 9; use HandlerCreatePayload instead. */
-export interface CardGenerateRequest {
-  user_input: string;
-  deck_name: string;
-  model_file_name: string;
-  model_name: string;
-  primary_field_name?: string;
-  system_prompt?: string | null;
-  extra_fields?: Record<string, string> | null;
-  tags?: string[] | null;
-}
-
-/** @deprecated Phase 9 後不再使用。改用 HandlerCreateResponse。No longer used after Phase 9; use HandlerCreateResponse instead. */
-export interface CardGenerateResponse {
-  note_id: number;
-  message: string;
-  deck_name: string;
-  model_name: string;
 }

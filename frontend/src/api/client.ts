@@ -2,29 +2,27 @@
  * FluencyTides API 客戶端模組。
  * FluencyTides API client module.
  *
- * Phase 9 重構：所有卡片 CRUD 操作改為透過 Handler-based API
- * Phase 9 refactor: all card CRUD operations go through the Handler-based API
- * (`/api/v1/handlers/{handler_name}/*`) 進行。
- *
- * 設計決策：
- * - 前端不再需要知道 Anki 內部的模型欄位結構。
- * - 透過 `listHandlers()` 動態取得可用處理器與其 input_schema。
- * - Relations 相關 API 暫時保留原有路由 (`/api/v1/relations/*`)。
+ * 筆記的建、改、刪經 handler（`/handlers/{name}/notes/...`）；讀取任一筆記用通用的
+ * `/notes/{note_id}`，它回傳負責的 handler 與權限，前端再依此組 handler 的網址
+ * （handlers 計畫書 D5、§4）。
+ * Writes go through a handler; the generic note read tells which handler
+ * owns a note and what is allowed.
  */
 
 import axios from 'axios';
 import type {
   AnkiDeckInfo,
   GraphData,
-  CardDetail,
   CardPage,
   CardView,
   CardRelationCreate,
+  CreateNoteRequest,
+  CreateNoteResponse,
+  DeleteNoteResponse,
+  GenericNoteDetail,
   HandlerInfo,
-  HandlerCreatePayload,
-  HandlerCreateResponse,
-  HandlerActionResponse,
-  HandlerUpdatePayload,
+  NoteDetail,
+  UpdateNoteResponse,
   CapabilityRoute,
   CapabilityRoutesResponse,
   RouteDeleteResponse,
@@ -85,96 +83,87 @@ apiClient.interceptors.response.use(
  */
 export const FluencyTidesAPI = {
   // ======================================================================
-  // Handlers (Phase 9 核心 API)
+  // Handlers 與筆記
   // ======================================================================
 
   /**
-   * 取得所有可用的任務處理器清單。
-   * Fetches the list of all available task handlers.
-   * 前端可根據 input_schema 動態建構 UI 表單。
-   * The frontend can dynamically build UI forms based on input_schema.
+   * 所有 handler、能力與建卡表單（依註冊順序）。
+   * Every handler with its capabilities and create form.
    * @returns Handler 資訊陣列。Array of handler info objects.
    */
   listHandlers: (): Promise<HandlerInfo[]> =>
-    apiClient.get('/handlers/'),
+    apiClient.get('/handlers'),
 
   /**
-   * 透過指定 Handler 建立卡片。
-   * Creates a card through the specified handler.
-   *
-   * @param handlerName - 處理器名稱 (如 'vocabulary_mining', 'speaking_coach')。Handler name (e.g. 'vocabulary_mining', 'speaking_coach').
-   * @param payload - 包含 deck_name, model_name, parameters 的物件。Object containing deck_name, model_name, and parameters.
-   * @returns 建立結果 (note_id 與訊息)。Creation result (note_id and message).
+   * 透過 handler 建卡；寫入後後端會同步 AnkiWeb 並等它完成才回應。
+   * Creates notes through a handler; the backend syncs before responding.
+   * @param handlerName - handler 名稱。Handler name.
+   * @param body - 牌組、筆記類型與建立參數。Deck, note type and parameters.
+   * @returns 建立的筆記 ID、實際的牌組與同步提醒。The created notes.
    */
-  createCard: (
-    handlerName: string,
-    payload: HandlerCreatePayload
-  ): Promise<HandlerCreateResponse> =>
-    apiClient.post(`/handlers/${handlerName}/create`, payload),
+  createNote: (handlerName: string, body: CreateNoteRequest): Promise<CreateNoteResponse> =>
+    apiClient.post(`/handlers/${encodeURIComponent(handlerName)}/notes`, body),
 
   /**
-   * 讀取指定 Handler 管轄的卡片列表。
-   * Reads the list of cards managed by the specified handler.
-   *
-   * @param handlerName - 處理器名稱。Handler name.
-   * @param deckName - 可選的牌組篩選。Optional deck filter.
-   * @returns 卡片資料陣列。Array of card data records.
+   * 通用讀取：任何筆記類型，附上負責的 handler 與能不能改、刪。
+   * Reads any note with its handler and permissions.
+   * @param noteId - 筆記 ID。Note ID.
+   * @returns 筆記、handler 與權限。The note.
    */
-  listCards: (
-    handlerName: string,
-    deckName?: string
-  ): Promise<Record<string, unknown>[]> =>
-    apiClient.get(`/handlers/${handlerName}/cards`, {
-      params: deckName ? { deck_name: deckName } : {},
-    }),
+  getNote: (noteId: number): Promise<GenericNoteDetail> =>
+    apiClient.get(`/notes/${noteId}`),
 
   /**
-   * 讀取指定 Handler 專屬的知識圖譜。
-   * Reads the knowledge graph owned by the specified handler.
-   *
-   * @param handlerName - 處理器名稱。Handler name.
-   * @param deckName - 可選的牌組篩選。Optional deck filter.
-   * @returns 圖譜資料 (nodes 與 links)。Graph data (nodes and links).
+   * 透過 handler 讀取筆記（成組卡片的 handler 之後會附上整組）。
+   * Reads a note through its handler.
+   * @param handlerName - handler 名稱。Handler name.
+   * @param noteId - 筆記 ID。Note ID.
+   * @returns 筆記。The note.
+   */
+  readNote: (handlerName: string, noteId: number): Promise<NoteDetail> =>
+    apiClient.get(`/handlers/${encodeURIComponent(handlerName)}/notes/${noteId}`),
+
+  /**
+   * 修改筆記欄位（只送有變的欄位）；回應是修改後的完整筆記與同步提醒。
+   * Updates fields; only send the changed ones.
+   * @param handlerName - handler 名稱（取自 `getNote` 的 `handler`）。Handler name.
+   * @param noteId - 筆記 ID。Note ID.
+   * @param fields - 欄位名 → 新值。Field name to new value.
+   * @returns 修改後的筆記與同步提醒。The updated note.
+   */
+  updateNoteFields: (handlerName: string, noteId: number, fields: Record<string, string>): Promise<UpdateNoteResponse> =>
+    apiClient.patch(`/handlers/${encodeURIComponent(handlerName)}/notes/${noteId}`, { fields }),
+
+  /**
+   * 刪除筆記與它的關聯。
+   * Deletes a note and its relations.
+   * @param handlerName - handler 名稱。Handler name.
+   * @param noteId - 筆記 ID。Note ID.
+   * @returns 同步提醒。The sync warning.
+   */
+  deleteNote: (handlerName: string, noteId: number): Promise<DeleteNoteResponse> =>
+    apiClient.delete(`/handlers/${encodeURIComponent(handlerName)}/notes/${noteId}`),
+
+  /**
+   * 讀取 handler 的圖譜。
+   * Reads a handler's graph.
+   * @param handlerName - handler 名稱。Handler name.
+   * @param options.deck - 牌組；省略或 `All Decks` 為全部牌組。The deck, or all.
+   * @param options.noteType - 只看其中一種筆記類型。One of the handler's note types.
+   * @param options.labelField - 節點名稱用的欄位；省略為 handler 的預設。The label field.
+   * @returns 節點、連線與可選的名稱欄位。The graph.
    */
   getHandlerGraph: (
     handlerName: string,
-    deckName?: string
+    options: { deck?: string | null; noteType?: string | null; labelField?: string | null } = {},
   ): Promise<GraphData> =>
-    apiClient.get(`/handlers/${handlerName}/graph`, {
-      params: deckName && deckName !== 'All Decks'
-        ? { deck_name: deckName }
-        : {},
+    apiClient.get(`/handlers/${encodeURIComponent(handlerName)}/graph`, {
+      params: {
+        deck: options.deck && options.deck !== 'All Decks' ? options.deck : undefined,
+        note_type: options.noteType || undefined,
+        label_field: options.labelField || undefined,
+      },
     }),
-
-  /**
-   * 透過指定 Handler 執行客製化的卡片更新。
-   * Performs a customized card update through the specified handler.
-   *
-   * @param handlerName - 處理器名稱。Handler name.
-   * @param noteId - 目標 Note ID。Target note ID.
-   * @param parameters - 更新參數 (如 action, fields 等)。Update parameters (e.g. action, fields).
-   * @returns 操作結果訊息。Operation result message.
-   */
-  updateCard: (
-    handlerName: string,
-    noteId: number,
-    parameters: HandlerUpdatePayload
-  ): Promise<HandlerActionResponse> =>
-    apiClient.put(`/handlers/${handlerName}/cards/${noteId}`, parameters),
-
-  /**
-   * 透過指定 Handler 刪除卡片。
-   * Deletes a card through the specified handler.
-   *
-   * @param handlerName - 處理器名稱。Handler name.
-   * @param noteId - 目標 Note ID。Target note ID.
-   * @returns 操作結果訊息。Operation result message.
-   */
-  deleteCard: (
-    handlerName: string,
-    noteId: number
-  ): Promise<HandlerActionResponse> =>
-    apiClient.delete(`/handlers/${handlerName}/cards/${noteId}`),
 
   // ======================================================================
   // Relations (暫時保留原有路由)
@@ -187,7 +176,7 @@ export const FluencyTidesAPI = {
    * @param deckName - 可選的牌組篩選。Optional deck filter.
    * @returns 圖譜資料。Graph data.
    */
-  getKnowledgeGraph: (deckName?: string): Promise<GraphData> =>
+  getKnowledgeGraph: (deckName?: string): Promise<Pick<GraphData, 'nodes' | 'links'>> =>
     apiClient.get('/relations/graph', {
       params: deckName && deckName !== 'All Decks'
         ? { deck_name: deckName }
@@ -231,7 +220,7 @@ export const FluencyTidesAPI = {
     apiClient.post('/relations/sync', null, { params: { force } }),
 
   // ======================================================================
-  // Anki 基礎查詢 (透過 Handler 或直接端點)
+  // 牌組
   // ======================================================================
 
   /**
@@ -240,16 +229,7 @@ export const FluencyTidesAPI = {
    * @returns 牌組資訊陣列。Array of deck info objects.
    */
   listDecks: (): Promise<AnkiDeckInfo[]> =>
-    apiClient.get('/handlers/decks'),
-
-  /**
-   * 讀取單一筆記詳情（AnkiConnect `notesInfo` 的欄位，camelCase）。
-   * Reads the details of a single note (AnkiConnect `notesInfo` keys, camelCase).
-   * @param noteId - 目標 Note ID。Target note ID.
-   * @returns 筆記詳情。Note detail.
-   */
-  getCard: (noteId: number): Promise<CardDetail> =>
-    apiClient.get(`/handlers/cards/${noteId}`),
+    apiClient.get('/decks'),
 
   // ======================================================================
   // 卡片瀏覽 (Card Browse)：不經過 handler，任何筆記類型都能看

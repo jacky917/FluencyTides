@@ -4,8 +4,8 @@ import { Loader2, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../api/client'
 import { describeApiError, failureTitle, isBackendError, retryTransient } from '../lib/apiError'
-import { changedFields, fieldEditPolicy, isStructuredField, orderedFields } from '../lib/cardFields'
-import type { CardDetail } from '../types/api'
+import { changedFields, fieldValues, noteEditPolicy } from '../lib/cardFields'
+import type { GenericNoteDetail } from '../types/api'
 import { ConfirmDialog } from './shared/ConfirmDialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -17,7 +17,8 @@ import { Input } from './ui/input'
 interface CardDetailModalProps {
   isOpen: boolean
   onClose: () => void
-  cardDetail: CardDetail | null
+  /** 筆記、負責的 handler 與權限（`GET /notes/{note_id}`）。The note with its handler and permissions. */
+  note: GenericNoteDetail | null
   isLoading: boolean
   /** 讀取筆記失敗的錯誤；沒有時省略。The load error, if any. */
   error?: unknown
@@ -34,28 +35,36 @@ interface WriteTarget {
 /** 欄位輸入框的 id；Anki 欄位名可以有空白，id 不行。An element id for a field. */
 const fieldId = (name: string) => `field-${encodeURIComponent(name)}`
 
-/** 寫入後要重新整理的查詢：知識圖譜與卡片瀏覽。Queries refreshed after a write. */
-const REFRESH_KEYS = [['graph'], ['cards'], ['card-view'], ['card']]
+/** 寫入後要重新整理的查詢：知識圖譜、卡片瀏覽與筆記。Queries refreshed after a write. */
+const REFRESH_KEYS = [['graph'], ['cards'], ['card-view'], ['note']]
+
+/** 後端寫入後會同步 AnkiWeb；同步失敗時資料已寫入，只提醒。Shows the backend's sync warning. */
+function showSyncWarning(warning: string | null) {
+  if (warning) toast.warning('同步 AnkiWeb 失敗', { description: warning })
+}
 
 /**
  * 卡片詳情彈窗：檢視、編輯與刪除單一 Anki 筆記的欄位。
  * Card detail modal: view, edit, and delete a single Anki note's fields.
  *
- * 寫入一律交給負責該筆記類型的 handler（依 `supported_models` 找），能否編輯與刪除見
- * {@link fieldEditPolicy}；JSON 欄位只顯示、不編輯；儲存時只送出有變的欄位。
- * Writes go to the handler owning the note type; JSON fields are read-only
- * and only changed fields are sent.
+ * 能否編輯、刪除看後端回傳的 `permissions`（不允許時顯示原因）；寫入送給負責的 handler
+ * （`note.handler`）；handler 宣告的 JSON、媒體欄位只顯示不編輯；儲存時只送出有變的欄位。
+ * 後端寫入後會同步 AnkiWeb 並等它完成，所以送出期間顯示「同步中」。
+ * Permissions come from the backend; writes go to the owning handler;
+ * declared JSON and media fields are read-only; only changed fields are sent.
  *
  * @param isOpen - 是否開啟彈窗。Whether the modal is open.
  * @param onClose - 關閉彈窗的回呼。Callback to close the modal.
- * @param cardDetail - 筆記詳情。Note detail.
+ * @param note - 筆記與權限。The note.
  * @param isLoading - 是否正在載入。Whether the note is loading.
  * @param error - 讀取筆記失敗的錯誤。The load error.
  * @param onDeleted - 刪除成功後的回呼。Called after a delete.
  * @returns 彈窗 JSX 或 null。Modal JSX or null.
  */
-export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading, error, onDeleted }: CardDetailModalProps) {
+export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDeleted }: CardDetailModalProps) {
   const queryClient = useQueryClient()
+  // 唯讀欄位看 handler 宣告的 JSON、媒體欄位；只有允許修改時才需要
+  const needsHandlers = isOpen && note?.permissions.update_fields.allowed === true
   const {
     data: handlers,
     error: handlersError,
@@ -64,13 +73,10 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading, error,
   } = useQuery({
     queryKey: ['handlers'],
     queryFn: FluencyTidesAPI.listHandlers,
-    enabled: isOpen,
+    enabled: needsHandlers,
     retry: retryTransient,
   })
-  const original = useMemo(
-    () => (cardDetail ? Object.fromEntries(orderedFields(cardDetail)) : {}),
-    [cardDetail],
-  )
+  const original = useMemo(() => (note ? fieldValues(note) : {}), [note])
   const [fields, setFields] = useState<Record<string, string>>({})
   // 刪除前的確認視窗（頁面內的，不用 window.confirm：瀏覽器顯示原生對話框前會退出全螢幕）
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -82,15 +88,15 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading, error,
     setFields(original)
   }, [original])
 
-  const policy = cardDetail
-    ? fieldEditPolicy({
-        handlers,
-        handlersError: handlersError ? describeApiError(handlersError).message : null,
-        modelName: cardDetail.modelName,
+  const policy = note
+    ? noteEditPolicy({
+        note,
+        handler: handlers?.find((handler) => handler.name === note.handler),
+        handlersError: needsHandlers && handlersError ? describeApiError(handlersError).message : null,
       })
     : null
   const target: WriteTarget | null =
-    cardDetail && policy?.handlerName ? { handlerName: policy.handlerName, noteId: cardDetail.noteId } : null
+    note && policy?.handlerName ? { handlerName: policy.handlerName, noteId: note.note_id } : null
   const changes = changedFields(original, fields)
   const hasChanges = Object.keys(changes).length > 0
 
@@ -103,9 +109,10 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading, error,
 
   const updateMutation = useMutation({
     mutationFn: ({ handlerName, noteId, fields: updated }: WriteTarget & { fields: Record<string, string> }) =>
-      FluencyTidesAPI.updateCard(handlerName, noteId, { action: 'update_fields', fields: updated }),
-    onSuccess: (_, variables) => {
+      FluencyTidesAPI.updateNoteFields(handlerName, noteId, updated),
+    onSuccess: (result, variables) => {
       toast.success('已儲存', { description: Object.keys(variables.fields).join('、') })
+      showSyncWarning(result.sync_warning)
       onClose()
     },
     onError: (err) => reportError('儲存', err),
@@ -113,9 +120,10 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading, error,
   })
 
   const deleteMutation = useMutation({
-    mutationFn: ({ handlerName, noteId }: WriteTarget) => FluencyTidesAPI.deleteCard(handlerName, noteId),
-    onSuccess: () => {
+    mutationFn: ({ handlerName, noteId }: WriteTarget) => FluencyTidesAPI.deleteNote(handlerName, noteId),
+    onSuccess: (result) => {
       toast.success('已刪除筆記')
+      showSyncWarning(result.sync_warning)
       onDeleted?.()
       onClose()
     },
@@ -128,6 +136,9 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading, error,
   const busy = updateMutation.isPending || deleteMutation.isPending
   const canSave = Boolean(target && policy?.canEdit && hasChanges && !busy && !isLoading)
   const canDelete = Boolean(target && policy?.canDelete && !busy && !isLoading)
+  const notices = [policy?.editNotice, policy?.deleteNotice && `無法刪除：${policy.deleteNotice}`].filter(
+    (notice): notice is string => Boolean(notice),
+  )
 
   const handleDelete = () => {
     if (target) setConfirmingDelete(true)
@@ -139,9 +150,9 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading, error,
         <div className="flex justify-between items-center px-6 py-4 border-b">
           <div className="min-w-0">
             <h2 className="text-xl font-semibold">筆記欄位</h2>
-            {cardDetail && (
+            {note && (
               <p className="text-sm text-muted-foreground mt-1 break-all">
-                {cardDetail.modelName} · Note {cardDetail.noteId}
+                {note.note_type} · Note {note.note_id}
               </p>
             )}
           </div>
@@ -159,12 +170,18 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading, error,
             <div className="flex justify-center items-center h-32">
               <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
             </div>
-          ) : cardDetail ? (
+          ) : note ? (
             <div className="space-y-4">
-              {policy?.notice && (
+              {notices.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-900">
-                  <span className="flex-1">{policy.notice}</span>
-                  {handlersError !== null && (
+                  <div className="flex-1 space-y-1">
+                    {notices.map((notice) => (
+                      <p key={notice} className="break-words">
+                        {notice}
+                      </p>
+                    ))}
+                  </div>
+                  {needsHandlers && handlersError !== null && (
                     <Button size="sm" variant="outline" onClick={() => refetchHandlers()} disabled={handlersFetching}>
                       重試
                     </Button>
@@ -172,14 +189,14 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading, error,
                 </div>
               )}
               {Object.entries(fields).map(([key, value]) => {
-                const structured = isStructuredField(key, original[key] ?? '')
-                const readOnly = !policy?.canEdit || structured
-                const isLongText = structured || key === 'ExampleSentence' || value.length > 50
+                const locked = policy?.lockedFields.get(key)
+                const readOnly = !policy?.canEdit || locked !== undefined
+                const isLongText = locked === 'JSON' || key === 'ExampleSentence' || value.length > 50
                 return (
                   <div key={key} className="space-y-1">
                     <label className="text-sm font-medium leading-none" htmlFor={fieldId(key)}>
                       {key}
-                      {structured && <span className="ml-2 text-xs text-muted-foreground">JSON，僅供檢視</span>}
+                      {locked && <span className="ml-2 text-xs text-muted-foreground">{locked}，僅供檢視</span>}
                     </label>
                     {isLongText ? (
                       <textarea
@@ -219,7 +236,7 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading, error,
             ) : (
               <Trash2 className="w-4 h-4 mr-2" />
             )}
-            刪除筆記
+            {deleteMutation.isPending ? '刪除並同步中…' : '刪除筆記'}
           </Button>
           <div className="space-x-2">
             <Button variant="outline" onClick={onClose} disabled={busy}>
@@ -227,7 +244,7 @@ export function CardDetailModal({ isOpen, onClose, cardDetail, isLoading, error,
             </Button>
             <Button onClick={() => target && updateMutation.mutate({ ...target, fields: changes })} disabled={!canSave}>
               {updateMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              儲存變更
+              {updateMutation.isPending ? '儲存並同步中…' : '儲存變更'}
             </Button>
           </div>
         </div>

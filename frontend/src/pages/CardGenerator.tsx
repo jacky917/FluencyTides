@@ -11,7 +11,7 @@
  * Phase 9 refactor: switched to the Handler-based API.
  * - 透過 `listHandlers()` 動態取得可用處理器。
  * - 透過 `createCard(handlerName, payload)` 建立卡片。
- * - Model 下拉選單根據所選 Handler 的 `supported_models` 動態更新。
+ * - Model 下拉選單列出所選 Handler 負責的筆記類型（`note_types`）；第 8 步改為依能力與 `create_schema` 產生表單。
  */
 
 import { useState, useEffect } from 'react'
@@ -70,18 +70,18 @@ export default function CardGenerator() {
   // 初始選中第一個 Handler
   useEffect(() => {
     if (handlers && handlers.length > 0 && !selectedHandler) {
-      setSelectedHandler(handlers[0].handler_name)
+      setSelectedHandler(handlers[0].name)
     }
   }, [handlers, selectedHandler])
 
   // 當 Handler 改變時，自動選中該 Handler 的第一個 supported model
   const currentHandler: HandlerInfo | undefined = handlers?.find(
-    (h) => h.handler_name === selectedHandler
+    (h) => h.name === selectedHandler
   )
 
   useEffect(() => {
-    if (currentHandler && currentHandler.supported_models.length > 0) {
-      setSelectedModel(currentHandler.supported_models[0])
+    if (currentHandler?.capabilities.create.note_type) {
+      setSelectedModel(currentHandler.capabilities.create.note_type)
     }
   }, [currentHandler])
 
@@ -89,14 +89,14 @@ export default function CardGenerator() {
   const queryClient = useQueryClient()
   const mutation = useMutation({
     mutationFn: (deck: string) =>
-      FluencyTidesAPI.createCard(selectedHandler, {
-        deck_name: deck,
-        model_name: selectedModel,
-        parameters: { word: word.trim() },
+      FluencyTidesAPI.createNote(selectedHandler, {
+        deck,
+        note_type: selectedModel,
+        params: { Expression: word.trim() },
       }),
     onSuccess: (data) => {
       toast.success('Card Generated!', {
-        description: `Note ID: ${data.note_id} — ${data.message}`,
+        description: `Note ID: ${data.note_ids.join(', ')}`,
       })
       queryClient.invalidateQueries({ queryKey: ['graph'] })
       setWord('')
@@ -159,8 +159,8 @@ export default function CardGenerator() {
             onChange={(e) => setSelectedHandler(e.target.value)}
           >
             {handlers?.map((h) => (
-              <option key={h.handler_name} value={h.handler_name}>
-                {h.handler_name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+              <option key={h.name} value={h.name}>
+                {h.title}
               </option>
             ))}
           </select>
@@ -173,7 +173,7 @@ export default function CardGenerator() {
             value={selectedModel}
             onChange={(e) => setSelectedModel(e.target.value)}
           >
-            {currentHandler?.supported_models.map((m) => (
+            {currentHandler?.note_types.map((m) => (
               <option key={m} value={m}>
                 {m}
               </option>

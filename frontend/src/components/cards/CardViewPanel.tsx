@@ -98,8 +98,8 @@ export function CardViewPanel({
     isPending: noteLoading,
     error: noteError,
   } = useQuery({
-    queryKey: ['card', noteId],
-    queryFn: () => FluencyTidesAPI.getCard(noteId!),
+    queryKey: ['note', noteId],
+    queryFn: () => FluencyTidesAPI.getNote(noteId!),
     enabled: fieldsOpen && noteId !== null,
     retry: retryTransient,
   })
@@ -201,7 +201,7 @@ export function CardViewPanel({
       <CardDetailModal
         isOpen={fieldsOpen}
         onClose={() => onFieldsOpen(false)}
-        cardDetail={noteDetail ?? null}
+        note={noteDetail ?? null}
         isLoading={noteLoading && noteError === null}
         error={noteError}
         onDeleted={onDeleted}

@@ -1,95 +1,99 @@
 /**
- * 卡片欄位編輯用的純函式：找出負責的 handler、決定能否編輯與刪除、判斷哪些欄位不該手動改、
- * 算出改了哪些欄位。
- * Pure helpers for editing card fields: the owning handler, the edit and
- * delete policy, which fields must not be hand-edited, and what changed.
+ * 卡片欄位編輯用的純函式：依後端回傳的權限與 handler 宣告決定能否編輯、刪除與哪些欄位唯讀，
+ * 算出改了哪些欄位，以及清單的摘要。
+ * Pure helpers for editing card fields: the edit and delete policy from the
+ * backend's permissions and the handler's declarations, what changed, and
+ * the list preview.
  */
 
-import type { CardDetail, HandlerInfo } from '../types/api'
-
-/**
- * 支援 `update_fields`（直接覆寫欄位）的 handler。其他 handler 的 `execute_update` 不支援這個
- * 動作：外語糾錯只有 `add_audio`、自他動詞與核心動詞是空實作（呼叫會回成功但什麼都沒改），
- * 所以不能讓網頁對它們送出欄位修改。這是手動維護的清單：後端
- * （`backend/app/services/task_handlers/`）有 handler 新增或移除 `update_fields` 支援時，這裡要
- * 跟著改。
- *
- * Handlers whose `execute_update` supports `update_fields`; kept in sync by
- * hand with backend/app/services/task_handlers/.
- */
-export const FIELD_EDIT_HANDLERS = new Set(['vocabulary_mining', 'speaking_coach', 'speaking_trilingual'])
-
-/**
- * 依筆記類型找出負責的 handler。
- * Finds the handler that owns a note type.
- * @param handlers - `/handlers/` 的清單。The handler list.
- * @param modelName - 筆記類型。Note type.
- * @returns handler，沒有時為 undefined。The handler, if any.
- */
-export function handlerForModel(handlers: HandlerInfo[] | undefined, modelName: string): HandlerInfo | undefined {
-  return handlers?.find((handler) => handler.supported_models.includes(modelName))
-}
+import type { GenericNoteDetail, HandlerInfo, NoteDetail, NotePermissions } from '../types/api'
 
 /** 欄位彈窗能做的事。What the field modal may do. */
-export interface FieldEditPolicy {
-  /** 寫入要送給哪個 handler；不能寫入時為 null。The handler for writes, or null. */
+export interface NoteEditPolicy {
+  /** 寫入要送給哪個 handler；沒有 handler 負責時為 null。The handler for writes, or null. */
   handlerName: string | null
   canEdit: boolean
   canDelete: boolean
-  /** 不能編輯或刪除時給使用者的說明。Why editing or deleting is unavailable. */
-  notice: string | null
+  /** 不能修改時的說明（後端給的原因或欄位設定載入失敗）。Why editing is unavailable. */
+  editNotice: string | null
+  /** 不能刪除時的說明（後端給的原因）。Why deleting is unavailable. */
+  deleteNotice: string | null
+  /** 唯讀欄位 → 標示（「JSON」或「媒體」），依 handler 宣告。Read-only fields and their label. */
+  lockedFields: Map<string, string>
 }
 
 /**
- * 依 handler 清單的狀態決定彈窗能否編輯、刪除，以及要顯示的說明。
- * Decides whether the modal may edit or delete, and what to tell the user.
+ * 依通用讀取回傳的 `permissions` 與 handler 宣告的 JSON、媒體欄位，決定彈窗能做的事
+ * （handlers 計畫書 D3、D4）。前端不自行猜測：能否改、刪看後端，唯讀欄位看宣告。
  *
- * @param state.handlers - handler 清單；還沒載入時為 undefined。The handlers, if loaded.
- * @param state.handlersError - 清單載入失敗的說明；沒有失敗時為 null。The load failure.
- * @param state.modelName - 筆記類型。Note type.
+ * Decides what the modal may do from the backend's permissions and the
+ * handler's declared JSON and media fields.
+ *
+ * @param state.note - 筆記與權限。The note with its permissions.
+ * @param state.handler - 負責的 handler 的資訊；還沒載入或沒有 handler 時為 undefined。The handler info.
+ * @param state.handlersError - handler 清單載入失敗的說明；沒有失敗時為 null。The load failure.
  * @returns 能做的事與說明。The policy.
  */
-export function fieldEditPolicy(state: {
-  handlers: HandlerInfo[] | undefined
+export function noteEditPolicy(state: {
+  note: GenericNoteDetail
+  handler: HandlerInfo | undefined
   handlersError: string | null
-  modelName: string
-}): FieldEditPolicy {
-  if (state.handlersError !== null) {
-    return {
-      handlerName: null,
-      canEdit: false,
-      canDelete: false,
-      notice: `無法取得 handler 清單，暫時無法修改或刪除：${state.handlersError}`,
-    }
+}): NoteEditPolicy {
+  const { note, handler, handlersError } = state
+  const { update_fields: update, delete: remove } = note.permissions
+  const lockedFields = new Map<string, string>()
+  for (const name of handler?.json_fields ?? []) lockedFields.set(name, 'JSON')
+  for (const name of handler?.media_fields ?? []) lockedFields.set(name, '媒體')
+
+  let canEdit = update.allowed && note.handler !== null
+  let editNotice = update.allowed ? null : update.reason
+  // 允許修改，但還不知道哪些欄位唯讀：清單載入失敗就說明，還在載入就先不開放
+  if (canEdit && handler === undefined) {
+    canEdit = false
+    if (handlersError !== null) editNotice = `無法取得欄位設定，暫時無法修改：${handlersError}`
   }
-  if (state.handlers === undefined) {
-    return { handlerName: null, canEdit: false, canDelete: false, notice: null }
-  }
-  const handler = handlerForModel(state.handlers, state.modelName)
-  if (!handler) {
-    return {
-      handlerName: null,
-      canEdit: false,
-      canDelete: false,
-      notice: `沒有 handler 負責 ${state.modelName}，網頁無法修改或刪除這種筆記。`,
-    }
-  }
-  const canEdit = FIELD_EDIT_HANDLERS.has(handler.handler_name)
   return {
-    handlerName: handler.handler_name,
+    handlerName: note.handler,
     canEdit,
-    canDelete: true,
-    notice: canEdit ? null : `${handler.handler_name} 不支援直接修改欄位，這裡只能檢視；刪除仍可使用。`,
+    canDelete: remove.allowed && note.handler !== null,
+    editNotice,
+    deleteNotice: remove.allowed ? null : remove.reason,
+    lockedFields,
   }
+}
+
+/**
+ * 從 handler 的能力算出對它的筆記能做的事，與後端通用讀取的 `permissions` 同一規則（D4）；
+ * 給從 handler 讀取筆記的地方（例如圖譜點節點）用。
+ * The permissions implied by a handler's capabilities, for notes read
+ * through that handler.
+ * @param handler - handler 資訊。The handler.
+ * @returns 權限。The permissions.
+ */
+export function permissionsFromCapabilities(handler: HandlerInfo): NotePermissions {
+  const { update_fields: update, delete: remove } = handler.capabilities
+  return {
+    update_fields: { allowed: update.supported, reason: update.supported ? null : update.reason },
+    delete: { allowed: remove.supported, reason: remove.supported ? null : remove.reason },
+  }
+}
+
+/**
+ * 欄位名 → 值（依筆記類型的順序；後端已排序）。Field values in note-type order.
+ * @param note - 筆記。The note.
+ * @returns 欄位名 → 值。Field name to value.
+ */
+export function fieldValues(note: NoteDetail): Record<string, string> {
+  return Object.fromEntries(note.fields.map((field) => [field.name, field.value]))
 }
 
 /**
  * 是否為結構化欄位（JSON）：欄位名含 JSON，或內容去掉 HTML 標記、還原 `&quot;` `&amp;` 後
- * 以 `[` / `{` 開頭。這類欄位由模板解析，手動改壞就整張卡顯示不出來，網頁只顯示不編輯。
- * 只放 `[sound:…]` 的音檔欄位也會被判成結構化而唯讀——寧可誤判成唯讀，這是刻意的取捨。
+ * 以 `[` / `{` 開頭。只用於清單摘要（跳過這類欄位）；彈窗的唯讀欄位改看 handler 宣告
+ * （{@link noteEditPolicy}），不再用它猜。
  *
- * Whether a field holds structured JSON, which the templates parse; such
- * fields (and, deliberately, `[sound:…]`-only fields) are read-only.
+ * Whether a field looks like structured JSON; only used to skip such fields
+ * in the list preview.
  *
  * @param name - 欄位名。Field name.
  * @param value - 欄位原始值。Raw value.
@@ -103,17 +107,6 @@ export function isStructuredField(name: string, value: string): boolean {
     .replace(/&amp;/g, '&')
     .trim()
   return text.startsWith('[') || text.startsWith('{')
-}
-
-/**
- * 依筆記類型的順序列出欄位值。Field values in note-type order.
- * @param detail - 筆記詳情。The note detail.
- * @returns `[欄位名, 值]` 陣列。`[name, value]` pairs.
- */
-export function orderedFields(detail: CardDetail): [string, string][] {
-  return Object.entries(detail.fields)
-    .sort(([, a], [, b]) => a.order - b.order)
-    .map(([name, field]) => [name, field.value])
 }
 
 /**

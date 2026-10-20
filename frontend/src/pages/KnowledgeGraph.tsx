@@ -143,13 +143,13 @@ export default function KnowledgeGraph() {
 
   const { data: graphData, isLoading, isError } = useQuery({
     queryKey: ['graph', selectedDeck],
-    queryFn: () => FluencyTidesAPI.getHandlerGraph('vocabulary_mining', selectedDeck),
+    queryFn: () => FluencyTidesAPI.getHandlerGraph('vocabulary_mining', { deck: selectedDeck }),
   })
 
   // Fetch individual card details when a node is selected
   const { data: cardDetail, isLoading: isLoadingCard } = useQuery({
-    queryKey: ['card', selectedNoteId],
-    queryFn: () => FluencyTidesAPI.getCard(selectedNoteId!),
+    queryKey: ['note', selectedNoteId],
+    queryFn: () => FluencyTidesAPI.getNote(selectedNoteId!),
     enabled: selectedNoteId !== null && !isLinkMode,
   })
 
@@ -621,7 +621,7 @@ export default function KnowledgeGraph() {
       <CardDetailModal
         isOpen={selectedNoteId !== null}
         onClose={() => setSelectedNoteId(null)}
-        cardDetail={cardDetail || null}
+        note={cardDetail || null}
         isLoading={isLoadingCard}
       />
 

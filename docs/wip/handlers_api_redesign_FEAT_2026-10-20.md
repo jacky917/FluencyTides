@@ -711,7 +711,7 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
 3. ✅ `NoteService`（含寫入後同步的提醒邏輯、歸屬檢查）與它的測試。
 4. ✅ TG 的 5 處改呼叫 `NoteService`（§7 表格），`bot/dependencies.py` 注入；`_sync_with_warning` 改為包裝服務層；TG 既有測試全過。
 5. ✅ REST 端點：`/handlers`、`/handlers/{name}/notes/...`、`/notes/{note_id}`、`/decks`，移除舊路徑；從 `BaseHandler` 與各 handler 移除 `get_input_schema`、`execute_read_list`；`main.py` 掛新路由；測試。`api/verb_pair.py`、`api/core_verb.py` 的 `generate-child-cards` 不動。
-6. 前端：client 與型別；從 Cards 抽出共用元件（D13），Cards 改用後畫面與行為不變；`CardViewPanel` 與 `CardDetailModal`；工具設定頁的「Handler 能力」區塊。
+6. ✅ 前端：client 與型別；從 Cards 抽出共用元件（D13），Cards 改用後畫面與行為不變；`CardViewPanel` 與 `CardDetailModal`；工具設定頁的「Handler 能力」區塊。
 7. 前端：Knowledge Graph 改用共用版面（左側牌組樹）、新的圖譜參數與點開卡片、全螢幕（D12、D13）。
 8. 前端：Generate 頁改用共用版面，依 `channels` 與 `create_schema` 產生下拉與表單（§6、D13）。
 
@@ -857,6 +857,47 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
 - **部署注意**：前端還在呼叫舊路徑，第 6～8 步改完之前，網頁的 Cards 詳情、Generate、Graph 都會壞。第 5～8 步要一起部署（R3）。
 
 驗證：`ruff` 通過；`pytest tests` 1128 個（第 5 步新增 40 個）、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常。
+
+**第 6 步實作結果（2026-10-20）**：
+
+- **`types/api.ts`**：依 §4 改寫。
+  - `HandlerInfo` 改為 `name`、`title`、`note_types`、`capabilities`、`create_schema`、`json_fields`、`media_fields`，能力有完整型別（`HandlerCapabilities`、`CreateCapability`、`Operation`…）。
+  - 新增 `NoteDetail`、`GenericNoteDetail`（`handler`、`permissions`）、`CreateNoteRequest`／`Response`、`UpdateNoteResponse`、`DeleteNoteResponse`。
+  - `GraphData` 加上 `label_fields`、`label_field`；`GraphNode` 的關聯圖譜專屬鍵改為選填。
+  - 刪掉 `CardDetail`（舊的 camelCase 形狀）、`HandlerCreatePayload` 等舊型別，以及沒人用的 `AnkiModelInfo`、已棄用的 `CardGenerate*`。
+- **`api/client.ts`**：
+  - 新增 `createNote`、`getNote`、`readNote`、`updateNoteFields`、`deleteNote`。
+  - `getHandlerGraph` 改帶 `deck`、`note_type`、`label_field`。
+  - `listHandlers`、`listDecks` 改新路徑。
+  - 刪掉 `createCard`、`listCards`、`updateCard`、`deleteCard`、`getCard`。
+  - 沒有呼叫方的 `getKnowledgeGraph`（舊的 `/relations/graph`，§13）保留，回傳型別縮成 `nodes`、`links`。
+- **`lib/cardFields.ts`**：
+  - 刪掉 `FIELD_EDIT_HANDLERS`、`handlerForModel`、`fieldEditPolicy`、`orderedFields`。
+  - 改為 `noteEditPolicy`：能否改、刪看 `permissions`，唯讀欄位看 handler 宣告的 `json_fields`、`media_fields`。允許修改但還不知道唯讀欄位時先不開放，清單載入失敗時說明原因；刪除不受影響。
+  - 另有 `permissionsFromCapabilities`（從 handler 的能力算出權限，給第 7 步圖譜點節點用，規則同後端 D4）與 `fieldValues`。
+  - `isStructuredField` 只留給清單摘要用，彈窗不再用它猜。
+- **`CardDetailModal`**：
+  - 改收 `GenericNoteDetail`。
+  - 寫入送給 `note.handler`：`PATCH`／`DELETE /handlers/{handler}/notes/{id}`。
+  - 不允許時顯示後端給的原因，例如 jp 類顯示刪除工具路徑。
+  - 唯讀欄位標「JSON／媒體，僅供檢視」。
+  - 送出期間按鈕顯示「儲存並同步中…」「刪除並同步中…」；有 `sync_warning` 時另以警告提示顯示。
+  - 只有允許修改時才查 `GET /handlers`（要知道唯讀欄位）。
+- **`CardViewPanel`**：改 `GET /notes/{id}`，查詢鍵 `['note', id]`。
+- **工具設定頁「Handler 能力」區塊**：
+  - `components/settings/HandlerCapabilitiesSection.tsx`，唯讀，每個 handler 一張卡片：標題（名稱）、負責的筆記類型；建立、讀取、改欄位、刪除、圖譜、動作各一列，標示開放與否，不開放的顯示原因。
+  - 建立另列管道、流程、牌組規則與建立的筆記類型。
+  - 文字規則抽成 `lib/handlerCapabilities.ts`；第 8 步 Generate 頁要用的 `createAvailability`（`channels` → 可選／反灰／不顯示）也放在這裡，一併寫好並測試。
+- Knowledge Graph、Generate 只改到能用新 API 編譯（圖譜仍寫死單字卡、點節點用通用讀取；Generate 仍是單一輸入框，送 `{"Expression": …}`），整頁改寫在第 7、8 步。
+- **測試**：`cardFields.test.ts` 改寫（權限、唯讀欄位、載入中與失敗）；新增 `handlerCapabilities.test.ts`（可選／反灰／不顯示、各列文字）。
+- **瀏覽器實測**：以這個分支的後端（port 8000、`TG_BOT_TOKEN=""`；`.claude/launch.json` 新增 `backend-handlers-redesign-no-bot`）與前端 dev server，只檢視、不寫入。
+  - 工具設定頁「Handler 能力」區塊 6 張卡片，與 §5 一致，不開放的項目附原因。
+  - Cards 頁單字卡的筆記欄位：文字欄位可編輯，`Word_Audio`、`Target_Example_Audio` 標「媒體，僅供檢視」，刪除可按。
+  - `JP_Context_Dark`：上方列出「由本機批次腳本管理，網頁只能檢視」與刪除工具路徑，欄位全部唯讀，刪除、儲存都停用。
+  - 所有請求都打新路徑且回 200。
+  - 沒有實際按儲存、刪除（會寫入本機 Anki）。
+
+驗證：`npm run lint` 0 個錯誤（14 個 `any` 警告都是既有的）；`npm test` 188 個通過；`npm run build` 成功。
 
 每一步結束都要通過：
 

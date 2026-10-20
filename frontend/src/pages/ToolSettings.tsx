@@ -11,6 +11,8 @@
  * setting, with a provider → model → (effort) picker and a restore action.
  * Options come only from the backend's whitelist; branch keys are indented
  * under their flow key.
+ *
+ * 頁面最下方另有唯讀的「Handler 能力」區塊（{@link HandlerCapabilitiesSection}），列出每種卡片開放到哪裡。
  */
 
 import { useState } from 'react'
@@ -18,6 +20,7 @@ import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../api/client'
+import { HandlerCapabilitiesSection } from '../components/settings/HandlerCapabilitiesSection'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Skeleton } from '../components/ui/skeleton'
@@ -192,6 +195,8 @@ export default function ToolSettings() {
           </div>
         </>
       )}
+
+      <HandlerCapabilitiesSection />
     </div>
   )
 }
