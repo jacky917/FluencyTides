@@ -12,7 +12,7 @@
 #   3. 前端：Type Check → Build & Push Docker Image → 觸發 Portainer stack webhook 重新佈署
 #
 # 所需 GitHub Secrets (在 Settings → Secrets and variables → Actions 中設定)：
-#   - PORTAINER_WEBHOOK_BACKEND  : 後端 stack（fluencytides）的 GitOps webhook URL
+#   - PORTAINER_WEBHOOK_BACKEND  : 後端 stack（fluencytides-backend）的 GitOps webhook URL
 #   - PORTAINER_WEBHOOK_FRONTEND : 前端 stack（fluencytides-frontend）的 GitOps webhook URL
 #   - CF_ACCESS_CLIENT_ID        : Cloudflare Zero Trust Client ID
 #   - CF_ACCESS_CLIENT_SECRET    : Cloudflare Zero Trust Client Secret

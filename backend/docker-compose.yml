@@ -1,4 +1,4 @@
-name: fluencytides
+name: fluencytides-backend
 services:
   backend:
     image: ghcr.io/jacky917/fluencytides-backend:latest
@@ -8,7 +8,7 @@ services:
       - "8000:8000"
       
     # 密鑰掛載：啟動時從 NAS 主機讀取機密變數
-    # 【部署】本檔由 Portainer 的 Git stack（fluencytides）部署；Portainer 在自己的容器內
+    # 【部署】本檔由 Portainer 的 Git stack（fluencytides-backend）部署；Portainer 在自己的容器內
     # 執行 compose，所以 /DATA/AppData/FluencyTides 必須以相同路徑掛進 Portainer 才讀得到。
     # 【注意】env_file 只在「容器建立」時注入——修改 .env 後要到 Portainer 對 stack
     # 重新部署（Pull and redeploy），單純 restart 不會重讀。不要在 Portainer 之外用
