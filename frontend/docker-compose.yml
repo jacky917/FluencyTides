@@ -34,6 +34,9 @@ services:
             en_US: Web UI Port
             zh_CN: 網頁前端端口
 
+# 【x-casaos 目前不生效】正式站改由 Portainer Git stack 部署（2026-10-20 起），CasaOS 讀不到
+# Portainer 存放的 compose 檔，不會把這組容器列為自己的 app；CasaOS 主畫面改用「外部連結」
+# 當入口（人工維護）。保留本區塊，供日後改回 CasaOS 管理時使用；Portainer 會忽略 x- 欄位。
 x-casaos:
   architectures:
     - amd64
