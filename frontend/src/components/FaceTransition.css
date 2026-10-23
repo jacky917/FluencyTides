@@ -200,6 +200,61 @@
   }
 }
 
+/* ---------- 抽卡（draw）／抽卡・疊卡（draw-stack）：上面那張往下抽走，露出壓在下面的一張 ----------
+   被抽走的那張在上面，往下移出外框（距離 --face-travel 是兩面中較高的高度，外框最後比它高時
+   也會整張離開；沒有高度時移動自己的高度），上緣帶陰影。下面那張：抽卡靜止不動；疊卡原本
+   略小、偏暗，隨之浮上來。往回時倒著播：上面那張從底下推回來，把下面那張蓋住。
+   外框上下左右都裁切並保留圓角，抽走的卡片不會蓋到外框下方的內容。 */
+
+.face-stage[data-face-anim='draw'],
+.face-stage[data-face-anim='draw-stack'] {
+  overflow: clip;
+  border-radius: var(--radius-lg, 0.5rem);
+}
+
+.face-layer[data-face-anim='draw'][data-face-part='leave'],
+.face-layer[data-face-anim='draw-stack'][data-face-part='leave'] {
+  z-index: 2;
+  box-shadow: 0 -16px 32px -14px rgb(15 23 42 / 0.5);
+  animation-name: face-draw-out;
+}
+
+.face-layer[data-face-anim='draw-stack'][data-face-part='enter'] {
+  animation-name: face-draw-under;
+}
+
+.face-layer[data-face-anim='draw-stack'][data-face-part='enter']::after {
+  background: rgb(0 0 0);
+  animation-name: face-undim;
+}
+
+@keyframes face-draw-out {
+  from {
+    translate: 0 0;
+  }
+  to {
+    translate: 0 var(--face-travel, 100%);
+  }
+}
+
+@keyframes face-draw-under {
+  from {
+    scale: 0.96;
+  }
+  to {
+    scale: 1;
+  }
+}
+
+@keyframes face-undim {
+  from {
+    opacity: 0.4;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 /* ---------- 伸縮漸變：外框（高度隨動畫過渡）裁切內容並保留圓角，看起來是同一張卡片在變長變短 ----------
    兩面不一樣高時，以較矮那一面的高度（--face-split）分成兩段：
    - 重疊的部分交叉漸變。兩面用 plus-lighter 直接相加（外框 isolation 讓它們只和彼此相加，

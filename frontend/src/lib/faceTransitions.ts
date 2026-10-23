@@ -15,7 +15,7 @@
  */
 
 /** 動畫代號。Animation identifiers. */
-export type FaceTransitionId = 'none' | 'page' | 'slide' | 'morph' | 'zoom'
+export type FaceTransitionId = 'none' | 'page' | 'slide' | 'draw' | 'draw-stack' | 'morph' | 'zoom'
 
 /** 速度代號。Speed identifiers. */
 export type FaceTransitionSpeed = 'fast' | 'normal' | 'slow'
@@ -47,6 +47,13 @@ export const FACE_TRANSITIONS: readonly FaceTransitionOption[] = [
     overflows: true,
   },
   { id: 'slide', label: '推移', description: '新的一面從右側推入，舊的一面退後變暗（iOS 頁面切換）', durationScale: 1 },
+  { id: 'draw', label: '抽卡', description: '上面那張往下抽走，露出靜止壓在下面的一張', durationScale: 1 },
+  {
+    id: 'draw-stack',
+    label: '抽卡・疊卡',
+    description: '上面那張往下抽走，壓在下面的一張由略小、偏暗浮上來',
+    durationScale: 1,
+  },
   { id: 'morph', label: '伸縮漸變', description: '外框隨內容平滑伸長或縮短，兩面在框內交叉漸變', durationScale: 1 },
   { id: 'zoom', label: '縮放', description: '舊的一面往後退去，新的一面由近處落定', durationScale: 0.9 },
   { id: 'none', label: '無動畫', description: '立即切換', durationScale: 0 },
@@ -203,6 +210,11 @@ export function faceMarkup(
     style: { '--face-duration': `${ms}ms`, '--face-easing': easing, '--face-play': forward ? 'normal' : 'reverse' },
   }
   const { from, to } = heights
+  const drawn = preference.animation === 'draw' || preference.animation === 'draw-stack'
+  if (drawn && from !== undefined && to !== undefined) {
+    // 抽走的那張要整張移出外框：外框最後可能比它高，所以移動距離取兩面中較高的
+    markup.style['--face-travel'] = `${Math.max(from, to)}px`
+  }
   if (preference.animation === 'morph' && from !== undefined && to !== undefined && from !== to) {
     const own = role === 'leaving' ? from : to
     const split = Math.min(from, to)

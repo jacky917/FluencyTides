@@ -121,6 +121,15 @@ describe('faceMarkup', () => {
     )
   })
 
+  it('moves a drawn card by the taller height, so it fully leaves the wrapper', () => {
+    const draw = { animation: 'draw', speed: 'normal' } as const
+    expect(faceMarkup(draw, 'leaving', 1, { from: 200, to: 360 })?.style['--face-travel']).toBe('360px')
+    expect(faceMarkup(draw, 'entering', -1, { from: 360, to: 200 })?.style['--face-travel']).toBe('360px')
+    expect(faceMarkup(draw, 'leaving', 1)?.style).not.toHaveProperty('--face-travel')
+    const stack = { animation: 'draw-stack', speed: 'normal' } as const
+    expect(faceMarkup(stack, 'leaving', 1, { from: 200, to: 360 })?.style['--face-travel']).toBe('360px')
+  })
+
   it('has no markup without animation', () => {
     expect(faceMarkup({ animation: 'none', speed: 'normal' }, 'leaving', 1)).toBeNull()
   })
