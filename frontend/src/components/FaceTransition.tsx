@@ -28,8 +28,8 @@ const READY_SETTLE_MS = 120
 const READY_TIMEOUT_MS = 900
 
 /**
- * 切換兩種內容（卡片的正面與背面）時播放動畫。
- * Animates switching between two contents (card faces).
+ * 切換內容（卡片的正反面，或換到另一張卡片）時播放動畫。
+ * Animates switching between contents (card faces, or cards).
  *
  * 分工：狀態怎麼轉移在 `lib/faceTransitionMachine.ts`，播哪一段、多久在
  * `lib/faceTransitions.ts`，長什麼樣子在 `FaceTransition.css`；這個元件只處理 DOM 的部分——
@@ -42,13 +42,19 @@ const READY_TIMEOUT_MS = 900
  * is never remounted.
  *
  * @param props.value - 要顯示的那一面。The face to show.
- * @param props.resetKey - 換了就不播動畫（例如另一張卡片）。Changing it skips the animation.
- * @param props.direction - 1 為往前（翻到背面），-1 為往回。Direction of the switch.
- * @param props.preference - 動畫與速度。Animation and speed.
+ * @param props.resetKey - 換了就不播動畫，直接顯示新的值（內容整個換掉、不該有過渡時用）。
+ *   Changing it skips the animation.
+ * @param props.direction - 1 為往前（例如翻到背面、換到新的卡片），-1 為往回（翻回正面、回到上一張）。
+ *   Direction of the switch.
+ * @param props.preference - 下一次切換要播的動畫與速度；切換開始時記下，播放中改了不影響這一次
+ *   （改成無動畫時立即切到結果）。Animation and speed of the next switch, fixed when it starts.
  * @param props.waitForReady - 新的一面要等 `onReady` 才播放。Wait for the incoming face's `onReady`.
  * @param props.faceClassName - 每一面外框的 class（例如圓角，讓陰影貼合卡面）。Class of each face wrapper.
  * @param props.children - 依某一面畫出內容。Renders a face.
- * @returns 包著內容的外框。The animated wrapper.
+ * @param props.footer - 畫在外框下方的內容（例如卡面的提示），隨外框高度的過渡一起移動；參數是
+ *   正在顯示的那一面，播放中為正在進來的那一面。Content below the wrapper, moving with its height;
+ *   receives the face on screen, or the incoming one while animating.
+ * @returns 包著內容的外框（與下方的內容）。The animated wrapper and the footer.
  */
 export function FaceTransition<T extends string>({
   value,
@@ -59,6 +65,7 @@ export function FaceTransition<T extends string>({
   className,
   faceClassName,
   children,
+  footer,
 }: {
   value: T
   resetKey: unknown
@@ -68,23 +75,27 @@ export function FaceTransition<T extends string>({
   className?: string
   faceClassName?: string
   children: (face: T, controls: FaceControls) => ReactNode
+  footer?: (face: T) => ReactNode
 }) {
   const [state, setState] = useState<FaceState<T>>(() => initialFaceState(resetKey, value, direction))
   const containerRef = useRef<HTMLDivElement>(null)
   const incomingRef = useRef<HTMLDivElement>(null)
   const dispatch = useCallback((event: FaceEvent<T>) => setState((prev) => reduceFace(prev, event)), [])
 
-  // 在 render 中對齊外部的值（React 會在提交前立刻重畫）：換卡片時不會先閃出舊的一面
+  // 在 render 中對齊外部的值（React 會在提交前立刻重畫）：換了 resetKey 時不會先閃出舊的值；
+  // 開始切換時也能在新的一面畫上去之前量到外框原本的高度
   const synced = reduceFace(state, {
     type: 'sync',
     key: resetKey,
     value,
     direction,
-    animated: preference.animation !== 'none',
+    preference,
     measure: () => exactHeight(containerRef.current),
   })
   if (synced !== state) setState(synced)
   const view = synced
+  // 切換中（準備與播放）用切換開始時記下的動畫，閒置時用外部給的
+  const active = view.preference ?? preference
 
   /** 新的一面排版好了：量它的高度，開始播放。Starts the animation. */
   const start = useCallback(() => dispatch({ type: 'ready', height: exactHeight(incomingRef.current) }), [dispatch])
@@ -107,7 +118,7 @@ export function FaceTransition<T extends string>({
 
   // 播完以兩面動畫自己的 finished 為準（瀏覽器可能延後才真正開始，用計時會提早截斷）；
   // 計時只是保險：分頁在背景時動畫不會前進
-  const { ms, easing } = faceTiming(preference)
+  const { ms, easing } = faceTiming(active)
   useEffect(() => {
     if (view.stage !== 'animating') return
     let cancelled = false
@@ -155,46 +166,51 @@ export function FaceTransition<T extends string>({
   const layerProps = (role: FaceRole): HTMLAttributes<HTMLDivElement> => {
     const markup =
       view.stage === 'animating'
-        ? faceMarkup(preference, role, view.direction, { from: view.fromHeight, to: view.toHeight })
+        ? faceMarkup(active, role, view.direction, { from: view.fromHeight, to: view.toHeight })
         : null
     if (!markup) return {}
     const { style, ...data } = markup
     return { ...data, style: style as CSSProperties }
   }
-  const option = faceTransitionOption(preference.animation)
+  const option = faceTransitionOption(active.animation)
+
+  const footerFace = view.stage === 'animating' && view.incoming !== null ? view.incoming : view.current
 
   return (
-    <div
-      ref={containerRef}
-      className={cn('face-stage', className)}
-      data-face-anim={view.stage === 'animating' ? preference.animation : undefined}
-      data-face-busy={view.stage !== 'idle' ? '' : undefined}
-      data-face-clip={option.overflows ? undefined : ''}
-      style={containerStyle}
-    >
+    <>
       <div
-        key={view.current}
-        className={cn('face-layer', faceClassName)}
-        aria-hidden={view.stage === 'animating' || undefined}
-        {...layerProps('leaving')}
+        ref={containerRef}
+        className={cn('face-stage', className)}
+        data-face-anim={view.stage === 'animating' ? active.animation : undefined}
+        data-face-busy={view.stage !== 'idle' ? '' : undefined}
+        data-face-clip={option.overflows ? undefined : ''}
+        style={containerStyle}
       >
-        {children(view.current, { onReady: noop })}
-      </div>
-      {view.incoming !== null && (
         <div
-          key={view.incoming}
-          ref={incomingRef}
+          key={view.current}
           className={cn('face-layer', faceClassName)}
-          data-face-stage={view.stage === 'preparing' ? 'preparing' : undefined}
-          aria-hidden={view.stage === 'preparing' || undefined}
-          // 準備中的那一面不能被 Tab 到（React 18 不認得 inert，直接當屬性傳）
-          {...(view.stage === 'preparing' ? ({ inert: '' } as Record<string, string>) : {})}
-          {...layerProps('entering')}
+          aria-hidden={view.stage === 'animating' || undefined}
+          {...layerProps('leaving')}
         >
-          {children(view.incoming, { onReady: onIncomingReady })}
+          {children(view.current, { onReady: noop })}
         </div>
-      )}
-    </div>
+        {view.incoming !== null && (
+          <div
+            key={view.incoming}
+            ref={incomingRef}
+            className={cn('face-layer', faceClassName)}
+            data-face-stage={view.stage === 'preparing' ? 'preparing' : undefined}
+            aria-hidden={view.stage === 'preparing' || undefined}
+            // 準備中的那一面不能被 Tab 到（React 18 不認得 inert，直接當屬性傳）
+            {...(view.stage === 'preparing' ? ({ inert: '' } as Record<string, string>) : {})}
+            {...layerProps('entering')}
+          >
+            {children(view.incoming, { onReady: onIncomingReady })}
+          </div>
+        )}
+      </div>
+      {footer?.(footerFace)}
+    </>
   )
 }
 

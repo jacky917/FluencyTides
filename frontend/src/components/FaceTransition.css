@@ -1,5 +1,6 @@
 /*
- * 卡面正反切換動畫的外觀（行為在 FaceTransition.tsx，目錄與時長在 lib/faceTransitions.ts）。
+ * 卡面切換（翻面、換卡）動畫的外觀（行為在 FaceTransition.tsx，目錄與時長在 lib/faceTransitions.ts）。
+ * .face-stage 之後的內容（FaceTransition 的 footer，例如卡面提示）不在這裡處理，隨外框高度的過渡移動。
  * Visuals of the card face switch; behaviour lives in FaceTransition.tsx.
  *
  * 每一面是一個 .face-layer，播放時帶：

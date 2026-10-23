@@ -98,6 +98,7 @@ export default function Cards() {
               deck={nav.deck}
               side={nav.side}
               trailLength={nav.trail.length}
+              arrivedBack={nav.arrivedBack}
               onSide={nav.setSide}
               onBrowse={nav.openNotes}
               onBack={nav.goBack}
