@@ -55,6 +55,16 @@ interface CardViewPanelProps {
 const STATUS_LIMIT = 4
 const NO_STATUS: CardFrameStatus = { failedMedia: [], notices: [], frameErrors: [] }
 
+/**
+ * 一行文字的骨架（span，可以放在標題與段落裡；`Skeleton` 是 div，不能放在 p 裡）。
+ * An inline skeleton for a line of text.
+ * @param props.className - 尺寸與對齊。Size and alignment.
+ * @returns 骨架 JSX。Skeleton JSX.
+ */
+function TextSkeleton({ className }: { className?: string }) {
+  return <span aria-hidden="true" className={cn('inline-block animate-pulse rounded-md bg-primary/10', className)} />
+}
+
 /** 狀態訊息的內容（內容一樣時提示不重新淡入）。The content of the messages, for the fade-in key. */
 const statusSignature = ({ failedMedia, notices, frameErrors }: CardFrameStatus) =>
   JSON.stringify([failedMedia.map((item) => item.name), notices, frameErrors])
@@ -186,39 +196,51 @@ export function CardViewPanel({
           返回上一張卡片{trailLength > 1 && `（${trailLength}）`}
         </Button>
       )}
-      {card ? (
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 space-y-1">
-            <CardTitle className="text-base break-all">{card.model_name}</CardTitle>
-            <p className="text-xs text-muted-foreground break-all">
-              {relativeDeckPath(card.deck_name, deck) || card.deck_name} · Card {card.card_id} · Note {card.note_id}
+      {/* 讀取中也排出同樣的三行與按鈕（骨架佔位、按鈕停用），讀完時版面不會先塌再撐開；
+          每行各自一行，太長就截斷（滑鼠移上去看全文） */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        {/* 至少留 10rem 給文字，再窄就讓按鈕換到下一行 */}
+        <div className="min-w-0 flex-1 basis-40 space-y-1">
+          <CardTitle className="truncate text-base" title={card?.model_name}>
+            {card ? card.model_name : <TextSkeleton className="h-4 w-40 align-top" />}
+          </CardTitle>
+          {card ? (
+            <p className="truncate text-xs text-muted-foreground" title={card.deck_name}>
+              {relativeDeckPath(card.deck_name, deck) || card.deck_name}
             </p>
-          </div>
-          <div className="flex gap-2">
-            <div className="inline-flex rounded-md border p-0.5" role="group" aria-label="卡面">
-              {(['question', 'answer'] as const).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => onSide(value)}
-                  aria-pressed={side === value}
-                  className={cn(
-                    'rounded px-3 py-1 text-sm',
-                    side === value ? 'bg-primary text-primary-foreground' : 'hover:bg-accent',
-                  )}
-                >
-                  {value === 'question' ? '正面' : '背面'}
-                </button>
-              ))}
-            </div>
-            <Button size="sm" variant="outline" onClick={() => onFieldsOpen(true)}>
-              筆記欄位
-            </Button>
-          </div>
+          ) : (
+            <p className="truncate text-xs" aria-hidden="true">
+              <TextSkeleton className="h-3 w-56 max-w-full align-middle" />
+            </p>
+          )}
+          <p className="truncate text-xs text-muted-foreground">
+            Card {cardId} · Note{' '}
+            {card ? card.note_id : <TextSkeleton className="h-3 w-24 align-middle" />}
+          </p>
         </div>
-      ) : (
-        <CardTitle className="text-base">Card {cardId}</CardTitle>
-      )}
+        <div className="flex gap-2">
+          <div className="inline-flex rounded-md border p-0.5" role="group" aria-label="卡面">
+            {(['question', 'answer'] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => onSide(value)}
+                disabled={!card}
+                aria-pressed={side === value}
+                className={cn(
+                  'rounded px-3 py-1 text-sm disabled:pointer-events-none disabled:opacity-50',
+                  side === value ? 'bg-primary text-primary-foreground' : 'hover:bg-accent',
+                )}
+              >
+                {value === 'question' ? '正面' : '背面'}
+              </button>
+            ))}
+          </div>
+          <Button size="sm" variant="outline" disabled={!card} onClick={() => onFieldsOpen(true)}>
+            筆記欄位
+          </Button>
+        </div>
+      </div>
     </CardHeader>
   )
 
