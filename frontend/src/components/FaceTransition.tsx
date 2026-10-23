@@ -81,13 +81,13 @@ export function FaceTransition<T extends string>({
     value,
     direction,
     animated: preference.animation !== 'none',
-    measure: () => containerRef.current?.offsetHeight,
+    measure: () => exactHeight(containerRef.current),
   })
   if (synced !== state) setState(synced)
   const view = synced
 
   /** 新的一面排版好了：量它的高度，開始播放。Starts the animation. */
-  const start = useCallback(() => dispatch({ type: 'ready', height: incomingRef.current?.offsetHeight }), [dispatch])
+  const start = useCallback(() => dispatch({ type: 'ready', height: exactHeight(incomingRef.current) }), [dispatch])
 
   // 準備階段：等新的一面回報排版好（再穩定一下），或最多等 READY_TIMEOUT_MS
   const settleTimer = useRef<number | undefined>(undefined)
@@ -153,7 +153,10 @@ export function FaceTransition<T extends string>({
 
   /** 一面在播放中的標記。Markup of one face. */
   const layerProps = (role: FaceRole): HTMLAttributes<HTMLDivElement> => {
-    const markup = view.stage === 'animating' ? faceMarkup(preference, role, view.direction) : null
+    const markup =
+      view.stage === 'animating'
+        ? faceMarkup(preference, role, view.direction, { from: view.fromHeight, to: view.toHeight })
+        : null
     if (!markup) return {}
     const { style, ...data } = markup
     return { ...data, style: style as CSSProperties }
@@ -196,3 +199,13 @@ export function FaceTransition<T extends string>({
 }
 
 const noop = () => undefined
+
+/**
+ * 元素不取整的高度（伸縮漸變的分界要和較矮那一面的下緣完全對齊，差一點就會多出一條亮線或縫）。
+ * The unrounded height, so the morph split lines up with the shorter face exactly.
+ * @param element - 要量的元素。The element.
+ * @returns 高度（px），沒有元素時為 undefined。The height, or undefined.
+ */
+function exactHeight(element: HTMLElement | null): number | undefined {
+  return element?.getBoundingClientRect().height
+}

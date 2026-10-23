@@ -59,6 +59,32 @@ describe('faceMarkup', () => {
     })
   })
 
+  it('splits a morph at the shorter height, marking the taller face', () => {
+    const morph = { animation: 'morph', speed: 'normal' } as const
+    // 長變短：舊的一面較高
+    expect(faceMarkup(morph, 'leaving', 1, { from: 500, to: 300.5 })).toMatchObject({
+      'data-face-span': 'long',
+      style: { '--face-split': '300.5px' },
+    })
+    expect(faceMarkup(morph, 'entering', 1, { from: 500, to: 300.5 })?.['data-face-span']).toBe('short')
+    // 短變長（往回也一樣，只看高度）：新的一面較高
+    expect(faceMarkup(morph, 'entering', -1, { from: 300, to: 500 })).toMatchObject({
+      'data-face-span': 'long',
+      style: { '--face-split': '300px' },
+    })
+    expect(faceMarkup(morph, 'leaving', -1, { from: 300, to: 500 })?.style).not.toHaveProperty('--face-split')
+  })
+
+  it('does not split equal heights, unknown heights or other animations', () => {
+    const morph = { animation: 'morph', speed: 'normal' } as const
+    expect(faceMarkup(morph, 'leaving', 1, { from: 300, to: 300 })).not.toHaveProperty('data-face-span')
+    expect(faceMarkup(morph, 'leaving', 1, { from: 300 })).not.toHaveProperty('data-face-span')
+    expect(faceMarkup(morph, 'leaving', 1)).not.toHaveProperty('data-face-span')
+    expect(faceMarkup({ animation: 'zoom', speed: 'normal' }, 'leaving', 1, { from: 500, to: 300 })).not.toHaveProperty(
+      'data-face-span',
+    )
+  })
+
   it('has no markup without animation', () => {
     expect(faceMarkup({ animation: 'none', speed: 'normal' }, 'leaving', 1)).toBeNull()
   })

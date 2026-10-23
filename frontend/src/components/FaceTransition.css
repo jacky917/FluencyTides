@@ -198,15 +198,93 @@
   }
 }
 
-/* ---------- 伸縮漸變／縮放：新的一面在上面先淡入，舊的一面稍後才淡出，
-   兩面合起來始終不透明，不會在中途透出底下的頁面 ---------- */
+/* ---------- 伸縮漸變：外框（高度隨動畫過渡）裁切內容並保留圓角，看起來是同一張卡片在變長變短 ----------
+   兩面不一樣高時，以較矮那一面的高度（--face-split）分成兩段：
+   - 重疊的部分交叉漸變。兩面用 plus-lighter 直接相加（外框 isolation 讓它們只和彼此相加，
+     不加到頁面背景上），權重是 1 − p 與 p，任何時間點加起來都是 1，不會透出後面。
+     一般的疊法是後面那層被前面那層打折，各 0.5 時會有 25% 透出後面。
+   - 較高那一面多出來的部分始終不透明，只由外框高度露出或收起（遮罩下段固定為 1）。
+   較高那一面不能整層淡化，改用遮罩上段的不透明度（--face-overlap）跟著動畫走；
+   要平滑過渡需要 @property，不支援的瀏覽器會在中途一次切過去。 */
 
-/* 伸縮漸變：外框（高度隨動畫過渡）裁切內容並保留圓角，較高的一面隨外框伸長逐漸露出，
-   較矮的一面隨外框縮短逐漸收起，看起來是同一張卡片在變長變短 */
+@property --face-overlap {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 1;
+}
+
 .face-stage[data-face-anim='morph'] {
   overflow: clip;
   border-radius: var(--radius-lg, 0.5rem);
+  isolation: isolate;
 }
+
+.face-layer[data-face-anim='morph'] {
+  mix-blend-mode: plus-lighter;
+}
+
+.face-layer[data-face-anim='morph'][data-face-part='enter'] {
+  animation-name: face-fade-in;
+}
+
+.face-layer[data-face-anim='morph'][data-face-part='leave'] {
+  animation-name: face-fade-out;
+}
+
+.face-layer[data-face-anim='morph'][data-face-span='long'] {
+  mask-image: linear-gradient(
+    to bottom,
+    rgb(0 0 0 / var(--face-overlap)) var(--face-split),
+    rgb(0 0 0) var(--face-split)
+  );
+}
+
+.face-layer[data-face-anim='morph'][data-face-span='long'][data-face-part='enter'] {
+  animation-name: face-overlap-in;
+}
+
+.face-layer[data-face-anim='morph'][data-face-span='long'][data-face-part='leave'] {
+  animation-name: face-overlap-out;
+}
+
+@keyframes face-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes face-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes face-overlap-in {
+  from {
+    --face-overlap: 0;
+  }
+  to {
+    --face-overlap: 1;
+  }
+}
+
+@keyframes face-overlap-out {
+  from {
+    --face-overlap: 1;
+  }
+  to {
+    --face-overlap: 0;
+  }
+}
+
+/* ---------- 縮放：新的一面在上面先淡入，舊的一面稍後才淡出，
+   兩面合起來始終不透明，不會在中途透出底下的頁面 ---------- */
 
 @keyframes face-fade-in-early {
   0% {
@@ -226,15 +304,6 @@
   100% {
     opacity: 0;
   }
-}
-
-.face-layer[data-face-anim='morph'][data-face-part='enter'] {
-  z-index: 2;
-  animation-name: face-fade-in-early;
-}
-
-.face-layer[data-face-anim='morph'][data-face-part='leave'] {
-  animation-name: face-fade-out-late;
 }
 
 .face-layer[data-face-anim='zoom'][data-face-part='enter'] {

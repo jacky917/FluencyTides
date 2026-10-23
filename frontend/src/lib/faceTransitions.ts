@@ -116,25 +116,54 @@ export function faceTiming(preference: FacePreference): { ms: number; easing: st
 export interface FaceMarkup {
   'data-face-anim': FaceTransitionId
   'data-face-part': FacePart
+  /** 伸縮漸變時兩面不一樣高：較高的是 long、較矮的是 short。Which face is taller (morph only). */
+  'data-face-span'?: 'long' | 'short'
   style: Record<string, string>
+}
+
+/** 兩面的高度：舊的一面（離開）與新的一面（進來）。Heights of the leaving and entering faces. */
+export interface FaceHeights {
+  from?: number
+  to?: number
 }
 
 /**
  * 播放中某一面的標記：播哪一段（往回時角色互換）、正放或倒放、時長與曲線。沒有動畫時為 null。
- * The markup of one face during a switch, or null for no animation.
+ *
+ * 伸縮漸變時，較高的一面另外標成 long，並帶上較矮那一面的高度（`--face-split`）：
+ * 這條線以上是兩面重疊、交叉漸變的部分，以下是較高那一面多出來的部分，不漸變、只由外框高度露出或收起。
+ *
+ * The markup of one face during a switch, or null for no animation. For a
+ * morph between faces of different heights, the taller one also carries the
+ * shorter height: above it the faces cross-fade, below it the taller face
+ * stays opaque and is revealed or hidden by the wrapper height alone.
  * @param preference - 動畫偏好。The preference.
  * @param role - 這一面是離開還是進來。Leaving or entering.
  * @param direction - 1 為翻到背面，-1 為翻回正面。+1 to the back, -1 to the front.
+ * @param heights - 兩面的高度（伸縮漸變用）。Heights of both faces, for morph.
  * @returns data 屬性與 CSS 變數。Attributes and CSS variables.
  */
-export function faceMarkup(preference: FacePreference, role: FaceRole, direction: 1 | -1): FaceMarkup | null {
+export function faceMarkup(
+  preference: FacePreference,
+  role: FaceRole,
+  direction: 1 | -1,
+  heights: FaceHeights = {},
+): FaceMarkup | null {
   if (preference.animation === 'none') return null
   const forward = direction === 1
   const part: FacePart = (role === 'leaving') === forward ? 'leave' : 'enter'
   const { ms, easing } = faceTiming(preference)
-  return {
+  const markup: FaceMarkup = {
     'data-face-anim': preference.animation,
     'data-face-part': part,
     style: { '--face-duration': `${ms}ms`, '--face-easing': easing, '--face-play': forward ? 'normal' : 'reverse' },
   }
+  const { from, to } = heights
+  if (preference.animation === 'morph' && from !== undefined && to !== undefined && from !== to) {
+    const own = role === 'leaving' ? from : to
+    const split = Math.min(from, to)
+    markup['data-face-span'] = own > split ? 'long' : 'short'
+    if (own > split) markup.style['--face-split'] = `${split}px`
+  }
+  return markup
 }
