@@ -245,6 +245,8 @@ export function CardViewPanel({
             direction={shown.direction}
             preference={facePreference(faceSettings, shown.occasion)}
             waitForReady
+            // 伸縮漸變時卡片的邊框改由外框沿著邊緣畫（與 CardFrame 的邊框相同），見 FaceTransition.css
+            className="[--face-frame:1px_solid_var(--color-border)]"
             faceClassName="rounded-lg"
             footer={(face) => {
               const status = statuses.get(face) ?? NO_STATUS
