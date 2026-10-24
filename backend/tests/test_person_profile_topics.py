@@ -210,6 +210,32 @@ class TestTopicsFlow:
         new_toggle = query.message.edit_reply_markup.await_args.kwargs["reply_markup"].inline_keyboard[-1][0]
         assert new_toggle.callback_data == f"pp:mask:5:{'on' if choice == 'off' else 'off'}"
 
+    @pytest.mark.parametrize(("state", "method"), [("off", "add_tags"), ("on", "remove_tags")])
+    def test_card_toggle_icon_link(self, state, method):
+        """卡面的眼睛圖示：深連結 pmask，index 是切換後的狀態（on＝遮）。"""
+        action = DeepLinkParser.parse(f"pmask-Display_Name-{state}-PP_20261024_123456_abcd")
+        assert isinstance(action, PersonLinkAction) and action.verb == "mask" and action.index == state
+        card_service = _card_service()
+        for name in ("add_tags", "remove_tags", "sync"):
+            setattr(card_service.anki_client, name, mock.AsyncMock())
+        message, _ = _message(f"/start pmask-Display_Name-{state}-PP_1")
+        _run(commands.command_start_handler(
+            message, _anki(), mock.MagicMock(), card_service, state=_fsm(), note_service=_note_service()
+        ))
+        getattr(card_service.anki_client, method).assert_awaited_once_with([5], TEXT_UNMASKED_TAG)
+        message.edit_reply_markup.assert_not_awaited()  # 使用者自己的 /start 訊息不能改
+        assert "下次分析時生效" in _sent(message.answer)[-1]
+
+    def test_card_toggle_icon_bad_state(self):
+        message, _ = _message("/start pmask-Display_Name-maybe-PP_1")
+        card_service = _card_service()
+        card_service.anki_client.add_tags = mock.AsyncMock()
+        _run(commands.command_start_handler(
+            message, _anki(), mock.MagicMock(), card_service, state=_fsm(), note_service=_note_service()
+        ))
+        assert "這個連結不支援" in _sent(message.answer)[-1]
+        card_service.anki_client.add_tags.assert_not_awaited()
+
     def test_toggle_with_bad_data(self):
         query, _ = _press("pp:mask:5:maybe", _card_service())
         assert "按鈕已失效" in _sent(query.message.answer)[0]

@@ -341,6 +341,31 @@ html, body {
     color: #ffffff;
 }
 
+/* AI 遮名字的開關：只有圖示。遮（預設）灰色劃線的眼睛；不遮橘色睜開的眼睛 */
+.mask-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 30px;
+    border-radius: 999px;
+    border: 1px solid #3a3a3a;
+    background-color: #242424;
+    color: #7f8c8d;
+    text-decoration: none;
+}
+
+.mask-toggle.is-unmasked {
+    border-color: #ff9f43;
+    background-color: rgba(255, 159, 67, 0.12);
+    color: #ff9f43;
+}
+
+.mask-toggle:hover {
+    border-color: #95a5a6;
+    color: #e0e0e0;
+}
+
 .tg-hint {
     align-self: center;
     color: #7f8c8d;

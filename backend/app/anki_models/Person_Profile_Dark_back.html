@@ -266,6 +266,25 @@
         return a;
     }
 
+    /**
+     * AI 分析時內文遮不遮名字的開關（只有圖示，像密碼欄的顯示／隱藏）：劃線的眼睛＝遮（預設，灰），
+     * 睜開的眼睛＝不遮（橘）。狀態存在標籤「AI內文不遮名字」（與後端 TEXT_UNMASKED_TAG 相同）；
+     * 點它開 TG 切換成另一個狀態。
+     */
+    function maskToggle() {
+        var unmasked = readField('Tags').split(/\s+/).indexOf('AI內文不遮名字') >= 0;
+        var a = tgLink('', tgUrl('pmask', 'Display_Name', unmasked ? 'on' : 'off'),
+            'mask-toggle' + (unmasked ? ' is-unmasked' : ''));
+        a.title = unmasked ? 'AI 分析：內文不遮名字（點一下改成遮）' : 'AI 分析：內文遮名字（點一下改成不遮）';
+        a.setAttribute('aria-label', a.title);
+        var eye = '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>';
+        var slash = '<line x1="3" y1="3" x2="21" y2="21"/>';
+        a.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" '
+            + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            + eye + (unmasked ? '' : slash) + '</svg>';
+        return a;
+    }
+
     /** 「+」：開啟 TG 新增一筆。放在 summary 裡時，點它不會展開或收合區段（連結是互動元素）。 */
     function addLink(field, label) {
         var a = tgLink('+', tgUrl('padd', field, 'none'), 'add-link');
@@ -608,10 +627,7 @@
         wrap.appendChild(tgLink('改資料', tgUrl('pview', 'Display_Name', 'none')));
         wrap.appendChild(tgLink('照片', tgUrl('pphoto', 'Photo', 'none')));
         wrap.appendChild(tgLink('AI 分析與話題', tgUrl('ptopic', 'Display_Name', 'none')));
-        // 標籤「AI內文不遮名字」：AI 分析時內文不遮名字（與後端 TEXT_UNMASKED_TAG 相同）
-        if (readField('Tags').split(/\s+/).indexOf('AI內文不遮名字') >= 0) {
-            wrap.appendChild(el('span', 'tg-hint', 'AI：內文不遮名字'));
-        }
+        wrap.appendChild(maskToggle());
         wrap.appendChild(el('span', 'tg-hint', '長按項目 3 秒可刪除'));
         document.getElementById('person-tg').appendChild(wrap);
     })();

@@ -311,6 +311,11 @@ async def handle_person_link(
             await _start_photo(message, state, note_id)
         elif action.verb == "topic":
             await _send_topics(message, card_service, note_id)
+        elif action.verb == "mask":
+            if action.index not in ("on", "off"):
+                await message.answer("❌ 這個連結不支援，請回 Anki 重新點。")
+                return
+            await _set_text_mask(message, card_service, note_id, masked=action.index == "on", from_button=False)
     except (FluencyTidesError, AnkiConnectError) as e:
         await _reply_error(message, e)
 
@@ -1030,8 +1035,15 @@ def _topics_keyboard(note_id: int, masked: bool) -> InlineKeyboardMarkup:
     ])
 
 
-async def _set_text_mask(message: types.Message, card_service: CardService, note_id: int, masked: bool) -> None:
-    """切換內文遮名字：加減標籤 :data:`TEXT_UNMASKED_TAG`（不改筆記類型），並同步。Toggle via the tag."""
+async def _set_text_mask(
+    message: types.Message, card_service: CardService, note_id: int, masked: bool, *, from_button: bool = True
+) -> None:
+    """切換內文遮名字：加減標籤 :data:`TEXT_UNMASKED_TAG`（不改筆記類型），並同步。Toggle via the tag.
+
+    Args:
+        from_button: 從分析結果的按鈕切換（更新那則訊息的按鈕）；卡面的開關圖示（深連結）為 False。
+            From the topics message's button; False for the card's toggle icon.
+    """
     loaded = await _load(card_service, note_id)
     if loaded is None:
         await message.answer(CARD_NOT_FOUND)
@@ -1042,7 +1054,8 @@ async def _set_text_mask(message: types.Message, card_service: CardService, note
     else:
         await client.add_tags([note_id], TEXT_UNMASKED_TAG)
     warning = await sync_warning(client)
-    await message.edit_reply_markup(reply_markup=_topics_keyboard(note_id, masked))
+    if from_button:
+        await message.edit_reply_markup(reply_markup=_topics_keyboard(note_id, masked))
     await message.answer(
         ("已改成：送給 AI 的內文遮名字（預設）。" if masked
          else "已改成：送給 AI 的內文不遮名字（姓名欄位照樣不送）。")
