@@ -5,8 +5,9 @@ Person profile "AI insight and topics": the LLM first reads the person like
 a counselor, then suggests conversation topics.
 
 隱私：送給 LLM 前，本人與家人的名字換成代號（``〔本人〕``、``〔家人1〕``），回來後再換回真正的稱呼。
-只遮得到資料裡登記的名字（稱呼、各語言的姓名與它們的姓、名，家人的名字）；其他文字裡提到的
-第三者名字照原文送出。聯絡方式、敏感話題、名字記憶法、外貌等與話題無關的欄位不送。
+做法是最基本的字串比對：姓名欄位（稱呼與去掉敬稱的部分、各語言的姓名、讀音）與家人名字的完整值，
+以及只寫名字的情況（「姓 名」分開寫的欄位取出的名字），假名再加平假名、片假名兩種寫法，出現就換掉。
+沒有登記的第三者名字不會被遮。聯絡方式、敏感話題、名字記憶法、外貌等與話題無關的欄位不送。
 
 Names of the person and their family are replaced with tokens before the
 LLM sees them and restored afterwards.
@@ -41,6 +42,9 @@ PERSON_TOKEN = "〔本人〕"
 #: 本人的姓名欄位（全部遮起來，不另外送）。The person's name fields.
 NAME_FIELDS = ("Display_Name", "Name_ZH", "Name_EN", "Name_JA", "Name_JA_Kana", "Name_Romaji")
 
+#: 以空白分開「姓 名」的欄位裡，名字在第幾段（只寫名字時也要遮）。Where the given name sits.
+GIVEN_NAME_POSITION = {"Name_JA": -1, "Name_JA_Kana": -1, "Name_Romaji": -1, "Name_EN": 0}
+
 #: 不送給 LLM 的欄位：姓名（另以代號表示）、與話題無關或不該外送的資料。Fields never sent.
 EXCLUDED_FIELDS = (*NAME_FIELDS, "Honorific", "Name_Memo", "Appearance", "Sensitive", "Introducer_Note_ID",
                    "Contact_Cadence")
@@ -48,15 +52,12 @@ EXCLUDED_FIELDS = (*NAME_FIELDS, "Honorific", "Name_Memo", "Appearance", "Sensit
 #: 稱呼後面常見的敬稱：還原時避免變成「田中さんさん」。Honorific suffixes.
 HONORIFICS = ("さん", "くん", "君", "ちゃん", "さま", "様", "先生", "桑", "san")
 
-_SPLIT = re.compile(r"[\s・･·]+")
-
-
 @dataclass
 class NameMask:
     """名字 ↔ 代號的對照：送出前遮名字，回來後換回稱呼。Masks names and restores them.
 
     Attributes:
-        names: 名字（小寫）→ 代號。Name (lower-cased) to token.
+        names: 名字 → 代號。Name to token.
         restore: 代號 → 要換回的稱呼。Token to the display name.
         family: 家人的代號與關係（給提示詞說明）。Family tokens with relations.
     """
@@ -66,27 +67,23 @@ class NameMask:
     family: list[tuple[str, str]] = field(default_factory=list)
 
     def add(self, token: str, display: str, names: list[str]) -> None:
-        """登記一個人：完整的名字與拆開的姓、名都換成同一個代號（先登記的優先）。Register a person."""
+        """登記一個人：這些名字（稱呼另加去掉敬稱的部分；假名另加平假名、片假名兩種寫法）換成同一個代號。
+
+        Register a person's names (plus hiragana/katakana variants) under one token.
+        """
         self.restore[token] = display
         for name in names:
             name = name.strip()
-            if not name:
-                continue
-            candidates = [name, *_SPLIT.split(name)]
-            core = _strip_honorific(name)
-            if core != name:
-                candidates.append(core)
-            for candidate in candidates:
-                # 太短的片段（單一漢字、兩個字母）容易誤遮一般文字
-                if len(candidate) >= (2 if not candidate.isascii() else 3):
-                    self.names.setdefault(candidate.lower(), token)
+            for value in {name, _strip_honorific(name)}:
+                for variant in {value, _to_katakana(value), _to_hiragana(value)}:
+                    if variant:
+                        self.names.setdefault(variant, token)
 
     def mask(self, text: str) -> str:
-        """把登記過的名字換成代號（長的先比對，英文不分大小寫）。Replace names with tokens."""
-        if not self.names or not text:
-            return text
-        pattern = "|".join(re.escape(name) for name in sorted(self.names, key=len, reverse=True))
-        return re.sub(pattern, lambda m: self.names[m.group(0).lower()], text, flags=re.IGNORECASE)
+        """把登記過的名字換成代號：完整字串比對，長的先換（「田中さん」先於「田中」）。Replace names."""
+        for name in sorted(self.names, key=len, reverse=True):
+            text = text.replace(name, self.names[name])
+        return text
 
     def unmask(self, text: str) -> str:
         """代號換回稱呼；稱呼已含敬稱時，去掉 LLM 在代號後面多加的敬稱。Restore the names."""
@@ -101,6 +98,16 @@ class NameMask:
         return text
 
 
+def _to_katakana(text: str) -> str:
+    """平假名轉片假名（其他字不變）。Hiragana to katakana."""
+    return "".join(chr(ord(c) + 0x60) if "ぁ" <= c <= "ゖ" else c for c in text)
+
+
+def _to_hiragana(text: str) -> str:
+    """片假名轉平假名（其他字不變）。Katakana to hiragana."""
+    return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in text)
+
+
 def _strip_honorific(name: str) -> str:
     for honorific in HONORIFICS:
         if name.endswith(honorific) and len(name) > len(honorific):
@@ -112,7 +119,13 @@ def build_mask(fields: dict[str, str], lists: dict[str, list[object]]) -> NameMa
     """依本人的姓名欄位與家人清單建立對照表。Build the mask from the name fields and family."""
     mask = NameMask()
     display = plain_text(fields.get("Display_Name", ""), 60)
-    mask.add(PERSON_TOKEN, display, [plain_text(fields.get(name, ""), 60) for name in NAME_FIELDS])
+    names = [plain_text(fields.get(name, ""), 60) for name in NAME_FIELDS]
+    # 只寫名字的情況：從「姓 名」分開寫的欄位取出名字（英文名在前，其他在後）
+    for name, position in GIVEN_NAME_POSITION.items():
+        parts = plain_text(fields.get(name, ""), 60).split()
+        if len(parts) >= 2:
+            names.append(parts[position])
+    mask.add(PERSON_TOKEN, display, names)
     number = 0
     for member in lists.get("Family_JSON", []):
         if not isinstance(member, dict) or not str(member.get("name", "")).strip():

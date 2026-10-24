@@ -58,13 +58,13 @@ def _result(text: str = "〔本人〕") -> dict:
 
 
 class TestMask:
-    def test_prompt_contains_no_names(self):
+    def test_prompt_contains_no_registered_names(self):
         prompt, mask = topics.build_prompt(
-            _fields(Notes="上次跟田中先生、Yuki 和美咲一起吃飯", Work_Detail="tanaka 負責 IT"),
-            _lists(Interactions_JSON=[{"date": "2026-10-01", "topics": "悠希的轉職", "quote": "ゆうき です"}]),
+            _fields(Notes="上次跟田中先生、Yuki Tanaka 和美咲一起吃飯，Momo 也在", Work_Detail="田中悠希負責 IT"),
+            _lists(Interactions_JSON=[{"date": "2026-10-01", "topics": "田中 悠希的轉職", "quote": "たなか ゆうき です"}]),
             TODAY,
         )
-        for name in ("田中", "悠希", "ゆうき", "たなか", "Yuki", "yuki", "tanaka", "Tanaka", "美咲", "Momo"):
+        for name in ("田中", "悠希", "たなか ゆうき", "Yuki Tanaka", "Tanaka Yūki", "美咲", "Momo"):
             assert name not in prompt, name
         assert "〔本人〕" in prompt and "〔家人1〕" in prompt and "〔家人2〕" in prompt
         assert "`〔家人1〕`：他的妻子" in prompt
@@ -82,10 +82,16 @@ class TestMask:
             assert secret not in prompt, secret
         assert "不想被主動提起的話題" in prompt
 
-    def test_short_fragments_are_not_masked(self):
-        """單一漢字、兩個字母的片段不遮：容易誤遮一般文字。"""
-        mask = topics.build_mask({"Display_Name": "李さん", "Name_EN": "Bo Li"}, {})
-        assert mask.mask("李さん和 Bo Li 去了 Li 公園") == "〔本人〕和 〔本人〕 去了 Li 公園"
+    def test_whole_values_even_short(self):
+        """完整值再短也遮；稱呼去掉敬稱的部分也遮。"""
+        mask = topics.build_mask({"Display_Name": "李さん", "Name_EN": "Bo Li"}, {"Family_JSON": [{"relation": "貓", "name": "Mo"}]})
+        assert mask.mask("李さん、李和 Bo Li 帶 Mo 去公園") == "〔本人〕、〔本人〕和 〔本人〕 帶 〔家人1〕 去公園"
+
+    def test_given_name_alone_in_any_kana(self):
+        """只寫名字也遮：漢字、平假名、片假名、英文、羅馬拼音；姓不另外拆出來遮。"""
+        mask = topics.build_mask(NAMES, {"Family_JSON": [{"relation": "妻子", "name": "みさき"}]})
+        assert mask.mask("悠希、ゆうき、ユウキ、Yuki、Yūki") == "〔本人〕、〔本人〕、〔本人〕、〔本人〕、〔本人〕"
+        assert mask.mask("ミサキとたなか") == "〔家人1〕とたなか"
 
     @pytest.mark.parametrize(
         ("display", "text", "expected"),
