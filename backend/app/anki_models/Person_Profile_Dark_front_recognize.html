@@ -1,15 +1,19 @@
 <!-- 人脈卡「認人」正面：只用線索出題（照片、公司・職稱、認識場合、外貌），問「這是誰？」。
      Anki 只要正面引用的欄位有一個有值就產生這張卡，所以這裡只能引用線索欄位、不能引用姓名：
-     引用姓名會讓每個人都產生這張卡，也可能直接洩漏答案。多數人沒有照片，文字線索是主要的題目。 -->
-<div class="card person-card recognize-front">
-    <div class="front-kicker">🧑 這是誰？</div>
+     引用姓名會讓每個人都產生這張卡，也可能直接洩漏答案。多數人沒有照片，文字線索是主要的題目。
+     版面與「見面前複習」正面相同（標籤 → 頭像 → 內容 → 問題），只有內容不同。 -->
+<div class="card person-card person-front">
+    <div class="front-kicker">認人</div>
 
-    {{#Photo}}<div class="front-photo">{{Photo}}</div>{{/Photo}}
+    {{#Photo}}<div class="avatar-lg avatar-photo-cue">{{Photo}}</div>{{/Photo}}
+    {{^Photo}}<div class="avatar-lg avatar-unknown">?</div>{{/Photo}}
 
-    <ul class="cue-list">
-        {{#Company}}<li><span class="cue-icon">🏢</span><span>{{Company}}{{#Title}}・{{Title}}{{/Title}}</span></li>{{/Company}}
-        {{^Company}}{{#Title}}<li><span class="cue-icon">🏢</span><span>{{Title}}</span></li>{{/Title}}{{/Company}}
-        {{#Met_Where}}<li><span class="cue-icon">🤝</span><span>{{Met_Where}}{{#Met_Date}}（{{Met_Date}}）{{/Met_Date}}</span></li>{{/Met_Where}}
-        {{#Appearance}}<li><span class="cue-icon">👀</span><span>{{Appearance}}</span></li>{{/Appearance}}
-    </ul>
+    <dl class="cue-list">
+        {{#Company}}<div class="cue"><dt>公司</dt><dd>{{Company}}{{#Title}}・{{Title}}{{/Title}}</dd></div>{{/Company}}
+        {{^Company}}{{#Title}}<div class="cue"><dt>職稱</dt><dd>{{Title}}</dd></div>{{/Title}}{{/Company}}
+        {{#Met_Where}}<div class="cue"><dt>認識</dt><dd>{{Met_Where}}{{#Met_Date}}（{{Met_Date}}）{{/Met_Date}}</dd></div>{{/Met_Where}}
+        {{#Appearance}}<div class="cue"><dt>外貌</dt><dd>{{Appearance}}</dd></div>{{/Appearance}}
+    </dl>
+
+    <div class="front-question">這是誰？</div>
 </div>

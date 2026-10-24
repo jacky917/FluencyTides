@@ -85,7 +85,7 @@ def _button(text: str, data: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=data)
 
 
-CANCEL_ROW = [_button("❌ 取消", "pp:cancel")]
+CANCEL_ROW = [_button("取消", "pp:cancel")]
 
 
 def _today() -> date:
@@ -134,10 +134,10 @@ async def _ensure_ids(card_service: CardService, note_id: int, fields: dict[str,
 def summary_keyboard(note_id: int) -> InlineKeyboardMarkup:
     """摘要下方的操作按鈕。The buttons under a summary."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [_button("🧠 用一段話記錄（文字或語音）", f"pp:ing:{note_id}")],
-        [_button("➕ 記一筆互動", f"pp:add:{note_id}:I"), _button("✅ 待追蹤", f"pp:ls:{note_id}:F")],
-        [_button("✏️ 改資料", f"pp:edit:{note_id}"), _button("📋 清單", f"pp:lists:{note_id}")],
-        [_button("📷 照片", f"pp:photo:{note_id}"), _button("📇 全部資料", f"pp:full:{note_id}")],
+        [_button("用一段話記錄（文字或語音）", f"pp:ing:{note_id}")],
+        [_button("+ 記一筆互動", f"pp:add:{note_id}:I"), _button("待追蹤", f"pp:ls:{note_id}:F")],
+        [_button("改資料", f"pp:edit:{note_id}"), _button("清單", f"pp:lists:{note_id}")],
+        [_button("照片", f"pp:photo:{note_id}"), _button("全部資料", f"pp:full:{note_id}")],
     ])
 
 
@@ -192,7 +192,7 @@ async def command_person(
     await state.clear()
     if not command.args or not command.args.strip():
         await state.set_state(PersonStates.waiting_search)
-        await message.answer("👤 要找誰？輸入名字（稱呼、中文、日文、讀音、英文都可以）：",
+        await message.answer("要找誰？輸入名字（稱呼、中文、日文、讀音、英文都可以）：",
                              reply_markup=InlineKeyboardMarkup(inline_keyboard=[CANCEL_ROW]))
         return
     await _search(message, state, anki_client, card_service, command.args.strip())
@@ -220,8 +220,8 @@ async def _search(
         if not note_ids:
             await state.update_data(new_name=name)
             await message.answer(
-                f"🔍 找不到「{escape_tg(name, 40)}」。",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("➕ 建立這個人", "pp:new")]]),
+                f"找不到「{escape_tg(name, 40)}」。",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("+ 建立這個人", "pp:new")]]),
                 parse_mode="HTML",
             )
             return
@@ -229,7 +229,7 @@ async def _search(
             await send_summary(message, card_service, note_ids[0])
             return
         if len(note_ids) > view.MAX_SEARCH_RESULTS:
-            await message.answer(f"🔍 找到 {len(note_ids)} 位，太多了，請打更完整的名字。")
+            await message.answer(f"找到 {len(note_ids)} 位，太多了，請打更完整的名字。")
             return
         notes = await anki_client.get_notes_info(notes=note_ids)
         rows = []
@@ -237,7 +237,7 @@ async def _search(
             fields = {name: str(v.get("value", "")) for name, v in note.fields.items()}
             label = " ".join(filter(None, [fields.get("Display_Name", ""), fields.get("Company", "")]))
             rows.append([_button(escape_tg(label, 40) or str(note.noteId), f"pp:s:{note.noteId}")])
-        await message.answer(f"🔍 找到 {len(notes)} 位，要看哪一位？", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+        await message.answer(f"找到 {len(notes)} 位，要看哪一位？", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     except (FluencyTidesError, AnkiConnectError) as e:
         await _reply_error(message, e)
 
@@ -315,7 +315,7 @@ async def on_person_button(
         if verb == "cancel":
             await state.clear()
             await message.edit_reply_markup(reply_markup=None)
-            await message.answer("🗑️ 已取消。")
+            await message.answer("已取消。")
         elif verb == "s":
             await state.clear()
             await send_summary(message, card_service, _int_arg(parts, 2))
@@ -337,7 +337,7 @@ async def on_person_button(
                 note_id, "remove_item", {"field": field_name, "index": _int_arg(parts, 4), "fingerprint": _arg(parts, 5)}
             )
             await message.edit_reply_markup(reply_markup=None)
-            await send_summary(message, card_service, note_id, prefix="🗑 已刪除。" + sync_suffix(warning))
+            await send_summary(message, card_service, note_id, prefix="已刪除。" + sync_suffix(warning))
         elif verb == "st":
             status = "done" if _arg(parts, 5) == "d" else "open"
             await _set_followup_status(
@@ -358,7 +358,7 @@ async def on_person_button(
             await state.clear()
             note_id = _int_arg(parts, 2)
             warning = await note_service.run_action(note_id, "set_photo", {"filename": ""})
-            await send_summary(message, card_service, note_id, prefix="🗑 已移除照片。" + sync_suffix(warning))
+            await send_summary(message, card_service, note_id, prefix="已移除照片。" + sync_suffix(warning))
         elif verb == "new":
             data = await state.get_data()
             await start_person_create(message, state, name=str(data.get("new_name") or "") or None)
@@ -420,7 +420,7 @@ async def _send_full(message: types.Message, card_service: CardService, note_id:
         return
     await message.answer(
         view.full_text(*loaded),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("⬅️ 摘要", f"pp:s:{note_id}")]]),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("回摘要", f"pp:s:{note_id}")]]),
         parse_mode="HTML",
     )
 
@@ -435,8 +435,8 @@ async def _send_lists_menu(message: types.Message, card_service: CardService, no
         [_button(f"{PERSON_JSON_ITEMS[name][1]}（{len(lists.get(name, []))}）", f"pp:ls:{note_id}:{code}")]
         for code, name in view.LIST_CODES.items()
     ]
-    rows.append([_button("⬅️ 摘要", f"pp:s:{note_id}")])
-    await message.answer("📋 要看哪一個清單？", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    rows.append([_button("回摘要", f"pp:s:{note_id}")])
+    await message.answer("要看哪一個清單？", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 async def _send_list(message: types.Message, card_service: CardService, note_id: int, field_name: str) -> None:
@@ -448,22 +448,22 @@ async def _send_list(message: types.Message, card_service: CardService, note_id:
     items = loaded[1].get(field_name, [])
     code = view.CODE_OF_LIST[field_name]
     title = PERSON_JSON_ITEMS[field_name][1]
-    lines = [f"📋 <b>{title}</b>"]
+    lines = [f"<b>{title}</b>"]
     rows: list[list[InlineKeyboardButton]] = []
     shown = list(enumerate(items))[-20:]
     for index, item in shown:
         lines.append(f"{index + 1}. {view.item_line(field_name, item)}")
         fp = item_fingerprint(item)
-        row = [_button(f"🗑 {index + 1}", f"pp:del:{note_id}:{code}:{index}:{fp}")]
+        row = [_button(f"刪 {index + 1}", f"pp:del:{note_id}:{code}:{index}:{fp}")]
         if field_name == "Followups_JSON" and isinstance(item, dict):
             done = item.get("status") == "done"
-            row.append(_button(f"{'↩️' if done else '✅'} {index + 1}", f"pp:st:{note_id}:{index}:{fp}:{'o' if done else 'd'}"))
+            row.append(_button(f"{'復原' if done else '完成'} {index + 1}", f"pp:st:{note_id}:{index}:{fp}:{'o' if done else 'd'}"))
         rows.append(row)
     if not items:
         lines.append("（還沒有）")
     elif len(items) > len(shown):
         lines.insert(1, f"<i>只列最近 {len(shown)} 筆</i>")
-    rows.append([_button("➕ 新增", f"pp:add:{note_id}:{code}"), _button("⬅️ 摘要", f"pp:s:{note_id}")])
+    rows.append([_button("+ 新增", f"pp:add:{note_id}:{code}"), _button("回摘要", f"pp:s:{note_id}")])
     await message.answer(view.truncate("\n".join(lines)), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
                          parse_mode="HTML")
 
@@ -485,9 +485,9 @@ async def _confirm_delete(
         index = matches[0]
     code = view.CODE_OF_LIST[field_name]
     await message.answer(
-        f"🗑 要刪除這一筆{PERSON_JSON_ITEMS[field_name][1]}嗎？\n\n{view.item_line(field_name, items[index])}",
+        f"要刪除這一筆{PERSON_JSON_ITEMS[field_name][1]}嗎？\n\n{view.item_line(field_name, items[index])}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            _button("🗑 確認刪除", f"pp:delok:{note_id}:{code}:{index}:{fingerprint}"),
+            _button("確認刪除", f"pp:delok:{note_id}:{code}:{index}:{fingerprint}"),
             _button("取消", f"pp:s:{note_id}"),
         ]]),
         parse_mode="HTML",
@@ -509,10 +509,10 @@ async def _set_followup_status(
     )
     undo = "o" if status == "done" else "d"
     await message.answer(
-        ("✅ 已標成完成。" if status == "done" else "↩️ 已改回未完成。") + sync_suffix(warning),
+        ("✅ 已標成完成。" if status == "done" else "已改回未完成。") + sync_suffix(warning),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            _button("↩️ 復原" if status == "done" else "✅ 標成完成", f"pp:st:{note_id}:{index}:{fingerprint}:{undo}"),
-            _button("⬅️ 摘要", f"pp:s:{note_id}"),
+            _button("復原" if status == "done" else "標成完成", f"pp:st:{note_id}:{index}:{fingerprint}:{undo}"),
+            _button("回摘要", f"pp:s:{note_id}"),
         ]]),
     )
 
@@ -527,7 +527,7 @@ async def start_add(message: types.Message, state: FSMContext, note_id: int, fie
     await state.clear()
     await state.set_state(PersonStates.add_step)
     await state.update_data(nid=note_id, field=field_name, step=0, item={})
-    await message.answer(f"➕ <b>新增{PERSON_JSON_ITEMS[field_name][1]}</b>", parse_mode="HTML")
+    await message.answer(f"<b>新增{PERSON_JSON_ITEMS[field_name][1]}</b>", parse_mode="HTML")
     await _ask_step(message, state)
 
 
@@ -539,7 +539,7 @@ async def _ask_step(message: types.Message, state: FSMContext) -> None:
         await state.set_state(PersonStates.add_confirm)
         await message.answer(
             view.preview_item(data["field"], data["item"]),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("✅ 儲存", "pp:save"), *CANCEL_ROW]]),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("儲存", "pp:save"), *CANCEL_ROW]]),
             parse_mode="HTML",
         )
         return
@@ -656,15 +656,15 @@ async def _save_item(
 
 async def _send_edit_groups(message: types.Message, note_id: int) -> None:
     rows = [[_button(name, f"pp:eg:{note_id}:{i}")] for i, (name, _) in enumerate(view.FIELD_GROUPS)]
-    rows.append([_button("⬅️ 摘要", f"pp:s:{note_id}")])
-    await message.answer("✏️ 要改哪一類？", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    rows.append([_button("回摘要", f"pp:s:{note_id}")])
+    await message.answer("要改哪一類？", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 async def _send_edit_fields(message: types.Message, note_id: int, group_index: int) -> None:
     _, names = view.FIELD_GROUPS[group_index]
     buttons = [_button(view.field_title(name), f"pp:ef:{note_id}:{view.EDITABLE_FIELDS.index(name)}") for name in names]
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
-    rows.append([_button("⬅️ 上一層", f"pp:edit:{note_id}")])
+    rows.append([_button("回上一層", f"pp:edit:{note_id}")])
     await message.answer("要改哪一個欄位？", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
@@ -683,7 +683,7 @@ async def _start_edit(
     hint = f"\n<i>{escape_tg(info.description, 120)}</i>" if info.description else ""
     shown = anki_field_to_tg_text(current, 600) if current else "（空白）"
     await message.answer(
-        f"✏️ <b>{escape_tg(view.field_title(field_name))}</b>{hint}\n\n目前：{shown}\n\n"
+        f"<b>{escape_tg(view.field_title(field_name))}</b>{hint}\n\n目前：{shown}\n\n"
         "輸入新的內容（輸入「清空」清除）：",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[CANCEL_ROW]),
         parse_mode="HTML",
@@ -718,7 +718,7 @@ async def process_edit_value(
         await message.answer(
             "要取代原本的內容，還是接在後面？",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [_button("🔁 取代", "pp:em:r"), _button("➕ 接在後面", "pp:em:a")], CANCEL_ROW,
+                [_button("取代", "pp:em:r"), _button("接在後面", "pp:em:a")], CANCEL_ROW,
             ]),
         )
         return
@@ -757,8 +757,8 @@ async def _start_photo(message: types.Message, state: FSMContext, note_id: int) 
     await state.set_state(PersonStates.waiting_photo)
     await state.update_data(nid=note_id)
     await message.answer(
-        "📷 傳一張照片（會放在「認人」卡的正面與背面頭像）：",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("🗑 移除照片", f"pp:phrm:{note_id}"), *CANCEL_ROW]]),
+        "傳一張照片（會放在「認人」卡的正面與背面頭像）：",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("移除照片", f"pp:phrm:{note_id}"), *CANCEL_ROW]]),
     )
 
 
@@ -816,7 +816,7 @@ async def _start_ingest(message: types.Message, state: FSMContext, card_service:
     await state.update_data(nid=note_id)
     name = escape_tg(ingest_service.plain_text(loaded[0].get("Display_Name", ""), 40)) or "他"
     await message.answer(
-        f"🧠 剛剛和 <b>{name}</b> 聊了什麼？打一段話或傳語音，隨意說就好：\n"
+        f"剛剛和 <b>{name}</b> 聊了什麼？打一段話或傳語音，隨意說就好：\n"
         "聊了哪些話題、他的近況、答應了什麼、下次要問什麼、新知道的興趣或家人…\n\n"
         "<i>整理好會先給你看，勾選後才會寫入。</i>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[CANCEL_ROW]),
@@ -863,7 +863,7 @@ async def process_ingest_voice(message: types.Message, state: FSMContext, card_s
     if not text:
         await status.edit_text("❌ 沒有聽到內容，請再傳一次（或改用打字）。")
         return
-    await status.edit_text(f"🎙 聽到：{escape_tg(text, 1500)}\n\n⏳ 整理中…", parse_mode="HTML")
+    await status.edit_text(f"聽到：{escape_tg(text, 1500)}\n\n⏳ 整理中…", parse_mode="HTML")
     await _run_ingest(message, status, state, card_service, text)
 
 
@@ -905,7 +905,7 @@ async def _run_ingest(
         {"kind": p.kind, "data": p.data} for p in ingest_service.proposals_from(result, fields, _today())
     ]
     if not proposals:
-        await status.edit_text("🤔 這段話裡沒有整理出可以記下的內容。可以再說具體一點後重傳，或按取消。",
+        await status.edit_text("這段話裡沒有整理出可以記下的內容。可以再說具體一點後重傳，或按取消。",
                                reply_markup=InlineKeyboardMarkup(inline_keyboard=[CANCEL_ROW]))
         return
     # 一則訊息放不下的建議不列出、也不提供勾選：沒給使用者看過的不寫入
@@ -935,15 +935,15 @@ def _ingest_failure(error: LLMServiceError | LLMGenerationError) -> str:
 
 
 def _proposal_view(data: dict[str, object]) -> tuple[str, InlineKeyboardMarkup]:
-    """依 FSM 資料畫出預覽與按鈕（已儲存的項目標 💾）。The preview and its buttons from the FSM data."""
+    """依 FSM 資料畫出預覽與按鈕（已儲存的項目標「已存」）。The preview and its buttons from the FSM data."""
     proposals = list(data["proposals"])  # type: ignore[call-overload]
     selected = [bool(x) for x in data["selected"]]  # type: ignore[attr-defined]
     saved = frozenset(int(i) for i in data.get("saved") or [])  # type: ignore[attr-defined]
     text = view.ingest_preview(proposals, selected, saved=saved, overflow=int(data.get("overflow") or 0))  # type: ignore[call-overload]
-    marks = ["💾" if i in saved else ("✅" if chosen else "⬜") for i, chosen in enumerate(selected)]
-    toggles = [_button(f"{mark} {i + 1}", f"pp:ig:{i}") for i, mark in enumerate(marks)]
+    marks = [view.SAVED if i in saved else (view.CHECKED if chosen else "") for i, chosen in enumerate(selected)]
+    toggles = [_button(f"{mark} {i + 1}".strip(), f"pp:ig:{i}") for i, mark in enumerate(marks)]
     rows = [toggles[i:i + 5] for i in range(0, len(toggles), 5)]
-    rows.append([_button("💾 儲存勾選的", "pp:igsave"), *CANCEL_ROW])
+    rows.append([_button("儲存勾選的", "pp:igsave"), *CANCEL_ROW])
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -973,7 +973,7 @@ async def _save_proposals(
 ) -> None:
     """寫入勾選的建議：互動、待追蹤各一筆，欄位建議合成一次 ``update_fields``。
 
-    中途失敗時保留狀態並記下已寫入的項目（預覽標 💾），再按一次儲存只補存其他的，不會重複寫入。
+    中途失敗時保留狀態並記下已寫入的項目（預覽標「已存」），再按一次儲存只補存其他的，不會重複寫入。
     Write the picked proposals; after a partial failure, pressing save again writes only the rest.
     """
     if await state.get_state() != PersonStates.ingest_confirm.state:
@@ -1024,7 +1024,7 @@ async def _save_proposals(
         await message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
         reason = error_detail(e.message if isinstance(e, FluencyTidesError) else e)
         await message.answer(
-            f"⚠️ 已記下 {len(saved)} 項，其餘還沒存：{reason}\n再按一次「💾 儲存勾選的」只會補存還沒存的項目。",
+            f"❌ 已記下 {len(saved)} 項，其餘還沒存：{reason}\n再按一次「儲存勾選的」只會補存還沒存的項目。",
             parse_mode="HTML",
         )
         return
@@ -1058,7 +1058,7 @@ async def start_person_create(message: types.Message, state: FSMContext, *, name
         return
     await state.set_state(PersonStates.create_name)
     await message.answer(
-        "👤 <b>人脈卡</b>\n\n他的稱呼是？（例如「田中さん」）",
+        "<b>人脈卡</b>\n\n他的稱呼是？（例如「田中さん」）",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[CANCEL_ROW]),
         parse_mode="HTML",
     )

@@ -128,7 +128,7 @@ class TestPreview:
         text = view.ingest_preview(proposals, [True, False, True])
         _assert_tg_html(text)
         assert NASTY not in text
-        assert "⬜ 2. 📌 對方答應的" in text and "（期限 2026-11-01）" in text
+        assert "－ 2. <b>對方答應的</b>" in text and "（期限 2026-11-01）" in text
         assert "<b>興趣</b> 接在後面" in text
 
 
@@ -170,11 +170,11 @@ class TestIngestFlow:
         assert _run(state.get_state()) == PersonStates.ingest_confirm.state
         status.delete.assert_awaited_once()
         (preview,) = _sent(message.answer)
-        assert "✅ 1." in preview and "✅ 4." in preview
+        assert "✓ 1." in preview and "✓ 4." in preview
 
         # 取消勾選第二項（N1 的待追蹤）
         query = _press("pp:ig:1", state)
-        assert "⬜ 2." in _sent(query.message.edit_text)[0]
+        assert "－ 2." in _sent(query.message.edit_text)[0]
 
         _press("pp:igsave", state, note_service, card_service)
         actions = [(c.args[1], c.args[2]) for c in note_service.run_action.await_args_list]
@@ -286,7 +286,7 @@ class TestPreviewFits:
         assert 0 < shown < 15
         text = view.ingest_preview(proposals[:shown], [True] * shown, overflow=15 - shown)
         assert len(text) <= view.MESSAGE_LIMIT
-        assert all(f"✅ {i + 1}." in text for i in range(shown))
+        assert all(f"✓ {i + 1}." in text for i in range(shown))
         assert f"還有 {15 - shown} 項放不下" in text
 
     def test_overflow_is_not_offered_or_written(self):
@@ -323,7 +323,7 @@ class TestPartialSave:
         (warning,) = _sent(query.message.answer)
         _assert_tg_html(warning)
         assert "已記下 1 項" in warning and "只會補存" in warning
-        assert "💾 1." in _sent(query.message.edit_text)[0]
+        assert "已存 1." in _sent(query.message.edit_text)[0]
         note_service.update_fields.assert_not_awaited()
 
         # 已存的那項不能再切換

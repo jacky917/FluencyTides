@@ -1,15 +1,16 @@
 <!-- 人脈卡「見面前複習」正面：稱呼與頭像，回想上次聊了什麼、這次要問什麼。每個人都有這張卡。
-     多數人沒有照片：沒有照片時頭像是稱呼的第一個字，背景色由稱呼算出固定的顏色（與背面相同）。 -->
-<div class="card person-card review-front">
-    <div class="front-kicker">📋 見面前複習</div>
+     多數人沒有照片：沒有照片時頭像是稱呼的第一個字，背景色由稱呼算出固定的顏色（與背面相同）。
+     版面與「認人」正面相同（標籤 → 頭像 → 內容 → 問題），只有內容不同。 -->
+<div class="card person-card person-front">
+    <div class="front-kicker">見面前複習</div>
 
     {{#Photo}}<div class="avatar-lg">{{Photo}}</div>{{/Photo}}
     {{^Photo}}<div class="avatar-lg avatar-initial" id="review-avatar-initial"></div>{{/Photo}}
 
-    <div class="review-name" id="review-name">{{Display_Name}}</div>
-    {{#Company}}<div class="review-sub">{{Company}}{{#Title}}・{{Title}}{{/Title}}</div>{{/Company}}
+    <div class="front-name" id="review-name">{{Display_Name}}</div>
+    {{#Company}}<div class="front-sub">{{Company}}{{#Title}}・{{Title}}{{/Title}}</div>{{/Company}}
 
-    <div class="review-question">上次聊了什麼？這次要問什麼？</div>
+    <div class="front-question">上次聊了什麼？這次要問什麼？</div>
 </div>
 
 <script>
@@ -21,6 +22,6 @@
         var hash = 0;
         for (var i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) % 360;
         avatar.style.backgroundColor = 'hsl(' + hash + ', 45%, 32%)';
-        avatar.textContent = name ? name.charAt(0) : '👤';
+        avatar.textContent = name ? name.charAt(0) : '?';
     })();
 </script>

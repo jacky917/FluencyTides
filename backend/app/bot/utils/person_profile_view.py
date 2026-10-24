@@ -53,7 +53,7 @@ FIELD_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("聯絡與其他", ("Comm_Prefs", "Notes", "Last_Contact", "Contact_Cadence")),
 )
 
-FOLLOWUP_TYPES = {"ask": "❓ 下次要問", "my_promise": "🤝 我答應的", "their_promise": "📌 對方答應的"}
+FOLLOWUP_TYPES = {"ask": "下次要問", "my_promise": "我答應的", "their_promise": "對方答應的"}
 
 #: TG 訊息長度上限（留一點餘裕）。Telegram's message limit, with margin.
 MESSAGE_LIMIT = 3800
@@ -142,7 +142,7 @@ def name_line(fields: dict[str, str]) -> str:
     display = _plain(fields, "Display_Name", 60)
     others = [_plain(fields, name, 60) for name in ("Name_JA", "Name_JA_Kana", "Name_ZH", "Name_EN")]
     others = [o for i, o in enumerate(others) if o and o != display and o not in others[:i]]
-    return f"👤 <b>{display}</b>" + (f"（{'・'.join(others)}）" if others else "")
+    return f"<b>{display}</b>" + (f"（{'・'.join(others)}）" if others else "")
 
 
 def summary_text(fields: dict[str, str], lists: dict[str, list[object]], today: date) -> str:
@@ -171,15 +171,15 @@ def summary_text(fields: dict[str, str], lists: dict[str, list[object]], today: 
     for kind, label in FOLLOWUP_TYPES.items():
         open_items = [f for f in followups if (f.get("type") or "ask") == kind and f.get("status", "open") != "done"]
         if open_items:
-            must.append(f"{label}：" + "；".join(escape_tg(str(f.get("item", "")), 80) for f in open_items))
+            must.append(f"<b>{label}</b>：" + "；".join(escape_tg(str(f.get("item", "")), 80) for f in open_items))
     dietary = _plain(fields, "Dietary", 120)
     if dietary:
-        must.append(f"⚠ 飲食：{dietary}")
+        must.append(f"<b>飲食</b>：{dietary}")
     interactions = [i for i in lists.get("Interactions_JSON", []) if isinstance(i, dict)]
     if interactions:
         latest = max(interactions, key=lambda i: str(i.get("date", "")))
         text = "｜".join(filter(None, [str(latest.get("topics", "")), str(latest.get("updates", ""))]))
-        must.append(f"💬 上次（{escape_tg(str(latest.get('date', '')), 10)}）：{escape_tg(text, 160)}")
+        must.append(f"<b>上次</b>（{escape_tg(str(latest.get('date', '')), 10)}）：{escape_tg(text, 160)}")
     soon = []
     for item in lists.get("Key_Dates_JSON", []):
         if not isinstance(item, dict):
@@ -194,9 +194,9 @@ def summary_text(fields: dict[str, str], lists: dict[str, list[object]], today: 
             soon.append((until, f"{escape_tg(str(item.get('label', '')), 40)}（{month:02d}/{day:02d}，"
                                 f"{'就是今天' if until == 0 else f'還有 {until} 天'}）"))
     if soon:
-        must.append("📅 近期：" + "；".join(text for _, text in sorted(soon)))
+        must.append("<b>近期</b>：" + "；".join(text for _, text in sorted(soon)))
     lines.append("")
-    lines.extend(must or ["⭐ 還沒有要注意的事"])
+    lines.extend(must or ["還沒有要注意的事"])
     return "\n".join(lines)
 
 
@@ -210,7 +210,7 @@ def full_text(fields: dict[str, str], lists: dict[str, list[object]]) -> str:
             lines.extend(rows)
     counts = [f"{PERSON_JSON_ITEMS[name][1]} {len(lists.get(name, []))}" for name in PERSON_JSON_ITEMS]
     lines.append("")
-    lines.append("📋 " + "｜".join(counts))
+    lines.append("｜".join(counts))
     return truncate("\n".join(lines))
 
 
@@ -222,8 +222,8 @@ def item_line(field_name: str, item: object) -> str:
     if field_name == "Interactions_JSON":
         return f"{get('date')}：{get('topics') or get('place')}" + (f"｜{get('updates')}" if item.get("updates") else "")
     if field_name == "Followups_JSON":
-        mark = "✅" if item.get("status") == "done" else FOLLOWUP_TYPES.get(str(item.get("type") or "ask"), "❓")[:1]
-        return f"{mark} {get('item')}" + (f"（期限 {get('due')}）" if item.get("due") else "")
+        label = "已完成" if item.get("status") == "done" else FOLLOWUP_TYPES.get(str(item.get("type") or "ask"), "")
+        return f"[{label}] {get('item')}" + (f"（期限 {get('due')}）" if item.get("due") else "")
     if field_name == "Family_JSON":
         return f"{get('relation')}：{get('name')}" + (f"（{item.get('birth_year')} 年生）" if item.get("birth_year") else "")
     if field_name == "Gifts_JSON":
@@ -272,12 +272,12 @@ class Step:
 
 ADD_STEPS: dict[str, tuple[Step, ...]] = {
     "Interactions_JSON": (
-        Step("date", "📅 哪一天？（YYYY-MM-DD 或 MM-DD）", kind="date", required=True, default_today=True),
-        Step("topics", "💬 聊了什麼？", required=True),
-        Step("updates", "🗞 對方的近況？"),
-        Step("place", "📍 在哪裡？"),
-        Step("quote", "🗨 對方說的一句話？"),
-        Step("_followups", "❓ 下次要問的事？（每行一件）", kind="lines"),
+        Step("date", "哪一天？（YYYY-MM-DD 或 MM-DD）", kind="date", required=True, default_today=True),
+        Step("topics", "聊了什麼？", required=True),
+        Step("updates", "對方的近況？"),
+        Step("place", "在哪裡？"),
+        Step("quote", "對方說的一句話？"),
+        Step("_followups", "下次要問的事？（每行一件）", kind="lines"),
     ),
     "Followups_JSON": (
         Step("type", "要記哪一種？", kind="choice", required=True,
@@ -294,21 +294,21 @@ ADD_STEPS: dict[str, tuple[Step, ...]] = {
     ),
     "Gifts_JSON": (
         Step("direction", "送出還是收到？", kind="choice", required=True,
-             choices=(("given", "🎁 送出"), ("received", "📦 收到"))),
+             choices=(("given", "送出"), ("received", "收到"))),
         Step("item", "什麼禮物？", required=True),
-        Step("date", "📅 哪一天？", kind="date", default_today=True),
+        Step("date", "哪一天？", kind="date", default_today=True),
         Step("reaction", "對方的反應？"),
     ),
     "Key_Dates_JSON": (
         Step("label", "什麼日子？（例如「N1 考試」）", required=True),
-        Step("date", "📅 日期？（YYYY-MM-DD）", kind="date", required=True),
-        Step("yearly", "每年都有嗎？", kind="choice", required=True, choices=(("1", "🔁 每年"), ("0", "1️⃣ 只有一次"))),
+        Step("date", "日期？（YYYY-MM-DD）", kind="date", required=True),
+        Step("yearly", "每年都有嗎？", kind="choice", required=True, choices=(("1", "每年"), ("0", "只有一次"))),
     ),
     "Contacts_JSON": (
         Step("channel", "哪種聯絡方式？", required=True,
              choices=(("LINE", "LINE"), ("Email", "Email"), ("電話", "電話"), ("Instagram", "Instagram"))),
         Step("handle", "帳號或號碼？", required=True),
-        Step("preferred", "是偏好的聯絡方式嗎？", kind="choice", required=True, choices=(("1", "⭐ 是"), ("0", "否"))),
+        Step("preferred", "是偏好的聯絡方式嗎？", kind="choice", required=True, choices=(("1", "是"), ("0", "否"))),
     ),
 }
 
@@ -360,9 +360,9 @@ def preview_item(field_name: str, item: dict[str, object]) -> str:
     lines = [f"<b>新增{title}</b>", item_line(field_name, {k: v for k, v in item.items() if not k.startswith("_")})]
     extra = item.get("_followups")
     if isinstance(extra, list) and extra:
-        lines.append("❓ 下次要問：" + "；".join(escape_tg(str(x), 60) for x in extra))
+        lines.append("下次要問：" + "；".join(escape_tg(str(x), 60) for x in extra))
     if field_name == "Interactions_JSON":
-        for key, label in (("updates", "🗞 近況"), ("place", "📍 地點"), ("quote", "🗨")):
+        for key, label in (("updates", "近況"), ("place", "地點"), ("quote", "原話")):
             if item.get(key):
                 lines.append(f"{label}：{escape_tg(str(item[key]), 200)}")
     return "\n".join(lines)
@@ -377,18 +377,21 @@ def proposal_line(kind: str, data: dict[str, object]) -> str:
     """一項建議的文字（已轉義）。One proposal as escaped text."""
     get = lambda key, limit=200: escape_tg(str(data.get(key, "") or ""), limit)  # noqa: E731
     if kind == "interaction":
-        lines = [f"💬 <b>互動</b> {get('date')}：{get('topics')}"]
-        for key, label in (("updates", "🗞 近況"), ("place", "📍 地點"), ("quote", "🗨")):
+        lines = [f"<b>互動</b> {get('date')}：{get('topics')}"]
+        for key, label in (("updates", "近況"), ("place", "地點"), ("quote", "原話")):
             if data.get(key):
                 lines.append(f"    {label}：{get(key)}")
         return "\n".join(lines)
     if kind == "followup":
-        label = FOLLOWUP_TYPES.get(str(data.get("type") or "ask"), "❓ 下次要問")
-        return f"{label}：{get('item')}" + (f"（期限 {get('due')}）" if data.get("due") else "")
+        label = FOLLOWUP_TYPES.get(str(data.get("type") or "ask"), "下次要問")
+        return f"<b>{label}</b>：{get('item')}" + (f"（期限 {get('due')}）" if data.get("due") else "")
     mode = "接在後面" if data.get("mode") == "append" else "改成"
-    line = f"✏️ <b>{escape_tg(field_title(str(data.get('field', ''))))}</b> {mode}：{get('value', 300)}"
+    line = f"<b>{escape_tg(field_title(str(data.get('field', ''))))}</b> {mode}：{get('value', 300)}"
     return line + (f"\n    <i>（{get('reason', 120)}）</i>" if data.get("reason") else "")
 
+
+#: 預覽與按鈕上的勾選記號（文字，不用 emoji）。Check marks used in the preview and buttons.
+CHECKED, UNCHECKED, SAVED = "✓", "－", "已存"
 
 #: 預覽的開頭與結尾提示（放不下、已儲存的說明）預留的字數。Room kept for the preview's header and notes.
 _PREVIEW_RESERVE = 300
@@ -403,7 +406,7 @@ def fitting_count(proposals: list[dict[str, object]]) -> int:
     """一則訊息放得下前幾項建議（勾選記號的長度固定，切換勾選不影響）。How many proposals fit in one message."""
     used = _PREVIEW_RESERVE
     for index, proposal in enumerate(proposals):
-        used += len(_proposal_entry(index, proposal, "✅")) + 1
+        used += len(_proposal_entry(index, proposal, CHECKED)) + 1
         if used > MESSAGE_LIMIT:
             return index
     return len(proposals)
@@ -420,12 +423,12 @@ def ingest_preview(
         saved: 已經寫入的項目（上次儲存中途失敗時）。Proposals already written.
         overflow: 放不下、沒有列出的項數。How many were left out.
     """
-    lines = ["🧠 <b>整理好了</b>，勾選要記下的項目（點下面的編號切換）：", ""]
+    lines = ["<b>整理好了</b>，勾選要記下的項目（點下面的編號切換）：", ""]
     for index, (proposal, chosen) in enumerate(zip(proposals, selected)):
-        mark = "💾" if index in saved else ("✅" if chosen else "⬜")
+        mark = SAVED if index in saved else (CHECKED if chosen else UNCHECKED)
         lines.append(_proposal_entry(index, proposal, mark))
     if saved:
-        lines += ["", f"<i>💾 的 {len(saved)} 項已經存了；再按一次儲存只會補存其他勾選的項目。</i>"]
+        lines += ["", f"<i>標「{SAVED}」的 {len(saved)} 項已經存了；再按一次儲存只會補存其他勾選的項目。</i>"]
     if overflow:
         lines += ["", f"<i>還有 {overflow} 項放不下，沒有列出也不會寫入；需要的話請分次記錄。</i>"]
     return "\n".join(lines)

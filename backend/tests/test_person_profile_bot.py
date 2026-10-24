@@ -77,10 +77,10 @@ class TestView:
         }
         text = view.summary_text(_fields(Company="Geekly", Dietary="不吃生魚", Last_Contact="2026-10-01"), lists, TODAY)
         _assert_tg_html(text)
-        assert "❓ 下次要問：N1 考得如何？" in text
-        assert "🤝 我答應的：介紹 Ken 給他" in text and "寄履歷範本" not in text
-        assert "⚠ 飲食：不吃生魚" in text
-        assert "💬 上次（2026-10-01）：轉職｜要考 N1" in text
+        assert "<b>下次要問</b>：N1 考得如何？" in text
+        assert "<b>我答應的</b>：介紹 Ken 給他" in text and "寄履歷範本" not in text
+        assert "<b>飲食</b>：不吃生魚" in text
+        assert "<b>上次</b>（2026-10-01）：轉職｜要考 N1" in text
         assert "N1 考試（12/07，還有 44 天）" in text and "紀念日" not in text
         assert "上次聯絡 23 天前" in text
 
@@ -202,7 +202,7 @@ class TestAddFlow:
         state, note_service, card_service = _fsm(), _note_service(), _card_service()
         message, _ = _message()
         _run(person_profile.start_add(message, state, 5, "Followups_JSON"))
-        _press("pp:ch:1", state, note_service, card_service)  # 🤝 我答應的
+        _press("pp:ch:1", state, note_service, card_service)  # 我答應的
         typed, _ = _message("介紹 Ken 給他")
         _run(person_profile.process_add_text(typed, state))
         _press("pp:skip", state, note_service, card_service)  # 期限略過
