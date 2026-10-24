@@ -18,6 +18,7 @@ from app.core.exceptions import FieldNotEditableError
 from app.services.relation_service import RelationService
 from app.services.task_handlers.base import BaseHandler
 from app.services.task_handlers.capabilities import CreateCapability, HandlerCapabilities
+from app.schemas.person_profile import PersonCreateParams
 from app.services.task_handlers.expression_handler import ExpressionCreateParams
 from app.services.task_handlers.jp_core_verb_handler import JPCoreVerbHandler
 from app.services.task_handlers.jp_verb_pair_handler import JPVerbPairHandler
@@ -122,9 +123,9 @@ class TestInitialCapabilities:
         assert verb_pair.CAPABILITIES.existing_note_ops() == core_verb.CAPABILITIES.existing_note_ops()
 
     def test_web_creatable_handlers(self):
-        """Generate 頁本次只有單字卡可選（§6）。"""
+        """Generate 頁可選單字卡（§6）與人脈卡（人脈卡計畫書 §3.11）。"""
         web = [h.handler_name for h in handler_registry.all_handlers() if "web" in h.CAPABILITIES.create.channels]
-        assert web == ["vocabulary_mining"]
+        assert web == ["vocabulary_mining", "person_profile"]
 
 
 # =============================================================================
@@ -206,6 +207,7 @@ class TestCreateParams:
             "speaking_trilingual": SpeakingTrilingualCreateParams,
             "jp_verb_pair": None,
             "jp_core_verb": None,
+            "person_profile": PersonCreateParams,
         }
 
     def test_speaking_language_normalized_like_tg(self):

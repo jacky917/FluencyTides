@@ -305,7 +305,7 @@ class TestRegistryChecks:
 
 
 class TestProductionRegistry:
-    def test_six_handlers_in_order(self):
+    def test_handlers_in_order(self):
         from app.services.task_handlers.registry import handler_registry
 
         handlers = handler_registry.all_handlers()
@@ -316,6 +316,7 @@ class TestProductionRegistry:
             ("speaking_trilingual", "三語對話卡"),
             ("jp_verb_pair", "自他動詞"),
             ("jp_core_verb", "核心動詞"),
+            ("person_profile", "人脈卡"),
         ]
         assert [h.handler_name for h in handler_registry.handlers_for_note_type("JP_Context_Dark")] == [
             "jp_verb_pair", "jp_core_verb",

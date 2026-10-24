@@ -364,7 +364,7 @@ class TestListHandlers:
         handlers = {h["name"]: h for h in _run(_service(SyncingAnki()).list_handlers())}
         assert list(handlers) == [
             "vocabulary_mining", "expression_correction", "speaking_coach",
-            "speaking_trilingual", "jp_verb_pair", "jp_core_verb",
+            "speaking_trilingual", "jp_verb_pair", "jp_core_verb", "person_profile",
         ]
         vocab = handlers["vocabulary_mining"]
         assert vocab["title"] == "單字卡" and vocab["note_types"] == [V2]

@@ -18,4 +18,5 @@ from app.services.task_handlers import (  # noqa: F401
     speaking_trilingual_handler,
     jp_verb_pair_handler,
     jp_core_verb_handler,
+    person_profile_handler,
 )

@@ -94,7 +94,7 @@ def test_list_handlers(client):
     handlers = {h["name"]: h for h in response.json()}
     assert list(handlers) == [
         "vocabulary_mining", "expression_correction", "speaking_coach",
-        "speaking_trilingual", "jp_verb_pair", "jp_core_verb",
+        "speaking_trilingual", "jp_verb_pair", "jp_core_verb", "person_profile",
     ]
     vocab = handlers["vocabulary_mining"]
     assert vocab["capabilities"]["create"]["channels"] == ["web", "tg"]
