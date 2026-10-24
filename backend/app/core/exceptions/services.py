@@ -289,6 +289,16 @@ class FieldNotEditableError(ServiceBaseError):
     status_code = 400
 
 
+class JsonItemChangedError(ServiceBaseError):
+    """要動的 JSON 清單項目已經變了（別處新增、刪除過，或卡片畫面還沒同步），找不到同一筆。
+
+    The JSON list item to change is no longer there (changed elsewhere or the
+    card view is stale).
+    """
+    error_code = "JSON_ITEM_CHANGED"
+    status_code = 409
+
+
 class InvalidNoteQueryError(ServiceBaseError):
     """依 handler 查筆記（含圖譜）的參數不適用：筆記類型不歸它、名稱欄位不存在、關聯圖譜指定了名稱欄位。
 

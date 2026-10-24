@@ -155,6 +155,55 @@ class Contact(_Item):
     preferred: bool = Field(False, title="偏好")
 
 
+#: 指紋用的鍵：每種項目的主要文字欄位（與模板 itemFingerprint 相同）。Keys the fingerprint reads.
+FINGERPRINT_KEYS = ("date", "item", "topics", "name", "label", "handle", "relation", "channel")
+
+
+def item_fingerprint(item: object) -> str:
+    """一筆 JSON 項目的指紋：主要文字欄位以 ``|`` 串起，djb2 雜湊（UTF-16 碼元），36 進位。
+
+    The fingerprint of a JSON item, identical to the card template's
+    ``itemFingerprint``: djb2 over the UTF-16 code units of the main text
+    fields joined by ``|``, in base 36.
+
+    卡片上的刪除、標成完成連結在序號後面附上它，用來確認要動的還是同一筆（序號可能過時）。
+
+    Args:
+        item: 一筆項目（通常是 dict；其他型別視為沒有欄位）。The item.
+
+    Returns:
+        36 進位字串。A base-36 string.
+    """
+    values = item if isinstance(item, dict) else {}
+    key = "|".join("" if values.get(k) is None else _js_string(values[k]) for k in FINGERPRINT_KEYS)
+    h = 5381
+    data = key.encode("utf-16-le")
+    for i in range(0, len(data), 2):
+        h = ((h * 33) ^ (data[i] | data[i + 1] << 8)) & 0xFFFFFFFF
+    return _base36(h)
+
+
+def _js_string(value: object) -> str:
+    """與 JavaScript 的 ``String(value)`` 相同的寫法（布林、整數）。Mirrors JS ``String()``."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _base36(number: int) -> str:
+    """非負整數轉 36 進位（小寫，同 JS ``toString(36)``）。Base 36, like JS ``toString(36)``."""
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    if number == 0:
+        return "0"
+    out = ""
+    while number:
+        number, rest = divmod(number, 36)
+        out = digits[rest] + out
+    return out
+
+
 #: JSON 欄位 → (項目模型, 標題)。JSON field → (item model, title).
 PERSON_JSON_ITEMS: dict[str, tuple[type[_Item], str]] = {
     "Interactions_JSON": (Interaction, "互動紀錄"),

@@ -53,6 +53,7 @@ from .services import (
     NoteTypeNotCreatableError,
     NoteNotOwnedByHandlerError,
     FieldNotEditableError,
+    JsonItemChangedError,
     InvalidNoteQueryError,
     InvalidNoteFieldsError,
 )
@@ -98,6 +99,7 @@ __all__ = [
     "NoteTypeNotCreatableError",
     "NoteNotOwnedByHandlerError",
     "FieldNotEditableError",
+    "JsonItemChangedError",
     "InvalidNoteQueryError",
     "InvalidNoteFieldsError",
 ]

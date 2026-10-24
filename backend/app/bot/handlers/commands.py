@@ -27,10 +27,12 @@ from app.core.exceptions import FluencyTidesError
 
 if TYPE_CHECKING:
     from app.services.card_service import CardService
+    from app.services.note_service import NoteService
 
 from aiogram import Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from app.bot.state import UserState, UserStateManager
@@ -48,6 +50,7 @@ from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.tg.deep_link import (
     DeleteEntryAction,
     GenerateCardAction,
+    PersonLinkAction,
     RecordAudioAction,
     AddAudioAction,
     TTSAudioAction,
@@ -71,6 +74,8 @@ async def command_start_handler(
     anki_client: AnkiClient,
     user_state_manager: UserStateManager,
     card_service: "CardService",
+    state: FSMContext | None = None,
+    note_service: "NoteService | None" = None,
 ) -> None:
     """處理 /start 指令與 Deep Link 邏輯。
 
@@ -225,6 +230,15 @@ async def command_start_handler(
 
     if isinstance(action, DeleteEntryAction):
         await _handle_delete_entry(message, anki_client, card_service, action)
+        return
+
+    if isinstance(action, PersonLinkAction):
+        if state is None or note_service is None:
+            await message.answer("❌ 這個連結暫時無法處理，請稍後再試。")
+            return
+        from app.bot.handlers.person_profile import handle_person_link
+
+        await handle_person_link(message, state, note_service, card_service, anki_client, action)
         return
 
     if isinstance(action, GenerateCardAction):
@@ -401,9 +415,12 @@ async def command_help_handler(message: Message) -> None:
         "發送語音即可獲得 AI 評分。\n\n"
         "3️⃣ <b>刪除條目</b>\n"
         "點擊 Anki 卡片上的刪除按鈕，即可遠端刪除特定的參考範本或歷史錄音。\n\n"
-        "4️⃣ <b>同步清理</b>\n"
+        "4️⃣ <b>人脈卡</b>\n"
+        "輸入 /p 名字 找人，看「見面前必看」，並可記一筆互動、待追蹤、改資料、換照片；"
+        "卡片上的「＋」與長按 3 秒刪除也會開到這裡。/newcard 可以建立新的人。\n\n"
+        "5️⃣ <b>同步清理</b>\n"
         "輸入 /sync 手動清理資料庫中已不存在於 Anki 的孤兒關聯。\n\n"
-        "5️⃣ <b>工具設定（管理員限定）</b>\n"
+        "6️⃣ <b>工具設定（管理員限定）</b>\n"
         "輸入 /setconfig 為每個用途（例如自他動詞子卡、錄音評分）或全域指定要用的工具：\n"
         "  • <b>文字 LLM</b>：端點、模型與思考深度\n"
         "  • <b>評分策略</b>（錄音評分）：\n"

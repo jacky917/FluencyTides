@@ -312,6 +312,10 @@ class TestRunAction:
             ("speaking_trilingual", "add_audio"), ("speaking_trilingual", "add_recording"),
             ("speaking_trilingual", "delete_recording"),
             ("expression_correction", "add_audio"),
+            # 人脈卡的動作在 tests/test_person_profile_handler.py::TestActions 逐一測試
+            ("person_profile", "add_interaction"), ("person_profile", "add_followup"),
+            ("person_profile", "set_followup_status"), ("person_profile", "add_item"),
+            ("person_profile", "remove_item"), ("person_profile", "set_photo"),
         }
 
 

@@ -11,9 +11,10 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from app.core.exceptions import FieldNotEditableError
+from app.core.exceptions import FieldNotEditableError, InvalidNoteFieldsError, JsonItemChangedError
+from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.anki import AnkiNoteInfo
-from app.schemas.person_profile import PERSON_NOTE_TYPE, PersonCreateParams
+from app.schemas.person_profile import PERSON_NOTE_TYPE, PersonCreateParams, item_fingerprint
 from app.services.task_handlers.person_profile_handler import PersonProfileHandler, new_card_id
 from app.services.task_handlers.registry import handler_registry
 from tests.test_handler_base import FakeAnki, _card_service, _relations
@@ -168,3 +169,105 @@ class TestDelete:
         anki = PersonAnki([person(1, Display_Name="田中さん")])
         _run(PersonProfileHandler().execute_delete(_card_service(anki), _relations(), 1))
         assert anki.deleted == [1]
+
+
+# =============================================================================
+# 具名動作（§3.11）
+# =============================================================================
+
+
+def _act(anki: PersonAnki, note_id: int, **parameters) -> None:
+    _run(PersonProfileHandler().execute_update(_card_service(anki), _relations(), note_id, parameters))
+
+
+def _list(anki: PersonAnki, note_id: int, field: str) -> list:
+    return AnkiJsonFieldManager.parse_field_string(anki.value(note_id, field))
+
+
+FOLLOWUPS = [
+    {"added": "2026-10-01", "item": "N1 考得如何？", "type": "ask", "due": "2026-12-07", "status": "open"},
+    {"added": "2026-10-01", "item": "介紹 Ken 給他", "type": "my_promise", "status": "open"},
+]
+
+
+class TestFingerprint:
+    def test_matches_the_card_template(self):
+        """模板的 itemFingerprint 在瀏覽器算出的值（P0 範例資料）。"""
+        assert item_fingerprint(FOLLOWUPS[0]) == "14vynru"
+        assert item_fingerprint(FOLLOWUPS[1]) == "r1tbnf"
+
+    def test_non_dict_items_do_not_crash(self):
+        assert item_fingerprint("x") == item_fingerprint({})
+
+
+class TestActions:
+    def test_add_interaction_moves_last_contact_forward_only(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん", Interactions_JSON="[]", Last_Contact="2026-09-01")])
+        _act(anki, 1, action="add_interaction", item={"date": "2026-10-01", "topics": "轉職", "place": ""})
+        assert _list(anki, 1, "Interactions_JSON") == [{"date": "2026-10-01", "topics": "轉職"}]
+        assert anki.value(1, "Last_Contact") == "2026-10-01"
+        assert anki.value(1, "Updated_At") == date.today().isoformat()
+
+        _act(anki, 1, action="add_interaction", item={"date": "2026-08-01", "topics": "以前的事"})
+        assert anki.value(1, "Last_Contact") == "2026-10-01"
+        assert len(_list(anki, 1, "Interactions_JSON")) == 2
+
+    def test_add_interaction_validates(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん", Interactions_JSON="[]")])
+        with pytest.raises(InvalidNoteFieldsError):
+            _act(anki, 1, action="add_interaction", item={"date": "10/01", "topics": "x"})
+        with pytest.raises(InvalidNoteFieldsError):
+            _act(anki, 1, action="add_interaction", item={"date": "2026-10-01"}, extra="x")
+        assert anki.updated == []
+
+    def test_add_followup_defaults(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん", Followups_JSON="[]")])
+        _act(anki, 1, action="add_followup", item={"item": "N1 考得如何？"})
+        assert _list(anki, 1, "Followups_JSON") == [
+            {"item": "N1 考得如何？", "type": "ask", "status": "open", "added": date.today().isoformat()}
+        ]
+
+    def test_set_followup_status_by_fingerprint(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん", Followups_JSON=json.dumps(FOLLOWUPS))])
+        _act(anki, 1, action="set_followup_status", index=1, fingerprint="r1tbnf", status="done")
+        assert [f["status"] for f in _list(anki, 1, "Followups_JSON")] == ["open", "done"]
+
+    def test_stale_index_found_by_fingerprint(self):
+        """卡片上的序號過時（前面的被刪掉了）：依指紋找到同一筆。"""
+        anki = PersonAnki([person(1, Display_Name="田中さん", Followups_JSON=json.dumps(FOLLOWUPS[1:]))])
+        _act(anki, 1, action="set_followup_status", index=1, fingerprint="r1tbnf", status="done")
+        assert _list(anki, 1, "Followups_JSON")[0]["status"] == "done"
+
+    def test_changed_item_is_not_touched(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん", Followups_JSON=json.dumps(FOLLOWUPS))])
+        with pytest.raises(JsonItemChangedError):
+            _act(anki, 1, action="remove_item", field="Followups_JSON", index=0, fingerprint="zzzz")
+        assert anki.updated == []
+
+    def test_remove_item(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん", Followups_JSON=json.dumps(FOLLOWUPS))])
+        _act(anki, 1, action="remove_item", field="Followups_JSON", index=0, fingerprint="14vynru")
+        assert [f["item"] for f in _list(anki, 1, "Followups_JSON")] == ["介紹 Ken 給他"]
+
+    def test_add_item_to_generic_lists_only(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん", Gifts_JSON="[]")])
+        _act(anki, 1, action="add_item", field="Gifts_JSON", item={"item": "鳳梨酥", "date": "2026-09-20"})
+        assert _list(anki, 1, "Gifts_JSON") == [{"item": "鳳梨酥", "direction": "given", "date": "2026-09-20"}]
+        with pytest.raises(InvalidNoteFieldsError):
+            _act(anki, 1, action="add_item", field="Gifts_JSON", item={"date": "2026-09-20"})
+        with pytest.raises(InvalidNoteFieldsError):
+            _act(anki, 1, action="add_item", field="Interactions_JSON", item={"date": "2026-09-20"})
+
+    def test_set_photo(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん")])
+        _act(anki, 1, action="set_photo", filename="person_PP_x_20261024.jpg")
+        assert anki.value(1, "Photo") == '<img src="person_PP_x_20261024.jpg">'
+        with pytest.raises(InvalidNoteFieldsError):
+            _act(anki, 1, action="set_photo", filename='x.jpg" onerror="alert(1)')
+        _act(anki, 1, action="set_photo", filename="")
+        assert anki.value(1, "Photo") == ""
+
+    def test_declared_actions(self):
+        assert set(PersonProfileHandler.CAPABILITIES.actions) == {
+            "add_interaction", "add_followup", "set_followup_status", "add_item", "remove_item", "set_photo",
+        }
