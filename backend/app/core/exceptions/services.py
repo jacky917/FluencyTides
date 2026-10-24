@@ -299,6 +299,15 @@ class JsonItemChangedError(ServiceBaseError):
     status_code = 409
 
 
+class JsonFieldConflictError(ServiceBaseError):
+    """網頁編輯 JSON 欄位期間，別處（TG、腳本、另一個分頁）改過這一欄，不寫入。
+
+    The JSON field changed elsewhere while it was being edited.
+    """
+    error_code = "JSON_FIELD_CONFLICT"
+    status_code = 409
+
+
 class InvalidNoteQueryError(ServiceBaseError):
     """依 handler 查筆記（含圖譜）的參數不適用：筆記類型不歸它、名稱欄位不存在、關聯圖譜指定了名稱欄位。
 

@@ -22,6 +22,7 @@ import type {
   GenericNoteDetail,
   HandlerInfo,
   NoteDetail,
+  UpdateJsonResponse,
   UpdateNoteResponse,
   CapabilityRoute,
   CapabilityRoutesResponse,
@@ -133,6 +134,29 @@ export const FluencyTidesAPI = {
    */
   updateNoteFields: (handlerName: string, noteId: number, fields: Record<string, string>): Promise<UpdateNoteResponse> =>
     apiClient.patch(`/handlers/${encodeURIComponent(handlerName)}/notes/${noteId}`, { fields }),
+
+  /**
+   * 整欄寫入一個 JSON 欄位：送出整個清單與讀取時的版本。別處改過時回 409（`JSON_FIELD_CONFLICT`），
+   * 某一筆格式不對時回 422（`loc` 為 `["body", "items", 第幾筆, 鍵名]`）。
+   * Writes a whole JSON field with the version read.
+   * @param handlerName - handler 名稱。Handler name.
+   * @param noteId - 筆記 ID。Note ID.
+   * @param field - JSON 欄位。The field.
+   * @param items - 整個清單。The whole list.
+   * @param version - 讀取時拿到的版本。The version read.
+   * @returns 寫入後的這一欄與同步提醒。The new state.
+   */
+  updateJsonField: (
+    handlerName: string,
+    noteId: number,
+    field: string,
+    items: Record<string, unknown>[],
+    version: string,
+  ): Promise<UpdateJsonResponse> =>
+    apiClient.put(
+      `/handlers/${encodeURIComponent(handlerName)}/notes/${noteId}/json/${encodeURIComponent(field)}`,
+      { items, version },
+    ),
 
   /**
    * 刪除筆記與它的關聯。

@@ -331,8 +331,10 @@ class TestGet:
         assert result["handler"] == "vocabulary_mining"
         assert result["permissions"] == {
             "update_fields": {"allowed": True, "reason": None},
+            "update_json": {"allowed": False, "reason": "尚未開放"},
             "delete": {"allowed": True, "reason": None},
         }
+        assert result["json_fields"] == {}
         assert result["fields"][0] == {"name": "Expression", "value": "anyway"}
 
     def test_closed_permissions_carry_reasons(self):
@@ -350,6 +352,7 @@ class TestGet:
         reason = "沒有 handler 負責 Notion_SRS_Dark"
         assert result["permissions"] == {
             "update_fields": {"allowed": False, "reason": reason},
+            "update_json": {"allowed": False, "reason": reason},
             "delete": {"allowed": False, "reason": reason},
         }
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
@@ -6,6 +6,7 @@ import { FluencyTidesAPI } from '../api/client'
 import { describeApiError, failureTitle, isBackendError, retryTransient } from '../lib/apiError'
 import { changedFields, fieldValues, noteEditPolicy } from '../lib/cardFields'
 import type { GenericNoteDetail } from '../types/api'
+import { JsonFieldEditor } from './JsonFieldEditor'
 import { ConfirmDialog } from './shared/ConfirmDialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -48,7 +49,8 @@ function showSyncWarning(warning: string | null) {
  * Card detail modal: view, edit, and delete a single Anki note's fields.
  *
  * 能否編輯、刪除看後端回傳的 `permissions`（不允許時顯示原因）；寫入送給負責的 handler
- * （`note.handler`）；handler 宣告的 JSON、媒體欄位只顯示不編輯；儲存時只送出有變的欄位。
+ * （`note.handler`）；handler 宣告的媒體欄位、沒有格式的 JSON 欄位只顯示不編輯；儲存時只送出有變的欄位。
+ * handler 宣告了格式的 JSON 欄位（`json_field_specs`）改用清單表單編輯，各欄自己儲存（`JsonFieldEditor`）。
  * 後端寫入後會同步 AnkiWeb 並等它完成，所以送出期間顯示「同步中」。
  * Permissions come from the backend; writes go to the owning handler;
  * declared JSON and media fields are read-only; only changed fields are sent.
@@ -63,8 +65,9 @@ function showSyncWarning(warning: string | null) {
  */
 export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDeleted }: CardDetailModalProps) {
   const queryClient = useQueryClient()
-  // 唯讀欄位看 handler 宣告的 JSON、媒體欄位；只有允許修改時才需要
-  const needsHandlers = isOpen && note?.permissions.update_fields.allowed === true
+  // 唯讀欄位與 JSON 欄位的格式看 handler 宣告；只有允許修改時才需要
+  const needsHandlers =
+    isOpen && (note?.permissions.update_fields.allowed === true || note?.permissions.update_json?.allowed === true)
   const {
     data: handlers,
     error: handlersError,
@@ -80,21 +83,44 @@ export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDel
   const [fields, setFields] = useState<Record<string, string>>({})
   // 刪除前的確認視窗（頁面內的，不用 window.confirm：瀏覽器顯示原生對話框前會退出全螢幕）
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  // JSON 清單有未儲存的修改時，關閉前確認
+  const [dirtyJson, setDirtyJson] = useState<ReadonlySet<string>>(new Set())
+  const [confirmingClose, setConfirmingClose] = useState(false)
   useEffect(() => {
-    if (!isOpen) setConfirmingDelete(false)
+    if (!isOpen) {
+      setConfirmingDelete(false)
+      setConfirmingClose(false)
+      setDirtyJson(new Set())
+    }
   }, [isOpen])
+  const onJsonDirty = useCallback((field: string, dirty: boolean) => {
+    setDirtyJson((prev) => {
+      if (prev.has(field) === dirty) return prev
+      const next = new Set(prev)
+      if (dirty) next.add(field)
+      else next.delete(field)
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     setFields(original)
   }, [original])
 
+  const handler = note ? handlers?.find((h) => h.name === note.handler) : undefined
   const policy = note
     ? noteEditPolicy({
         note,
-        handler: handlers?.find((handler) => handler.name === note.handler),
+        handler,
         handlersError: needsHandlers && handlersError ? describeApiError(handlersError).message : null,
       })
     : null
+  // 能以清單表單編輯的 JSON 欄位：handler 宣告了格式、讀取也帶回了內容
+  const jsonSpecs = handler?.json_field_specs ?? {}
+  const jsonStates = note?.json_fields ?? {}
+  const jsonEditable = Object.keys(jsonSpecs).filter((name) => jsonStates[name] !== undefined)
+  const jsonPermission = note?.permissions.update_json
+  const reloadNote = () => queryClient.invalidateQueries({ queryKey: ['note'] })
   const target: WriteTarget | null =
     note && policy?.handlerName ? { handlerName: policy.handlerName, noteId: note.note_id } : null
   const changes = changedFields(original, fields)
@@ -133,6 +159,11 @@ export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDel
 
   if (!isOpen) return null
 
+  const requestClose = () => {
+    if (dirtyJson.size > 0) setConfirmingClose(true)
+    else onClose()
+  }
+
   const busy = updateMutation.isPending || deleteMutation.isPending
   const canSave = Boolean(target && policy?.canEdit && hasChanges && !busy && !isLoading)
   const canDelete = Boolean(target && policy?.canDelete && !busy && !isLoading)
@@ -157,7 +188,7 @@ export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDel
             )}
           </div>
           <button
-            onClick={onClose}
+            onClick={requestClose}
             aria-label="關閉"
             className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
           >
@@ -189,6 +220,7 @@ export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDel
                 </div>
               )}
               {Object.entries(fields).map(([key, value]) => {
+                if (jsonEditable.includes(key)) return null
                 const locked = policy?.lockedFields.get(key)
                 const readOnly = !policy?.canEdit || locked !== undefined
                 const isLongText = locked === 'JSON' || key === 'ExampleSentence' || value.length > 50
@@ -218,6 +250,22 @@ export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDel
                   </div>
                 )
               })}
+              {target &&
+                jsonEditable.map((name) => (
+                  <JsonFieldEditor
+                    key={name}
+                    handlerName={target.handlerName}
+                    noteId={target.noteId}
+                    field={name}
+                    spec={jsonSpecs[name]}
+                    state={jsonStates[name]}
+                    canEdit={jsonPermission?.allowed === true}
+                    notice={jsonPermission?.allowed ? null : jsonPermission?.reason}
+                    onSaved={refresh}
+                    onReload={reloadNote}
+                    onDirtyChange={onJsonDirty}
+                  />
+                ))}
             </div>
           ) : (
             <div role="alert" className="text-center text-sm">
@@ -239,7 +287,7 @@ export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDel
             {deleteMutation.isPending ? '刪除並同步中…' : '刪除筆記'}
           </Button>
           <div className="space-x-2">
-            <Button variant="outline" onClick={onClose} disabled={busy}>
+            <Button variant="outline" onClick={requestClose} disabled={busy}>
               取消
             </Button>
             <Button onClick={() => target && updateMutation.mutate({ ...target, fields: changes })} disabled={!canSave}>
@@ -249,6 +297,19 @@ export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDel
           </div>
         </div>
       </div>
+      {confirmingClose && (
+        <ConfirmDialog
+          title="還有未儲存的清單"
+          message="有清單的修改還沒儲存，關閉後會遺失。確定要關閉嗎？"
+          confirmLabel="關閉"
+          destructive
+          onCancel={() => setConfirmingClose(false)}
+          onConfirm={() => {
+            setConfirmingClose(false)
+            onClose()
+          }}
+        />
+      )}
       {confirmingDelete && target && (
         <ConfirmDialog
           title="刪除筆記"

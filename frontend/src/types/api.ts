@@ -41,6 +41,8 @@ export interface HandlerCapabilities {
   create: CreateCapability;
   read: Operation;
   update_fields: Operation;
+  /** 網頁以表單編輯 JSON 欄位（格式見 `json_field_specs`）。Editing JSON fields as forms. */
+  update_json?: Operation;
   delete: Operation;
   actions: string[];
   graph: GraphCapability;
@@ -58,6 +60,8 @@ export interface HandlerInfo {
   create_schema: Record<string, unknown> | null;
   /** JSON 欄位：不能直接修改，網頁唯讀顯示。JSON fields, read-only. */
   json_fields: string[];
+  /** 能以表單編輯的 JSON 欄位：標題與每一筆的 JSON Schema。Editable JSON fields. */
+  json_field_specs?: Record<string, JsonFieldSpec>;
   /** 媒體欄位：同上。Media fields, read-only. */
   media_fields: string[];
 }
@@ -90,7 +94,31 @@ export interface Permission {
 /** 對這張筆記能做的事。What may be done to a note. */
 export interface NotePermissions {
   update_fields: Permission;
+  /** 以表單編輯 JSON 欄位。Editing JSON fields as forms. */
+  update_json?: Permission;
   delete: Permission;
+}
+
+/** 一個能以表單編輯的 JSON 欄位。An editable JSON field. */
+export interface JsonFieldSpec {
+  title: string;
+  /** 每一筆的 JSON Schema。The JSON Schema of one item. */
+  item_schema: Record<string, unknown>;
+}
+
+/** 一個 JSON 欄位目前的內容。A JSON field's current content. */
+export interface JsonFieldState {
+  /** 解析好的清單；欄位壞掉時為空。The items; empty when the field is corrupted. */
+  items: unknown[];
+  /** 欄位原始字串的雜湊；寫入時送回，用來偵測別處的修改。The version to send back. */
+  version: string;
+  /** 欄位壞掉時的原因（這時不能編輯）。Why the field is unreadable. */
+  error: string | null;
+}
+
+/** `PUT .../json/{field}` 的回應。The JSON field write result. */
+export interface UpdateJsonResponse extends JsonFieldState {
+  sync_warning: string | null;
 }
 
 /** `GET /notes/{note_id}`：附上負責的 handler 與權限。The generic read. */
@@ -98,6 +126,8 @@ export interface GenericNoteDetail extends NoteDetail {
   /** 負責的 handler；沒有 handler 負責這種筆記類型時為 null。The owning handler, or null. */
   handler: string | null;
   permissions: NotePermissions;
+  /** 能以表單編輯的 JSON 欄位目前的內容。The editable JSON fields. */
+  json_fields?: Record<string, JsonFieldState>;
 }
 
 /** `POST /handlers/{name}/notes` 的請求。The create request. */

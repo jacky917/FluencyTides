@@ -15,7 +15,10 @@ construction; the registry checks it against the implementation.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
 
 #: 建卡管道：網頁、TG、本機腳本。Channels a card can be created from.
 Channel = Literal["web", "tg", "script"]
@@ -117,6 +120,8 @@ class HandlerCapabilities:
     create: CreateCapability = field(default_factory=CreateCapability)
     read: Operation = field(default_factory=lambda: Operation(supported=True))
     update_fields: Operation = field(default_factory=Operation)
+    #: 網頁以表單編輯 JSON 欄位（json_field_editor 計畫 D2）；欄位格式見 ``JSON_FIELD_SPECS``。
+    update_json: Operation = field(default_factory=Operation)
     delete: Operation = field(default_factory=Operation)
     actions: tuple[str, ...] = ()
     graph: GraphCapability = field(default_factory=GraphCapability)
@@ -129,21 +134,36 @@ class HandlerCapabilities:
         """
         return _lists(asdict(self))
 
-    def existing_note_ops(self) -> tuple[bool, bool, bool, tuple[str, ...]]:
-        """對既有筆記的能力（讀取、改欄位、刪除、動作），同一筆記類型的多個 handler 必須一致（D4）。
+    def existing_note_ops(self) -> tuple[bool, bool, bool, bool, tuple[str, ...]]:
+        """對既有筆記的能力（讀取、改欄位、改 JSON 欄位、刪除、動作），同一筆記類型的多個 handler
+        必須一致（D4）。
 
         The capabilities on existing notes, which must match across handlers
         sharing a note type.
 
         Returns:
-            (能否讀取, 能否改欄位, 能否刪除, 動作)。The four values.
+            (能否讀取, 能否改欄位, 能否改 JSON 欄位, 能否刪除, 動作)。The five values.
         """
         return (
             self.read.supported,
             self.update_fields.supported,
+            self.update_json.supported,
             self.delete.supported,
             tuple(sorted(self.actions)),
         )
+
+
+@dataclass(frozen=True)
+class JsonFieldSpec:
+    """一個 JSON 欄位的格式：每一筆資料的 Pydantic 模型與標題（json_field_editor 計畫 D1）。
+
+    The format of one JSON field: the item model and a title.
+
+    模型建議設 ``extra="allow"``：既有資料有模型沒列出的鍵時，經網頁儲存也原樣保留。
+    """
+
+    item: type[BaseModel]
+    title: str
 
 
 @dataclass(frozen=True)

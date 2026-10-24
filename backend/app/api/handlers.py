@@ -7,6 +7,7 @@ Task handlers REST API router module.
 - ``POST   /handlers/{name}/notes``                  建卡（201）
 - ``GET    /handlers/{name}/notes/{note_id}``        handler 讀取
 - ``PATCH  /handlers/{name}/notes/{note_id}``        修改欄位
+- ``PUT    /handlers/{name}/notes/{note_id}/json/{field}``  整欄寫入 JSON 欄位（json_field_editor 計畫）
 - ``DELETE /handlers/{name}/notes/{note_id}``        刪除
 - ``GET    /handlers/{name}/graph``                  圖譜
 
@@ -32,6 +33,8 @@ from app.schemas.notes import (
     GraphResponse,
     HandlerInfo,
     NoteDetail,
+    UpdateJsonRequest,
+    UpdateJsonResponse,
     UpdateNoteRequest,
     UpdateNoteResponse,
 )
@@ -125,6 +128,41 @@ async def update_note(
 ) -> dict[str, object]:
     """修改欄位。Update fields."""
     return await note_service.update_fields(handler_name, note_id, body.fields)
+
+
+@router.put(
+    "/{handler_name}/notes/{note_id}/json/{field_name}",
+    response_model=UpdateJsonResponse,
+    summary="整欄寫入 JSON 欄位",
+    description="送出整個清單與讀取時的版本；別處改過時回 409，某一筆格式不對時回 422（loc 指到第幾筆的哪個鍵）。",
+    responses={
+        **_REFUSED,
+        **_NOT_FOUND,
+        409: {"model": ErrorResponse, "description": "這一欄在別處被改過"},
+        422: {"description": "某一筆格式不對（detail）"},
+        **_ANKI_ERROR,
+    },
+)
+async def update_json_field(
+    handler_name: str,
+    note_id: int,
+    field_name: str,
+    body: UpdateJsonRequest,
+    note_service: NoteService = Depends(get_note_service),
+) -> dict[str, object]:
+    """整欄寫入 JSON 欄位，寫入後同步。Write a whole JSON field.
+
+    Raises:
+        RequestValidationError: 某一筆格式不對；``loc`` 前面接上 ``body``、``items``。On invalid items.
+    """
+    try:
+        return await note_service.update_json(handler_name, note_id, field_name, list(body.items), body.version)
+    except ValidationError as exc:
+        errors = [
+            {**error, "loc": ("body", "items", *error["loc"])}
+            for error in exc.errors(include_url=False, include_context=False)
+        ]
+        raise RequestValidationError(errors) from exc
 
 
 @router.delete(

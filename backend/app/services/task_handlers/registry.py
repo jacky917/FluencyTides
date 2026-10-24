@@ -217,6 +217,13 @@ def validate_handler(handler: BaseHandler) -> None:
     if handler.CREATE_PARAMS is not None and not overrides_create:
         problems.append("宣告了 CREATE_PARAMS，但用的是標準建立（參數就是筆記欄位）")
 
+    # JSON 欄位的表單編輯：開放就要有格式；格式只能宣告在 JSON_FIELDS 之內
+    if caps.update_json.supported and not handler.JSON_FIELD_SPECS:
+        problems.append("開放 update_json，但沒有宣告 JSON_FIELD_SPECS")
+    unknown_specs = [name for name in handler.JSON_FIELD_SPECS if name not in handler.JSON_FIELDS]
+    if unknown_specs:
+        problems.append(f"JSON_FIELD_SPECS 的 {unknown_specs} 不在 JSON_FIELDS 內")
+
     # 基底的 execute_update 只做 update_fields；具名動作一定要覆寫
     if caps.actions and cls.execute_update is BaseHandler.execute_update:
         problems.append(f"宣告了動作 {list(caps.actions)}，但沒有覆寫 execute_update")

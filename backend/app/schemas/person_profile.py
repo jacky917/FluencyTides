@@ -116,7 +116,7 @@ class Followup(_Item):
     type: Literal["ask", "my_promise", "their_promise"] = Field(
         "ask", title="種類", description="ask：下次要問；my_promise：我答應的；their_promise：對方答應的"
     )
-    status: Literal["open", "done"] = Field("open", title="狀態")
+    status: Literal["open", "done"] = Field("open", title="狀態", description="open：未完成；done：已完成")
     added: str = Field("", title="記下的日期", pattern=OPTIONAL_DATE)
     due: str = Field("", title="期限", pattern=OPTIONAL_DATE)
 

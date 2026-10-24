@@ -13,20 +13,25 @@ validation, note-ownership checks and the sync after writes.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from functools import cache
 from typing import TYPE_CHECKING, Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, create_model
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter, create_model
 
 from app.core.config import settings
 from app.core.exceptions import (
+    AnkiFieldCorruptedError,
+    FieldNotEditableError,
     HandlerOperationUnsupportedError,
+    JsonFieldConflictError,
     NoteNotOwnedByHandlerError,
     NoteTypeNotCreatableError,
 )
 from app.infrastructure.anki.client import AnkiConnectError
-from app.services.task_handlers.base import note_detail
+from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
+from app.services.task_handlers.base import note_detail, note_field_values
 from app.services.task_handlers.registry import handler_registry
 
 if TYPE_CHECKING:
@@ -111,6 +116,7 @@ class NoteService:
                 "capabilities": capabilities,
                 "create_schema": create_schema,
                 "json_fields": list(handler.JSON_FIELDS),
+                "json_field_specs": json_field_specs(handler),
                 "media_fields": list(handler.MEDIA_FIELDS),
             })
         return result
@@ -223,19 +229,31 @@ class NoteService:
         Raises:
             NoteNotFoundError: 筆記不存在。Missing note.
         """
-        detail = note_detail(await self.card_service.get_note(note_id))
+        note = await self.card_service.get_note(note_id)
+        detail = note_detail(note)
         note_type = str(detail["note_type"])
         handler = self.registry.handler_for_note_type(note_type)
         if handler is None:
             reason = f"沒有 handler 負責 {note_type}"
-            permissions = {name: {"allowed": False, "reason": reason} for name in ("update_fields", "delete")}
+            permissions = {
+                name: {"allowed": False, "reason": reason} for name in ("update_fields", "update_json", "delete")
+            }
+            json_fields: dict[str, object] = {}
         else:
             caps = handler.CAPABILITIES
             permissions = {
                 "update_fields": _permission(caps.update_fields),
+                "update_json": _permission(caps.update_json),
                 "delete": _permission(caps.delete),
             }
-        return {**detail, "handler": handler.handler_name if handler else None, "permissions": permissions}
+            values = note_field_values(note)
+            json_fields = {name: json_field_state(values.get(name, "")) for name in handler.JSON_FIELD_SPECS}
+        return {
+            **detail,
+            "handler": handler.handler_name if handler else None,
+            "permissions": permissions,
+            "json_fields": json_fields,
+        }
 
     async def update_fields(
         self, handler_name: str, note_id: int, fields: Mapping[str, object]
@@ -259,6 +277,47 @@ class NoteService:
         sync_warning = await self.sync_after_write()
         detail = note_detail(await self.card_service.get_note(note_id))
         return {**detail, "sync_warning": sync_warning}
+
+    async def update_json(
+        self, handler_name: str, note_id: int, field_name: str, items: list[object], version: str
+    ) -> dict[str, object]:
+        """整欄寫入一個 JSON 欄位（json_field_editor 計畫 D4）：檢查能力與歸屬 → 版本 → 格式 → 寫入
+        → handler 的善後 → 同步。
+
+        Write a whole JSON field: capability and ownership, version, format,
+        write, the handler's follow-up, then the sync.
+
+        Args:
+            handler_name: handler 名稱。The handler.
+            note_id: 筆記 ID。The note.
+            field_name: JSON 欄位，必須在 ``JSON_FIELD_SPECS`` 內。The field.
+            items: 整個清單。The whole list.
+            version: 讀取時拿到的版本（欄位原始字串的雜湊）。The version read.
+
+        Returns:
+            ``{"items", "version", "sync_warning"}``：寫入後的清單與新的版本。The new state.
+
+        Raises:
+            HandlerOperationUnsupportedError: 不開放 JSON 編輯。Not offered.
+            NoteNotOwnedByHandlerError: 筆記不歸這個 handler。Not this handler's note.
+            FieldNotEditableError: 這個欄位不能以表單編輯。The field is not editable.
+            JsonFieldConflictError: 版本不符（別處改過）。The field changed elsewhere.
+            pydantic.ValidationError: 某一筆格式不對（REST 轉成 422，loc 指到第幾筆）。Invalid items.
+        """
+        handler = await self._owning_handler(handler_name, note_id, "update_json")
+        spec = handler.JSON_FIELD_SPECS.get(field_name)
+        if spec is None:
+            raise FieldNotEditableError(f"{field_name} 不能以表單編輯")
+        raw = note_field_values(await self.card_service.get_note(note_id)).get(field_name, "")
+        if json_field_version(raw) != version:
+            raise JsonFieldConflictError(f"「{spec.title}」在別處被改過，請重新載入後再改")
+        validated = TypeAdapter(list[spec.item]).validate_python(items)  # type: ignore[name-defined]
+        data = [item.model_dump(mode="json") for item in validated]
+        await AnkiJsonFieldManager.update_field(self.card_service, note_id, field_name, data)
+        await handler.after_json_update(self.card_service, note_id, field_name, data)
+        sync_warning = await self.sync_after_write()
+        current = note_field_values(await self.card_service.get_note(note_id)).get(field_name, "")
+        return {**json_field_state(current), "sync_warning": sync_warning}
 
     async def run_action(self, note_id: int, action: str, params: Mapping[str, object]) -> str | None:
         """具名動作（例如口說卡的 ``add_audio``）：依筆記類型找 handler，不帶 handler 名稱。
@@ -421,6 +480,32 @@ def standard_params_model(
         __config__=ConfigDict(extra="allow"),
         **definitions,
     )
+
+
+def json_field_version(raw: str) -> str:
+    """JSON 欄位的版本：原始字串的 SHA-256 前 16 碼（json_field_editor 計畫 D3）。The field's version."""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def json_field_state(raw: str) -> dict[str, object]:
+    """讀取時回傳的一個 JSON 欄位：解析好的清單、版本與錯誤（壞掉時清單為空、不能編輯）。
+
+    One JSON field as returned by the read: items, version and error.
+    """
+    try:
+        items: list[object] = AnkiJsonFieldManager.parse_field_string(raw)
+        error = None
+    except AnkiFieldCorruptedError as exc:
+        items, error = [], exc.message
+    return {"items": items, "version": json_field_version(raw), "error": error}
+
+
+def json_field_specs(handler: BaseHandler) -> dict[str, object]:
+    """``GET /handlers`` 的 JSON 欄位格式：標題與每一筆的 JSON Schema。The JSON field formats."""
+    return {
+        name: {"title": spec.title, "item_schema": spec.item.model_json_schema()}
+        for name, spec in handler.JSON_FIELD_SPECS.items()
+    }
 
 
 def _require(operation: Operation) -> None:

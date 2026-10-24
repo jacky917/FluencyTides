@@ -548,7 +548,7 @@
 | **P1** | handler：覆寫建立、`update_fields`、`delete`；網頁建立、修改、刪除 | 網頁能建人、改單值與文字欄位 |
 | **P2** | TG：`/p` 找人、摘要、`/newcard` 建立；補 `Card_ID` 腳本 | 手機上不開 Anki 也能查人；後面的 TG 寫入都從摘要出發 |
 | **P3** | handler 具名動作；TG：記一筆互動、待追蹤、改欄位、照片、深連結 | 「見完面馬上記」的主要入口 |
-| **P4** | 網頁 JSON 清單編輯 | 依 `json_field_editor` 計畫做通用版本，人脈卡的六種格式是其中一個使用者 |
+| **P4** | 網頁 JSON 清單編輯 | 依 `json_field_editor` 計畫做通用版本，人脈卡的六種格式是其中一個使用者。2026-10-24 實作時與該計畫的差異：格式宣告用另一個類別屬性 `JSON_FIELD_SPECS`（`JSON_FIELDS` 維持名稱的 tuple，其他 handler 不用改）；`GET /handlers` 多一個鍵 `json_field_specs`（`json_fields` 照舊是名稱清單，前端唯讀判斷不受影響）；`after_json_update` 讓 handler 在整欄寫入後維護相關欄位（人脈卡：`Updated_At`、`Last_Contact`）。單字卡 `_v2` 的試點留待之後 |
 | **P5** | TG：一段話或語音 → LLM 整理 → 預覽確認後寫入 | 最省力的記錄方式；依賴 P3 的動作，放最後 |
 
 ## 6. 風險與未知

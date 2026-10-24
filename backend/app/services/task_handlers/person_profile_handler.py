@@ -27,7 +27,7 @@ from app.schemas.person_profile import (
 from app.services.card_service import CardService
 from app.services.relation_service import RelationService
 from app.services.task_handlers.base import BaseHandler, field_text, note_field_values
-from app.services.task_handlers.capabilities import CreateCapability, HandlerCapabilities, Operation
+from app.services.task_handlers.capabilities import CreateCapability, HandlerCapabilities, JsonFieldSpec, Operation
 from app.services.task_handlers.registry import register_handler
 
 #: 系統維護、不能經 ``update_fields`` 改的欄位：TG 深連結以 ``Card_ID`` 找人，改了就斷線。
@@ -134,6 +134,8 @@ class PersonProfileHandler(BaseHandler):
     - 具名動作（``ACTIONS``）：追加互動紀錄（同時更新 ``Last_Contact``）、新增待追蹤、改待追蹤狀態、
       在其他清單新增一筆、刪除一筆、設定照片。項目以 §3.3 的模型驗證；刪除與改狀態以指紋確認
       要動的是同一筆。每次寫入都更新 ``Updated_At``。
+    - 網頁整欄編輯 JSON 欄位（``JSON_FIELD_SPECS``）：寫入後更新 ``Updated_At``；互動紀錄有更新的日期時
+      一併更新 ``Last_Contact``。
     - 刪除：標準刪除。
     """
 
@@ -142,10 +144,12 @@ class PersonProfileHandler(BaseHandler):
             supported=True, channels=("web", "tg"), flow="form", deck="selected", note_type=PERSON_NOTE_TYPE
         ),
         update_fields=Operation(supported=True),
+        update_json=Operation(supported=True),
         delete=Operation(supported=True),
         actions=ACTIONS,
     )
     JSON_FIELDS = tuple(PERSON_JSON_ITEMS)
+    JSON_FIELD_SPECS = {name: JsonFieldSpec(item=model, title=title) for name, (model, title) in PERSON_JSON_ITEMS.items()}
     MEDIA_FIELDS = ("Photo",)
     CREATE_TAGS = ("PersonProfile", "HandlerGenerated")
     CREATE_PARAMS = PersonCreateParams
@@ -280,6 +284,20 @@ class PersonProfileHandler(BaseHandler):
             await self._touch(card_service, note_id)
         else:
             await super().execute_update(card_service, relation_service, note_id, parameters)
+
+    @override
+    async def after_json_update(
+        self, card_service: CardService, note_id: int, field_name: str, items: list[object]
+    ) -> None:
+        """網頁整欄寫入之後：互動紀錄的最新日期推進 ``Last_Contact``，並更新 ``Updated_At``。
+
+        After the web writes a whole field: move ``Last_Contact`` forward and stamp ``Updated_At``.
+        """
+        if field_name == "Interactions_JSON":
+            dates = [str(item.get("date", "")) for item in items if isinstance(item, dict)]
+            if dates:
+                await self._bump_last_contact(card_service, note_id, max(dates))
+        await self._touch(card_service, note_id)
 
     async def _update_fields(
         self,

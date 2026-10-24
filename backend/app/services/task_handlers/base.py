@@ -24,7 +24,7 @@ from app.core.exceptions import (
     InvalidNoteQueryError,
 )
 from app.infrastructure.anki.search import note_types_query
-from app.services.task_handlers.capabilities import GraphSpec, HandlerCapabilities
+from app.services.task_handlers.capabilities import GraphSpec, HandlerCapabilities, JsonFieldSpec
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -54,6 +54,8 @@ class BaseHandler(ABC):
         RELATION_LABEL_FIELD: 關聯表用來辨認節點的文字欄位；有宣告時，標準修改會在它改變時同步
             關聯表兩端的標籤（D12）。The field relations use as node text.
         JSON_FIELDS: JSON 欄位名稱；建卡與改欄位都不能直接寫（D3）。JSON field names.
+        JSON_FIELD_SPECS: 能在網頁以表單編輯的 JSON 欄位與格式（json_field_editor 計畫 D1）；
+            要搭配 ``CAPABILITIES.update_json``。Editable JSON fields and their formats.
         MEDIA_FIELDS: 媒體欄位名稱；同上。Media field names.
         CREATE_TAGS: 標準建立加上的標籤。Tags the standard create adds.
         CREATE_PARAMS: 覆寫建立的 handler 的建立參數模型（D3）；服務層以它驗證參數、產生網頁表單。
@@ -65,6 +67,7 @@ class BaseHandler(ABC):
     GRAPH: ClassVar[GraphSpec] = GraphSpec()
     RELATION_LABEL_FIELD: ClassVar[str | None] = None
     JSON_FIELDS: ClassVar[tuple[str, ...]] = ()
+    JSON_FIELD_SPECS: ClassVar[Mapping[str, JsonFieldSpec]] = {}
     MEDIA_FIELDS: ClassVar[tuple[str, ...]] = ()
     CREATE_TAGS: ClassVar[tuple[str, ...]] = ("HandlerGenerated",)
     CREATE_PARAMS: ClassVar[type[BaseModel] | None] = None
@@ -342,6 +345,21 @@ class BaseHandler(ABC):
         if note_type not in self.supported_models:
             raise InvalidNoteQueryError(f"{note_type} 不歸「{self.title}」負責")
         return [note_type]
+
+    async def after_json_update(
+        self, card_service: CardService, note_id: int, field_name: str, items: list[object]
+    ) -> None:
+        """網頁整欄寫入 JSON 欄位之後（同步之前）呼叫；預設不做事。
+
+        Called after the web writes a whole JSON field, before the sync.
+        覆寫的 handler 可以維護相關欄位（例如人脈卡的最後聯絡日）。
+
+        Args:
+            card_service: 卡片服務。Card service.
+            note_id: 筆記 ID。The note.
+            field_name: 寫入的 JSON 欄位。The field written.
+            items: 寫入的清單。The items written.
+        """
 
     def reject_locked_fields(self, field_names: Iterable[str]) -> None:
         """宣告為 JSON、媒體的欄位不能直接以文字寫入（D3）。

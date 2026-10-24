@@ -44,6 +44,7 @@ class CapabilitiesOut(BaseModel):
     create: CreateCapabilityOut
     read: OperationOut
     update_fields: OperationOut
+    update_json: OperationOut = Field(description="網頁以表單編輯 JSON 欄位（格式見 json_field_specs）")
     delete: OperationOut
     actions: list[str]
     graph: GraphCapabilityOut
@@ -60,7 +61,17 @@ class HandlerInfo(BaseModel):
         description="網頁建卡表單的 JSON Schema；不開放、不是表單流程或 Anki 連不上時為 null"
     )
     json_fields: list[str] = Field(description="JSON 欄位：建卡表單不列、不能直接修改、網頁唯讀顯示")
+    json_field_specs: dict[str, "JsonFieldSpecOut"] = Field(
+        default_factory=dict, description="能以表單編輯的 JSON 欄位：標題與每一筆的 JSON Schema"
+    )
     media_fields: list[str] = Field(description="媒體欄位：同上")
+
+
+class JsonFieldSpecOut(BaseModel):
+    """一個能以表單編輯的 JSON 欄位（json_field_editor 計畫 D2）。An editable JSON field."""
+
+    title: str
+    item_schema: dict[str, Any] = Field(description="每一筆的 JSON Schema，前端依它產生表單")
 
 
 # =============================================================================
@@ -101,7 +112,16 @@ class NotePermissions(BaseModel):
     """通用讀取附上的權限（D4）。Permissions in the generic read."""
 
     update_fields: Permission
+    update_json: Permission
     delete: Permission
+
+
+class JsonFieldState(BaseModel):
+    """一個 JSON 欄位目前的內容（json_field_editor 計畫 D3）。A JSON field's current content."""
+
+    items: list[Any] = Field(description="解析好的清單；欄位壞掉時為空")
+    version: str = Field(description="欄位原始字串的雜湊；寫入時送回，用來偵測別處的修改")
+    error: str | None = Field(description="欄位壞掉時的原因（這時不能編輯）")
 
 
 class GenericNoteDetail(NoteDetail):
@@ -109,6 +129,9 @@ class GenericNoteDetail(NoteDetail):
 
     handler: str | None = Field(description="負責的 handler；沒有 handler 負責這種筆記類型時為 null")
     permissions: NotePermissions
+    json_fields: dict[str, JsonFieldState] = Field(
+        default_factory=dict, description="能以表單編輯的 JSON 欄位（handler 的 JSON_FIELD_SPECS）目前的內容"
+    )
 
 
 class CreateNoteRequest(BaseModel):
@@ -165,3 +188,20 @@ class DeckInfo(BaseModel):
 
     deck_name: str
     deck_id: int
+
+
+class UpdateJsonRequest(BaseModel):
+    """``PUT /handlers/{name}/notes/{note_id}/json/{field}``：整欄送出（json_field_editor 計畫 D4）。"""
+
+    items: list[dict[str, Any]] = Field(description="整個清單，依顯示順序")
+    version: str = Field(description="讀取時拿到的版本")
+
+
+class UpdateJsonResponse(JsonFieldState):
+    """寫入後的這一欄與同步提醒。The field after writing and the sync warning."""
+
+    sync_warning: str | None = Field(description="寫入後同步 AnkiWeb 失敗時的提醒；資料仍已寫入")
+
+
+# json_field_specs 用到後面才定義的 JsonFieldSpecOut
+HandlerInfo.model_rebuild()
