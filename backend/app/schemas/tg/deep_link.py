@@ -77,13 +77,13 @@ class TTSAudioAction(DeepLinkAction):
 
 
 class PersonLinkAction(DeepLinkAction):
-    """人脈卡的深連結：卡面的「+」、長按刪除、✅、改資料、照片（人脈卡計畫書 §3.8）。
+    """人脈卡的深連結：卡面的「+」、長按刪除、完成、改資料、照片、AI 分析與話題（人脈卡計畫書 §3.8）。
 
     A person profile card link: add, delete, mark done, view, or photo.
     """
 
     action_type: Literal["person"] = "person"
-    verb: Literal["view", "add", "del", "done", "photo"] = Field(..., description="要做什麼")
+    verb: Literal["view", "add", "del", "done", "photo", "topic"] = Field(..., description="要做什麼")
     field_name: str = Field(..., description="對象欄位（例如 Followups_JSON）")
     index: str = Field(..., description="序號與指紋 `{序號}_{指紋}`；不適用時為 none")
     card_id: str = Field(..., description="人脈卡的 Card_ID")

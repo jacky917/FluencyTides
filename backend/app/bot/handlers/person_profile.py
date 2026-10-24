@@ -8,6 +8,7 @@ Telegram flows of the person profile card.
 - 卡面的深連結（``pview``、``padd``、``pdel``、``pdone``、``pphoto``）由 ``commands.py`` 的 ``/start``
   轉給 :func:`handle_person_link`。
 - ``/newcard`` 選「人脈卡」時由 :func:`start_person_create` 建立新的人。
+- 「AI 分析與話題」：LLM 以諮商師的角度分析這個人並推薦話題，名字遮起來送出（:mod:`app.services.person_profile_topics`）。
 - 「用一段話記錄」：一段文字或語音經 LLM 整理成互動、待追蹤與欄位建議，勾選後才寫入
   （:mod:`app.services.person_profile_ingest`）。
 
@@ -58,6 +59,7 @@ from app.schemas.person_profile import (
 )
 from app.schemas.tg.deep_link import PersonLinkAction
 from app.services import person_profile_ingest as ingest_service
+from app.services import person_profile_topics as topics_service
 from app.services.card_service import CardService
 from app.services.note_service import NoteService, sync_warning
 from app.services.task_handlers.base import note_field_values
@@ -145,6 +147,7 @@ def summary_keyboard(note_id: int) -> InlineKeyboardMarkup:
     """摘要下方的操作按鈕。The buttons under a summary."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [_button("用一段話記錄（文字或語音）", f"pp:ing:{note_id}")],
+        [_button("AI 分析與話題", f"pp:topic:{note_id}")],
         [_button("+ 記一筆互動", f"pp:add:{note_id}:I"), _button("待追蹤", f"pp:ls:{note_id}:F")],
         [_button("改資料", f"pp:edit:{note_id}"), _button("清單", f"pp:lists:{note_id}")],
         [_button("照片", f"pp:photo:{note_id}"), _button("全部資料", f"pp:full:{note_id}")],
@@ -297,6 +300,8 @@ async def handle_person_link(
                 await _set_followup_status(message, note_service, card_service, note_id, int(index), fingerprint, "done")
         elif action.verb == "photo":
             await _start_photo(message, state, note_id)
+        elif action.verb == "topic":
+            await _send_topics(message, card_service, note_id)
     except (FluencyTidesError, AnkiConnectError) as e:
         await _reply_error(message, e)
 
@@ -382,6 +387,8 @@ async def on_person_button(
             await _toggle_proposal(message, state, _int_arg(parts, 2))
         elif verb == "igsave":
             await _save_proposals(message, state, note_service, card_service)
+        elif verb == "topic":
+            await _send_topics(message, card_service, _int_arg(parts, 2))
     except _StaleButton:
         logger.info("人脈卡按鈕的資料解析不了: %r", callback.data)
         await message.answer("❌ 這個按鈕已失效，請用 /p 重新找人。")
@@ -934,16 +941,73 @@ async def _run_ingest(
 
 
 def _ingest_failure(error: LLMServiceError | LLMGenerationError) -> str:
-    """整理失敗時給使用者的訊息：依原因給下一步。The failure message, with a next step per cause."""
+    """整理一段話失敗時給使用者的訊息。The ingest failure message."""
+    return _llm_failure(error, task="整理", setting=ingest_service.INGEST_ROUTE.description, retry="再傳")
+
+
+def _llm_failure(error: LLMServiceError | LLMGenerationError, *, task: str, setting: str, retry: str) -> str:
+    """LLM 失敗時給使用者的訊息：依原因給下一步。The LLM failure message, with a next step per cause.
+
+    Args:
+        error: LLM 的錯誤。The error.
+        task: 做什麼失敗（「整理」）。What failed.
+        setting: 用途鍵的說明（``/setconfig`` 上看到的名稱）。The route's description.
+        retry: 重試的動作（「再傳」「再按」）。How to retry.
+    """
     detail = error_detail(error.message)
-    setting = "用 /setconfig 替「人脈卡：整理一段話」換一個模型"
+    change = f"用 /setconfig 替「{setting}」換一個模型"
     if isinstance(error, LLMQuotaError):
-        return f"❌ LLM 額度用完或太頻繁：{detail}\n請稍後再傳，或{setting}。"
+        return f"❌ LLM 額度用完或太頻繁：{detail}\n請稍後{retry}，或{change}。"
     if isinstance(error, LLMRefusalError):
-        return f"❌ 模型拒絕處理這段內容：{detail}\n可以換個說法再傳，或{setting}。"
+        return f"❌ 模型拒絕處理這段內容：{detail}\n可以換個說法{retry}，或{change}。"
     if isinstance(error, LLMGenerationError):
-        return f"❌ 整理失敗：{detail}\n直接再傳一次即可。"
-    return f"❌ 整理失敗：{detail}\n請再傳一次；一直失敗的話，{setting}或檢查它的設定。"
+        return f"❌ {task}失敗：{detail}\n直接{retry}一次即可。"
+    return f"❌ {task}失敗：{detail}\n請{retry}一次；一直失敗的話，{change}或檢查它的設定。"
+
+
+# =============================================================================
+# AI 分析與話題（不寫入，只回覆）
+# =============================================================================
+
+
+async def _send_topics(message: types.Message, card_service: CardService, note_id: int) -> None:
+    """請 LLM 以諮商師的角度分析這個人並推薦話題（名字遮起來送出，回來再換回）。Analyse and suggest topics."""
+    status = await message.answer("⏳ 分析中…（約需半分鐘）")
+    try:
+        loaded = await _load(card_service, note_id)
+    except NoteNotFoundError:
+        loaded = None
+    except AnkiConnectError as e:
+        await status.delete()
+        await _reply_error(message, e)
+        return
+    if loaded is None:
+        await status.edit_text(CARD_NOT_FOUND)
+        return
+    fields, lists = loaded
+    try:
+        result = await topics_service.suggest(fields, lists, _today())
+    except TemplateEngineError:
+        logger.exception("人脈卡話題：提示詞模板有誤（note %s）", note_id)
+        await status.edit_text("❌ 系統錯誤（提示詞模板），重試也沒有用，請通知管理員查看伺服器日誌。")
+        return
+    except (LLMServiceError, LLMGenerationError) as e:
+        logger.warning("人脈卡話題失敗（note %s）: %s", note_id, e)
+        await status.edit_text(
+            _llm_failure(e, task="分析", setting=topics_service.TOPICS_ROUTE.description, retry="再按"),
+            reply_markup=_topics_keyboard(note_id),
+            parse_mode="HTML",
+        )
+        return
+    await status.edit_text(
+        view.topics_text(fields, result), reply_markup=_topics_keyboard(note_id), parse_mode="HTML"
+    )
+
+
+def _topics_keyboard(note_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [_button("再想一次", f"pp:topic:{note_id}"), _button("回摘要", f"pp:s:{note_id}")],
+    ])
 
 
 def _proposal_view(data: dict[str, object]) -> tuple[str, InlineKeyboardMarkup]:

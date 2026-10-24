@@ -243,8 +243,15 @@ def _db_down():
 
 
 def _to_capability(key_prefix: str, capability_prefix: str = "文字 LLM"):
-    """從 /setconfig 點到某用途的某能力詳情，回傳 (畫面文字, 鍵盤)。"""
+    """從 /setconfig 點到某用途的某能力詳情，回傳 (畫面文字, 鍵盤)。
+
+    用途不在第一頁時往後翻（正式宣告的用途鍵變多時，排在後面的會被擠到下一頁）。
+    """
     _, markup = _open_menu()
+    while not any(label.startswith(key_prefix) for label in _buttons(markup)) and any(
+        label.startswith("下一頁") for label in _buttons(markup)
+    ):
+        _, markup, _ = _click(_button_starting(markup, "下一頁"))
     _, markup, _ = _click(_button_starting(markup, key_prefix))
     text, markup, _ = _click(_button_starting(markup, capability_prefix))
     return text, markup

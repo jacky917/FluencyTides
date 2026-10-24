@@ -47,3 +47,29 @@ class LLMPersonIngestResult(BaseModel):
     interaction: IngestInteraction
     followups: list[IngestFollowup] = Field(default_factory=list)
     field_updates: list[IngestFieldUpdate] = Field(default_factory=list)
+
+
+
+class PersonInsight(BaseModel):
+    """以諮商師的角度對這個人的理解。A counselor's read of the person."""
+
+    portrait: str = Field(description="這是個怎樣的人：個性、做事與待人的方式（兩三句，依據資料推論，不確定的就說不確定）")
+    values: str = Field(description="他在意、重視什麼；什麼會讓他覺得被理解或被肯定")
+    communication: str = Field(description="適合的相處與溝通方式：喜歡怎麼被問、步調、要避免的說法")
+    current_state: str = Field(description="他最近的處境與可能的心境（依最近的互動與近況）；沒有資訊就說沒有")
+    cautions: str = Field("", description="這次見面要特別留意的地方（例如剛經歷的事、不宜碰的話題）；沒有就空字串")
+
+
+class TopicSuggestion(BaseModel):
+    """一個可以聊的話題。One conversation topic."""
+
+    title: str = Field(description="話題（簡短，例如「N1 考試的結果」）")
+    why: str = Field(description="為什麼適合聊：連結到上面的分析或資料裡的哪件事（簡短）")
+    opener: str = Field(description="可以直接說出口的開場白（一句話，用你們平常交談的語言）")
+
+
+class LLMPersonTopicsResult(BaseModel):
+    """想話題的結果：先分析這個人，再依分析推薦話題。Insight first, then topics."""
+
+    insight: PersonInsight
+    topics: list[TopicSuggestion] = Field(description="3 到 5 個話題，最值得聊的放前面")

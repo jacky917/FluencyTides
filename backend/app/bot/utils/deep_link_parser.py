@@ -26,7 +26,7 @@ from app.schemas.tg.deep_link import (
 logger = logging.getLogger(__name__)
 
 #: 人脈卡深連結的動作前綴 → PersonLinkAction.verb。Person link prefixes.
-PERSON_VERBS = {"pview": "view", "padd": "add", "pdel": "del", "pdone": "done", "pphoto": "photo"}
+PERSON_VERBS = {"pview": "view", "padd": "add", "pdel": "del", "pdone": "done", "pphoto": "photo", "ptopic": "topic"}
 
 
 class DeepLinkParser:

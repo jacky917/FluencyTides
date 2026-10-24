@@ -20,6 +20,7 @@ from datetime import date, timedelta
 
 from app.bot.utils.formatting import anki_field_to_tg_text, escape_tg
 from app.infrastructure.anki.search import escape_search_value, note_type_term
+from app.schemas.llm.person_profile import LLMPersonTopicsResult
 from app.schemas.person_profile import PERSON_JSON_ITEMS, PERSON_NOTE_TYPE, PersonCreateParams
 
 #: 用名字找人時比對的欄位。Fields a name search looks at.
@@ -432,3 +433,26 @@ def ingest_preview(
     if overflow:
         lines += ["", f"<i>還有 {overflow} 項放不下，沒有列出也不會寫入；需要的話請分次記錄。</i>"]
     return "\n".join(lines)
+
+
+# =============================================================================
+# AI 分析與話題
+# =============================================================================
+
+
+def topics_text(fields: dict[str, str], result: LLMPersonTopicsResult) -> str:
+    """分析與話題的訊息（已轉義）。The insight and topics as a Telegram HTML message."""
+    insight = result.insight
+    lines = [f"<b>{_plain(fields, 'Display_Name', 60)} 是個怎樣的人</b>", escape_tg(insight.portrait, 600), ""]
+    for label, text in (("在意的事", insight.values), ("相處方式", insight.communication),
+                        ("最近", insight.current_state), ("留意", insight.cautions)):
+        if text.strip():
+            lines.append(f"<b>{label}</b>：{escape_tg(text, 500)}")
+    lines += ["", "<b>可以聊的話題</b>"]
+    for index, topic in enumerate(result.topics, 1):
+        lines.append(f"{index}. <b>{escape_tg(topic.title, 80)}</b>")
+        if topic.why.strip():
+            lines.append(f"    <i>{escape_tg(topic.why, 200)}</i>")
+        if topic.opener.strip():
+            lines.append(f"    「{escape_tg(topic.opener, 300)}」")
+    return truncate("\n".join(lines))
