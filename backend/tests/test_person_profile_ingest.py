@@ -6,10 +6,20 @@ Tests for the person profile "record in one paragraph" flow.
 from datetime import date
 from unittest import mock
 
+import pytest
+
 from app.bot.handlers import person_profile
 from app.bot.handlers.person_profile import PersonStates
 from app.bot.utils import person_profile_view as view
-from app.core.exceptions import LLMServiceError
+from app.core.exceptions import (
+    LLMGenerationError,
+    LLMQuotaError,
+    LLMRefusalError,
+    LLMServiceError,
+    NoteNotFoundError,
+)
+from app.core.template_engine import TemplateEngineError
+from app.infrastructure.anki.client import AnkiConnectError
 from app.schemas.llm.person_profile import LLMPersonIngestResult
 from app.services import person_profile_ingest as ingest
 from tests.test_bot_replies import NASTY, _assert_tg_html, _callback, _fsm, _message, _run, _sent
@@ -255,3 +265,205 @@ class TestIngestFlow:
     def test_summary_has_ingest_button(self):
         buttons = [b.callback_data for row in person_profile.summary_keyboard(5).inline_keyboard for b in row]
         assert "pp:ing:5" in buttons
+
+
+# =============================================================================
+# 審查修正：截斷、部分寫入、按鈕解析、錯誤分流
+# =============================================================================
+
+
+def _long_fields(count: int) -> list[dict]:
+    return [
+        {"field": "Notes", "value": f"第{i}項" + "長" * 300, "mode": "append", "reason": "理由" * 60}
+        for i in range(count)
+    ]
+
+
+class TestPreviewFits:
+    def test_every_listed_item_is_visible(self):
+        proposals = [{"kind": "field", "data": data} for data in _long_fields(15)]
+        shown = view.fitting_count(proposals)
+        assert 0 < shown < 15
+        text = view.ingest_preview(proposals[:shown], [True] * shown, overflow=15 - shown)
+        assert len(text) <= view.MESSAGE_LIMIT
+        assert all(f"✅ {i + 1}." in text for i in range(shown))
+        assert f"還有 {15 - shown} 項放不下" in text
+
+    def test_overflow_is_not_offered_or_written(self):
+        state, note_service = _fsm(), _note_service()
+        card_service = _card_service()
+        result = _result(followups=[], field_updates=_long_fields(15))
+        message, _, _ = _ingested(state, card_service, result)
+
+        data = _run(state.get_data())
+        shown = len(data["proposals"])
+        assert shown < 16 and data["overflow"] == 16 - shown
+        (preview,) = _sent(message.answer)
+        assert "放不下" in preview
+        buttons = message.answer.await_args.kwargs["reply_markup"].inline_keyboard
+        assert sum(1 for row in buttons for b in row if b.callback_data.startswith("pp:ig:")) == shown
+
+        _press("pp:igsave", state, note_service, card_service)
+        (changes,) = [c.args[2] for c in note_service.update_fields.await_args_list]
+        # 第一項是互動，其餘 shown - 1 項欄位建議接成一欄
+        assert changes["Notes"].count("<br>") == shown - 2
+
+
+class TestPartialSave:
+    def test_failure_keeps_state_and_retry_writes_only_the_rest(self):
+        state, note_service = _fsm(), _note_service()
+        card_service = _card_service(_note(Interests="攝影"))
+        note_service.run_action = mock.AsyncMock(side_effect=[None, AnkiConnectError("連線中斷 <x>")])
+        _ingested(state, card_service)
+
+        query = _press("pp:igsave", state, note_service, card_service)
+        assert _run(state.get_state()) == PersonStates.ingest_confirm.state
+        data = _run(state.get_data())
+        assert data["saved"] == [0] and not data["saving"]
+        (warning,) = _sent(query.message.answer)
+        _assert_tg_html(warning)
+        assert "已記下 1 項" in warning and "只會補存" in warning
+        assert "💾 1." in _sent(query.message.edit_text)[0]
+        note_service.update_fields.assert_not_awaited()
+
+        # 已存的那項不能再切換
+        assert "已經存了" in _sent(_press("pp:ig:0", state).message.answer)[0]
+
+        note_service.run_action = mock.AsyncMock(return_value=None)
+        query = _press("pp:igsave", state, note_service, card_service)
+        actions = [c.args[1] for c in note_service.run_action.await_args_list]
+        assert actions == ["add_followup", "add_followup"]  # 互動不重複寫
+        note_service.update_fields.assert_awaited_once()
+        assert _run(state.get_state()) is None
+        assert "已記下 4 項" in _sent(query.message.answer)[-1]
+
+    def test_second_press_while_saving_is_ignored(self):
+        state, note_service = _fsm(), _note_service()
+        card_service = _card_service()
+        _ingested(state, card_service)
+        _run(state.update_data(saving=True))
+        query = _press("pp:igsave", state, note_service, card_service)
+        assert "儲存中" in _sent(query.message.answer)[0]
+        note_service.run_action.assert_not_awaited()
+
+    def test_program_error_resets_saving_and_propagates(self):
+        state, note_service = _fsm(), _note_service()
+        card_service = _card_service()
+        note_service.run_action = mock.AsyncMock(side_effect=[None, RuntimeError("bug")])
+        _ingested(state, card_service)
+        with pytest.raises(RuntimeError):
+            _press("pp:igsave", state, note_service, card_service)
+        data = _run(state.get_data())
+        assert data["saved"] == [0] and not data["saving"]
+
+    def test_written_but_summary_unreadable(self):
+        state, note_service = _fsm(), _note_service()
+        card_service = _card_service()
+        _ingested(state, card_service, _result(followups=[], field_updates=[]))
+        card_service.get_note = mock.AsyncMock(side_effect=AnkiConnectError("timeout"))
+        query = _press("pp:igsave", state, note_service, card_service)
+        (text,) = _sent(query.message.answer)
+        assert "已記下 1 項" in text and "摘要暫時讀不到" in text
+        assert _run(state.get_state()) is None
+
+
+class TestButtonParsing:
+    @pytest.mark.parametrize("data", ["pp:ls:5:Z", "pp:s:abc", "pp:del:5:F", "pp:ef:5:999", "pp:eg:5:99"])
+    def test_unparsable_buttons(self, data):
+        query = _press(data, _fsm())
+        assert "按鈕已失效" in _sent(query.message.answer)[0]
+
+    def test_toggle_out_of_range(self):
+        state, card_service = _fsm(), _card_service()
+        _ingested(state, card_service)
+        assert "按鈕已失效" in _sent(_press("pp:ig:99", state).message.answer)[0]
+
+    def test_errors_while_running_are_not_called_stale(self):
+        note_service = _note_service()
+        note_service.run_action = mock.AsyncMock(side_effect=KeyError("bug"))
+        with pytest.raises(KeyError):
+            _press("pp:delok:5:F:0:abc", _fsm(), note_service)
+
+
+class TestIngestErrors:
+    def _fail(self, error):
+        state, card_service = _fsm(), _card_service()
+        _press("pp:ing:5", state, card_service=card_service)
+        message, status = _message("今天喝咖啡")
+        with mock.patch.object(ingest, "ingest", mock.AsyncMock(side_effect=error)):
+            _run(person_profile.process_ingest_text(message, state, card_service))
+        return state, status
+
+    def test_quota(self):
+        state, status = self._fail(LLMQuotaError("429"))
+        (text,) = _sent(status.edit_text)
+        assert "額度" in text and "/setconfig" in text
+        assert _run(state.get_state()) == PersonStates.ingest_text.state
+
+    def test_refusal(self):
+        _, status = self._fail(LLMRefusalError("no"))
+        assert "拒絕" in _sent(status.edit_text)[0]
+
+    def test_template_error_ends_the_flow(self):
+        state, status = self._fail(TemplateEngineError("missing"))
+        assert "系統錯誤" in _sent(status.edit_text)[0]
+        assert _run(state.get_state()) is None
+
+    def test_card_deleted(self):
+        state, card_service = _fsm(), _card_service()
+        _press("pp:ing:5", state, card_service=card_service)
+        card_service.get_note = mock.AsyncMock(side_effect=NoteNotFoundError("gone"))
+        message, status = _message("今天喝咖啡")
+        _run(person_profile.process_ingest_text(message, state, card_service))
+        assert "找不到這張卡片" in _sent(status.edit_text)[0]
+        assert _run(state.get_state()) is None
+
+    def test_anki_unreachable_keeps_waiting(self):
+        state, card_service = _fsm(), _card_service()
+        _press("pp:ing:5", state, card_service=card_service)
+        card_service.get_note = mock.AsyncMock(side_effect=AnkiConnectError("down"))
+        message, status = _message("今天喝咖啡")
+        _run(person_profile.process_ingest_text(message, state, card_service))
+        status.delete.assert_awaited_once()
+        assert "down" in _sent(message.answer)[0]
+        assert _run(state.get_state()) == PersonStates.ingest_text.state
+
+
+def _route(client):
+    return mock.MagicMock(client=mock.AsyncMock(return_value=client))
+
+
+class TestIngestCall:
+    def _client(self, parsed):
+        client = mock.MagicMock()
+        client.generate_structured_data = mock.AsyncMock(
+            return_value=mock.MagicMock(parsed_data=parsed, model_name="m1", raw_content="{}")
+        )
+        return client
+
+    def test_sends_prompt_and_schema(self):
+        client = self._client(_result().model_dump())
+        with mock.patch.object(ingest, "INGEST_ROUTE", _route(client)):
+            result = _run(ingest.ingest({"Display_Name": "田中さん"}, {}, "今天喝咖啡", TODAY))
+        kwargs = client.generate_structured_data.await_args.kwargs
+        assert "今天喝咖啡" in kwargs["user_prompt"]
+        assert kwargs["response_schema"] == LLMPersonIngestResult.model_json_schema()
+        assert result.followups[0].item == "N1 考得如何？"
+
+    def test_malformed_reply_becomes_generation_error(self):
+        client = self._client({"followups": "x"})
+        with (
+            mock.patch.object(ingest, "INGEST_ROUTE", _route(client)),
+            pytest.raises(LLMGenerationError, match="m1"),
+        ):
+            _run(ingest.ingest({}, {}, "x", TODAY))
+
+    def test_malformed_reply_in_flow_keeps_waiting(self):
+        state, card_service = _fsm(), _card_service()
+        _press("pp:ing:5", state, card_service=card_service)
+        message, status = _message("今天喝咖啡")
+        with mock.patch.object(ingest, "INGEST_ROUTE", _route(self._client({}))):
+            _run(person_profile.process_ingest_text(message, state, card_service))
+        (text,) = _sent(status.edit_text)
+        assert "格式不對" in text and "再傳一次" in text
+        assert _run(state.get_state()) == PersonStates.ingest_text.state

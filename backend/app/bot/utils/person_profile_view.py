@@ -390,11 +390,42 @@ def proposal_line(kind: str, data: dict[str, object]) -> str:
     return line + (f"\n    <i>（{get('reason', 120)}）</i>" if data.get("reason") else "")
 
 
-def ingest_preview(proposals: list[dict[str, object]], selected: list[bool]) -> str:
-    """整理結果的預覽：每項前面標勾選狀態與編號。The proposals with their checkboxes."""
+#: 預覽的開頭與結尾提示（放不下、已儲存的說明）預留的字數。Room kept for the preview's header and notes.
+_PREVIEW_RESERVE = 300
+
+
+def _proposal_entry(index: int, proposal: dict[str, object], mark: str) -> str:
+    data = proposal.get("data")
+    return f"{mark} {index + 1}. {proposal_line(str(proposal.get('kind', '')), data if isinstance(data, dict) else {})}"
+
+
+def fitting_count(proposals: list[dict[str, object]]) -> int:
+    """一則訊息放得下前幾項建議（勾選記號的長度固定，切換勾選不影響）。How many proposals fit in one message."""
+    used = _PREVIEW_RESERVE
+    for index, proposal in enumerate(proposals):
+        used += len(_proposal_entry(index, proposal, "✅")) + 1
+        if used > MESSAGE_LIMIT:
+            return index
+    return len(proposals)
+
+
+def ingest_preview(
+    proposals: list[dict[str, object]], selected: list[bool], *, saved: frozenset[int] = frozenset(), overflow: int = 0
+) -> str:
+    """整理結果的預覽：每項前面標勾選狀態與編號。The proposals with their checkboxes.
+
+    Args:
+        proposals: 建議（呼叫端先用 :func:`fitting_count` 截到放得下的數量）。The proposals.
+        selected: 每項是否勾選。Whether each is picked.
+        saved: 已經寫入的項目（上次儲存中途失敗時）。Proposals already written.
+        overflow: 放不下、沒有列出的項數。How many were left out.
+    """
     lines = ["🧠 <b>整理好了</b>，勾選要記下的項目（點下面的編號切換）：", ""]
     for index, (proposal, chosen) in enumerate(zip(proposals, selected)):
-        data = proposal.get("data")
-        text = proposal_line(str(proposal.get("kind", "")), data if isinstance(data, dict) else {})
-        lines.append(f"{'✅' if chosen else '⬜'} {index + 1}. {text}")
-    return truncate("\n".join(lines))
+        mark = "💾" if index in saved else ("✅" if chosen else "⬜")
+        lines.append(_proposal_entry(index, proposal, mark))
+    if saved:
+        lines += ["", f"<i>💾 的 {len(saved)} 項已經存了；再按一次儲存只會補存其他勾選的項目。</i>"]
+    if overflow:
+        lines += ["", f"<i>還有 {overflow} 項放不下，沒有列出也不會寫入；需要的話請分次記錄。</i>"]
+    return "\n".join(lines)

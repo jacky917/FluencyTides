@@ -36,7 +36,16 @@ from app.bot.utils import person_profile_view as view
 from app.bot.utils.formatting import anki_field_to_tg_text, escape_tg
 from app.bot.utils.texts import ANKI_UNREACHABLE, CARD_NOT_FOUND, error_detail, sync_suffix
 from app.core.config import settings
-from app.core.exceptions import AnkiFieldCorruptedError, FluencyTidesError
+from app.core.exceptions import (
+    AnkiFieldCorruptedError,
+    FluencyTidesError,
+    LLMGenerationError,
+    LLMQuotaError,
+    LLMRefusalError,
+    LLMServiceError,
+    NoteNotFoundError,
+)
+from app.core.template_engine import TemplateEngineError
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.anki import AnkiStoreMediaParams
@@ -309,40 +318,45 @@ async def on_person_button(
             await message.answer("🗑️ 已取消。")
         elif verb == "s":
             await state.clear()
-            await send_summary(message, card_service, int(parts[2]))
+            await send_summary(message, card_service, _int_arg(parts, 2))
         elif verb == "full":
-            await _send_full(message, card_service, int(parts[2]))
+            await _send_full(message, card_service, _int_arg(parts, 2))
         elif verb == "lists":
-            await _send_lists_menu(message, card_service, int(parts[2]))
+            await _send_lists_menu(message, card_service, _int_arg(parts, 2))
         elif verb == "ls":
-            await _send_list(message, card_service, int(parts[2]), view.LIST_CODES[parts[3]])
+            await _send_list(message, card_service, _int_arg(parts, 2), _list_arg(parts, 3))
         elif verb == "add":
-            await start_add(message, state, int(parts[2]), view.LIST_CODES[parts[3]])
+            await start_add(message, state, _int_arg(parts, 2), _list_arg(parts, 3))
         elif verb == "del":
-            await _confirm_delete(message, card_service, int(parts[2]), view.LIST_CODES[parts[3]], int(parts[4]), parts[5])
+            await _confirm_delete(
+                message, card_service, _int_arg(parts, 2), _list_arg(parts, 3), _int_arg(parts, 4), _arg(parts, 5)
+            )
         elif verb == "delok":
-            note_id, field_name = int(parts[2]), view.LIST_CODES[parts[3]]
+            note_id, field_name = _int_arg(parts, 2), _list_arg(parts, 3)
             warning = await note_service.run_action(
-                note_id, "remove_item", {"field": field_name, "index": int(parts[4]), "fingerprint": parts[5]}
+                note_id, "remove_item", {"field": field_name, "index": _int_arg(parts, 4), "fingerprint": _arg(parts, 5)}
             )
             await message.edit_reply_markup(reply_markup=None)
             await send_summary(message, card_service, note_id, prefix="🗑 已刪除。" + sync_suffix(warning))
         elif verb == "st":
-            status = "done" if parts[5] == "d" else "open"
-            await _set_followup_status(message, note_service, card_service, int(parts[2]), int(parts[3]), parts[4], status)
+            status = "done" if _arg(parts, 5) == "d" else "open"
+            await _set_followup_status(
+                message, note_service, card_service, _int_arg(parts, 2), _int_arg(parts, 3), _arg(parts, 4), status
+            )
         elif verb == "edit":
-            await _send_edit_groups(message, int(parts[2]))
+            await _send_edit_groups(message, _int_arg(parts, 2))
         elif verb == "eg":
-            await _send_edit_fields(message, int(parts[2]), int(parts[3]))
+            await _send_edit_fields(message, _int_arg(parts, 2), _index_arg(parts, 3, len(view.FIELD_GROUPS)))
         elif verb == "ef":
-            await _start_edit(message, state, card_service, int(parts[2]), view.EDITABLE_FIELDS[int(parts[3])])
+            field_name = view.EDITABLE_FIELDS[_index_arg(parts, 3, len(view.EDITABLE_FIELDS))]
+            await _start_edit(message, state, card_service, _int_arg(parts, 2), field_name)
         elif verb == "em":
-            await _finish_edit(message, state, note_service, card_service, append=parts[2] == "a")
+            await _finish_edit(message, state, note_service, card_service, append=_arg(parts, 2) == "a")
         elif verb == "photo":
-            await _start_photo(message, state, int(parts[2]))
+            await _start_photo(message, state, _int_arg(parts, 2))
         elif verb == "phrm":
             await state.clear()
-            note_id = int(parts[2])
+            note_id = _int_arg(parts, 2)
             warning = await note_service.run_action(note_id, "set_photo", {"filename": ""})
             await send_summary(message, card_service, note_id, prefix="🗑 已移除照片。" + sync_suffix(warning))
         elif verb == "new":
@@ -353,15 +367,50 @@ async def on_person_button(
         elif verb == "save":
             await _save_item(message, state, note_service, card_service)
         elif verb == "ing":
-            await _start_ingest(message, state, card_service, int(parts[2]))
+            await _start_ingest(message, state, card_service, _int_arg(parts, 2))
         elif verb == "ig":
-            await _toggle_proposal(message, state, int(parts[2]))
+            await _toggle_proposal(message, state, _int_arg(parts, 2))
         elif verb == "igsave":
             await _save_proposals(message, state, note_service, card_service)
+    except _StaleButton:
+        logger.info("人脈卡按鈕的資料解析不了: %r", callback.data)
+        await message.answer("❌ 這個按鈕已失效，請用 /p 重新找人。")
     except (FluencyTidesError, AnkiConnectError) as e:
         await _reply_error(message, e)
-    except (IndexError, KeyError, ValueError):
-        await message.answer("❌ 這個按鈕已失效，請用 /p 重新找人。")
+
+
+class _StaleButton(Exception):
+    """按鈕的 callback data 解析不了（舊版本的按鈕、格式不對）。The button's data cannot be parsed.
+
+    只用在解析 callback data：執行時的錯誤不轉成這個，免得被說成「按鈕已失效」。
+    """
+
+
+def _arg(parts: list[str], index: int) -> str:
+    if index >= len(parts):
+        raise _StaleButton
+    return parts[index]
+
+
+def _int_arg(parts: list[str], index: int) -> int:
+    value = _arg(parts, index)
+    if not value.isdigit():
+        raise _StaleButton
+    return int(value)
+
+
+def _index_arg(parts: list[str], index: int, size: int) -> int:
+    value = _int_arg(parts, index)
+    if value >= size:
+        raise _StaleButton
+    return value
+
+
+def _list_arg(parts: list[str], index: int) -> str:
+    field_name = view.LIST_CODES.get(_arg(parts, index))
+    if field_name is None:
+        raise _StaleButton
+    return field_name
 
 
 async def _send_full(message: types.Message, card_service: CardService, note_id: int) -> None:
@@ -567,10 +616,14 @@ async def _answer_step_button(
     await message.edit_reply_markup(reply_markup=None)
     if parts[1] == "skip":
         await _store_answer(message, state, None)
-    elif parts[2].startswith("t"):
-        await _store_answer(message, state, view.today_choice(_today(), int(parts[2][1:])))
+        return
+    choice = _arg(parts, 2)
+    if choice.startswith("t"):
+        if not choice[1:].isdigit():
+            raise _StaleButton
+        await _store_answer(message, state, view.today_choice(_today(), int(choice[1:])))
     else:
-        await _store_answer(message, state, step.choices[int(parts[2])][0])
+        await _store_answer(message, state, step.choices[_index_arg(parts, 2, len(step.choices))][0])
 
 
 async def _save_item(
@@ -824,23 +877,29 @@ async def _run_ingest(
     note_id = int((await state.get_data())["nid"])
     try:
         loaded = await _load(card_service, note_id)
-        if loaded is None:
-            await state.clear()
-            await status.edit_text(CARD_NOT_FOUND)
-            return
-        fields, lists = loaded
-        result = await ingest_service.ingest(fields, lists, text, _today())
-    except ValidationError as e:
-        logger.warning("人脈卡整理：LLM 回傳格式不對: %s", e)
-        await status.edit_text("❌ 整理失敗（回傳的格式不對），請再傳一次。")
-        return
-    except FluencyTidesError as e:
-        logger.warning("人脈卡整理失敗: %s", e)
-        await status.edit_text(f"❌ 整理失敗：{error_detail(e.message)}\n請再傳一次。", parse_mode="HTML")
-        return
+    except NoteNotFoundError:
+        loaded = None
     except AnkiConnectError as e:
+        # 暫時連不上 Anki：保留狀態，連上後直接再傳即可
         await status.delete()
         await _reply_error(message, e)
+        return
+    if loaded is None:
+        await state.clear()
+        await status.edit_text(CARD_NOT_FOUND)
+        return
+    fields, lists = loaded
+    try:
+        result = await ingest_service.ingest(fields, lists, text, _today())
+    except TemplateEngineError:
+        # 程式或部署錯誤：重傳也沒用
+        logger.exception("人脈卡整理：提示詞模板有誤（note %s）", note_id)
+        await state.clear()
+        await status.edit_text("❌ 系統錯誤（提示詞模板），重傳也沒有用，請通知管理員查看伺服器日誌。")
+        return
+    except (LLMServiceError, LLMGenerationError) as e:
+        logger.warning("人脈卡整理失敗（note %s）: %s", note_id, e)
+        await status.edit_text(_ingest_failure(e), parse_mode="HTML")
         return
     proposals = [
         {"kind": p.kind, "data": p.data} for p in ingest_service.proposals_from(result, fields, _today())
@@ -849,20 +908,43 @@ async def _run_ingest(
         await status.edit_text("🤔 這段話裡沒有整理出可以記下的內容。可以再說具體一點後重傳，或按取消。",
                                reply_markup=InlineKeyboardMarkup(inline_keyboard=[CANCEL_ROW]))
         return
-    selected = [True] * len(proposals)
+    # 一則訊息放不下的建議不列出、也不提供勾選：沒給使用者看過的不寫入
+    shown = view.fitting_count(proposals)
+    overflow = len(proposals) - shown
+    if overflow:
+        logger.info("人脈卡整理：%d 項建議放不下預覽，未列出（note %s）", overflow, note_id)
+    proposals = proposals[:shown]
     await state.set_state(PersonStates.ingest_confirm)
-    await state.update_data(proposals=proposals, selected=selected)
+    await state.update_data(proposals=proposals, selected=[True] * len(proposals), saved=[], overflow=overflow)
     await status.delete()
-    await message.answer(
-        view.ingest_preview(proposals, selected), reply_markup=_proposal_keyboard(selected), parse_mode="HTML"
-    )
+    text, keyboard = _proposal_view(await state.get_data())
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
-def _proposal_keyboard(selected: list[bool]) -> InlineKeyboardMarkup:
-    toggles = [_button(f"{'✅' if chosen else '⬜'} {i + 1}", f"pp:ig:{i}") for i, chosen in enumerate(selected)]
+def _ingest_failure(error: LLMServiceError | LLMGenerationError) -> str:
+    """整理失敗時給使用者的訊息：依原因給下一步。The failure message, with a next step per cause."""
+    detail = error_detail(error.message)
+    setting = "用 /setconfig 替「人脈卡：整理一段話」換一個模型"
+    if isinstance(error, LLMQuotaError):
+        return f"❌ LLM 額度用完或太頻繁：{detail}\n請稍後再傳，或{setting}。"
+    if isinstance(error, LLMRefusalError):
+        return f"❌ 模型拒絕處理這段內容：{detail}\n可以換個說法再傳，或{setting}。"
+    if isinstance(error, LLMGenerationError):
+        return f"❌ 整理失敗：{detail}\n直接再傳一次即可。"
+    return f"❌ 整理失敗：{detail}\n請再傳一次；一直失敗的話，{setting}或檢查它的設定。"
+
+
+def _proposal_view(data: dict[str, object]) -> tuple[str, InlineKeyboardMarkup]:
+    """依 FSM 資料畫出預覽與按鈕（已儲存的項目標 💾）。The preview and its buttons from the FSM data."""
+    proposals = list(data["proposals"])  # type: ignore[call-overload]
+    selected = [bool(x) for x in data["selected"]]  # type: ignore[attr-defined]
+    saved = frozenset(int(i) for i in data.get("saved") or [])  # type: ignore[attr-defined]
+    text = view.ingest_preview(proposals, selected, saved=saved, overflow=int(data.get("overflow") or 0))  # type: ignore[call-overload]
+    marks = ["💾" if i in saved else ("✅" if chosen else "⬜") for i, chosen in enumerate(selected)]
+    toggles = [_button(f"{mark} {i + 1}", f"pp:ig:{i}") for i, mark in enumerate(marks)]
     rows = [toggles[i:i + 5] for i in range(0, len(toggles), 5)]
     rows.append([_button("💾 儲存勾選的", "pp:igsave"), *CANCEL_ROW])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _toggle_proposal(message: types.Message, state: FSMContext, index: int) -> None:
@@ -870,48 +952,95 @@ async def _toggle_proposal(message: types.Message, state: FSMContext, index: int
         await message.answer("⌛ 這個步驟已結束，請重新開始。")
         return
     data = await state.get_data()
-    proposals, selected = list(data["proposals"]), [bool(x) for x in data["selected"]]
+    selected = [bool(x) for x in data["selected"]]
+    if index >= len(selected):
+        raise _StaleButton
+    if index in (data.get("saved") or []):
+        await message.answer(f"第 {index + 1} 項已經存了。")
+        return
     selected[index] = not selected[index]
     await state.update_data(selected=selected)
-    await message.edit_text(
-        view.ingest_preview(proposals, selected), reply_markup=_proposal_keyboard(selected), parse_mode="HTML"
-    )
+    text, keyboard = _proposal_view(await state.get_data())
+    await message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+#: 互動、待追蹤建議對應的具名動作。The named action for each item proposal.
+_PROPOSAL_ACTIONS = {"interaction": "add_interaction", "followup": "add_followup"}
 
 
 async def _save_proposals(
     message: types.Message, state: FSMContext, note_service: NoteService, card_service: CardService
 ) -> None:
-    """寫入勾選的建議：互動、待追蹤各一筆，欄位建議合成一次 ``update_fields``。Write the picked proposals."""
+    """寫入勾選的建議：互動、待追蹤各一筆，欄位建議合成一次 ``update_fields``。
+
+    中途失敗時保留狀態並記下已寫入的項目（預覽標 💾），再按一次儲存只補存其他的，不會重複寫入。
+    Write the picked proposals; after a partial failure, pressing save again writes only the rest.
+    """
     if await state.get_state() != PersonStates.ingest_confirm.state:
         await message.answer("⌛ 這個步驟已結束，請重新開始。")
         return
     data = await state.get_data()
+    if data.get("saving"):
+        await message.answer("⏳ 儲存中，請稍候。")
+        return
     note_id = int(data["nid"])
-    picked = [p for p, chosen in zip(data["proposals"], data["selected"]) if chosen]
-    if not picked:
+    proposals = list(data["proposals"])
+    saved = {int(i) for i in data.get("saved") or []}
+    pending = [i for i, chosen in enumerate(data["selected"]) if chosen and i not in saved]
+    if not pending and not saved:
         await message.answer("沒有勾選任何項目；要放棄請按取消。")
         return
+    await state.update_data(saving=True)
+    warning: str | None = None
+    try:
+        for i in pending:
+            kind = proposals[i]["kind"]
+            if kind == "field":
+                continue
+            if kind not in _PROPOSAL_ACTIONS:
+                raise ValueError(f"未知的建議種類 {kind!r}")
+            warning = await note_service.run_action(note_id, _PROPOSAL_ACTIONS[kind], {"item": proposals[i]["data"]})
+            saved.add(i)
+        field_indexes = [i for i in pending if proposals[i]["kind"] == "field"]
+        if field_indexes:
+            loaded = await _load(card_service, note_id)
+            if loaded is None:
+                raise NoteNotFoundError(CARD_NOT_FOUND)
+            current, changes = loaded[0], {}
+            for i in field_indexes:
+                update = proposals[i]["data"]
+                name = str(update["field"])
+                changes[name] = ingest_service.field_html(
+                    changes.get(name, current.get(name, "")), str(update["value"]), str(update["mode"])
+                )
+            result = await note_service.update_fields(HANDLER_NAME, note_id, changes)
+            saved.update(field_indexes)
+            # 每次寫入後都會同步：最後一次的結果涵蓋前面的寫入
+            warning = result.get("sync_warning")  # type: ignore[assignment]
+    except (FluencyTidesError, AnkiConnectError) as e:
+        await state.update_data(saved=sorted(saved), saving=False)
+        logger.error("人脈卡整理：寫入中斷（note %s，已寫 %d/%d 項）: %s", note_id, len(saved), len(saved) + len(pending), e)
+        text, keyboard = _proposal_view(await state.get_data())
+        await message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        reason = error_detail(e.message if isinstance(e, FluencyTidesError) else e)
+        await message.answer(
+            f"⚠️ 已記下 {len(saved)} 項，其餘還沒存：{reason}\n再按一次「💾 儲存勾選的」只會補存還沒存的項目。",
+            parse_mode="HTML",
+        )
+        return
+    except BaseException:
+        # 程式錯誤交給全域處理；先記下已寫入的，免得狀態卡在「儲存中」或之後重複寫入
+        await state.update_data(saved=sorted(saved), saving=False)
+        raise
     await state.clear()
     await message.edit_reply_markup(reply_markup=None)
-    warning: str | None = None
-    for proposal in picked:
-        if proposal["kind"] == "interaction":
-            warning = await note_service.run_action(note_id, "add_interaction", {"item": proposal["data"]})
-        elif proposal["kind"] == "followup":
-            warning = await note_service.run_action(note_id, "add_followup", {"item": proposal["data"]})
-    field_updates = [p["data"] for p in picked if p["kind"] == "field"]
-    if field_updates:
-        loaded = await _load(card_service, note_id)
-        current = dict(loaded[0]) if loaded else {}
-        changes: dict[str, str] = {}
-        for update in field_updates:
-            name = str(update["field"])
-            changes[name] = ingest_service.field_html(
-                changes.get(name, current.get(name, "")), str(update["value"]), str(update["mode"])
-            )
-        result = await note_service.update_fields(HANDLER_NAME, note_id, changes)
-        warning = result.get("sync_warning") or warning  # type: ignore[assignment]
-    await send_summary(message, card_service, note_id, prefix=f"✅ 已記下 {len(picked)} 項。" + sync_suffix(warning))
+    prefix = f"✅ 已記下 {len(saved)} 項。" + sync_suffix(warning)
+    try:
+        await send_summary(message, card_service, note_id, prefix=prefix)
+    except (FluencyTidesError, AnkiConnectError) as e:
+        # 已經寫入了，只是讀不到摘要：不要讓使用者以為沒存到
+        logger.warning("人脈卡整理：已寫入，但讀摘要失敗（note %s）: %s", note_id, e)
+        await message.answer(prefix + "\n（摘要暫時讀不到，稍後用 /p 再看。）", parse_mode="HTML")
 
 
 # =============================================================================

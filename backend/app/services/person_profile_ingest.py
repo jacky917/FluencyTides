@@ -21,6 +21,7 @@ from datetime import date
 from pydantic import ValidationError
 
 from app.core.dependencies import get_template_engine
+from app.core.exceptions import LLMGenerationError
 from app.infrastructure.llm.routing import route
 from app.schemas.llm.person_profile import LLMPersonIngestResult
 from app.schemas.person_profile import Followup, Interaction, PersonCreateParams
@@ -110,7 +111,8 @@ async def ingest(
 
     Raises:
         LLMServiceError 等：LLM 呼叫失敗。When the LLM call fails.
-        pydantic.ValidationError: LLM 回傳格式不符。On a malformed response.
+        LLMGenerationError: LLM 回傳的格式不符（訊息帶模型名稱）。On a malformed response.
+        TemplateEngineError: 提示詞模板有誤（程式或部署錯誤）。When the prompt template is broken.
     """
     client = await INGEST_ROUTE.client()
     result = await client.generate_structured_data(
@@ -118,7 +120,14 @@ async def ingest(
         user_prompt=build_prompt(fields, lists, text, today),
         response_schema=LLMPersonIngestResult.model_json_schema(),
     )
-    return LLMPersonIngestResult.model_validate(result.parsed_data)
+    try:
+        return LLMPersonIngestResult.model_validate(result.parsed_data)
+    except ValidationError as e:
+        # 調整提示詞時要看哪個模型、哪種輸出常出錯：記下前幾個錯誤與原始輸出的開頭
+        logger.warning(
+            "人脈卡整理：%s 回傳的格式不對：%s；原始輸出：%.500s", result.model_name, e.errors()[:3], result.raw_content
+        )
+        raise LLMGenerationError(f"模型 {result.model_name} 回傳的格式不對，請再試一次。") from e
 
 
 async def transcribe(audio: bytes, filename: str) -> str:
