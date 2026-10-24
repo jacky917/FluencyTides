@@ -331,6 +331,93 @@ html, body {
     color: #ffffff;
 }
 
+.tg-hint {
+    align-self: center;
+    color: #7f8c8d;
+    font-size: 12px;
+}
+
+/* 區段標題上的「+」：開啟 TG 新增一筆 */
+.add-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    margin-left: 6px;
+    border-radius: 50%;
+    border: 1px solid #2c5d8a;
+    background-color: #1a3a5c;
+    color: #5dade2;
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1;
+    text-decoration: none;
+}
+
+.add-link:hover {
+    border-color: #5dade2;
+    color: #ffffff;
+}
+
+.add-chip {
+    margin-left: 10px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    border: 1px solid #8a6d1e;
+    color: #f1c40f;
+    font-size: 11px;
+    font-weight: 600;
+    text-decoration: none;
+    letter-spacing: 0;
+}
+
+.done-link {
+    margin-left: 8px;
+    text-decoration: none;
+    opacity: 0.7;
+}
+
+.done-link:hover {
+    opacity: 1;
+}
+
+/* 長按 3 秒刪除：按住時下緣的進度條跑滿 3 秒 */
+.lp-target {
+    position: relative;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: pan-y;
+}
+
+.lp-target::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 2px;
+    width: 0;
+    background-color: #e74c3c;
+}
+
+.lp-target.lp-active::after {
+    width: 100%;
+    transition: width 3s linear;
+}
+
+.lp-reveal {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    border: 1px solid #c0392b;
+    color: #f5b7b1;
+    font-size: 12px;
+    text-decoration: none;
+}
+
 /* ============================
    可收合區段（<details>）
    ============================ */

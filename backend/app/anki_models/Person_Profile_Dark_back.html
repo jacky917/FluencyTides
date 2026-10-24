@@ -1,7 +1,8 @@
 <!-- 人脈卡共用背面（「認人」與「見面前複習」兩張卡都用這份）。
      版面：頭部（頭像、姓名與讀音、徽章）→ 見面前必看（一律展開）→ TG 按鈕 → 可收合區段（<details>）。
      沒有內容的區段整段不顯示。欄位都放在隱藏的 div，由下方的 JS 讀取後畫出；JSON 欄位解析失敗時
-     該區段顯示「資料格式錯誤」與原文，不會默默消失。模板只顯示、不寫資料：寫入交給網頁與 TG。 -->
+     該區段顯示「資料格式錯誤」與原文，不會默默消失。模板只顯示、不寫資料：寫入交給網頁與 TG——
+     有 Card_ID 與 TG_Bot 時，「+」開啟 TG 新增一筆，長按項目 3 秒開啟 TG 刪除（TG 會再確認一次）。 -->
 <div class="card person-card" id="person-root">
     <div class="card-kind" id="person-kind"></div>
     <div id="person-header"></div>
@@ -224,6 +225,126 @@
     }
 
     // ============================
+    // TG 深連結：Anki app 的寫入入口（需要 Card_ID 與 TG_Bot）
+    // 格式 {動作}-{欄位}-{序號}-{Card_ID}，與後端 app/bot/person_profile 的解析一致
+    // ============================
+
+    var tgCardId = readField('Card_ID');
+    var tgBot = readField('TG_Bot').replace(/^@/, '');
+    var tgEnabled = /^[A-Za-z0-9_]+$/.test(tgCardId) && /^[A-Za-z0-9_]+$/.test(tgBot);
+
+    function tgUrl(action, field, index) {
+        return 'https://t.me/' + tgBot + '?start=' + action + '-' + field + '-' + index + '-' + tgCardId;
+    }
+
+    /**
+     * 一筆 JSON 項目的指紋（djb2，UTF-16 碼元，36 進位），與後端 item_fingerprint 相同算法。
+     * 刪除、標成完成時附在序號後面：卡片上的序號可能過時（別處新增或刪除、尚未同步），TG 據此確認
+     * 要動的還是同一筆。
+     */
+    function itemFingerprint(item) {
+        var keys = ['date', 'item', 'topics', 'name', 'label', 'handle', 'relation', 'channel'];
+        var key = keys.map(function (k) {
+            return item && item[k] !== undefined && item[k] !== null ? String(item[k]) : '';
+        }).join('|');
+        var h = 5381;
+        for (var i = 0; i < key.length; i++) h = ((h * 33) ^ key.charCodeAt(i)) >>> 0;
+        return h.toString(36);
+    }
+
+    function itemRef(index, item) {
+        return index + '_' + itemFingerprint(item);
+    }
+
+    function tgLink(text, url, className) {
+        var a = el('a', className || 'tg-link', text);
+        a.href = url;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.addEventListener('click', function (e) { e.stopPropagation(); });
+        return a;
+    }
+
+    /** 「+」：開啟 TG 新增一筆。放在 summary 裡時，點它不會展開或收合區段（連結是互動元素）。 */
+    function addLink(field, label) {
+        var a = tgLink('+', tgUrl('padd', field, 'none'), 'add-link');
+        a.title = '在 TG 新增' + (label || '');
+        return a;
+    }
+
+    function openUrl(url) {
+        var a = el('a');
+        a.href = url;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
+
+    var LONG_PRESS_MS = 3000;
+
+    /**
+     * 長按 3 秒刪除：按住時下緣出現進度條，放開、移動或捲動就取消；滿 3 秒開啟 TG 確認刪除，
+     * 並在項目旁留一個「在 TG 刪除」連結（有些 App 不允許程式自動開連結，這時點它）。
+     * 沒有 TG 連結時什麼都不做。
+     */
+    function longPressDelete(node, field, index, item) {
+        if (!tgEnabled) return node;
+        var url = tgUrl('pdel', field, itemRef(index, item));
+        node.className += ' lp-target';
+        node.setAttribute('role', 'button');
+        node.setAttribute('title', '長按 3 秒刪除');
+        var timer = null;
+        var fired = false;
+        var startX = 0;
+        var startY = 0;
+
+        function cancel() {
+            if (timer) clearTimeout(timer);
+            timer = null;
+            node.className = node.className.replace(/\s*lp-active/g, '');
+        }
+
+        node.addEventListener('pointerdown', function (e) {
+            if (e.button) return;
+            fired = false;
+            startX = e.clientX;
+            startY = e.clientY;
+            node.className += ' lp-active';
+            timer = setTimeout(function () {
+                cancel();
+                fired = true;
+                if (navigator.vibrate) {
+                    try { navigator.vibrate(30); } catch (err) { /* 不支援震動 */ }
+                }
+                if (!node.querySelector('.lp-reveal')) node.appendChild(tgLink('🗑 在 TG 刪除這筆', url, 'lp-reveal'));
+                openUrl(url);
+            }, LONG_PRESS_MS);
+        });
+        node.addEventListener('pointermove', function (e) {
+            if (timer && (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10)) cancel();
+        });
+        ['pointerup', 'pointerleave', 'pointercancel'].forEach(function (type) {
+            node.addEventListener(type, cancel);
+        });
+        node.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+        // 長按觸發後的那一下點擊，不要再展開、收合或翻面
+        node.addEventListener('click', function (e) {
+            if (!fired) return;
+            fired = false;
+            e.preventDefault();
+            e.stopPropagation();
+        }, true);
+        return node;
+    }
+
+    /** 陣列加上原本的序號（排序後顯示，刪除時仍要用存放的位置）。 */
+    function withIndex(list) {
+        return list.map(function (item, index) { return { item: item, index: index }; });
+    }
+
+    // ============================
     // 可收合區段
     // ============================
 
@@ -246,8 +367,8 @@
         }
     }
 
-    /** 產生一個可收合區段；沒有內容（nodes 為空）時回傳 null。 */
-    function section(key, title, color, nodes, count) {
+    /** 產生一個可收合區段；沒有內容（nodes 為空）時回傳 null。addField：summary 上的「+」新增到哪個 JSON 欄位。 */
+    function section(key, title, color, nodes, count, addField) {
         nodes = nodes.filter(Boolean);
         if (nodes.length === 0) return null;
         var details = el('details', 'p-section');
@@ -256,6 +377,7 @@
         var summary = el('summary');
         summary.appendChild(el('span', null, title));
         if (count) summary.appendChild(el('span', 'p-section-count', count));
+        if (addField && tgEnabled) summary.appendChild(addLink(addField, title));
         summary.appendChild(el('span', 'accordion-arrow', '▸'));
         details.appendChild(summary);
         var body = el('div', 'p-section-body');
@@ -385,7 +507,9 @@
     // ============================
     (function renderMustSee() {
         var box = el('div', 'must-see');
-        box.appendChild(el('div', 'must-see-title', '⭐ 見面前必看'));
+        var title = el('div', 'must-see-title', '⭐ 見面前必看');
+        if (tgEnabled) title.appendChild(tgLink('+ 待追蹤', tgUrl('padd', 'Followups_JSON', 'none'), 'add-chip'));
+        box.appendChild(title);
         var any = false;
 
         function mustRow(label, content) {
@@ -405,16 +529,23 @@
                 ['their_promise', '📌 對方答應的']
             ];
             groups.forEach(function (group) {
-                var open = followups.filter(function (f) {
+                var open = withIndex(followups).filter(function (entry) {
+                    var f = entry.item;
                     return (f.type || 'ask') === group[0] && (f.status || 'open') !== 'done';
                 });
                 if (!open.length) return;
                 var list = el('ul', 'followup-list');
-                open.forEach(function (f) {
+                open.forEach(function (entry) {
+                    var f = entry.item;
                     var li = el('li', null, f.item || '');
                     var note = f.due ? '期限 ' + shortDate(f.due) : f.added ? shortDate(f.added) + ' 記' : '';
                     if (note) li.appendChild(el('span', 'followup-date', note));
-                    list.appendChild(li);
+                    if (tgEnabled) {
+                        var done = tgLink('✅', tgUrl('pdone', 'Followups_JSON', itemRef(entry.index, f)), 'done-link');
+                        done.title = '在 TG 標成完成';
+                        li.appendChild(done);
+                    }
+                    list.appendChild(longPressDelete(li, 'Followups_JSON', entry.index, f));
                 });
                 mustRow(group[1], list);
             });
@@ -462,19 +593,20 @@
     // TG 深連結（Anki app 的寫入入口；需要 Card_ID 與 TG_Bot）
     // ============================
     (function renderTgLinks() {
-        var cardId = readField('Card_ID');
-        var bot = readField('TG_Bot').replace(/^@/, '');
-        if (!cardId || !bot || !/^[A-Za-z0-9_]+$/.test(cardId) || !/^[A-Za-z0-9_]+$/.test(bot)) return;
+        if (!tgEnabled) return;
         var wrap = el('div', 'tg-actions');
+        wrap.appendChild(tgLink('➕ 記一筆互動', tgUrl('padd', 'Interactions_JSON', 'none')));
         [
-            ['pint', 'Interactions_JSON', '➕ 記一筆互動'],
-            ['pview', 'Display_Name', '✏️ 改資料'],
+            ['Family_JSON', '家人'],
+            ['Gifts_JSON', '禮物'],
+            ['Key_Dates_JSON', '日期'],
+            ['Contacts_JSON', '聯絡'],
         ].forEach(function (link) {
-            var a = el('a', 'tg-link', link[2]);
-            a.href = 'https://t.me/' + bot + '?start=' + link[0] + '-' + link[1] + '-0-' + cardId;
-            a.target = '_blank';
-            wrap.appendChild(a);
+            wrap.appendChild(tgLink('+ ' + link[1], tgUrl('padd', link[0], 'none')));
         });
+        wrap.appendChild(tgLink('✏️ 改資料', tgUrl('pview', 'Display_Name', 'none')));
+        wrap.appendChild(tgLink('📷 照片', tgUrl('pphoto', 'Photo', 'none')));
+        wrap.appendChild(el('span', 'tg-hint', '長按項目 3 秒可刪除'));
         document.getElementById('person-tg').appendChild(wrap);
     })();
 
@@ -504,13 +636,14 @@
         if (isError(family)) {
             familyNodes.push(errorNode(family));
         } else {
-            family.forEach(function (m) {
+            family.forEach(function (m, index) {
                 var parts = [m.name];
                 if (m.birth_year) parts.push(m.birth_year + ' 年生（' + (today().getFullYear() - m.birth_year) + ' 歲）');
-                familyNodes.push(row(m.relation || '家人', parts.filter(Boolean).join('・') + (m.note ? '｜' + m.note : '')));
+                var r = row(m.relation || '家人', parts.filter(Boolean).join('・') + (m.note ? '｜' + m.note : ''));
+                familyNodes.push(longPressDelete(r, 'Family_JSON', index, m));
             });
         }
-        sections.push(section('family', '👨‍👩‍👧 家庭', '#e91e63', familyNodes, isError(family) ? '' : family.length || ''));
+        sections.push(section('family', '👨‍👩‍👧 家庭', '#e91e63', familyNodes, isError(family) ? '' : family.length || '', 'Family_JSON'));
 
         // 💡 個性與價值觀
         sections.push(section('personality', '💡 個性與價值觀', '#9b59b6', [
@@ -525,13 +658,14 @@
             interactionNodes.push(errorNode(interactions));
         } else if (interactions.length) {
             var timeline = el('div', 'timeline');
-            interactions.slice().sort(byDateDesc).forEach(function (it, index) {
+            withIndex(interactions).sort(function (a, b) { return byDateDesc(a.item, b.item); }).forEach(function (entry, order) {
+                var it = entry.item;
                 var item = el('details', 'timeline-item');
-                item.open = index === 0;
+                item.open = order === 0;
                 var summary = el('summary');
                 summary.appendChild(el('span', 'timeline-date', it.date || '日期不明'));
                 summary.appendChild(el('span', 'timeline-topics', it.topics || it.place || ''));
-                item.appendChild(summary);
+                item.appendChild(longPressDelete(summary, 'Interactions_JSON', entry.index, it));
                 var body = el('div', 'timeline-body');
                 if (it.place) body.appendChild(row('地點', it.place));
                 if (it.updates) body.appendChild(row('對方的近況', it.updates));
@@ -542,27 +676,32 @@
             interactionNodes.push(timeline);
         }
         if (!isError(followups)) {
-            var done = followups.filter(function (f) { return f.status === 'done'; });
+            var done = withIndex(followups).filter(function (entry) { return entry.item.status === 'done'; });
             if (done.length) {
                 var doneList = el('ul', 'followup-list');
-                done.forEach(function (f) { doneList.appendChild(el('li', 'followup-done', f.item || '')); });
+                done.forEach(function (entry) {
+                    var li = el('li', 'followup-done', entry.item.item || '');
+                    doneList.appendChild(longPressDelete(li, 'Followups_JSON', entry.index, entry.item));
+                });
                 interactionNodes.push(row('已完成的待追蹤', doneList));
             }
         }
         sections.push(section('interactions', '🗓️ 互動紀錄', '#e67e22', interactionNodes,
-            isError(interactions) ? '' : interactions.length || ''));
+            isError(interactions) ? '' : interactions.length || '', 'Interactions_JSON'));
 
         // 🎁 禮物
         var giftNodes = [];
         if (isError(gifts)) {
             giftNodes.push(errorNode(gifts));
         } else {
-            gifts.slice().sort(byDateDesc).forEach(function (g) {
+            withIndex(gifts).sort(function (a, b) { return byDateDesc(a.item, b.item); }).forEach(function (entry) {
+                var g = entry.item;
                 var label = (g.direction === 'received' ? '收到' : '送出') + (g.date ? '・' + g.date : '');
-                giftNodes.push(row(label, (g.item || '') + (g.reaction ? '｜' + g.reaction : '')));
+                var r = row(label, (g.item || '') + (g.reaction ? '｜' + g.reaction : ''));
+                giftNodes.push(longPressDelete(r, 'Gifts_JSON', entry.index, g));
             });
         }
-        sections.push(section('gifts', '🎁 禮物', '#f1c40f', giftNodes, isError(gifts) ? '' : gifts.length || ''));
+        sections.push(section('gifts', '🎁 禮物', '#f1c40f', giftNodes, isError(gifts) ? '' : gifts.length || '', 'Gifts_JSON'));
 
         // 📅 重要日期（含生日）
         var dateNodes = [];
@@ -578,23 +717,25 @@
         if (isError(keyDates)) {
             dateNodes.push(errorNode(keyDates));
         } else {
-            keyDates.forEach(function (k) {
-                dateNodes.push(row(k.label || '日子', (k.date || '') + (k.yearly ? '（每年）' : '')));
+            keyDates.forEach(function (k, index) {
+                var r = row(k.label || '日子', (k.date || '') + (k.yearly ? '（每年）' : ''));
+                dateNodes.push(longPressDelete(r, 'Key_Dates_JSON', index, k));
             });
         }
-        sections.push(section('dates', '📅 重要日期', '#1abc9c', dateNodes));
+        sections.push(section('dates', '📅 重要日期', '#1abc9c', dateNodes, '', 'Key_Dates_JSON'));
 
         // 📇 聯絡方式
         var contactNodes = [];
         if (isError(contacts)) {
             contactNodes.push(errorNode(contacts));
         } else {
-            contacts.forEach(function (c) {
-                contactNodes.push(row(c.channel || '聯絡方式', (c.handle || '') + (c.preferred ? '（偏好）' : '')));
+            contacts.forEach(function (c, index) {
+                var r = row(c.channel || '聯絡方式', (c.handle || '') + (c.preferred ? '（偏好）' : ''));
+                contactNodes.push(longPressDelete(r, 'Contacts_JSON', index, c));
             });
         }
         contactNodes.push(htmlRow('溝通偏好', 'Comm_Prefs'));
-        sections.push(section('contacts', '📇 聯絡方式', '#5dade2', contactNodes));
+        sections.push(section('contacts', '📇 聯絡方式', '#5dade2', contactNodes, '', 'Contacts_JSON'));
 
         // 🤝 認識脈絡與基本資料
         var introducer = readField('Introducer_Note_ID');

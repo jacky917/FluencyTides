@@ -303,7 +303,19 @@
   | `byDateDesc(a, b)` | 互動紀錄由新到舊 |
   | `browseNote(id)` | 以 AnkiConnect `guiBrowse` 打開另一張筆記（同 `openMasterCard`，`JP_CoreVerb_Cloze_Dark_back.html:231-238`）；網頁版會在網頁裡切換過去 |
 
-- **TG 深連結按鈕**：`Card_ID` 與 `TG_Bot` 都有值時，背面「見面前必看」下方顯示「➕ 記一筆互動」「✏️ 改資料」兩個連結，開啟 `https://t.me/{TG_Bot}?start={動作}-{欄位}-{序號}-{Card_ID}`（格式同現有深連結，`app/bot/utils/deep_link_parser.py:67-90`）。這是 Anki app（尤其手機）唯一的「寫入」入口：卡面不寫，交給 TG 寫。網頁版允許開新分頁（iframe 有 `allow-popups`），連結照樣能用。
+- **TG 深連結**（2026-10-24 依使用者要求擴充）：`Card_ID` 與 `TG_Bot` 都有值時顯示，是 Anki app（尤其手機）唯一的「寫入」入口：卡面不寫，交給 TG 寫。格式同現有深連結 `{動作}-{欄位}-{序號}-{Card_ID}`（`app/bot/utils/deep_link_parser.py:67-90`），最長約 57 字元，在 TG 的 64 字元上限內。
+
+  | 動作 | 卡面上的入口 | TG 做什麼 |
+  |---|---|---|
+  | `padd-{JSON 欄位}-none` | 區段標題的「+」、TG 連結列的「+ 家人」等、「見面前必看」的「+ 待追蹤」、「➕ 記一筆互動」 | 依欄位進入新增一筆的問答 |
+  | `pdel-{JSON 欄位}-{序號}_{指紋}` | **長按項目 3 秒** | 顯示那一筆的內容，確認後刪除 |
+  | `pdone-Followups_JSON-{序號}_{指紋}` | 未完成待追蹤旁的 ✅ | 標成完成 |
+  | `pview-Display_Name-none` | 「✏️ 改資料」 | 摘要與改欄位選單 |
+  | `pphoto-Photo-none` | 「📷 照片」 | 傳照片替換 |
+
+  - **長按 3 秒刪除**：按住時項目下緣出現 3 秒的進度條，放開、移動超過 10px 或捲動就取消；滿 3 秒時震動（支援時）並開啟 TG。有些 App 不允許程式自動開連結，所以同時在項目旁留下「🗑 在 TG 刪除這筆」連結，點它也能開。觸發後的那一下點擊不會再展開、收合或翻面；長按的項目設 `role="button"`，網頁版不會把它當成點卡面翻面。
+  - **序號附指紋**：卡片上的序號可能過時（別處新增或刪除、手機尚未同步）。序號後面附上那一筆的指紋（主要文字欄位 `date`、`item`、`topics`、`name`、`label`、`handle`、`relation`、`channel` 以 `|` 串起，djb2 雜湊、UTF-16 碼元、36 進位），TG 刪除或標成完成前比對；對不上時在清單中找同指紋的那一筆，找不到就不動，請使用者重新整理卡片。前後端用同一個算法（模板的 `itemFingerprint`、後端的 `item_fingerprint`）。
+  - 排序顯示的清單（互動紀錄、禮物）用的是存放時的序號，不是畫面上的順序。
 - **模板只顯示，不寫資料**：網頁版不支援 `updateNoteFields`（卡面會出現「網頁版不支援」提示），桌面版呼叫後會跳回正面（`Speaking_Coach_Dark_back.html:297`）。修改交給網頁表單（非 JSON 欄位）、TG 或腳本。
 - **防 XSS**：JSON 與單值欄位一律用 `textContent` 放進畫面；只有文字區段用 `innerHTML`，它們本來就是自己在 Anki 編輯器寫的 HTML。
 
@@ -401,9 +413,9 @@
 | 操作 | Anki app | 網頁 | TG |
 |---|---|---|---|
 | 讀取 | ✅ 卡片（時間軸、清單） | ✅ 卡片；欄位彈窗唯讀 | 🔧（P2）摘要含未完成的待追蹤與最新一筆互動 |
-| 新增一筆 | ⚠ 只能手改原始 JSON，不建議（R2） | 🔗 `json_field_editor`（P4） | 🔧（P3）`add_interaction`、`add_followup`、`add_item`；從卡面「➕ 記一筆互動」深連結或 `/p` 摘要的按鈕進入；🔧（P5）一段話或語音由 LLM 整理成一筆互動加新的待追蹤 |
+| 新增一筆 | ⚠ 只能手改原始 JSON，不建議（R2）；或點卡面上的「+」開啟 TG 新增 | 🔗 `json_field_editor`（P4） | 🔧（P3）`add_interaction`、`add_followup`、`add_item`；從卡面「➕ 記一筆互動」深連結或 `/p` 摘要的按鈕進入；🔧（P5）一段話或語音由 LLM 整理成一筆互動加新的待追蹤 |
 | 修改一筆 | ⚠ 同上 | 🔗 `json_field_editor`（P4） | 🔧（P3）只做最常用的「待追蹤標成完成」（`set_followup_status`）；其他修改用刪掉再新增 |
-| 刪除一筆 | ⚠ 同上 | 🔗 `json_field_editor`（P4） | 🔧（P3）`remove_item`：清單每筆附「🗑」按鈕，確認後刪除。不沿用現有 `del-` 深連結（它跳過能力檢查直接寫，且欄位白名單只有口說卡的欄位，`commands.py:272-279`） |
+| 刪除一筆 | ⚠ 同上；或長按卡面上的項目 3 秒，開啟 TG 刪除 | 🔗 `json_field_editor`（P4） | 🔧（P3）`remove_item`：從卡面長按（`pdel` 深連結）或 TG 清單的「🗑」進入，顯示內容確認後刪除。不沿用現有 `del-` 深連結（它跳過能力檢查直接寫，且欄位白名單只有口說卡的欄位，`commands.py:272-279`） |
 
 **照片**
 
