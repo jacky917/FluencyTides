@@ -1,0 +1,643 @@
+<!-- 人脈卡共用背面（「認人」與「見面前複習」兩張卡都用這份）。
+     版面：頭部（頭像、姓名與讀音、徽章）→ 見面前必看（一律展開）→ TG 按鈕 → 可收合區段（<details>）。
+     沒有內容的區段整段不顯示。欄位都放在隱藏的 div，由下方的 JS 讀取後畫出；JSON 欄位解析失敗時
+     該區段顯示「資料格式錯誤」與原文，不會默默消失。模板只顯示、不寫資料：寫入交給網頁與 TG。 -->
+<div class="card person-card" id="person-root">
+    <div class="card-kind" id="person-kind"></div>
+    <div id="person-header"></div>
+    <div id="person-must-see"></div>
+    <div id="person-tg"></div>
+    <div id="person-sections"></div>
+</div>
+
+<div style="display:none;">
+    <div id="f-Card">{{Card}}</div>
+    <div id="f-Display_Name">{{Display_Name}}</div>
+    <div id="f-Name_ZH">{{Name_ZH}}</div>
+    <div id="f-Name_EN">{{Name_EN}}</div>
+    <div id="f-Name_JA">{{Name_JA}}</div>
+    <div id="f-Name_JA_Kana">{{Name_JA_Kana}}</div>
+    <div id="f-Name_Romaji">{{Name_Romaji}}</div>
+    <div id="f-Honorific">{{Honorific}}</div>
+    <div id="f-Name_Memo">{{Name_Memo}}</div>
+    <div id="f-Photo">{{Photo}}</div>
+    <div id="f-Appearance">{{Appearance}}</div>
+    <div id="f-Birthday">{{Birthday}}</div>
+    <div id="f-Hometown">{{Hometown}}</div>
+    <div id="f-Residence">{{Residence}}</div>
+    <div id="f-Languages">{{Languages}}</div>
+    <div id="f-Timezone">{{Timezone}}</div>
+    <div id="f-Met_Date">{{Met_Date}}</div>
+    <div id="f-Met_Where">{{Met_Where}}</div>
+    <div id="f-Met_Via">{{Met_Via}}</div>
+    <div id="f-Introducer_Note_ID">{{Introducer_Note_ID}}</div>
+    <div id="f-Relationship">{{Relationship}}</div>
+    <div id="f-Closeness">{{Closeness}}</div>
+    <div id="f-First_Impression">{{First_Impression}}</div>
+    <div id="f-Company">{{Company}}</div>
+    <div id="f-Title">{{Title}}</div>
+    <div id="f-Work_Detail">{{Work_Detail}}</div>
+    <div id="f-Education">{{Education}}</div>
+    <div id="f-Interests">{{Interests}}</div>
+    <div id="f-Food_Drink">{{Food_Drink}}</div>
+    <div id="f-Dietary">{{Dietary}}</div>
+    <div id="f-Personality_Values">{{Personality_Values}}</div>
+    <div id="f-Praise">{{Praise}}</div>
+    <div id="f-Ask_Advice">{{Ask_Advice}}</div>
+    <div id="f-Sensitive">{{Sensitive}}</div>
+    <div id="f-Comm_Prefs">{{Comm_Prefs}}</div>
+    <div id="f-Notes">{{Notes}}</div>
+    <div id="f-Interactions_JSON">{{Interactions_JSON}}</div>
+    <div id="f-Followups_JSON">{{Followups_JSON}}</div>
+    <div id="f-Family_JSON">{{Family_JSON}}</div>
+    <div id="f-Gifts_JSON">{{Gifts_JSON}}</div>
+    <div id="f-Key_Dates_JSON">{{Key_Dates_JSON}}</div>
+    <div id="f-Contacts_JSON">{{Contacts_JSON}}</div>
+    <div id="f-Last_Contact">{{Last_Contact}}</div>
+    <div id="f-Contact_Cadence">{{Contact_Cadence}}</div>
+    <div id="f-Card_ID">{{Card_ID}}</div>
+    <div id="f-TG_Bot">{{TG_Bot}}</div>
+    <div id="f-Updated_At">{{Updated_At}}</div>
+</div>
+
+<script>
+(function () {
+    // ============================
+    // 讀欄位
+    // ============================
+
+    /** 欄位的純文字（`&quot;` 等跳脫會還原、HTML 標籤會去掉）。 */
+    function readField(name) {
+        var el = document.getElementById('f-' + name);
+        return el ? (el.textContent || '').replace(/ /g, ' ').trim() : '';
+    }
+
+    /** 文字區段的 HTML（保留自己在 Anki 編輯器寫的條列）；只有空白或空標籤時視為空。 */
+    function readHtml(name) {
+        var el = document.getElementById('f-' + name);
+        if (!el) return '';
+        var text = (el.textContent || '').replace(/ /g, ' ').trim();
+        if (!text && !el.querySelector('img')) return '';
+        return el.innerHTML.trim();
+    }
+
+    /**
+     * JSON 陣列欄位：比照後端 AnkiJsonFieldManager.parse_field_string，容忍 Anki 編輯器插入的
+     * <div>、<br>、不換行空白。空欄位回傳 []；格式錯誤回傳 { error, raw }，由區段顯示錯誤與原文。
+     */
+    function readJsonList(name) {
+        var raw = readField(name);
+        if (!raw) return [];
+        try {
+            var data = JSON.parse(raw);
+            if (Object.prototype.toString.call(data) !== '[object Array]') {
+                return { error: '不是 JSON 陣列', raw: raw };
+            }
+            return data;
+        } catch (e) {
+            return { error: '資料格式錯誤', raw: raw };
+        }
+    }
+
+    function isError(list) {
+        return list && !(Object.prototype.toString.call(list) === '[object Array]');
+    }
+
+    // ============================
+    // 小工具
+    // ============================
+
+    function el(tag, className, text) {
+        var node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined && text !== null) node.textContent = String(text);
+        return node;
+    }
+
+    function htmlNode(tag, className, html) {
+        var node = el(tag, className);
+        node.innerHTML = html;
+        return node;
+    }
+
+    /** 同一個名字永遠得到同一個顏色（與「見面前複習」正面相同的算法）。 */
+    function avatarColor(name) {
+        var hash = 0;
+        for (var i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) % 360;
+        return 'hsl(' + hash + ', 45%, 32%)';
+    }
+
+    function pad2(n) {
+        return (n < 10 ? '0' : '') + n;
+    }
+
+    function today() {
+        var now = new Date();
+        return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    }
+
+    /** `YYYY-MM-DD` 或 `--MM-DD` → { year|null, month, day }；格式不對回傳 null。 */
+    function parseDate(text) {
+        var m = /^(\d{4}|--)-?(\d{2})-(\d{2})$/.exec((text || '').trim());
+        if (!m) return null;
+        var month = parseInt(m[2], 10);
+        var day = parseInt(m[3], 10);
+        if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+        return { year: m[1] === '--' ? null : parseInt(m[1], 10), month: month, day: day };
+    }
+
+    var DAY_MS = 86400000;
+
+    /** 距今幾天（過去為正）；年份不明時回傳 null。 */
+    function daysSince(text) {
+        var d = parseDate(text);
+        if (!d || d.year === null) return null;
+        return Math.round((today() - new Date(d.year, d.month - 1, d.day)) / DAY_MS);
+    }
+
+    /** 下一次這個月日還有幾天（今天為 0）。 */
+    function daysUntilNext(d) {
+        var t = today();
+        var next = new Date(t.getFullYear(), d.month - 1, d.day);
+        if (next < t) next = new Date(t.getFullYear() + 1, d.month - 1, d.day);
+        return Math.round((next - t) / DAY_MS);
+    }
+
+    /** 一次性日期距今還有幾天（已過為負）。 */
+    function daysUntil(d) {
+        if (d.year === null) return daysUntilNext(d);
+        return Math.round((new Date(d.year, d.month - 1, d.day) - today()) / DAY_MS);
+    }
+
+    function age(d) {
+        if (!d || d.year === null) return null;
+        var t = today();
+        var years = t.getFullYear() - d.year;
+        if (t.getMonth() + 1 < d.month || (t.getMonth() + 1 === d.month && t.getDate() < d.day)) years--;
+        return years;
+    }
+
+    function shortDate(text) {
+        var d = parseDate(text);
+        return d ? pad2(d.month) + '/' + pad2(d.day) : text;
+    }
+
+    function byDateDesc(a, b) {
+        return String(b.date || '').localeCompare(String(a.date || ''));
+    }
+
+    /** 日文姓名加上讀音：漢字與讀音用空白分段且段數相同時逐段標，否則整段標。 */
+    function furiganaName(kanji, kana) {
+        var wrap = el('span');
+        if (!kana) {
+            wrap.textContent = kanji;
+            return wrap;
+        }
+        var ks = kanji.split(/\s+/);
+        var rs = kana.split(/\s+/);
+        var pairs = ks.length === rs.length ? ks.map(function (k, i) { return [k, rs[i]]; }) : [[kanji, kana]];
+        pairs.forEach(function (pair, i) {
+            if (i > 0) wrap.appendChild(document.createTextNode(' '));
+            var ruby = el('ruby', null, pair[0]);
+            ruby.appendChild(el('rt', null, pair[1]));
+            wrap.appendChild(ruby);
+        });
+        return wrap;
+    }
+
+    /** 逗號、頓號分隔的短項目變成標籤；看起來是一段文字（含 HTML 或很長）時回傳 null。 */
+    function chips(html, text) {
+        if (/<(ul|ol|li|div|br|p)\b/i.test(html) || text.length > 120) return null;
+        var items = text.split(/[,，、]/).map(function (s) { return s.trim(); }).filter(Boolean);
+        if (items.length < 2) return null;
+        var row = el('div', 'chip-row');
+        items.forEach(function (item) { row.appendChild(el('span', 'chip', item)); });
+        return row;
+    }
+
+    /** 以 AnkiConnect 打開另一張筆記（桌面版開瀏覽器；網頁版在網頁裡切換過去）。 */
+    function browseNote(noteId) {
+        fetch('http://127.0.0.1:8765', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'guiBrowse', version: 6, params: { query: 'nid:' + noteId } })
+        }).catch(function () {});
+    }
+
+    // ============================
+    // 可收合區段
+    // ============================
+
+    var STORAGE_PREFIX = 'person_profile_open_';
+
+    function storedOpen(key, fallback) {
+        try {
+            var v = window.localStorage.getItem(STORAGE_PREFIX + key);
+            return v === null ? fallback : v === '1';
+        } catch (e) {
+            return fallback;
+        }
+    }
+
+    function rememberOpen(key, open) {
+        try {
+            window.localStorage.setItem(STORAGE_PREFIX + key, open ? '1' : '0');
+        } catch (e) {
+            // 只影響下次的預設展開狀態
+        }
+    }
+
+    /** 產生一個可收合區段；沒有內容（nodes 為空）時回傳 null。 */
+    function section(key, title, color, nodes, count) {
+        nodes = nodes.filter(Boolean);
+        if (nodes.length === 0) return null;
+        var details = el('details', 'p-section');
+        details.style.borderLeftColor = color;
+        details.open = storedOpen(key, false);
+        var summary = el('summary');
+        summary.appendChild(el('span', null, title));
+        if (count) summary.appendChild(el('span', 'p-section-count', count));
+        summary.appendChild(el('span', 'accordion-arrow', '▸'));
+        details.appendChild(summary);
+        var body = el('div', 'p-section-body');
+        nodes.forEach(function (node) { body.appendChild(node); });
+        details.appendChild(body);
+        details.addEventListener('toggle', function () { rememberOpen(key, details.open); });
+        return details;
+    }
+
+    /** 一列「標籤：內容」；內容為空時回傳 null。value 可以是文字或節點。 */
+    function row(label, value) {
+        if (value === null || value === undefined || value === '') return null;
+        var r = el('div', 'p-row');
+        if (label) r.appendChild(el('div', 'p-label', label));
+        var v = el('div', 'p-value');
+        if (typeof value === 'string') v.textContent = value;
+        else v.appendChild(value);
+        r.appendChild(v);
+        return r;
+    }
+
+    /** 文字區段欄位的一列：能變成標籤就顯示標籤，否則照 HTML 顯示。 */
+    function htmlRow(label, name, asChips) {
+        var html = readHtml(name);
+        if (!html) return null;
+        var node = asChips ? chips(html, readField(name)) : null;
+        return row(label, node || htmlNode('div', null, html));
+    }
+
+    function errorNode(list) {
+        var box = el('div', 'json-error', '⚠ ' + list.error + '（請在網頁或 TG 修正，或在 Anki 編輯器檢查原文）');
+        box.appendChild(el('pre', null, list.raw));
+        return box;
+    }
+
+    // ============================
+    // 資料
+    // ============================
+
+    var displayName = readField('Display_Name');
+    var photoHtml = readHtml('Photo');
+    var interactions = readJsonList('Interactions_JSON');
+    var followups = readJsonList('Followups_JSON');
+    var family = readJsonList('Family_JSON');
+    var gifts = readJsonList('Gifts_JSON');
+    var keyDates = readJsonList('Key_Dates_JSON');
+    var contacts = readJsonList('Contacts_JSON');
+
+    var cardName = readField('Card');
+    document.getElementById('person-kind').textContent =
+        cardName === '認人' ? '🧑 認人' : cardName === '見面前複習' ? '📋 見面前複習' : '';
+
+    // ============================
+    // 頭部
+    // ============================
+    (function renderHeader() {
+        var header = el('div', 'person-header');
+
+        var avatar = el('div', 'avatar-md');
+        if (photoHtml) {
+            avatar.innerHTML = photoHtml;
+        } else {
+            avatar.textContent = displayName ? displayName.charAt(0) : '👤';
+            avatar.style.backgroundColor = avatarColor(displayName);
+        }
+        header.appendChild(avatar);
+
+        var names = el('div', 'person-names');
+        var nameJa = readField('Name_JA');
+        var display = el('div', 'person-display');
+        // 有日文姓名時以它（加讀音）為主，否則用稱呼
+        display.appendChild(nameJa ? furiganaName(nameJa, readField('Name_JA_Kana')) : el('span', null, displayName));
+        names.appendChild(display);
+
+        var alt = [];
+        if (nameJa && displayName) alt.push(displayName);
+        ['Name_ZH', 'Name_EN', 'Name_Romaji'].forEach(function (f) {
+            var v = readField(f);
+            if (v && alt.indexOf(v) < 0 && v !== nameJa) alt.push(v);
+        });
+        var honorific = readField('Honorific');
+        if (honorific) alt.push(honorific);
+        if (alt.length) names.appendChild(el('div', 'person-alt', alt.join(' · ')));
+
+        var memo = readField('Name_Memo');
+        if (memo) names.appendChild(el('div', 'person-memo', '💡 ' + memo));
+
+        var company = readField('Company');
+        var title = readField('Title');
+        if (company || title) names.appendChild(el('div', 'person-work', [company, title].filter(Boolean).join('・')));
+
+        var badges = el('div', 'badge-row');
+        var relationship = readField('Relationship');
+        if (relationship) badges.appendChild(el('span', 'pane-badge badge-blue', relationship));
+
+        var closeness = parseInt(readField('Closeness'), 10);
+        if (closeness >= 1 && closeness <= 5) {
+            var dots = '';
+            for (var i = 1; i <= 5; i++) dots += i <= closeness ? '●' : '○';
+            badges.appendChild(el('span', 'pane-badge closeness-dots', dots));
+        }
+
+        var birthday = parseDate(readField('Birthday'));
+        if (birthday) {
+            var untilBirthday = daysUntilNext(birthday);
+            var years = age(birthday);
+            var text = untilBirthday === 0 ? '🎂 今天生日！' : '🎂 還有 ' + untilBirthday + ' 天';
+            if (years !== null) text += '（' + (untilBirthday === 0 ? years : years + 1) + ' 歲）';
+            badges.appendChild(el('span', 'pane-badge ' + (untilBirthday <= 14 ? 'badge-yellow' : ''), text));
+        }
+
+        var since = daysSince(readField('Last_Contact'));
+        if (since !== null) {
+            var cadence = parseInt(readField('Contact_Cadence'), 10);
+            var tone = '';
+            if (cadence > 0) tone = since > cadence ? 'badge-red' : since > cadence / 2 ? 'badge-yellow' : 'badge-green';
+            badges.appendChild(el('span', 'pane-badge ' + tone, '📅 ' + (since <= 0 ? '今天聯絡過' : since + ' 天前')));
+        }
+        if (badges.childNodes.length) names.appendChild(badges);
+
+        header.appendChild(names);
+        document.getElementById('person-header').appendChild(header);
+    })();
+
+    // ============================
+    // 見面前必看
+    // ============================
+    (function renderMustSee() {
+        var box = el('div', 'must-see');
+        box.appendChild(el('div', 'must-see-title', '⭐ 見面前必看'));
+        var any = false;
+
+        function mustRow(label, content) {
+            var r = el('div', 'must-row');
+            r.appendChild(el('span', 'must-label', label));
+            r.appendChild(content);
+            box.appendChild(r);
+            any = true;
+        }
+
+        if (isError(followups)) {
+            mustRow('❓ 待追蹤', errorNode(followups));
+        } else {
+            var groups = [
+                ['ask', '❓ 下次要問'],
+                ['my_promise', '🤝 我答應的'],
+                ['their_promise', '📌 對方答應的']
+            ];
+            groups.forEach(function (group) {
+                var open = followups.filter(function (f) {
+                    return (f.type || 'ask') === group[0] && (f.status || 'open') !== 'done';
+                });
+                if (!open.length) return;
+                var list = el('ul', 'followup-list');
+                open.forEach(function (f) {
+                    var li = el('li', null, f.item || '');
+                    var note = f.due ? '期限 ' + shortDate(f.due) : f.added ? shortDate(f.added) + ' 記' : '';
+                    if (note) li.appendChild(el('span', 'followup-date', note));
+                    list.appendChild(li);
+                });
+                mustRow(group[1], list);
+            });
+        }
+
+        var dietary = readHtml('Dietary');
+        if (dietary) {
+            box.appendChild(htmlNode('div', 'warn-box', '⚠ 飲食：' + dietary));
+            any = true;
+        }
+
+        if (isError(interactions)) {
+            mustRow('💬 上次', errorNode(interactions));
+        } else if (interactions.length) {
+            var last = interactions.slice().sort(byDateDesc)[0];
+            var lastText = el('span', null, (last.topics || '') + (last.updates ? '｜' + last.updates : ''));
+            mustRow('💬 上次（' + shortDate(last.date || '') + '）', lastText);
+        }
+
+        if (!isError(keyDates)) {
+            var soon = keyDates
+                .map(function (k) {
+                    var d = parseDate(k.date);
+                    if (!d) return null;
+                    var until = k.yearly ? daysUntilNext(d) : daysUntil(d);
+                    return until >= 0 && until <= 60 ? { label: k.label, date: d, until: until } : null;
+                })
+                .filter(Boolean)
+                .sort(function (a, b) { return a.until - b.until; });
+            if (soon.length) {
+                var list = el('ul', 'followup-list');
+                soon.forEach(function (s) {
+                    list.appendChild(el('li', null, s.label + '（' + pad2(s.date.month) + '/' + pad2(s.date.day) +
+                        (s.until === 0 ? '，就是今天' : '，還有 ' + s.until + ' 天') + '）'));
+                });
+                mustRow('📅 近期', list);
+            }
+        }
+
+        if (!any) box.appendChild(el('div', 'empty-hint', '還沒有要注意的事'));
+        document.getElementById('person-must-see').appendChild(box);
+    })();
+
+    // ============================
+    // TG 深連結（Anki app 的寫入入口；需要 Card_ID 與 TG_Bot）
+    // ============================
+    (function renderTgLinks() {
+        var cardId = readField('Card_ID');
+        var bot = readField('TG_Bot').replace(/^@/, '');
+        if (!cardId || !bot || !/^[A-Za-z0-9_]+$/.test(cardId) || !/^[A-Za-z0-9_]+$/.test(bot)) return;
+        var wrap = el('div', 'tg-actions');
+        [
+            ['pint', 'Interactions_JSON', '➕ 記一筆互動'],
+            ['pview', 'Display_Name', '✏️ 改資料'],
+        ].forEach(function (link) {
+            var a = el('a', 'tg-link', link[2]);
+            a.href = 'https://t.me/' + bot + '?start=' + link[0] + '-' + link[1] + '-0-' + cardId;
+            a.target = '_blank';
+            wrap.appendChild(a);
+        });
+        document.getElementById('person-tg').appendChild(wrap);
+    })();
+
+    // ============================
+    // 可收合區段
+    // ============================
+    (function renderSections() {
+        var mount = document.getElementById('person-sections');
+        var sections = [];
+
+        // 🙂 興趣與喜好
+        sections.push(section('interests', '🙂 興趣與喜好', '#2ecc71', [
+            htmlRow('興趣', 'Interests', true),
+            htmlRow('飲食', 'Food_Drink', true)
+        ]));
+
+        // 🏢 工作
+        var workLine = [readField('Company'), readField('Title')].filter(Boolean).join('・');
+        sections.push(section('work', '🏢 工作', '#3498db', [
+            row('公司・職稱', workLine),
+            htmlRow('工作內容', 'Work_Detail'),
+            row('學歷', readField('Education'))
+        ]));
+
+        // 👨‍👩‍👧 家庭
+        var familyNodes = [];
+        if (isError(family)) {
+            familyNodes.push(errorNode(family));
+        } else {
+            family.forEach(function (m) {
+                var parts = [m.name];
+                if (m.birth_year) parts.push(m.birth_year + ' 年生（' + (today().getFullYear() - m.birth_year) + ' 歲）');
+                familyNodes.push(row(m.relation || '家人', parts.filter(Boolean).join('・') + (m.note ? '｜' + m.note : '')));
+            });
+        }
+        sections.push(section('family', '👨‍👩‍👧 家庭', '#e91e63', familyNodes, isError(family) ? '' : family.length || ''));
+
+        // 💡 個性與價值觀
+        sections.push(section('personality', '💡 個性與價值觀', '#9b59b6', [
+            htmlRow('個性・價值觀・夢想・煩惱', 'Personality_Values'),
+            htmlRow('🌟 讚美素材', 'Praise'),
+            htmlRow('🙋 可以請教的事', 'Ask_Advice')
+        ]));
+
+        // 🗓️ 互動紀錄（時間軸，最新一筆展開）與已完成的待追蹤
+        var interactionNodes = [];
+        if (isError(interactions)) {
+            interactionNodes.push(errorNode(interactions));
+        } else if (interactions.length) {
+            var timeline = el('div', 'timeline');
+            interactions.slice().sort(byDateDesc).forEach(function (it, index) {
+                var item = el('details', 'timeline-item');
+                item.open = index === 0;
+                var summary = el('summary');
+                summary.appendChild(el('span', 'timeline-date', it.date || '日期不明'));
+                summary.appendChild(el('span', 'timeline-topics', it.topics || it.place || ''));
+                item.appendChild(summary);
+                var body = el('div', 'timeline-body');
+                if (it.place) body.appendChild(row('地點', it.place));
+                if (it.updates) body.appendChild(row('對方的近況', it.updates));
+                if (it.quote) body.appendChild(el('div', 'quote', '「' + it.quote + '」'));
+                item.appendChild(body);
+                timeline.appendChild(item);
+            });
+            interactionNodes.push(timeline);
+        }
+        if (!isError(followups)) {
+            var done = followups.filter(function (f) { return f.status === 'done'; });
+            if (done.length) {
+                var doneList = el('ul', 'followup-list');
+                done.forEach(function (f) { doneList.appendChild(el('li', 'followup-done', f.item || '')); });
+                interactionNodes.push(row('已完成的待追蹤', doneList));
+            }
+        }
+        sections.push(section('interactions', '🗓️ 互動紀錄', '#e67e22', interactionNodes,
+            isError(interactions) ? '' : interactions.length || ''));
+
+        // 🎁 禮物
+        var giftNodes = [];
+        if (isError(gifts)) {
+            giftNodes.push(errorNode(gifts));
+        } else {
+            gifts.slice().sort(byDateDesc).forEach(function (g) {
+                var label = (g.direction === 'received' ? '收到' : '送出') + (g.date ? '・' + g.date : '');
+                giftNodes.push(row(label, (g.item || '') + (g.reaction ? '｜' + g.reaction : '')));
+            });
+        }
+        sections.push(section('gifts', '🎁 禮物', '#f1c40f', giftNodes, isError(gifts) ? '' : gifts.length || ''));
+
+        // 📅 重要日期（含生日）
+        var dateNodes = [];
+        var birthdayText = readField('Birthday');
+        var birthdayDate = parseDate(birthdayText);
+        if (birthdayDate) {
+            var birthdayAge = age(birthdayDate);
+            dateNodes.push(row('生日', (birthdayDate.year !== null ? birthdayText : pad2(birthdayDate.month) + '/' + pad2(birthdayDate.day)) +
+                (birthdayAge !== null ? '（' + birthdayAge + ' 歲）' : '') + '・還有 ' + daysUntilNext(birthdayDate) + ' 天'));
+        } else if (birthdayText) {
+            dateNodes.push(row('生日', birthdayText));
+        }
+        if (isError(keyDates)) {
+            dateNodes.push(errorNode(keyDates));
+        } else {
+            keyDates.forEach(function (k) {
+                dateNodes.push(row(k.label || '日子', (k.date || '') + (k.yearly ? '（每年）' : '')));
+            });
+        }
+        sections.push(section('dates', '📅 重要日期', '#1abc9c', dateNodes));
+
+        // 📇 聯絡方式
+        var contactNodes = [];
+        if (isError(contacts)) {
+            contactNodes.push(errorNode(contacts));
+        } else {
+            contacts.forEach(function (c) {
+                contactNodes.push(row(c.channel || '聯絡方式', (c.handle || '') + (c.preferred ? '（偏好）' : '')));
+            });
+        }
+        contactNodes.push(htmlRow('溝通偏好', 'Comm_Prefs'));
+        sections.push(section('contacts', '📇 聯絡方式', '#5dade2', contactNodes));
+
+        // 🤝 認識脈絡與基本資料
+        var introducer = readField('Introducer_Note_ID');
+        var introducerNode = null;
+        if (/^\d+$/.test(introducer)) {
+            introducerNode = el('span', 'mini-action-btn', '🔍 查看介紹人');
+            introducerNode.setAttribute('role', 'button');
+            introducerNode.addEventListener('click', function (e) {
+                e.stopPropagation();
+                browseNote(introducer);
+            });
+        }
+        sections.push(section('context', '🤝 認識脈絡與基本資料', '#95a5a6', [
+            row('認識', [readField('Met_Date'), readField('Met_Where')].filter(Boolean).join('・')),
+            row('管道', readField('Met_Via')),
+            introducerNode ? row('介紹人', introducerNode) : null,
+            htmlRow('第一印象', 'First_Impression'),
+            htmlRow('外貌特徵', 'Appearance'),
+            row('出身', readField('Hometown')),
+            row('現居', readField('Residence')),
+            row('語言', readField('Languages')),
+            row('時區', readField('Timezone'))
+        ]));
+
+        // 🗒️ 備註
+        sections.push(section('notes', '🗒️ 備註', '#7f8c8d', [
+            htmlRow(null, 'Notes'),
+            row('資料更新', readField('Updated_At'))
+        ]));
+
+        // 🔒 敏感話題（模糊顯示，點了才清楚）
+        var sensitive = readHtml('Sensitive');
+        if (sensitive) {
+            var blurred = htmlNode('div', 'blur-reveal', sensitive);
+            blurred.setAttribute('role', 'button');
+            blurred.addEventListener('click', function (e) {
+                e.stopPropagation();
+                blurred.className = 'revealed';
+            });
+            sections.push(section('sensitive', '🔒 敏感話題', '#c0392b', [row('不要主動提', blurred)]));
+        }
+
+        sections.forEach(function (s) { if (s) mount.appendChild(s); });
+    })();
+})();
+</script>
