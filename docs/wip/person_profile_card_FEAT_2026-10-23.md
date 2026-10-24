@@ -490,8 +490,8 @@
 
 **LLM 整理（P5）**
 
-1. 在某人的摘要按「🧠 用一段話記錄」，或直接打一段話、傳一段語音。
-2. 語音先轉文字（沿用口說卡的語音處理，`voice.py:251-259`）。
+1. 在某人的摘要按「🧠 用一段話記錄」，再打一段話或傳一段語音。
+2. 語音先轉文字（能力路由的 `stt`，用途鍵 `person_profile`），轉出的文字先回給使用者看。
 3. LLM 以結構化輸出（`generate_structured_data`，同 `expression_handler.py:134-198`）回傳：一筆互動、新的待追蹤、建議更新的欄位（例如「興趣：加上 登山」）。
 4. 預覽，逐項勾選後寫入（`add_interaction`、`add_followup`、`update_fields`）。
 5. 提示詞放在 `app/templates/prompts/anki/`，模型路由沿用 capability routing（`route(...)`）。
@@ -529,7 +529,7 @@
 | `app/bot/utils/deep_link_parser.py`、`app/schemas/tg/deep_link.py` | 加入人脈卡的深連結動作 |
 | `app/bot/handlers/media.py` | 加「換照片」狀態分支 |
 | `scripts/local_anki/Person_Profile_Dark/backfill_card_ids.py` | 新增（P2）：替 `Card_ID` 為空的人補上 ID |
-| `app/templates/prompts/anki/person_profile_ingest.j2`、相關 bot 檔案 | 新增（P5）：LLM 整理的提示詞與流程（同 `expression_correction.j2` 的位置） |
+| `app/templates/prompts/anki/Person_Profile_Ingest.j2`、`app/services/person_profile_ingest.py`、`app/schemas/llm/person_profile.py`、相關 bot 檔案 | 新增（P5）：LLM 整理的提示詞與流程（同 `expression_correction.j2` 的位置） |
 
 ### Frontend
 
@@ -549,7 +549,7 @@
 | **P2** | TG：`/p` 找人、摘要、`/newcard` 建立；補 `Card_ID` 腳本 | 手機上不開 Anki 也能查人；後面的 TG 寫入都從摘要出發 |
 | **P3** | handler 具名動作；TG：記一筆互動、待追蹤、改欄位、照片、深連結 | 「見完面馬上記」的主要入口 |
 | **P4** | 網頁 JSON 清單編輯 | 依 `json_field_editor` 計畫做通用版本，人脈卡的六種格式是其中一個使用者。2026-10-24 實作時與該計畫的差異：格式宣告用另一個類別屬性 `JSON_FIELD_SPECS`（`JSON_FIELDS` 維持名稱的 tuple，其他 handler 不用改）；`GET /handlers` 多一個鍵 `json_field_specs`（`json_fields` 照舊是名稱清單，前端唯讀判斷不受影響）；`after_json_update` 讓 handler 在整欄寫入後維護相關欄位（人脈卡：`Updated_At`、`Last_Contact`）。單字卡 `_v2` 的試點留待之後 |
-| **P5** | TG：一段話或語音 → LLM 整理 → 預覽確認後寫入 | 最省力的記錄方式；依賴 P3 的動作，放最後 |
+| **P5** | TG：一段話或語音 → LLM 整理 → 預覽確認後寫入 | 最省力的記錄方式；依賴 P3 的動作，放最後。2026-10-24 實作時與 §3.13 的差異：入口只有摘要的「🧠 用一段話記錄」（要先知道是誰，不接受沒選人時直接打的話）；用途鍵 `person_profile` 同時宣告 `llm` 與 `stt`，`/setconfig` 可分別設定；LLM 的建議先過一次格式檢查（日期不對的互動改成今天、期限格式不對的待追蹤與不開放或格式不對的欄位建議丟掉、已經有的內容不再建議、單一值欄位一律取代）；同一個欄位的多項建議合成一次 `update_fields` |
 
 ## 6. 風險與未知
 

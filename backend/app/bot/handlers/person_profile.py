@@ -8,6 +8,8 @@ Telegram flows of the person profile card.
 - 卡面的深連結（``pview``、``padd``、``pdel``、``pdone``、``pphoto``）由 ``commands.py`` 的 ``/start``
   轉給 :func:`handle_person_link`。
 - ``/newcard`` 選「人脈卡」時由 :func:`start_person_create` 建立新的人。
+- 「用一段話記錄」：一段文字或語音經 LLM 整理成互動、待追蹤與欄位建議，勾選後才寫入
+  （:mod:`app.services.person_profile_ingest`）。
 
 寫入一律經 ``NoteService``（具名動作或 ``update_fields``），由 handler 驗證並在寫入後同步。
 callback data 以 ``pp:`` 開頭；用筆記 ID 指人（卡面深連結才用 ``Card_ID``）。
@@ -28,10 +30,9 @@ from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
-from app.bot.utils import person_profile_view as view
 from pydantic import ValidationError
 
+from app.bot.utils import person_profile_view as view
 from app.bot.utils.formatting import anki_field_to_tg_text, escape_tg
 from app.bot.utils.texts import ANKI_UNREACHABLE, CARD_NOT_FOUND, error_detail, sync_suffix
 from app.core.config import settings
@@ -41,6 +42,7 @@ from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.anki import AnkiStoreMediaParams
 from app.schemas.person_profile import PERSON_JSON_ITEMS, PERSON_NOTE_TYPE, PersonCreateParams, item_fingerprint
 from app.schemas.tg.deep_link import PersonLinkAction
+from app.services import person_profile_ingest as ingest_service
 from app.services.card_service import CardService
 from app.services.note_service import NoteService
 from app.services.task_handlers.base import note_field_values
@@ -66,6 +68,8 @@ class PersonStates(StatesGroup):
     edit_value = State()
     edit_mode = State()
     waiting_photo = State()
+    ingest_text = State()
+    ingest_confirm = State()
 
 
 def _button(text: str, data: str) -> InlineKeyboardButton:
@@ -121,6 +125,7 @@ async def _ensure_ids(card_service: CardService, note_id: int, fields: dict[str,
 def summary_keyboard(note_id: int) -> InlineKeyboardMarkup:
     """摘要下方的操作按鈕。The buttons under a summary."""
     return InlineKeyboardMarkup(inline_keyboard=[
+        [_button("🧠 用一段話記錄（文字或語音）", f"pp:ing:{note_id}")],
         [_button("➕ 記一筆互動", f"pp:add:{note_id}:I"), _button("✅ 待追蹤", f"pp:ls:{note_id}:F")],
         [_button("✏️ 改資料", f"pp:edit:{note_id}"), _button("📋 清單", f"pp:lists:{note_id}")],
         [_button("📷 照片", f"pp:photo:{note_id}"), _button("📇 全部資料", f"pp:full:{note_id}")],
@@ -347,6 +352,12 @@ async def on_person_button(
             await _answer_step_button(message, state, note_service, card_service, parts)
         elif verb == "save":
             await _save_item(message, state, note_service, card_service)
+        elif verb == "ing":
+            await _start_ingest(message, state, card_service, int(parts[2]))
+        elif verb == "ig":
+            await _toggle_proposal(message, state, int(parts[2]))
+        elif verb == "igsave":
+            await _save_proposals(message, state, note_service, card_service)
     except (FluencyTidesError, AnkiConnectError) as e:
         await _reply_error(message, e)
     except (IndexError, KeyError, ValueError):
@@ -735,6 +746,172 @@ async def process_photo(
     except (FluencyTidesError, AnkiConnectError) as e:
         await state.clear()
         await _reply_error(message, e)
+
+
+# =============================================================================
+# 用一段話記錄（LLM 整理，勾選後才寫入）
+# =============================================================================
+
+
+async def _start_ingest(message: types.Message, state: FSMContext, card_service: CardService, note_id: int) -> None:
+    loaded = await _load(card_service, note_id)
+    if loaded is None:
+        await message.answer(CARD_NOT_FOUND)
+        return
+    await state.clear()
+    await state.set_state(PersonStates.ingest_text)
+    await state.update_data(nid=note_id)
+    name = escape_tg(ingest_service.plain_text(loaded[0].get("Display_Name", ""), 40)) or "他"
+    await message.answer(
+        f"🧠 剛剛和 <b>{name}</b> 聊了什麼？打一段話或傳語音，隨意說就好：\n"
+        "聊了哪些話題、他的近況、答應了什麼、下次要問什麼、新知道的興趣或家人…\n\n"
+        "<i>整理好會先給你看，勾選後才會寫入。</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[CANCEL_ROW]),
+        parse_mode="HTML",
+    )
+
+
+@router.message(PersonStates.ingest_text, F.text)
+async def process_ingest_text(message: types.Message, state: FSMContext, card_service: CardService) -> None:
+    """用一段話記錄：收到文字。The typed paragraph."""
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("請輸入一段話，或傳語音。")
+        return
+    status = await message.reply("⏳ 整理中…")
+    await _run_ingest(message, status, state, card_service, text)
+
+
+@router.message(PersonStates.ingest_text, F.voice)
+async def process_ingest_voice(message: types.Message, state: FSMContext, card_service: CardService) -> None:
+    """用一段話記錄：收到語音，先轉成文字。The voice message, transcribed first."""
+    status = await message.reply("⏳ 下載語音中…")
+    try:
+        bot, voice = message.bot, message.voice
+        file = await bot.get_file(voice.file_id) if bot and voice else None
+        if not bot or not file or not file.file_path:
+            await status.edit_text("❌ 語音下載失敗，請再傳一次。")
+            return
+        buffer = BytesIO()
+        await bot.download_file(file.file_path, buffer)
+    except (TelegramAPIError, IOError) as e:
+        logger.error("人脈卡語音下載失敗: %s", e)
+        await status.edit_text(f"❌ 語音下載失敗：{error_detail(e)}\n請再傳一次。", parse_mode="HTML")
+        return
+    await status.edit_text("⏳ 語音轉文字中…")
+    try:
+        text = (await ingest_service.transcribe(buffer.getvalue(), "person_ingest.ogg")).strip()
+    except FluencyTidesError as e:
+        logger.warning("人脈卡語音轉文字失敗: %s", e)
+        await status.edit_text(
+            f"❌ 語音轉文字失敗：{error_detail(e.message)}\n可以改用打字，或稍後再傳一次。", parse_mode="HTML"
+        )
+        return
+    if not text:
+        await status.edit_text("❌ 沒有聽到內容，請再傳一次（或改用打字）。")
+        return
+    await status.edit_text(f"🎙 聽到：{escape_tg(text, 1500)}\n\n⏳ 整理中…", parse_mode="HTML")
+    await _run_ingest(message, status, state, card_service, text)
+
+
+async def _run_ingest(
+    message: types.Message, status: types.Message, state: FSMContext, card_service: CardService, text: str
+) -> None:
+    """請 LLM 整理，列出建議讓使用者勾選。失敗時保留狀態，可以直接再傳一次。
+
+    Ask the LLM, then show the proposals. On failure the state is kept so the user can resend.
+    """
+    note_id = int((await state.get_data())["nid"])
+    try:
+        loaded = await _load(card_service, note_id)
+        if loaded is None:
+            await state.clear()
+            await status.edit_text(CARD_NOT_FOUND)
+            return
+        fields, lists = loaded
+        result = await ingest_service.ingest(fields, lists, text, _today())
+    except ValidationError as e:
+        logger.warning("人脈卡整理：LLM 回傳格式不對: %s", e)
+        await status.edit_text("❌ 整理失敗（回傳的格式不對），請再傳一次。")
+        return
+    except FluencyTidesError as e:
+        logger.warning("人脈卡整理失敗: %s", e)
+        await status.edit_text(f"❌ 整理失敗：{error_detail(e.message)}\n請再傳一次。", parse_mode="HTML")
+        return
+    except AnkiConnectError as e:
+        await status.delete()
+        await _reply_error(message, e)
+        return
+    proposals = [
+        {"kind": p.kind, "data": p.data} for p in ingest_service.proposals_from(result, fields, _today())
+    ]
+    if not proposals:
+        await status.edit_text("🤔 這段話裡沒有整理出可以記下的內容。可以再說具體一點後重傳，或按取消。",
+                               reply_markup=InlineKeyboardMarkup(inline_keyboard=[CANCEL_ROW]))
+        return
+    selected = [True] * len(proposals)
+    await state.set_state(PersonStates.ingest_confirm)
+    await state.update_data(proposals=proposals, selected=selected)
+    await status.delete()
+    await message.answer(
+        view.ingest_preview(proposals, selected), reply_markup=_proposal_keyboard(selected), parse_mode="HTML"
+    )
+
+
+def _proposal_keyboard(selected: list[bool]) -> InlineKeyboardMarkup:
+    toggles = [_button(f"{'✅' if chosen else '⬜'} {i + 1}", f"pp:ig:{i}") for i, chosen in enumerate(selected)]
+    rows = [toggles[i:i + 5] for i in range(0, len(toggles), 5)]
+    rows.append([_button("💾 儲存勾選的", "pp:igsave"), *CANCEL_ROW])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _toggle_proposal(message: types.Message, state: FSMContext, index: int) -> None:
+    if await state.get_state() != PersonStates.ingest_confirm.state:
+        await message.answer("⌛ 這個步驟已結束，請重新開始。")
+        return
+    data = await state.get_data()
+    proposals, selected = list(data["proposals"]), [bool(x) for x in data["selected"]]
+    selected[index] = not selected[index]
+    await state.update_data(selected=selected)
+    await message.edit_text(
+        view.ingest_preview(proposals, selected), reply_markup=_proposal_keyboard(selected), parse_mode="HTML"
+    )
+
+
+async def _save_proposals(
+    message: types.Message, state: FSMContext, note_service: NoteService, card_service: CardService
+) -> None:
+    """寫入勾選的建議：互動、待追蹤各一筆，欄位建議合成一次 ``update_fields``。Write the picked proposals."""
+    if await state.get_state() != PersonStates.ingest_confirm.state:
+        await message.answer("⌛ 這個步驟已結束，請重新開始。")
+        return
+    data = await state.get_data()
+    note_id = int(data["nid"])
+    picked = [p for p, chosen in zip(data["proposals"], data["selected"]) if chosen]
+    if not picked:
+        await message.answer("沒有勾選任何項目；要放棄請按取消。")
+        return
+    await state.clear()
+    await message.edit_reply_markup(reply_markup=None)
+    warning: str | None = None
+    for proposal in picked:
+        if proposal["kind"] == "interaction":
+            warning = await note_service.run_action(note_id, "add_interaction", {"item": proposal["data"]})
+        elif proposal["kind"] == "followup":
+            warning = await note_service.run_action(note_id, "add_followup", {"item": proposal["data"]})
+    field_updates = [p["data"] for p in picked if p["kind"] == "field"]
+    if field_updates:
+        loaded = await _load(card_service, note_id)
+        current = dict(loaded[0]) if loaded else {}
+        changes: dict[str, str] = {}
+        for update in field_updates:
+            name = str(update["field"])
+            changes[name] = ingest_service.field_html(
+                changes.get(name, current.get(name, "")), str(update["value"]), str(update["mode"])
+            )
+        result = await note_service.update_fields(HANDLER_NAME, note_id, changes)
+        warning = result.get("sync_warning") or warning  # type: ignore[assignment]
+    await send_summary(message, card_service, note_id, prefix=f"✅ 已記下 {len(picked)} 項。" + sync_suffix(warning))
 
 
 # =============================================================================

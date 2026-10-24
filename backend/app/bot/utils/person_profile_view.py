@@ -366,3 +366,35 @@ def preview_item(field_name: str, item: dict[str, object]) -> str:
             if item.get(key):
                 lines.append(f"{label}：{escape_tg(str(item[key]), 200)}")
     return "\n".join(lines)
+
+
+# =============================================================================
+# 用一段話記錄（LLM 整理的建議）
+# =============================================================================
+
+
+def proposal_line(kind: str, data: dict[str, object]) -> str:
+    """一項建議的文字（已轉義）。One proposal as escaped text."""
+    get = lambda key, limit=200: escape_tg(str(data.get(key, "") or ""), limit)  # noqa: E731
+    if kind == "interaction":
+        lines = [f"💬 <b>互動</b> {get('date')}：{get('topics')}"]
+        for key, label in (("updates", "🗞 近況"), ("place", "📍 地點"), ("quote", "🗨")):
+            if data.get(key):
+                lines.append(f"    {label}：{get(key)}")
+        return "\n".join(lines)
+    if kind == "followup":
+        label = FOLLOWUP_TYPES.get(str(data.get("type") or "ask"), "❓ 下次要問")
+        return f"{label}：{get('item')}" + (f"（期限 {get('due')}）" if data.get("due") else "")
+    mode = "接在後面" if data.get("mode") == "append" else "改成"
+    line = f"✏️ <b>{escape_tg(field_title(str(data.get('field', ''))))}</b> {mode}：{get('value', 300)}"
+    return line + (f"\n    <i>（{get('reason', 120)}）</i>" if data.get("reason") else "")
+
+
+def ingest_preview(proposals: list[dict[str, object]], selected: list[bool]) -> str:
+    """整理結果的預覽：每項前面標勾選狀態與編號。The proposals with their checkboxes."""
+    lines = ["🧠 <b>整理好了</b>，勾選要記下的項目（點下面的編號切換）：", ""]
+    for index, (proposal, chosen) in enumerate(zip(proposals, selected)):
+        data = proposal.get("data")
+        text = proposal_line(str(proposal.get("kind", "")), data if isinstance(data, dict) else {})
+        lines.append(f"{'✅' if chosen else '⬜'} {index + 1}. {text}")
+    return truncate("\n".join(lines))

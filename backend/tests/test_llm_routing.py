@@ -42,6 +42,7 @@ _PRODUCTION_ROUTES = {
     "jp_verb_pair": "app.services.task_handlers.jp_verb_pair_handler",
     "jp_core_verb": "app.services.task_handlers.jp_core_verb_handler",
     "jp_verb_reading": "app.services.jp_verb_reading_service",
+    "person_profile": "app.services.person_profile_ingest",
 }
 
 
