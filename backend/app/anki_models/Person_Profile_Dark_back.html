@@ -13,6 +13,7 @@
 
 <div style="display:none;">
     <div id="f-Card">{{Card}}</div>
+    <div id="f-Tags">{{Tags}}</div>
     <div id="f-Display_Name">{{Display_Name}}</div>
     <div id="f-Name_ZH">{{Name_ZH}}</div>
     <div id="f-Name_EN">{{Name_EN}}</div>
@@ -607,6 +608,10 @@
         wrap.appendChild(tgLink('改資料', tgUrl('pview', 'Display_Name', 'none')));
         wrap.appendChild(tgLink('照片', tgUrl('pphoto', 'Photo', 'none')));
         wrap.appendChild(tgLink('AI 分析與話題', tgUrl('ptopic', 'Display_Name', 'none')));
+        // 標籤「AI內文不遮名字」：AI 分析時內文不遮名字（與後端 TEXT_UNMASKED_TAG 相同）
+        if (readField('Tags').split(/\s+/).indexOf('AI內文不遮名字') >= 0) {
+            wrap.appendChild(el('span', 'tg-hint', 'AI：內文不遮名字'));
+        }
         wrap.appendChild(el('span', 'tg-hint', '長按項目 3 秒可刪除'));
         document.getElementById('person-tg').appendChild(wrap);
     })();

@@ -13,6 +13,7 @@ from app.bot.handlers import commands, person_profile
 from app.bot.utils.deep_link_parser import DeepLinkParser
 from app.core.exceptions import LLMGenerationError, LLMQuotaError
 from app.schemas.llm.person_profile import LLMPersonTopicsResult
+from app.schemas.person_profile import TEXT_UNMASKED_TAG
 from app.schemas.tg.deep_link import PersonLinkAction
 from app.services import person_profile_topics as topics
 from tests.test_bot_replies import NASTY, _assert_tg_html, _callback, _fsm, _message, _run, _sent
@@ -71,6 +72,17 @@ class TestMask:
         # 沒有名字的家人不需要代號，照樣列出關係
         assert "- 兒子" in prompt
         assert mask.restore == {"〔本人〕": "田中さん", "〔家人1〕": "美咲", "〔家人2〕": "Momo"}
+
+    def test_unmasked_text_keeps_names_but_not_name_fields(self):
+        """關掉內文遮名字：內文照原文（ゆうき不會被換掉），姓名欄位照樣不送。"""
+        prompt, mask = topics.build_prompt(
+            _fields(Notes="ゆうきを出して転職した"), _lists(), TODAY, mask_text=False
+        )
+        assert "ゆうきを出して転職した" in prompt and "美咲" in prompt
+        assert "Yuki Tanaka" not in prompt and "Tanaka Yūki" not in prompt
+        assert "內文沒有遮名字" in prompt and "`〔家人1〕`" not in prompt
+        # 回來的代號照樣換回稱呼
+        assert mask.unmask("〔本人〕さん") == "田中さん"
 
     def test_excluded_fields_are_not_sent(self):
         prompt, _ = topics.build_prompt(
@@ -173,7 +185,34 @@ class TestTopicsFlow:
         assert "留意" not in text  # 空的不列
         buttons = [b.callback_data for row in status.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
                    for b in row]
-        assert buttons == ["pp:topic:5", "pp:s:5"]
+        assert buttons == ["pp:topic:5", "pp:s:5", "pp:mask:5:off"]
+
+    def test_tag_turns_off_text_masking(self):
+        note = _note()
+        note["tags"] = ["PersonProfile", TEXT_UNMASKED_TAG]
+        parsed = LLMPersonTopicsResult.model_validate(_result())
+        with mock.patch.object(topics, "suggest", mock.AsyncMock(return_value=parsed)) as suggest:
+            _, status = _press("pp:topic:5", _card_service(note))
+        assert suggest.await_args.kwargs == {"mask_text": False}
+        labels = [b.text for row in status.edit_text.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
+        assert "內文名字：不遮（按此改成遮）" in labels
+
+    @pytest.mark.parametrize(("choice", "method"), [("off", "add_tags"), ("on", "remove_tags")])
+    def test_toggle_uses_the_tag(self, choice, method):
+        card_service = _card_service()
+        card_service.anki_client.add_tags = mock.AsyncMock()
+        card_service.anki_client.remove_tags = mock.AsyncMock()
+        card_service.anki_client.sync = mock.AsyncMock()
+        query, _ = _press(f"pp:mask:5:{choice}", card_service)
+        getattr(card_service.anki_client, method).assert_awaited_once_with([5], TEXT_UNMASKED_TAG)
+        card_service.anki_client.sync.assert_awaited_once()
+        assert "下次分析時生效" in _sent(query.message.answer)[0]
+        new_toggle = query.message.edit_reply_markup.await_args.kwargs["reply_markup"].inline_keyboard[-1][0]
+        assert new_toggle.callback_data == f"pp:mask:5:{'on' if choice == 'off' else 'off'}"
+
+    def test_toggle_with_bad_data(self):
+        query, _ = _press("pp:mask:5:maybe", _card_service())
+        assert "按鈕已失效" in _sent(query.message.answer)[0]
 
     def test_llm_failure_offers_retry(self):
         card_service = _card_service()

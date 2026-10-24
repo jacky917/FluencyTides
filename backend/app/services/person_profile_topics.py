@@ -138,10 +138,20 @@ def build_mask(fields: dict[str, str], lists: dict[str, list[object]]) -> NameMa
     return mask
 
 
-def build_prompt(fields: dict[str, str], lists: dict[str, list[object]], today: date) -> tuple[str, NameMask]:
-    """組出提示（所有文字都先遮名字），一併回傳對照表。Render the masked prompt and return the mask."""
+def build_prompt(
+    fields: dict[str, str], lists: dict[str, list[object]], today: date, *, mask_text: bool = True
+) -> tuple[str, NameMask]:
+    """組出提示，一併回傳對照表。Render the prompt and return the mask.
+
+    Args:
+        fields: 欄位。The fields.
+        lists: 解析好的清單。The parsed lists.
+        today: 今天。Today.
+        mask_text: 內文也遮名字（預設）；False 時內文照原文送出（例如名字和一般詞同音、遮了反而看不懂），
+            姓名欄位照樣不送，回來的代號照樣換回。Mask names in the body text too (default).
+    """
     mask = build_mask(fields, lists)
-    m = mask.mask
+    m = mask.mask if mask_text else (lambda text: text)
     profile = [
         (PersonCreateParams.model_fields[name].title or name, m(plain_text(fields.get(name, ""))))
         for name in PersonCreateParams.model_fields
@@ -190,7 +200,8 @@ def build_prompt(fields: dict[str, str], lists: dict[str, list[object]], today: 
     prompt = get_template_engine().render(
         "prompts/anki/Person_Profile_Topics.j2",
         person_token=PERSON_TOKEN,
-        family_tokens=mask.family,
+        family_tokens=mask.family if mask_text else [],
+        text_unmasked=not mask_text,
         today=today.isoformat(),
         weekday=WEEKDAYS[today.weekday()],
         profile=profile,
@@ -204,7 +215,9 @@ def build_prompt(fields: dict[str, str], lists: dict[str, list[object]], today: 
     return prompt, mask
 
 
-async def suggest(fields: dict[str, str], lists: dict[str, list[object]], today: date) -> LLMPersonTopicsResult:
+async def suggest(
+    fields: dict[str, str], lists: dict[str, list[object]], today: date, *, mask_text: bool = True
+) -> LLMPersonTopicsResult:
     """請 LLM 分析這個人並推薦話題；回傳的文字已換回真正的稱呼。Ask the LLM; names restored.
 
     Raises:
@@ -212,7 +225,7 @@ async def suggest(fields: dict[str, str], lists: dict[str, list[object]], today:
         LLMGenerationError: LLM 回傳的格式不符（訊息帶模型名稱）。On a malformed response.
         TemplateEngineError: 提示詞模板有誤。When the prompt template is broken.
     """
-    prompt, mask = build_prompt(fields, lists, today)
+    prompt, mask = build_prompt(fields, lists, today, mask_text=mask_text)
     client = await TOPICS_ROUTE.client()
     result = await client.generate_structured_data(
         system_prompt="You are a warm, perceptive counselor. Reply in strict JSON. Never invent facts.",

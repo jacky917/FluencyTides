@@ -21,6 +21,11 @@ from pydantic import BaseModel, ConfigDict, Field
 #: 筆記類型。The note type.
 PERSON_NOTE_TYPE = "Person_Profile_Dark"
 
+#: 有這個標籤的人：「AI 分析與話題」送出的內文不遮名字（姓名欄位照樣不送）。用標籤而不是欄位：
+#: 改筆記類型的欄位會讓 AnkiWeb 要求完整同步；標籤在 Anki app 也能直接加減。
+#: Notes with this tag send body text unmasked to the topics LLM.
+TEXT_UNMASKED_TAG = "AI內文不遮名字"
+
 #: 空字串或 ``YYYY-MM-DD``。Empty or an ISO date.
 OPTIONAL_DATE = r"^$|^\d{4}-\d{2}-\d{2}$"
 #: ``YYYY-MM-DD``。An ISO date.

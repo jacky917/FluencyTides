@@ -53,6 +53,7 @@ from app.schemas.anki import AnkiStoreMediaParams
 from app.schemas.person_profile import (
     PERSON_JSON_ITEMS,
     PERSON_NOTE_TYPE,
+    TEXT_UNMASKED_TAG,
     PersonCreateParams,
     append_field_html,
     item_fingerprint,
@@ -111,6 +112,14 @@ async def _load(card_service: CardService, note_id: int) -> tuple[dict[str, str]
 
     Load a person's fields and parsed lists; None when not a person card.
     """
+    loaded = await _load_with_tags(card_service, note_id)
+    return loaded[:2] if loaded else None
+
+
+async def _load_with_tags(
+    card_service: CardService, note_id: int
+) -> tuple[dict[str, str], dict[str, list[object]], list[str]] | None:
+    """同 :func:`_load`，另外帶回筆記的標籤。Like :func:`_load`, plus the note's tags."""
     note = await card_service.get_note(note_id)
     if str(note.get("modelName")) != PERSON_NOTE_TYPE:
         return None
@@ -121,7 +130,7 @@ async def _load(card_service: CardService, note_id: int) -> tuple[dict[str, str]
             lists[name] = AnkiJsonFieldManager.parse_field_string(fields.get(name, ""))
         except AnkiFieldCorruptedError:
             lists[name] = []
-    return fields, lists
+    return fields, lists, [str(tag) for tag in note.get("tags") or []]
 
 
 async def _ensure_ids(card_service: CardService, note_id: int, fields: dict[str, str]) -> None:
@@ -389,6 +398,11 @@ async def on_person_button(
             await _save_proposals(message, state, note_service, card_service)
         elif verb == "topic":
             await _send_topics(message, card_service, _int_arg(parts, 2))
+        elif verb == "mask":
+            choice = _arg(parts, 3)
+            if choice not in ("on", "off"):
+                raise _StaleButton
+            await _set_text_mask(message, card_service, _int_arg(parts, 2), masked=choice == "on")
     except _StaleButton:
         logger.info("人脈卡按鈕的資料解析不了: %r", callback.data)
         await message.answer("❌ 這個按鈕已失效，請用 /p 重新找人。")
@@ -974,7 +988,7 @@ async def _send_topics(message: types.Message, card_service: CardService, note_i
     """請 LLM 以諮商師的角度分析這個人並推薦話題（名字遮起來送出，回來再換回）。Analyse and suggest topics."""
     status = await message.answer("⏳ 分析中…（約需半分鐘）")
     try:
-        loaded = await _load(card_service, note_id)
+        loaded = await _load_with_tags(card_service, note_id)
     except NoteNotFoundError:
         loaded = None
     except AnkiConnectError as e:
@@ -984,9 +998,11 @@ async def _send_topics(message: types.Message, card_service: CardService, note_i
     if loaded is None:
         await status.edit_text(CARD_NOT_FOUND)
         return
-    fields, lists = loaded
+    fields, lists, tags = loaded
+    # 預設內文也遮名字；有標籤時內文照原文送出（名字和一般詞同音、遮了反而看不懂時用）
+    masked = TEXT_UNMASKED_TAG not in tags
     try:
-        result = await topics_service.suggest(fields, lists, _today())
+        result = await topics_service.suggest(fields, lists, _today(), mask_text=masked)
     except TemplateEngineError:
         logger.exception("人脈卡話題：提示詞模板有誤（note %s）", note_id)
         await status.edit_text("❌ 系統錯誤（提示詞模板），重試也沒有用，請通知管理員查看伺服器日誌。")
@@ -995,19 +1011,43 @@ async def _send_topics(message: types.Message, card_service: CardService, note_i
         logger.warning("人脈卡話題失敗（note %s）: %s", note_id, e)
         await status.edit_text(
             _llm_failure(e, task="分析", setting=topics_service.TOPICS_ROUTE.description, retry="再按"),
-            reply_markup=_topics_keyboard(note_id),
+            reply_markup=_topics_keyboard(note_id, masked),
             parse_mode="HTML",
         )
         return
     await status.edit_text(
-        view.topics_text(fields, result), reply_markup=_topics_keyboard(note_id), parse_mode="HTML"
+        view.topics_text(fields, result), reply_markup=_topics_keyboard(note_id, masked), parse_mode="HTML"
     )
 
 
-def _topics_keyboard(note_id: int) -> InlineKeyboardMarkup:
+def _topics_keyboard(note_id: int, masked: bool) -> InlineKeyboardMarkup:
+    """再想一次、回摘要，以及內文遮名字的開關（按了切換）。The topics buttons."""
+    toggle = (_button("內文名字：遮（按此改成不遮）", f"pp:mask:{note_id}:off") if masked
+              else _button("內文名字：不遮（按此改成遮）", f"pp:mask:{note_id}:on"))
     return InlineKeyboardMarkup(inline_keyboard=[
         [_button("再想一次", f"pp:topic:{note_id}"), _button("回摘要", f"pp:s:{note_id}")],
+        [toggle],
     ])
+
+
+async def _set_text_mask(message: types.Message, card_service: CardService, note_id: int, masked: bool) -> None:
+    """切換內文遮名字：加減標籤 :data:`TEXT_UNMASKED_TAG`（不改筆記類型），並同步。Toggle via the tag."""
+    loaded = await _load(card_service, note_id)
+    if loaded is None:
+        await message.answer(CARD_NOT_FOUND)
+        return
+    client = card_service.anki_client
+    if masked:
+        await client.remove_tags([note_id], TEXT_UNMASKED_TAG)
+    else:
+        await client.add_tags([note_id], TEXT_UNMASKED_TAG)
+    warning = await sync_warning(client)
+    await message.edit_reply_markup(reply_markup=_topics_keyboard(note_id, masked))
+    await message.answer(
+        ("已改成：送給 AI 的內文遮名字（預設）。" if masked
+         else "已改成：送給 AI 的內文不遮名字（姓名欄位照樣不送）。")
+        + "下次分析時生效。" + sync_suffix(warning)
+    )
 
 
 def _proposal_view(data: dict[str, object]) -> tuple[str, InlineKeyboardMarkup]:
