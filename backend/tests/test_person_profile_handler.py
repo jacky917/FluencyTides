@@ -267,6 +267,33 @@ class TestActions:
         _act(anki, 1, action="set_photo", filename="")
         assert anki.value(1, "Photo") == ""
 
+    @pytest.mark.parametrize(
+        "parameters",
+        [
+            {"action": "add_interaction", "item": {"date": "2026-10-01", "topics": "轉職"}},
+            {"action": "add_followup", "item": {"item": "N1 考得如何？"}},
+            {"action": "set_followup_status", "index": 0, "fingerprint": "14vynru", "status": "done"},
+            {"action": "add_item", "field": "Gifts_JSON", "item": {"item": "鳳梨酥"}},
+            {"action": "remove_item", "field": "Followups_JSON", "index": 0, "fingerprint": "14vynru"},
+            {"action": "set_photo", "filename": "p.jpg"},
+        ],
+        ids=lambda p: p["action"],
+    )
+    def test_each_action_is_one_write(self, parameters):
+        """清單、Last_Contact、Updated_At 在同一次寫入：中途失敗時不會只寫了一半（重試才不會重複）。"""
+        anki = PersonAnki([person(1, Display_Name="田中さん", Followups_JSON=json.dumps(FOLLOWUPS), Gifts_JSON="[]",
+                                  Interactions_JSON="[]", Last_Contact="2026-09-01")])
+        _act(anki, 1, **parameters)
+        (( _, fields),) = anki.updated
+        assert fields["Updated_At"] == date.today().isoformat()
+        if parameters["action"] == "add_interaction":
+            assert fields["Last_Contact"] == "2026-10-01" and "Interactions_JSON" in fields
+
+    def test_zero_in_extra_keys_is_kept(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん", Gifts_JSON="[]")])
+        _act(anki, 1, action="add_item", field="Gifts_JSON", item={"item": "鳳梨酥", "count": 0, "flag": False})
+        assert _list(anki, 1, "Gifts_JSON") == [{"item": "鳳梨酥", "direction": "given", "count": 0}]
+
     def test_declared_actions(self):
         assert set(PersonProfileHandler.CAPABILITIES.actions) == {
             "add_interaction", "add_followup", "set_followup_status", "add_item", "remove_item", "set_photo",

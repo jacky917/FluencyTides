@@ -24,7 +24,7 @@ from app.core.dependencies import get_template_engine
 from app.core.exceptions import LLMGenerationError
 from app.infrastructure.llm.routing import route
 from app.schemas.llm.person_profile import LLMPersonIngestResult
-from app.schemas.person_profile import Followup, Interaction, PersonCreateParams
+from app.schemas.person_profile import Followup, Interaction, PersonCreateParams, append_field_html
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +32,12 @@ INGEST_ROUTE = route("person_profile", "人脈卡：整理一段話", capabiliti
 
 WEEKDAYS = "一二三四五六日"
 
-#: LLM 可以建議更新的欄位：一般欄位，稱呼與聯絡日由使用者或系統維護。Fields the LLM may suggest.
+#: LLM 可以建議更新的欄位：一般欄位。稱呼與聯絡日由使用者或系統維護；介紹人是另一筆筆記的 ID，LLM 無從得知。
+#: Fields the LLM may suggest.
 UPDATABLE_FIELDS: tuple[str, ...] = tuple(
-    name for name in PersonCreateParams.model_fields if name not in ("Display_Name", "Last_Contact", "Contact_Cadence")
+    name
+    for name in PersonCreateParams.model_fields
+    if name not in ("Display_Name", "Last_Contact", "Contact_Cadence", "Introducer_Note_ID")
 )
 
 _BREAK = re.compile(r"<\s*(br|/div|/p|/li)\s*/?\s*>", re.IGNORECASE)
@@ -195,9 +198,7 @@ def proposals_from(result: LLMPersonIngestResult, fields: dict[str, str], today:
     return proposals
 
 
-def field_html(current: str, value: str, mode: str) -> str:
-    """欄位建議要寫入的 HTML（接在後面時以換行分隔）。The field HTML to write."""
+def field_html(field: str, current: str, value: str, mode: str) -> str:
+    """欄位建議要寫入的 HTML（接在後面的分隔見 :func:`append_field_html`）。The field HTML to write."""
     new = html.escape(value.strip()).replace("\n", "<br>")
-    if mode == "append" and current.strip():
-        return f"{current}<br>{new}"
-    return new
+    return append_field_html(field, current, new) if mode == "append" else new

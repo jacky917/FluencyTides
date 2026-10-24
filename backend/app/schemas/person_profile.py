@@ -13,6 +13,7 @@ models keep unknown keys.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -153,6 +154,28 @@ class Contact(_Item):
     channel: str = Field(min_length=1, title="管道", description="例如 LINE、Email")
     handle: str = Field(min_length=1, title="帳號")
     preferred: bool = Field(False, title="偏好")
+
+
+#: 卡片背面把逗號、頓號分隔的內容顯示成標籤的欄位（模板的 ``chips``）。Fields shown as tags on the card.
+CHIP_FIELDS = ("Interests", "Food_Drink")
+
+# 與模板 chips() 的判斷相同：含這些標籤時視為一段文字，不顯示成標籤
+_BLOCK_HTML = re.compile(r"<(ul|ol|li|div|br|p)\b", re.IGNORECASE)
+
+
+def append_field_html(field: str, current: str, addition: str) -> str:
+    """把新的內容（已轉義的 HTML）接在欄位原本的內容後面。
+
+    Append (escaped) HTML to a field's current content.
+
+    一般欄位以換行（``<br>``）分隔；顯示成標籤的欄位（:data:`CHIP_FIELDS`）在原本還是短項目時改用「、」，
+    換行會讓卡片背面的標籤變成一段文字。
+    """
+    if not current.strip():
+        return addition
+    if field in CHIP_FIELDS and not _BLOCK_HTML.search(current):
+        return f"{current.rstrip(' 、,，')}、{addition.replace('<br>', '、')}"
+    return f"{current}<br>{addition}"
 
 
 #: 指紋用的鍵：每種項目的主要文字欄位（與模板 itemFingerprint 相同）。Keys the fingerprint reads.

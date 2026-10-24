@@ -198,6 +198,16 @@ def _press(data: str, state, note_service, card_service):
 
 
 class TestAddFlow:
+    def test_stale_choice_keeps_the_buttons(self):
+        """失效的選項按鈕：說明失效，但不拿掉這一步的按鈕，也不離開這一步。"""
+        state, note_service, card_service = _fsm(), _note_service(), _card_service()
+        message, _ = _message()
+        _run(person_profile.start_add(message, state, 5, "Followups_JSON"))
+        query = _press("pp:ch:9", state, note_service, card_service)
+        assert "按鈕已失效" in _sent(query.message.answer)[0]
+        query.message.edit_reply_markup.assert_not_awaited()
+        assert _run(state.get_state()) == PersonStates.add_step.state
+
     def test_add_followup(self):
         state, note_service, card_service = _fsm(), _note_service(), _card_service()
         message, _ = _message()
@@ -274,19 +284,49 @@ class TestEditFlow:
         _run(person_profile.process_edit_value(typed, state, note_service, card_service))
         assert _run(state.get_state()) == PersonStates.edit_mode.state
         _press("pp:em:a", state, note_service, card_service)
-        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Interests": "登山<br>精釀啤酒"})
+        # 興趣在卡片上顯示成標籤：接在後面用「、」
+        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Interests": "登山、精釀啤酒"})
+
+    def test_append_to_plain_text_section(self):
+        state, note_service, card_service = self._start("Notes", "第一次見面很緊張")
+        typed, _ = _message("其實很健談")
+        _run(person_profile.process_edit_value(typed, state, note_service, card_service))
+        _press("pp:em:a", state, note_service, card_service)
+        note_service.update_fields.assert_awaited_once_with(
+            "person_profile", 5, {"Notes": "第一次見面很緊張<br>其實很健談"}
+        )
 
 
 class TestSummaryAndCreate:
     def test_summary_backfills_missing_ids(self):
         card_service = _card_service(_note(Card_ID="", TG_Bot=""))
+        card_service.anki_client.sync = mock.AsyncMock()
         message, _ = _message()
         with mock.patch.object(person_profile.settings, "TG_BOT_USERNAME", "@FluencyBot"):
             _run(person_profile.send_summary(message, card_service, 5))
         (call,) = card_service.update_note_fields.await_args_list
         changes = call.args[1]
         assert changes["Card_ID"].startswith("PP_") and changes["TG_Bot"] == "FluencyBot"
+        # 補上的 ID 要同步到 AnkiWeb，手機上的卡面才有 TG 按鈕
+        card_service.anki_client.sync.assert_awaited_once()
         _assert_tg_html(_sent(message.answer)[0])
+
+    def test_summary_with_ids_does_not_sync(self):
+        card_service = _card_service()
+        card_service.anki_client.sync = mock.AsyncMock()
+        message, _ = _message()
+        _run(person_profile.send_summary(message, card_service, 5))
+        card_service.update_note_fields.assert_not_awaited()
+        card_service.anki_client.sync.assert_not_awaited()
+
+    def test_backfill_survives_sync_failure(self):
+        from app.infrastructure.anki.client import AnkiConnectError
+
+        card_service = _card_service(_note(Card_ID=""))
+        card_service.anki_client.sync = mock.AsyncMock(side_effect=AnkiConnectError("offline"))
+        message, _ = _message()
+        _run(person_profile.send_summary(message, card_service, 5))
+        assert "田中さん" in _sent(message.answer)[0]
 
     def test_create_from_search_miss(self):
         state, note_service, card_service = _fsm(), _note_service(), _card_service()

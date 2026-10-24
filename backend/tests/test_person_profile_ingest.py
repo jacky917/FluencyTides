@@ -84,9 +84,19 @@ class TestProposals:
         assert fields_proposed == [{"field": "Title", "value": "部長", "mode": "replace", "reason": ""}]
 
     def test_field_html(self):
-        assert ingest.field_html("攝影", "登山 & <露營>", "append") == "攝影<br>登山 &amp; &lt;露營&gt;"
-        assert ingest.field_html("", "登山", "append") == "登山"
-        assert ingest.field_html("A 社", "B 社\n新創", "replace") == "B 社<br>新創"
+        assert ingest.field_html("Notes", "攝影", "登山 & <露營>", "append") == "攝影<br>登山 &amp; &lt;露營&gt;"
+        assert ingest.field_html("Notes", "", "登山", "append") == "登山"
+        assert ingest.field_html("Company", "A 社", "B 社\n新創", "replace") == "B 社<br>新創"
+
+    def test_tag_fields_are_joined_with_commas(self):
+        """興趣、飲食在卡片上顯示成標籤：接在後面用「、」，換行會讓標籤變成一段文字。"""
+        assert ingest.field_html("Interests", "攝影, 精釀啤酒、", "登山\n露營", "append") == "攝影, 精釀啤酒、登山、露營"
+        # 原本已經是一段文字（含換行）時照常換行
+        assert ingest.field_html("Interests", "攝影<br>精釀啤酒", "登山", "append") == "攝影<br>精釀啤酒<br>登山"
+
+    def test_introducer_is_not_suggested(self):
+        """介紹人是另一筆筆記的 ID，LLM 無從得知。"""
+        assert "Introducer_Note_ID" not in ingest.UPDATABLE_FIELDS
 
 
 class TestPrompt:
@@ -182,7 +192,7 @@ class TestIngestFlow:
             ("add_interaction", {"item": {"date": "2026-10-23", "topics": "轉職、京都", "updates": "下個月考 N1", "place": "中野"}}),
             ("add_followup", {"item": {"item": "介紹 Ken 給他", "type": "my_promise"}}),
         ]
-        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Interests": "攝影<br>登山"})
+        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Interests": "攝影、登山"})
         assert _run(state.get_state()) is None
 
     def test_two_appends_to_one_field_are_combined(self):
@@ -194,7 +204,7 @@ class TestIngestFlow:
         ])
         _ingested(state, card_service, result)
         _press("pp:igsave", state, note_service, card_service)
-        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Interests": "攝影<br>登山<br>露營"})
+        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Interests": "攝影、登山、露營"})
 
     def test_save_with_nothing_picked(self):
         state, note_service = _fsm(), _note_service()

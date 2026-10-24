@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, Loader2, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -64,14 +64,18 @@ export function JsonFieldEditor({
   const [errors, setErrors] = useState<Map<number, Map<string, string>>>(new Map())
   const [conflict, setConflict] = useState(false)
 
-  // 讀到新的版本（重新載入、別處寫入後重新整理）時換成新的內容
-  useEffect(() => {
+  // 回到讀取時的內容。重新載入時若伺服器的資料沒變，react-query 會沿用同一個物件、下面的 effect 不會再跑，
+  // 所以「放棄修改」要自己呼叫它，不能只靠重新載入
+  const resetToState = useCallback(() => {
     setItems(asRecords(state.items))
     setVersion(state.version)
     setDirty(false)
     setErrors(new Map())
     setConflict(false)
   }, [state.items, state.version])
+
+  // 讀到新的版本（重新載入、別處寫入後重新整理）時換成新的內容
+  useEffect(resetToState, [resetToState])
 
   useEffect(() => onDirtyChange?.(field, dirty), [field, dirty, onDirtyChange])
 
@@ -201,7 +205,7 @@ export function JsonFieldEditor({
 
       {editable && dirty && (
         <div className="flex justify-end gap-2">
-          <Button size="sm" variant="outline" onClick={onReload} disabled={save.isPending}>
+          <Button size="sm" variant="outline" onClick={resetToState} disabled={save.isPending}>
             放棄修改
           </Button>
           <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>

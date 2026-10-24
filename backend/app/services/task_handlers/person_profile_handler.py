@@ -235,53 +235,53 @@ class PersonProfileHandler(BaseHandler):
             HandlerOperationUnsupportedError: 不認得的動作。An unknown action.
         """
         action = parameters.get("action")
+        # 每個具名動作讀一次、寫一次：清單、Last_Contact、Updated_At 在同一次寫入，不會只寫了一半
         if action == "update_fields":
             await self._update_fields(card_service, relation_service, note_id, parameters)
         elif action == "add_interaction":
             params = _parse(_AddInteraction, parameters)
             item = _validate_item("Interactions_JSON", params.item)
-            await AnkiJsonFieldManager.append_to_list(card_service, note_id, "Interactions_JSON", item)
-            await self._bump_last_contact(card_service, note_id, str(item["date"]))
-            await self._touch(card_service, note_id)
+            values = await _read(card_service, note_id)
+            items = _list(values, "Interactions_JSON") + [item]
+            changes = {"Interactions_JSON": AnkiJsonFieldManager.serialize(items)}
+            changes.update(_last_contact(values, str(item["date"])))
+            await _write(card_service, note_id, changes)
         elif action == "add_followup":
             params = _parse(_AddFollowup, parameters)
             item = _validate_item("Followups_JSON", {"added": today_iso(), **params.item})
-            await AnkiJsonFieldManager.append_to_list(card_service, note_id, "Followups_JSON", item)
-            await self._touch(card_service, note_id)
+            items = _list(await _read(card_service, note_id), "Followups_JSON") + [item]
+            await _write(card_service, note_id, {"Followups_JSON": AnkiJsonFieldManager.serialize(items)})
         elif action == "set_followup_status":
             params = _parse(_SetFollowupStatus, parameters)
             if params.status not in ("open", "done"):
                 raise InvalidNoteFieldsError(f"待追蹤的狀態只能是 open 或 done：{params.status}")
-            items = await AnkiJsonFieldManager.safe_read_list(card_service, note_id, "Followups_JSON")
+            items = _list(await _read(card_service, note_id), "Followups_JSON")
             index = resolve_index(items, params.index, params.fingerprint)
             if not isinstance(items[index], dict):
                 raise InvalidNoteFieldsError("這一筆待追蹤的格式不對，請在網頁或 Anki 修正。")
             items[index]["status"] = params.status
-            await AnkiJsonFieldManager.update_field(card_service, note_id, "Followups_JSON", items)
-            await self._touch(card_service, note_id)
+            await _write(card_service, note_id, {"Followups_JSON": AnkiJsonFieldManager.serialize(items)})
         elif action == "add_item":
             params = _parse(_AddItem, parameters)
             if params.field not in GENERIC_LISTS:
                 raise InvalidNoteFieldsError(f"add_item 不能新增到 {params.field}")
             item = _validate_item(params.field, params.item)
-            await AnkiJsonFieldManager.append_to_list(card_service, note_id, params.field, item)
-            await self._touch(card_service, note_id)
+            items = _list(await _read(card_service, note_id), params.field) + [item]
+            await _write(card_service, note_id, {params.field: AnkiJsonFieldManager.serialize(items)})
         elif action == "remove_item":
             params = _parse(_RemoveItem, parameters)
             if params.field not in self.JSON_FIELDS:
                 raise InvalidNoteFieldsError(f"{params.field} 不是人脈卡的清單")
-            items = await AnkiJsonFieldManager.safe_read_list(card_service, note_id, params.field)
+            items = _list(await _read(card_service, note_id), params.field)
             index = resolve_index(items, params.index, params.fingerprint)
             items.pop(index)
-            await AnkiJsonFieldManager.update_field(card_service, note_id, params.field, items)
-            await self._touch(card_service, note_id)
+            await _write(card_service, note_id, {params.field: AnkiJsonFieldManager.serialize(items)})
         elif action == "set_photo":
             params = _parse(_SetPhoto, parameters)
             if params.filename and not _MEDIA_NAME.fullmatch(params.filename):
                 raise InvalidNoteFieldsError(f"照片檔名不合法：{params.filename}")
             photo = f'<img src="{html.escape(params.filename)}">' if params.filename else ""
-            await card_service.update_note_fields(note_id, {"Photo": photo}, model_name=PERSON_NOTE_TYPE)
-            await self._touch(card_service, note_id)
+            await _write(card_service, note_id, {"Photo": photo})
         else:
             await super().execute_update(card_service, relation_service, note_id, parameters)
 
@@ -293,11 +293,12 @@ class PersonProfileHandler(BaseHandler):
 
         After the web writes a whole field: move ``Last_Contact`` forward and stamp ``Updated_At``.
         """
+        changes: dict[str, str] = {}
         if field_name == "Interactions_JSON":
             dates = [str(item.get("date", "")) for item in items if isinstance(item, dict)]
             if dates:
-                await self._bump_last_contact(card_service, note_id, max(dates))
-        await self._touch(card_service, note_id)
+                changes.update(_last_contact(await _read(card_service, note_id), max(dates)))
+        await _write(card_service, note_id, changes)
 
     async def _update_fields(
         self,
@@ -320,19 +321,33 @@ class PersonProfileHandler(BaseHandler):
             changed = any(field_text(value) != current.get(name) for name, value in fields.items())
         await super().execute_update(card_service, relation_service, note_id, parameters)
         if changed and isinstance(fields, dict) and "Updated_At" not in fields:
-            await self._touch(card_service, note_id)
+            await _write(card_service, note_id, {})
 
-    async def _bump_last_contact(self, card_service: CardService, note_id: int, contact_date: str) -> None:
-        """互動的日期比 ``Last_Contact`` 新時更新它。Move ``Last_Contact`` forward."""
-        current = note_field_values(await card_service.get_note(note_id)).get("Last_Contact", "").strip()
-        if contact_date > current:
-            await card_service.update_note_fields(
-                note_id, {"Last_Contact": contact_date}, model_name=PERSON_NOTE_TYPE
-            )
 
-    async def _touch(self, card_service: CardService, note_id: int) -> None:
-        """寫入今天的 ``Updated_At``。Stamp today's date into ``Updated_At``."""
-        await card_service.update_note_fields(note_id, {"Updated_At": today_iso()}, model_name=PERSON_NOTE_TYPE)
+async def _read(card_service: CardService, note_id: int) -> dict[str, str]:
+    """讀出筆記的欄位原始值。The note's raw field values."""
+    return note_field_values(await card_service.get_note(note_id))
+
+
+def _list(values: dict[str, str], field: str) -> list[object]:
+    """解析一個 JSON 清單欄位。Parse one JSON list field.
+
+    Raises:
+        AnkiFieldCorruptedError: 欄位格式壞了（不覆寫，免得蓋掉原本的資料）。When the field is broken.
+    """
+    return AnkiJsonFieldManager.parse_field_string(values.get(field, ""))
+
+
+def _last_contact(values: dict[str, str], contact_date: str) -> dict[str, str]:
+    """互動的日期比 ``Last_Contact`` 新時要寫入的變更。The change moving ``Last_Contact`` forward."""
+    return {"Last_Contact": contact_date} if contact_date > values.get("Last_Contact", "").strip() else {}
+
+
+async def _write(card_service: CardService, note_id: int, changes: dict[str, str]) -> None:
+    """一次寫入這些欄位，並附上今天的 ``Updated_At``。Write the changes plus today's ``Updated_At`` at once."""
+    await card_service.update_note_fields(
+        note_id, {**changes, "Updated_At": today_iso()}, model_name=PERSON_NOTE_TYPE
+    )
 
 
 _Params = TypeVar("_Params", bound=_ActionParams)
@@ -366,7 +381,8 @@ def _validate_item(field: str, item: dict[str, object]) -> dict[str, object]:
     data = validated.model_dump()
     # 選填的空字串、None、False 不存（卡片也不顯示），清單比較乾淨；必要的鍵與種類、狀態、方向一律保留
     keep = {name for name, info in model.model_fields.items() if info.is_required()} | {"type", "status", "direction"}
-    return {key: value for key, value in data.items() if key in keep or value not in ("", None, False)}
+    # 用 is False 比對：0 == False，用 in 會把數值 0 當成空值丟掉
+    return {key: value for key, value in data.items() if key in keep or not (value in ("", None) or value is False)}
 
 
 def _first_error(error: ValidationError) -> str:

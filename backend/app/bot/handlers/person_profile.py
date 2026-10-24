@@ -49,11 +49,17 @@ from app.core.template_engine import TemplateEngineError
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.anki import AnkiStoreMediaParams
-from app.schemas.person_profile import PERSON_JSON_ITEMS, PERSON_NOTE_TYPE, PersonCreateParams, item_fingerprint
+from app.schemas.person_profile import (
+    PERSON_JSON_ITEMS,
+    PERSON_NOTE_TYPE,
+    PersonCreateParams,
+    append_field_html,
+    item_fingerprint,
+)
 from app.schemas.tg.deep_link import PersonLinkAction
 from app.services import person_profile_ingest as ingest_service
 from app.services.card_service import CardService
-from app.services.note_service import NoteService
+from app.services.note_service import NoteService, sync_warning
 from app.services.task_handlers.base import note_field_values
 from app.services.task_handlers.person_profile_handler import new_card_id
 
@@ -129,6 +135,10 @@ async def _ensure_ids(card_service: CardService, note_id: int, fields: dict[str,
     if changes:
         await card_service.update_note_fields(note_id, changes, model_name=PERSON_NOTE_TYPE)
         fields.update(changes)
+        # 同步後手機上的卡面才有 Card_ID，TG 按鈕與長按刪除才能用；同步失敗不擋摘要，下次寫入時會再同步
+        warning = await sync_warning(card_service.anki_client)
+        if warning:
+            logger.warning("人脈卡補上 Card_ID 後同步失敗（note %s）: %s", note_id, warning)
 
 
 def summary_keyboard(note_id: int) -> InlineKeyboardMarkup:
@@ -613,17 +623,19 @@ async def _answer_step_button(
         return
     data = await state.get_data()
     step = view.ADD_STEPS[data["field"]][data["step"]]
-    await message.edit_reply_markup(reply_markup=None)
+    # 先解析按鈕，確定有效才拿掉按鈕：失效的按鈕不該讓這一步的其他按鈕跟著消失
     if parts[1] == "skip":
-        await _store_answer(message, state, None)
-        return
-    choice = _arg(parts, 2)
-    if choice.startswith("t"):
-        if not choice[1:].isdigit():
-            raise _StaleButton
-        await _store_answer(message, state, view.today_choice(_today(), int(choice[1:])))
+        answer = None
     else:
-        await _store_answer(message, state, step.choices[_index_arg(parts, 2, len(step.choices))][0])
+        choice = _arg(parts, 2)
+        if choice.startswith("t"):
+            if not choice[1:].isdigit():
+                raise _StaleButton
+            answer = view.today_choice(_today(), int(choice[1:]))
+        else:
+            answer = step.choices[_index_arg(parts, 2, len(step.choices))][0]
+    await message.edit_reply_markup(reply_markup=None)
+    await _store_answer(message, state, answer)
 
 
 async def _save_item(
@@ -740,7 +752,7 @@ async def _finish_edit(
     if append:
         loaded = await _load(card_service, note_id)
         current = loaded[0].get(field_name, "") if loaded else ""
-        new_value = f"{current}<br>{new_value}" if current.strip() else new_value
+        new_value = append_field_html(field_name, current, new_value)
     result = await note_service.update_fields(HANDLER_NAME, note_id, {field_name: new_value})
     await send_summary(message, card_service, note_id,
                        prefix=f"✅ 已更新「{escape_tg(view.field_title(field_name))}」。" +
@@ -1011,7 +1023,7 @@ async def _save_proposals(
                 update = proposals[i]["data"]
                 name = str(update["field"])
                 changes[name] = ingest_service.field_html(
-                    changes.get(name, current.get(name, "")), str(update["value"]), str(update["mode"])
+                    name, changes.get(name, current.get(name, "")), str(update["value"]), str(update["mode"])
                 )
             result = await note_service.update_fields(HANDLER_NAME, note_id, changes)
             saved.update(field_indexes)
