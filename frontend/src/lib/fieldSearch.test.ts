@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { HandlerInfo } from '../types/api'
+import type { HandlerInfo, Operation } from '../types/api'
 import {
   ANY_FIELD,
   EMPTY_FIELD_SEARCH,
@@ -13,10 +13,10 @@ import {
   setConditionValue,
 } from './fieldSearch'
 
-const open = { supported: true, reason: null }
-const closed = { supported: false, reason: '尚未開放' }
+const open: Operation = { supported: true, reason: null }
+const closed: Operation = { supported: false, reason: '尚未開放' }
 
-function handler(name: string, search: typeof open | undefined, fields = [{ key: 'relationship', title: '關係' }]) {
+function handler(name: string, search: Operation | undefined, fields = [{ key: 'relationship', title: '關係' }]) {
   return {
     name,
     title: name,
