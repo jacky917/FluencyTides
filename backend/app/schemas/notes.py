@@ -48,6 +48,7 @@ class CapabilitiesOut(BaseModel):
     delete: OperationOut
     actions: list[str]
     graph: GraphCapabilityOut
+    search: OperationOut = Field(description="網頁卡片頁的欄位搜尋（欄位按鈕見 search_fields）")
 
 
 class HandlerInfo(BaseModel):
@@ -65,6 +66,16 @@ class HandlerInfo(BaseModel):
         default_factory=dict, description="能以表單編輯的 JSON 欄位：標題與每一筆的 JSON Schema"
     )
     media_fields: list[str] = Field(description="媒體欄位：同上")
+    search_fields: list["SearchFieldOut"] = Field(
+        default_factory=list, description="欄位搜尋的欄位按鈕；不開放時為空（另有鍵 * 表示任何欄位）"
+    )
+
+
+class SearchFieldOut(BaseModel):
+    """欄位搜尋的一個欄位按鈕。One field-search button."""
+
+    key: str
+    title: str
 
 
 class JsonFieldSpecOut(BaseModel):
@@ -203,5 +214,24 @@ class UpdateJsonResponse(JsonFieldState):
     sync_warning: str | None = Field(description="寫入後同步 AnkiWeb 失敗時的提醒；資料仍已寫入")
 
 
-# json_field_specs 用到後面才定義的 JsonFieldSpecOut
+class SearchCondition(BaseModel):
+    """一個搜尋條件：欄位按鈕的鍵與關鍵字。One condition."""
+
+    field: str = Field(max_length=64, description="欄位按鈕的鍵；* 表示任何欄位")
+    value: str = Field(max_length=200, description="關鍵字（照字面比對、部分符合）")
+
+
+class SearchQueryRequest(BaseModel):
+    """欄位搜尋的條件（條件之間是「且」）。The conditions, ANDed."""
+
+    conditions: list[SearchCondition] = Field(default_factory=list, max_length=20)
+
+
+class SearchQueryResponse(BaseModel):
+    """組好的 Anki 查詢。The Anki query."""
+
+    query: str = Field(description="交給卡片清單搜尋的 Anki 查詢")
+
+
+# json_field_specs、search_fields 用到後面才定義的模型
 HandlerInfo.model_rebuild()

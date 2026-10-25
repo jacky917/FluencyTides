@@ -124,6 +124,9 @@ class HandlerCapabilities:
     update_json: Operation = field(default_factory=Operation)
     delete: Operation = field(default_factory=Operation)
     actions: tuple[str, ...] = ()
+    #: 網頁卡片頁的欄位搜尋（點欄位、輸入關鍵字）；可搜尋的欄位見 ``BaseHandler.search_fields``。
+    #: Field search on the web card page.
+    search: Operation = field(default_factory=Operation)
     graph: GraphCapability = field(default_factory=GraphCapability)
 
     def to_dict(self) -> dict[str, object]:
@@ -164,6 +167,23 @@ class JsonFieldSpec:
 
     item: type[BaseModel]
     title: str
+
+
+@dataclass(frozen=True)
+class SearchField:
+    """網頁欄位搜尋的一個欄位按鈕：搜尋時比對哪些 Anki 欄位（任一個包含關鍵字就算）。
+
+    One field button of the web field search: the Anki fields it matches (any of them).
+
+    Attributes:
+        key: API 用的鍵（英數字；``*`` 保留給「全部欄位」）。The API key.
+        title: 按鈕上的名稱。The button label.
+        fields: 比對的 Anki 欄位（多個時任一個包含即可，例如「名字」比對各語言的姓名）。The Anki fields.
+    """
+
+    key: str
+    title: str
+    fields: tuple[str, ...]
 
 
 @dataclass(frozen=True)

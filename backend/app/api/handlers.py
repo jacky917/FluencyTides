@@ -8,6 +8,7 @@ Task handlers REST API router module.
 - ``GET    /handlers/{name}/notes/{note_id}``        handler 讀取
 - ``PATCH  /handlers/{name}/notes/{note_id}``        修改欄位
 - ``PUT    /handlers/{name}/notes/{note_id}/json/{field}``  整欄寫入 JSON 欄位（json_field_editor 計畫）
+- ``POST   /handlers/{name}/search-query``           欄位搜尋組成 Anki 查詢
 - ``DELETE /handlers/{name}/notes/{note_id}``        刪除
 - ``GET    /handlers/{name}/graph``                  圖譜
 
@@ -33,6 +34,8 @@ from app.schemas.notes import (
     GraphResponse,
     HandlerInfo,
     NoteDetail,
+    SearchQueryRequest,
+    SearchQueryResponse,
     UpdateJsonRequest,
     UpdateJsonResponse,
     UpdateNoteRequest,
@@ -163,6 +166,23 @@ async def update_json_field(
             for error in exc.errors(include_url=False, include_context=False)
         ]
         raise RequestValidationError(errors) from exc
+
+
+@router.post(
+    "/{handler_name}/search-query",
+    response_model=SearchQueryResponse,
+    summary="欄位搜尋組成 Anki 查詢",
+    description="把「欄位按鈕＋關鍵字」的條件（條件之間是「且」）組成 Anki 查詢；不開放欄位搜尋時回 400，不能搜尋的欄位回 422。",
+    responses={**_REFUSED},
+)
+async def build_search_query(
+    handler_name: str,
+    body: SearchQueryRequest,
+    note_service: NoteService = Depends(get_note_service),
+) -> dict[str, object]:
+    """欄位搜尋組成 Anki 查詢（不碰 Anki）。Build the Anki query; Anki is not touched."""
+    query = note_service.search_query(handler_name, [(c.field, c.value) for c in body.conditions])
+    return {"query": query}
 
 
 @router.delete(

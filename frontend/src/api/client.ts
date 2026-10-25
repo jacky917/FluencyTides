@@ -22,6 +22,7 @@ import type {
   GenericNoteDetail,
   HandlerInfo,
   NoteDetail,
+  SearchCondition,
   UpdateJsonResponse,
   UpdateNoteResponse,
   CapabilityRoute,
@@ -157,6 +158,16 @@ export const FluencyTidesAPI = {
       `/handlers/${encodeURIComponent(handlerName)}/notes/${noteId}/json/${encodeURIComponent(field)}`,
       { items, version },
     ),
+
+  /**
+   * 欄位搜尋：把「欄位按鈕＋關鍵字」的條件（條件之間是「且」）組成 Anki 查詢，交給卡片清單搜尋。
+   * Builds an Anki query from field-search conditions (ANDed).
+   * @param handlerName - handler 名稱。Handler name.
+   * @param conditions - 條件。The conditions.
+   * @returns 組好的 Anki 查詢。The Anki query.
+   */
+  buildSearchQuery: (handlerName: string, conditions: SearchCondition[]): Promise<{ query: string }> =>
+    apiClient.post(`/handlers/${encodeURIComponent(handlerName)}/search-query`, { conditions }),
 
   /**
    * 刪除筆記與它的關聯。

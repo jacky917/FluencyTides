@@ -46,6 +46,24 @@ export interface HandlerCapabilities {
   delete: Operation;
   actions: string[];
   graph: GraphCapability;
+  /** 卡片頁的欄位搜尋（欄位按鈕見 `search_fields`）。Field search on the card page. */
+  search?: Operation;
+}
+
+/** 欄位搜尋的一個欄位按鈕。One field-search button. */
+export interface SearchField {
+  /** API 用的鍵；`*` 保留給「全部欄位」。The API key. */
+  key: string;
+  /** 按鈕上的名稱。The label. */
+  title: string;
+}
+
+/** 欄位搜尋的一個條件。One field-search condition. */
+export interface SearchCondition {
+  /** 欄位按鈕的鍵；`*` 表示任何欄位。The button key, or `*`. */
+  field: string;
+  /** 關鍵字（部分符合）。The keyword. */
+  value: string;
 }
 
 /** `GET /handlers` 的一項。One handler. */
@@ -64,6 +82,8 @@ export interface HandlerInfo {
   json_field_specs?: Record<string, JsonFieldSpec>;
   /** 媒體欄位：同上。Media fields, read-only. */
   media_fields: string[];
+  /** 欄位搜尋的欄位按鈕；不開放時為空。The field-search buttons. */
+  search_fields?: SearchField[];
 }
 
 // ============================================================================

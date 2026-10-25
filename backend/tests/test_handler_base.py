@@ -199,6 +199,7 @@ class TestCapabilityShapes:
             "delete": {"supported": False, "reason": "尚未開放"},
             "actions": [],
             "graph": {"supported": False, "links": False, "reason": "尚未開放"},
+            "search": {"supported": False, "reason": "尚未開放"},
         }
 
 

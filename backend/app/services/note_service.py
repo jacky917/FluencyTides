@@ -14,6 +14,7 @@ validation, note-ownership checks and the sync after writes.
 from __future__ import annotations
 
 import hashlib
+import html
 import logging
 from functools import cache
 from typing import TYPE_CHECKING, Annotated
@@ -25,12 +26,14 @@ from app.core.exceptions import (
     AnkiFieldCorruptedError,
     FieldNotEditableError,
     HandlerOperationUnsupportedError,
+    InvalidNoteFieldsError,
     JsonFieldConflictError,
     NoteNotOwnedByHandlerError,
     NoteTypeNotCreatableError,
 )
 from app.infrastructure.anki.client import AnkiConnectError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
+from app.infrastructure.anki.search import contains_term, note_types_query
 from app.services.task_handlers.base import note_detail, note_field_values
 from app.services.task_handlers.registry import handler_registry
 
@@ -118,6 +121,9 @@ class NoteService:
                 "json_fields": list(handler.JSON_FIELDS),
                 "json_field_specs": json_field_specs(handler),
                 "media_fields": list(handler.MEDIA_FIELDS),
+                "search_fields": [
+                    {"key": f.key, "title": f.title} for f in handler.search_fields()
+                ] if handler.CAPABILITIES.search.supported else [],
             })
         return result
 
@@ -318,6 +324,44 @@ class NoteService:
         sync_warning = await self.sync_after_write()
         current = note_field_values(await self.card_service.get_note(note_id)).get(field_name, "")
         return {**json_field_state(current), "sync_warning": sync_warning}
+
+    def search_query(self, handler_name: str, conditions: list[tuple[str, str]]) -> str:
+        """網頁欄位搜尋：把「欄位按鈕＋關鍵字」的條件組成 Anki 查詢（條件之間是「且」）。
+
+        Turn field-search conditions into an Anki query; conditions are ANDed.
+
+        - 限定這個 handler 負責的筆記類型。
+        - 每個條件比對欄位按鈕對應的 Anki 欄位，任一個「包含」關鍵字就算；鍵 ``*`` 表示任何欄位。
+        - 關鍵字照字面比對（萬用字元等會被跳脫）；含 ``&``、``<`` 等時也比對 HTML 轉義後的寫法
+          （JSON 欄位與 Anki 編輯器存的是轉義後的文字）。空白的關鍵字略過。
+
+        Args:
+            handler_name: handler 名稱。The handler.
+            conditions: ``(欄位按鈕的鍵, 關鍵字)``。``(button key, keyword)`` pairs.
+
+        Returns:
+            Anki 查詢，交給卡片清單的搜尋。The Anki query.
+
+        Raises:
+            HandlerNotFoundError: handler 不存在。Unknown handler.
+            HandlerOperationUnsupportedError: 不開放欄位搜尋。Search not offered.
+            InvalidNoteFieldsError: 不能搜尋的欄位鍵。An unknown button key.
+        """
+        handler = self.registry.get_handler(handler_name)
+        _require(handler.CAPABILITIES.search)
+        fields = {f.key: f.fields for f in handler.search_fields()}
+        terms = [note_types_query(list(handler.supported_models))]
+        for key, value in conditions:
+            value = value.strip()
+            if not value:
+                continue
+            if key != "*" and key not in fields:
+                raise InvalidNoteFieldsError(f"「{handler.title}」不能搜尋這個欄位：{key}")
+            targets: tuple[str | None, ...] = (None,) if key == "*" else fields[key]
+            variants = dict.fromkeys((value, html.escape(value)))
+            alternatives = [contains_term(field, variant) for field in targets for variant in variants]
+            terms.append(alternatives[0] if len(alternatives) == 1 else "(" + " OR ".join(alternatives) + ")")
+        return " ".join(terms)
 
     async def run_action(self, note_id: int, action: str, params: Mapping[str, object]) -> str | None:
         """具名動作（例如口說卡的 ``add_audio``）：依筆記類型找 handler，不帶 handler 名稱。

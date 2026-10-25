@@ -24,7 +24,7 @@ from app.core.exceptions import (
     InvalidNoteQueryError,
 )
 from app.infrastructure.anki.search import note_types_query
-from app.services.task_handlers.capabilities import GraphSpec, HandlerCapabilities, JsonFieldSpec
+from app.services.task_handlers.capabilities import GraphSpec, HandlerCapabilities, JsonFieldSpec, SearchField
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -61,6 +61,9 @@ class BaseHandler(ABC):
         CREATE_PARAMS: 覆寫建立的 handler 的建立參數模型（D3）；服務層以它驗證參數、產生網頁表單。
             標準建立不用它（參數就是筆記欄位）。The create parameter model of a
             handler overriding ``execute_create``.
+        SEARCH_FIELDS: 網頁欄位搜尋的欄位按鈕（要搭配 ``CAPABILITIES.search``）；不宣告時由
+            :meth:`search_fields` 從 ``CREATE_PARAMS`` 與 ``JSON_FIELD_SPECS`` 自動產生。
+            The web field-search buttons; derived when not declared.
     """
 
     CAPABILITIES: ClassVar[HandlerCapabilities] = HandlerCapabilities()
@@ -71,6 +74,27 @@ class BaseHandler(ABC):
     MEDIA_FIELDS: ClassVar[tuple[str, ...]] = ()
     CREATE_TAGS: ClassVar[tuple[str, ...]] = ("HandlerGenerated",)
     CREATE_PARAMS: ClassVar[type[BaseModel] | None] = None
+    SEARCH_FIELDS: ClassVar[tuple[SearchField, ...]] = ()
+
+    def search_fields(self) -> tuple[SearchField, ...]:
+        """網頁欄位搜尋的欄位按鈕：有宣告 ``SEARCH_FIELDS`` 就用它；否則依建立參數（媒體欄位除外）
+        與能以表單編輯的 JSON 欄位自動產生，一個欄位一顆按鈕。
+
+        The field-search buttons: ``SEARCH_FIELDS`` when declared, otherwise one
+        per create parameter (media excluded) and editable JSON field.
+
+        Returns:
+            欄位按鈕；沒有可用的欄位時為空。The buttons, possibly empty.
+        """
+        if self.SEARCH_FIELDS:
+            return self.SEARCH_FIELDS
+        fields: list[SearchField] = []
+        if self.CREATE_PARAMS is not None:
+            for name, info in self.CREATE_PARAMS.model_fields.items():
+                if name not in self.MEDIA_FIELDS:
+                    fields.append(SearchField(name, info.title or name, (name,)))
+        fields.extend(SearchField(name, spec.title, (name,)) for name, spec in self.JSON_FIELD_SPECS.items())
+        return tuple(fields)
 
     @property
     @abstractmethod

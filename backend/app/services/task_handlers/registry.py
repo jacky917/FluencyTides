@@ -224,6 +224,17 @@ def validate_handler(handler: BaseHandler) -> None:
     if unknown_specs:
         problems.append(f"JSON_FIELD_SPECS 的 {unknown_specs} 不在 JSON_FIELDS 內")
 
+    # 欄位搜尋：開放就要有欄位按鈕；鍵不重複，「*」保留給「全部欄位」
+    if caps.search.supported:
+        search_fields = handler.search_fields()
+        keys = [f.key for f in search_fields]
+        if not search_fields:
+            problems.append("開放 search，但沒有可搜尋的欄位（宣告 SEARCH_FIELDS 或 CREATE_PARAMS）")
+        if len(set(keys)) != len(keys) or "*" in keys:
+            problems.append(f"SEARCH_FIELDS 的鍵重複或用了保留的「*」：{keys}")
+        if any(not f.fields for f in search_fields):
+            problems.append("SEARCH_FIELDS 有欄位按鈕沒有對應的 Anki 欄位")
+
     # 基底的 execute_update 只做 update_fields；具名動作一定要覆寫
     if caps.actions and cls.execute_update is BaseHandler.execute_update:
         problems.append(f"宣告了動作 {list(caps.actions)}，但沒有覆寫 execute_update")

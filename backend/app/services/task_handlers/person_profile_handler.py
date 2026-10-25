@@ -27,7 +27,13 @@ from app.schemas.person_profile import (
 from app.services.card_service import CardService
 from app.services.relation_service import RelationService
 from app.services.task_handlers.base import BaseHandler, field_text, note_field_values
-from app.services.task_handlers.capabilities import CreateCapability, HandlerCapabilities, JsonFieldSpec, Operation
+from app.services.task_handlers.capabilities import (
+    CreateCapability,
+    HandlerCapabilities,
+    JsonFieldSpec,
+    Operation,
+    SearchField,
+)
 from app.services.task_handlers.registry import register_handler
 
 #: 系統維護、不能經 ``update_fields`` 改的欄位：TG 深連結以 ``Card_ID`` 找人，改了就斷線。
@@ -147,12 +153,33 @@ class PersonProfileHandler(BaseHandler):
         update_json=Operation(supported=True),
         delete=Operation(supported=True),
         actions=ACTIONS,
+        search=Operation(supported=True),
     )
     JSON_FIELDS = tuple(PERSON_JSON_ITEMS)
     JSON_FIELD_SPECS = {name: JsonFieldSpec(item=model, title=title) for name, (model, title) in PERSON_JSON_ITEMS.items()}
     MEDIA_FIELDS = ("Photo",)
     CREATE_TAGS = ("PersonProfile", "HandlerGenerated")
     CREATE_PARAMS = PersonCreateParams
+    #: 網頁欄位搜尋的按鈕：名字合併各語言的姓名，相近的欄位放在一起。The field-search buttons.
+    SEARCH_FIELDS = (
+        SearchField("name", "名字", ("Display_Name", "Name_ZH", "Name_EN", "Name_JA", "Name_JA_Kana", "Name_Romaji")),
+        SearchField("relationship", "關係", ("Relationship",)),
+        SearchField("company", "公司", ("Company",)),
+        SearchField("title", "職稱", ("Title",)),
+        SearchField("work", "工作", ("Work_Detail",)),
+        SearchField("interests", "興趣", ("Interests",)),
+        SearchField("food", "飲食", ("Food_Drink", "Dietary")),
+        SearchField("personality", "個性", ("Personality_Values", "First_Impression", "Praise", "Ask_Advice")),
+        SearchField("met", "認識", ("Met_Where", "Met_Via", "Met_Date")),
+        SearchField("place", "出身／現居", ("Hometown", "Residence")),
+        SearchField("interactions", "互動", ("Interactions_JSON",)),
+        SearchField("followups", "待追蹤", ("Followups_JSON",)),
+        SearchField("family", "家人", ("Family_JSON",)),
+        SearchField("gifts", "禮物", ("Gifts_JSON",)),
+        SearchField("dates", "重要日期", ("Key_Dates_JSON",)),
+        SearchField("contacts", "聯絡方式", ("Contacts_JSON",)),
+        SearchField("notes", "備註", ("Notes",)),
+    )
 
     @property
     @override

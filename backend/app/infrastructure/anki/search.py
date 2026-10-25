@@ -53,6 +53,22 @@ def field_term(field: str, value: str) -> str:
     return f'"{field}:{escape_search_value(value)}"'
 
 
+def contains_term(field: str | None, value: str) -> str:
+    """欄位「包含」這個值的條件；``field`` 為 None 時不限欄位（Anki 不指定欄位時本來就是部分比對）。
+
+    A term matching fields that contain the value; any field when ``field`` is None.
+
+    Args:
+        field: 欄位名（不跳脫，由程式提供），None 表示任何欄位。Field name, or None.
+        value: 要照字面比對的值（萬用字元等會被跳脫）。The value.
+
+    Returns:
+        例如 ``"Interactions_JSON:*餐廳*"``、``"餐廳"``。The search term.
+    """
+    escaped = escape_search_value(value)
+    return f'"{field}:*{escaped}*"' if field else f'"{escaped}"'
+
+
 def deck_term(deck: str) -> str:
     """只比對這個牌組（含子牌組）的條件，名稱中的萬用字元照字面比對。
 

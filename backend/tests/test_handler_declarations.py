@@ -69,6 +69,7 @@ class TestInitialCapabilities:
             "delete": {"supported": True, "reason": None},
             "actions": [],
             "graph": {"supported": True, "links": True, "reason": None},
+            "search": {"supported": False, "reason": "尚未開放"},
         }
 
     def test_speaking_coach(self):
@@ -83,6 +84,7 @@ class TestInitialCapabilities:
             "delete": {"supported": False, "reason": "對話卡的刪除尚未開放"},
             "actions": SPEAKING_ACTIONS,
             "graph": {"supported": False, "links": False, "reason": "口說卡沒有知識圖譜"},
+            "search": {"supported": False, "reason": "尚未開放"},
         }
 
     def test_speaking_trilingual(self):
