@@ -2,17 +2,20 @@
  * Card Generator 的預覽流程（`create.flow="preview"`）：以 `draft_schema` 的表單請 LLM 生成草稿 → 預覽、
  * 勾選 → 建立或廢棄（計畫書 `docs/wip/trilingual_web_create_FEAT_2026-10-30.md` §3）。
  *
- * 草稿不存在後端：生成結果只在這個元件裡，建立時把勾選的內容送到一般的建卡端點；廢棄就是丟掉草稿、
- * 回到輸入（輸入的內容保留）。預覽畫面依卡片類型而定，目前只有三語對話卡。
+ * 草稿不存在後端：輸入與草稿（含勾選、修改過的情境）存在這個分頁的 sessionStorage（`useSessionStore`），
+ * 切換頁面、重新整理都還在；生成中離開頁面，結果回來時照樣存下。建立時把勾選的內容送到一般的建卡端點，
+ * 成功後清空；「廢棄」只丟掉草稿、回到輸入；「清除」把輸入與草稿一起清掉。預覽畫面依卡片類型而定，
+ * 目前只有三語對話卡。
  *
  * The preview create flow: draft form → LLM draft → select → create or discard.
  */
 
-import { useId, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Sparkles } from 'lucide-react'
+import { useId, useMemo, useState } from 'react'
+import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Eraser, Loader2, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../../api/client'
+import { useSessionStore, writeSession } from '../../hooks/useSessionStore'
 import { describeApiError, failureTitle, isBackendError } from '../../lib/apiError'
 import { formErrorsFrom, initialValues, missingRequired, schemaFields, type FormErrors } from '../../lib/createForm'
 import {
@@ -60,9 +63,14 @@ export function PreviewCreate({
   const create = handler.capabilities.create
   const { fields } = schemaFields(handler.draft_schema ?? null)
   const fieldNames = fields.map((field) => field.name)
-  const [values, setValues] = useState(() => initialValues(fields))
+  // 輸入與草稿依卡片類型分開存，切換類型再回來也還在
+  const formKey = `generate_form:${handler.name}`
+  const draftKey = `generate_draft:${handler.name}`
+  const [storedValues, setStoredValues] = useSessionStore<Record<string, string>>(formKey, {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const values = useMemo(() => ({ ...initialValues(fields), ...storedValues }), [storedValues])
   const [inputErrors, setInputErrors] = useState<FormErrors | null>(null)
-  const [state, setState] = useState<DraftState | null>(null)
+  const [state, setState] = useSessionStore<DraftState | null>(draftKey, null)
   const [createError, setCreateError] = useState<string | null>(null)
   const [result, setResult] = useState<CreateNoteResponse | null>(null)
 
@@ -70,11 +78,22 @@ export function PreviewCreate({
   const deck = fixedDeck ?? (deckMissing ? null : selectedDeck)
   const ready = handler.draft_schema && create.note_type !== null && PREVIEW_HANDLERS.has(handler.name)
 
+  // 生成中離開再回來時，新的元件看不到原本那次呼叫的 isPending：用 mutationKey 查有沒有還在跑的
+  const draftKeyFilter = { mutationKey: ['draft', handler.name] }
+  const generating = useIsMutating(draftKeyFilter) > 0
   const draftMutation = useMutation({
-    mutationFn: () => FluencyTidesAPI.createDraft(handler.name, values),
+    ...draftKeyFilter,
+    mutationFn: (input: Record<string, string>) => FluencyTidesAPI.createDraft(handler.name, input),
+    // 這裡的回呼在元件卸載後也會執行（TanStack Query v5）：草稿直接寫進 sessionStorage，回到頁面就看得到
     onSuccess: (data) => {
       const draft = readDraft(data.params)
-      setState({ draft, selection: selectAll(draft), prompt: draft.prompt, context: draft.context })
+      writeSession<DraftState>(draftKey, {
+        draft,
+        selection: selectAll(draft),
+        prompt: draft.prompt,
+        context: draft.context,
+      })
+      toast.success('三語草稿已生成', { description: '在 Card Generator 勾選後建立' })
       setInputErrors(null)
       setCreateError(null)
       setResult(null)
@@ -101,9 +120,9 @@ export function PreviewCreate({
       }),
     onSuccess: (data) => {
       setResult(data)
-      setState(null)
+      writeSession(draftKey, null)
+      writeSession(formKey, null)
       setCreateError(null)
-      setValues(initialValues(fields))
       toast.success(`已建立 ${data.note_ids.length} 張筆記`, { description: `牌組：${data.deck}` })
       if (data.sync_warning) toast.warning('同步 AnkiWeb 失敗', { description: data.sync_warning })
       for (const queryKey of [['graph'], ['cards'], ['decks']]) queryClient.invalidateQueries({ queryKey })
@@ -121,7 +140,7 @@ export function PreviewCreate({
     },
   })
 
-  const busy = draftMutation.isPending || createMutation.isPending
+  const busy = generating || createMutation.isPending
   const missing = missingRequired(fields, values)
   const canGenerate = Boolean(ready) && missing.length === 0 && !busy
   const chosen = state ? selectedCount(state.selection) : 0
@@ -129,8 +148,24 @@ export function PreviewCreate({
 
   const handleGenerate = (e: React.FormEvent) => {
     e.preventDefault()
-    if (canGenerate) draftMutation.mutate()
+    if (canGenerate) draftMutation.mutate(values)
   }
+
+  /** 一鍵清除：輸入、草稿與提示一起清掉（生成中仍會在完成時存下草稿）。Clears inputs and the draft. */
+  const clearAll = () => {
+    setState(null)
+    setStoredValues(null)
+    setInputErrors(null)
+    setCreateError(null)
+    setResult(null)
+  }
+  const hasInput = Object.values(storedValues).some((value) => value.trim() !== '') || state !== null
+  const clearButton = (
+    <Button type="button" variant="ghost" disabled={busy || !hasInput} onClick={clearAll}>
+      <Eraser className="mr-2 h-4 w-4" />
+      清除
+    </Button>
+  )
 
   const handleCreate = () => {
     if (state && canCreate) {
@@ -191,6 +226,7 @@ export function PreviewCreate({
           <Button type="button" variant="outline" disabled={createMutation.isPending} onClick={() => setState(null)}>
             廢棄
           </Button>
+          {clearButton}
         </div>
         {createMutation.isPending && (
           <p role="status" className="text-xs text-muted-foreground">
@@ -203,7 +239,7 @@ export function PreviewCreate({
   }
 
   return (
-    <form onSubmit={handleGenerate} className="space-y-4" aria-busy={draftMutation.isPending}>
+    <form onSubmit={handleGenerate} className="space-y-4" aria-busy={generating}>
       {deckSummary}
       {fields.map((field) => (
         <SchemaFieldInput
@@ -212,24 +248,23 @@ export function PreviewCreate({
           field={field}
           value={values[field.name] ?? ''}
           error={inputErrors?.fields[field.name]}
-          disabled={draftMutation.isPending}
-          onChange={(value) => setValues((prev) => ({ ...prev, [field.name]: value }))}
+          disabled={generating}
+          onChange={(value) => setStoredValues((prev) => ({ ...prev, [field.name]: value }))}
         />
       ))}
       {inputErrors && inputErrors.other.length > 0 && (
         <ErrorNote title="無法生成" error={{ error_code: 'VALIDATION', message: inputErrors.other.join('；') }} />
       )}
-      <Button type="submit" disabled={!canGenerate}>
-        {draftMutation.isPending ? (
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        ) : (
-          <Sparkles className="mr-2 h-4 w-4" />
-        )}
-        {draftMutation.isPending ? '生成中…' : '生成'}
-      </Button>
-      {draftMutation.isPending && (
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="submit" disabled={!canGenerate}>
+          {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+          {generating ? '生成中…' : '生成'}
+        </Button>
+        {clearButton}
+      </div>
+      {generating && (
         <p role="status" className="text-xs text-muted-foreground">
-          LLM 正在寫三種語言的說法，通常要半分鐘到一分鐘。
+          LLM 正在寫三種語言的說法，通常要半分鐘到一分鐘。可以先去別頁，生成好會通知，回來就看得到。
         </p>
       )}
       {result && <CreatedNotice result={result} />}

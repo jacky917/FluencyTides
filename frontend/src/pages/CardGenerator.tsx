@@ -10,6 +10,7 @@
  * - 填表流程（`flow="form"`）：表單由 `create_schema` 產生（`lib/createForm.ts`），不呼叫 LLM。
  * - 預覽流程（`flow="preview"`，目前只有三語對話卡）：先以 `draft_schema` 的表單請 LLM 生成草稿，勾選後
  *   建立或廢棄（`components/generate/PreviewCreate.tsx`）。
+ * - 填到一半的內容（與預覽流程的草稿）存在分頁的 sessionStorage，切換頁面、重新整理都還在；「清除」一鍵清空。
  * - 後端寫入後會同步 AnkiWeb 並等它完成，所以送出期間顯示「建立中、同步中」；422 的欄位錯誤標在
  *   欄位旁。
  *
@@ -17,9 +18,9 @@
  * form comes from `create_schema`; field errors are shown next to fields.
  */
 
-import { useId, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, PlusCircle } from 'lucide-react'
+import { Eraser, Loader2, PlusCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../api/client'
 import { DeckTreePanel } from '../components/shared/DeckTreePanel'
@@ -32,6 +33,7 @@ import { SplitLayout } from '../components/shared/SplitLayout'
 import { Button } from '../components/ui/button'
 import { Skeleton } from '../components/ui/skeleton'
 import { useLocalStorage } from '../hooks/useLocalStorage'
+import { useSessionStore } from '../hooks/useSessionStore'
 import { usePanelWidths } from '../hooks/usePanelWidths'
 import { describeApiError, failureTitle, isBackendError, retryTransient } from '../lib/apiError'
 import { GENERATE_LAYOUT } from '../lib/cardLayout'
@@ -246,7 +248,10 @@ function CreateForm({
   const queryClient = useQueryClient()
   const create = handler.capabilities.create
   const { fields, skipped } = schemaFields(handler.create_schema)
-  const [values, setValues] = useState(() => initialValues(fields))
+  // 填到一半的內容存在這個分頁的 sessionStorage：切換頁面、重新整理都還在，建立成功或按「清除」才清掉
+  const [storedValues, setStoredValues] = useSessionStore<Record<string, string>>(`generate_form:${handler.name}`, {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const values = useMemo(() => ({ ...initialValues(fields), ...storedValues }), [storedValues])
   const [errors, setErrors] = useState<FormErrors | null>(null)
   const [result, setResult] = useState<CreateNoteResponse | null>(null)
 
@@ -261,7 +266,7 @@ function CreateForm({
     onSuccess: (data) => {
       setResult(data)
       setErrors(null)
-      setValues(initialValues(fields))
+      setStoredValues(null)
       toast.success(`已建立 ${data.note_ids.length} 張筆記`, { description: `牌組：${data.deck}` })
       if (data.sync_warning) toast.warning('同步 AnkiWeb 失敗', { description: data.sync_warning })
       for (const queryKey of [['graph'], ['cards'], ['decks']]) queryClient.invalidateQueries({ queryKey })
@@ -310,7 +315,7 @@ function CreateForm({
           value={values[field.name] ?? ''}
           error={errors?.fields[field.name]}
           disabled={mutation.isPending}
-          onChange={(value) => setValues((prev) => ({ ...prev, [field.name]: value }))}
+          onChange={(value) => setStoredValues((prev) => ({ ...prev, [field.name]: value }))}
         />
       ))}
 
@@ -321,14 +326,29 @@ function CreateForm({
         <ErrorNote title="建立失敗" error={{ error_code: 'VALIDATION', message: errors.other.join('；') }} />
       )}
 
-      <Button
-        type="submit"
-        disabled={!canSubmit}
-        aria-describedby={deck === null && !fixedDeck ? `${formId}-deck` : undefined}
-      >
-        {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-        {mutation.isPending ? '建立中、同步中…' : '建立'}
-      </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="submit"
+          disabled={!canSubmit}
+          aria-describedby={deck === null && !fixedDeck ? `${formId}-deck` : undefined}
+        >
+          {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          {mutation.isPending ? '建立中、同步中…' : '建立'}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          disabled={mutation.isPending || !Object.values(storedValues).some((value) => value.trim() !== '')}
+          onClick={() => {
+            setStoredValues(null)
+            setErrors(null)
+            setResult(null)
+          }}
+        >
+          <Eraser className="mr-2 h-4 w-4" />
+          清除
+        </Button>
+      </div>
       {mutation.isPending && (
         <p role="status" className="text-xs text-muted-foreground">
           寫入 Anki 後會同步 AnkiWeb，最久可能要等一分鐘。
