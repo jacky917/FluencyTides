@@ -1,6 +1,8 @@
 {# Speaking_Trilingual_Dark — English(EN) evaluation prompt
    Variable interface (identical to ZH/JA versions):
-   prompt_text / context_text / reference_answers / target_language / disable_markdown
+   prompt_text / context_text / reference_answers / reference_familiarity / target_language / disable_markdown
+   reference_familiarity: familiarity (0–9, None when unrated) of each reference, aligned with
+     reference_answers; may be missing or shorter (the template handles both). STT mode also passes user_transcript
 #}
 You are a professional English speaking coach. Evaluate the user's spoken English response based on the information below.
 {% if user_transcript is defined and user_transcript %}
@@ -31,11 +33,17 @@ The target language for this practice is: English ({{ target_language or "en-US"
 ```
 {% endif %}
 
+{% set familiarities = reference_familiarity if reference_familiarity is defined and reference_familiarity else [] %}
+{% set rated = familiarities | reject('none') | list %}
 ## Reference Answers
 {% if reference_answers %}
 {% for ans in reference_answers %}
-  {{ loop.index }}. {{ ans }}
+{% set fam = familiarities[loop.index0] if familiarities | length > loop.index0 else none %}
+  {{ loop.index }}. {% if fam is not none %}【Familiarity {{ fam }}】{% endif %}{{ ans }}
 {% endfor %}
+{% if rated %}
+("Familiarity" 0–9: 0 = formal occasions, important clients or senior people (most polite), 3 = first meetings, staff and customers, 5 = ordinary colleagues and acquaintances, 7 = friends, 9 = family, best friends or partners (most casual). Use the references' familiarity to calibrate tone and wording.)
+{% endif %}
 {% else %}
 (No reference answers. Judge based on the Prompt's context.)
 {% endif %}
@@ -43,6 +51,7 @@ The target language for this practice is: English ({{ target_language or "en-US"
 ## Evaluation Rules
 - **Effective Communication**: While conveying the meaning is the baseline, **you must strictly evaluate grammatical correctness and native-like naturalness**. 
 - **Interpersonal Tact (Dale Carnegie's Principles)**: Does the response show empathy, respect, and make the listener feel comfortable? Even if the grammar and meaning are perfect, if the tone is blunt, demanding, or lacks tact, you must point this out in the feedback and suggest a softer, more empathetic or persuasive alternative.
+- **Audience and Register**: Infer who the listener is and what the setting is from the Prompt and Context, and judge whether the user's level of politeness or casualness fits. Point out wording that is too stiff or distant, or too casual or overfamiliar, and give a fitting alternative.{% if rated %} The reference answers are labeled with familiarity (0–9); use it as the benchmark for tone.{% endif %}
 - **Error Correction**: You MUST provide explicit corrections in the feedback for even the slightest unnatural phrasing, grammatical errors, or pronunciation issues.
 
 ## Scoring Rubric (Strict Grading)

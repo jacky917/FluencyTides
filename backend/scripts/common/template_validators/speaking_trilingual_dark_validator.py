@@ -10,7 +10,7 @@ sample cards into Anki for UI and deep-link preview.
     Prompt_Audios 國旗徽章、背面三語區段預設折疊/展開、各 Deep Link 按鈕。
 
     另做結構檢查：11 欄位齊全且順序正確、七個 JSON 欄位可解析、
-    Prompt_Audios 每語言 ≤1 條且 lang ∈ {ZH, JA, EN}。
+    Prompt_Audios 每語言 ≤1 條且 lang ∈ {ZH, JA, EN}、參考答案的熟識度合格（規則同匯入腳本）。
 
 使用範例：
     python scripts/common/template_validators/speaking_trilingual_dark_validator.py --overwrite
@@ -18,6 +18,7 @@ sample cards into Anki for UI and deep-link preview.
 
 import argparse
 import asyncio
+import copy
 import json
 import logging
 import sys
@@ -27,6 +28,8 @@ from pathlib import Path
 backend_dir = Path(__file__).resolve().parents[3]
 sys.path.append(str(backend_dir))
 import scripts.common.env  # noqa
+
+from app.services.task_handlers.shared.trilingual_familiarity import normalize_reference_familiarity  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -109,6 +112,12 @@ class SpeakingTrilingualDarkValidator:
             langs = [item.get("lang") for item in pa_items]
             assert all(l in VALID_LANGS for l in langs), f"Prompt_Audios 含非法 lang: {langs}"
             assert len(langs) == len(set(langs)), f"Prompt_Audios 同語言多條: {langs}"
+            # 參考答案的熟識度：規則同匯入腳本（0–9 的整數、半形數字字串或省略）。深拷貝：只檢查，
+            # 不能改到之後要插入 Anki 的範例資料
+            try:
+                normalize_reference_familiarity(copy.deepcopy(fields))
+            except ValueError as e:
+                raise AssertionError(f"[{fields.get('Card_ID', '?')}] {e}") from e
             # Card_ID 唯一
             card_id = fields.get("Card_ID", "")
             assert card_id and card_id not in seen_ids, f"Card_ID 缺失或重複: {card_id}"

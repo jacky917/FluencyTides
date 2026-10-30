@@ -59,6 +59,7 @@ from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.utils.id_generator import generate_unique_card_id
 from app.schemas.anki import AnkiNote, AnkiNoteOptions
+from app.services.task_handlers.shared.trilingual_familiarity import normalize_reference_familiarity
 from scripts.local_anki.common.card_identity import (
     KEY_CARD_ID,
     KEY_NOTE_ID,
@@ -503,9 +504,16 @@ async def import_cards(
             # paths to bare filenames in place, so passing the dict from cards_data
             # would make the identity write-back destroy the user's hand-written
             # media paths — and jsons/ is git-ignored, so that is the only copy.
-            fields = await _normalize_fields(
-                client, copy.deepcopy(card.get("fields", {})), existing_card_id, dry_run
-            )
+            raw_fields = copy.deepcopy(card.get("fields", {}))
+            # 參考答案的熟識度（0–9）：字串數字轉成整數；格式不對時整張卡跳過，免得寫進 Anki 才發現
+            # Familiarity of reference answers: digit strings become ints; a bad value skips the card.
+            try:
+                normalize_reference_familiarity(raw_fields)
+            except ValueError as e:
+                logger.error(f"❌ [{card_label}] {e}，跳過這張卡。")
+                stats["failed"] += 1
+                continue
+            fields = await _normalize_fields(client, raw_fields, existing_card_id, dry_run)
             prompt_text = fields.get("Prompt", "")
             if not prompt_text:
                 logger.warning(f"⚠️ [{card_label}] 缺少 Prompt 欄位，跳過。")

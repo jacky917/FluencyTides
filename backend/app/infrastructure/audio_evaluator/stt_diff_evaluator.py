@@ -178,6 +178,7 @@ class STTDiffEvaluator(BaseAudioEvaluator):
         reference_answers: list[str],
         target_language: str | None = None,
         template_name: str = "prompts/audio_evaluator.j2",
+        reference_familiarity: list[int | None] | None = None,
     ) -> AudioEvaluationResult:
         """以 STT 逐字稿與參考答案的相似度評分。
 
@@ -197,10 +198,14 @@ class STTDiffEvaluator(BaseAudioEvaluator):
                 Target-language locale controlling Whisper's language.
             template_name: 評分樣板（本模式不使用，保留介面相容）。
                 Evaluation template (unused; kept for interface parity).
+            reference_familiarity: 每句參考答案的熟識度；比對到的那句有標時，
+                feedback 開頭註明。Familiarity of each reference; noted in
+                the feedback for the matched one.
 
         Returns:
-            含分數、雙格式差異標記與逐字稿的評分結果。The evaluation
-            result with score, dual-format diff markup, and transcript.
+            含分數、雙格式差異標記（可能帶熟識度註記）與逐字稿的評分結果。
+            The evaluation result with score, dual-format diff markup
+            (possibly noting the familiarity), and transcript.
 
         Raises:
             STTServiceError: STT 服務呼叫失敗時拋出。Raised when the
@@ -249,10 +254,22 @@ class STTDiffEvaluator(BaseAudioEvaluator):
             transcript_map, best_ref_map, best_matcher.get_opcodes()
         )
 
-        # 分數已由訊息/卡片其他欄位顯示，feedback 只保留差異標記本體
-        # The score is shown elsewhere; feedback carries only the diff markup.
+        # 分數已由訊息/卡片其他欄位顯示，feedback 放差異標記（三語卡另在開頭註明比對到的說法的熟識度）
+        # The score is shown elsewhere; feedback carries the diff markup (plus,
+        # for trilingual cards, the matched reference's familiarity).
         feedback_tg = tg_diff
         feedback_anki = anki_diff
+        # 三語卡：比對到的參考答案有熟識度時註明（同一題常有正式與隨意的不同說法）
+        # Trilingual cards: name the matched reference's familiarity.
+        familiarity = (
+            reference_familiarity[best_index]
+            if reference_familiarity and best_index < len(reference_familiarity)
+            else None
+        )
+        if familiarity is not None:
+            note = f"比對對象：熟識度 {familiarity} 的說法"
+            feedback_tg = f"{note}\n{feedback_tg}"
+            feedback_anki = f"{note}<br>{feedback_anki}"
 
         logger.info(
             "stt_diff 評分完成: score=%d, ref=#%d/%d",

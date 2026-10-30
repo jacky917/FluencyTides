@@ -71,6 +71,7 @@ class BaseAudioEvaluator(abc.ABC):
         reference_answers: list[str],
         target_language: str | None = None,
         template_name: str = "prompts/audio_evaluator.j2",
+        reference_familiarity: list[int | None] | None = None,
     ) -> AudioEvaluationResult:
         """評估使用者語音，產出結構化評分結果。
 
@@ -93,6 +94,14 @@ class BaseAudioEvaluator(abc.ABC):
                 三語卡傳入 per-language 樣板，變數介面相同）。Jinja2 template
                 for the evaluation prompt; trilingual cards pass a
                 per-language template with the same variable interface.
+            reference_familiarity: 每句參考答案的熟識度（0–9，未標為 None），與
+                ``reference_answers`` 一一對應；None 或空表示都沒有（非三語卡）。
+                LLM 類評分器交給樣板的 ``reference_familiarity``（只有三語樣板會用），
+                stt_diff 在 feedback 註明比對到的那句。Familiarity (0–9) of each
+                reference answer, aligned with ``reference_answers``; None or
+                empty when there is none. LLM evaluators pass it to the template
+                (only the trilingual templates use it); stt_diff notes the
+                matched one in its feedback.
 
         Returns:
             AudioEvaluationResult 包含 score、feedback、transcript。
