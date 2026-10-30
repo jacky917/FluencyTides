@@ -283,7 +283,12 @@ class NoteService:
         if handler.DRAFT_PARAMS is None or _draft_schema(handler) is None:
             raise HandlerOperationUnsupportedError(f"「{handler.title}」沒有網頁的預覽建卡流程")
         parameters = handler.DRAFT_PARAMS.model_validate(dict(params)).model_dump()
-        existing = [str(item["tag"]) for item in await self.tags(handler_name)]
+        try:
+            existing = [str(item["tag"]) for item in await self.tags(handler_name)]
+        except AnkiConnectError as exc:
+            # 既有標籤只是給 LLM 參考：Anki 連不上時照樣生成草稿（建卡時才真的需要 Anki）
+            logger.warning("生成草稿時查不到既有標籤，改為不提供：%s", exc)
+            existing = []
         draft = dict(await handler.execute_draft(parameters, existing[:MAX_PROMPT_TAGS]))
         raw_tags = draft.pop("tags", None)
         return {"params": draft, "suggested_tags": _suggested_tags(raw_tags, existing)}

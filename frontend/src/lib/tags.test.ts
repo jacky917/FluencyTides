@@ -11,6 +11,19 @@ describe('addTag', () => {
     expect(addTag(['Interview'], 'interview')).toEqual({ tags: ['Interview'], error: null })
   })
 
+  it('splits pasted comma lists (half- and full-width)', () => {
+    expect(addTag(['Interview'], 'FlowerShop, interview，HairSalon,')).toEqual({
+      tags: ['Interview', 'FlowerShop', 'HairSalon'],
+      error: null,
+    })
+  })
+
+  it('adds nothing when one of the pasted tags has whitespace', () => {
+    const result = addTag([], 'FlowerShop, Hair Salon')
+    expect(result.tags).toEqual([])
+    expect(result.error).toContain('Hair Salon')
+  })
+
   it('rejects whitespace inside a tag', () => {
     const result = addTag([], 'Hair Salon')
     expect(result.tags).toEqual([])

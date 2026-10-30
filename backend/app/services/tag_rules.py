@@ -44,20 +44,21 @@ _WHITESPACE = re.compile(r"\s")
 
 
 @cache
-def _system_tags() -> frozenset[str]:
-    """固定的系統標籤加上各 handler 建卡固定加的標籤（第一次用到時才讀註冊表，避免循環 import）。"""
+def _folded_system_tags() -> frozenset[str]:
+    """固定的系統標籤加上各 handler 建卡固定加的標籤，轉成小寫（第一次用到時才讀註冊表，避免循環 import）。"""
     from app.services.task_handlers.registry import handler_registry
 
     create_tags = {tag for handler in handler_registry.all_handlers() for tag in handler.CREATE_TAGS}
-    return _FIXED_SYSTEM_TAGS | create_tags
+    return frozenset(tag.casefold() for tag in _FIXED_SYSTEM_TAGS | create_tags)
+
+
+_FOLDED_PREFIXES = tuple(prefix.casefold() for prefix in SYSTEM_TAG_PREFIXES)
 
 
 def is_system_tag(tag: str) -> bool:
     """是否為系統標籤（不區分大小寫，Anki 的標籤本身就不分大小寫）。Whether the tag is a system tag."""
     folded = tag.casefold()
-    return any(folded == t.casefold() for t in _system_tags()) or any(
-        folded.startswith(prefix.casefold()) for prefix in SYSTEM_TAG_PREFIXES
-    )
+    return folded in _folded_system_tags() or folded.startswith(_FOLDED_PREFIXES)
 
 
 def normalize_tags(tags: list[str]) -> list[str]:

@@ -185,7 +185,8 @@ export function CreatedNotice({ result }: { result: CreateNoteResponse }) {
       <p className="font-medium">
         已建立 {result.note_ids.length} 張筆記（牌組：{result.deck}）
       </p>
-      {result.sync_warning && <p className="text-amber-900">{result.sync_warning}</p>}
+      {/* 加標籤失敗與同步失敗可能同時發生，後端以換行分開 */}
+      {result.sync_warning && <p className="whitespace-pre-line text-amber-900">{result.sync_warning}</p>}
       <Link className="text-primary underline" to={`/cards?deck=${encodeURIComponent(result.deck)}`}>
         到 Cards 頁查看這個牌組
       </Link>

@@ -213,3 +213,18 @@ def test_prompt_renders_tag_section(existing):
     assert "## 標籤（tags）" in prompt
     assert ("Interview、FlowerShop" in prompt) == bool(existing)
     assert "Step1" in prompt  # 排序標籤不要建議
+
+
+def test_draft_still_works_when_anki_is_down(client, anki):
+    """既有標籤只是給 LLM 參考：查不到時照樣生成草稿，只是沒有既有標籤可沿用。"""
+
+    async def down(query):
+        raise AnkiConnectError("連不上")
+
+    anki.find_notes = down
+    generate = mock.AsyncMock(return_value=_draft(tags=["HairSalon"]))
+    with mock.patch.object(generate_service, "generate", generate):
+        response = client.post("/api/v1/handlers/speaking_trilingual/draft", json={"params": {"background": "剪髮"}})
+    assert response.status_code == 200
+    assert generate.await_args.args[3] == []
+    assert response.json()["suggested_tags"] == [{"tag": "HairSalon", "existing": False}]

@@ -13,19 +13,27 @@ export interface AddTagResult {
 }
 
 /**
- * 加入一個標籤：去前後空白；含空白不加並提示（Anki 的標籤不能有空白）；與已有的只差大小寫時不重複加
- * （Anki 的標籤不分大小寫）。
- * Adds a tag, trimming it, rejecting whitespace and skipping case-insensitive duplicates.
+ * 加入標籤：以逗號（含全形）分開的會拆成多個（例如貼上 `Interview, FlowerShop`）；每個去前後空白；
+ * 含空白的不加並提示（Anki 的標籤不能有空白）；與已有的只差大小寫時不重複加（Anki 的標籤不分大小寫）。
+ * 其中一個不合格時一個都不加，讓使用者改好再按一次。
+ * Adds comma-separated tags, trimming each, rejecting whitespace and skipping
+ * case-insensitive duplicates; nothing is added when one is invalid.
  * @param tags - 目前的標籤。The current tags.
  * @param raw - 輸入的文字。The typed text.
  * @returns 新的標籤與提示。The new tags and a hint.
  */
 export function addTag(tags: string[], raw: string): AddTagResult {
-  const tag = raw.trim()
-  if (!tag) return { tags, error: null }
-  if (/\s/.test(tag)) return { tags, error: '標籤不能有空白（可以用 _ 或 :: 代替）' }
-  if (tags.some((t) => t.toLowerCase() === tag.toLowerCase())) return { tags, error: null }
-  return { tags: [...tags, tag], error: null }
+  const parts = raw
+    .split(/[,，]/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+  const invalid = parts.find((part) => /\s/.test(part))
+  if (invalid) return { tags, error: `「${invalid}」含空白；標籤不能有空白（可以用 _ 或 :: 代替）` }
+  let next = tags
+  for (const tag of parts) {
+    if (!next.some((t) => t.toLowerCase() === tag.toLowerCase())) next = [...next, tag]
+  }
+  return { tags: next, error: null }
 }
 
 /**

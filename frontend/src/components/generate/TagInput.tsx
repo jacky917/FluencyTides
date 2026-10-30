@@ -96,7 +96,7 @@ export function TagInput({
         aria-describedby={hint ? `${id}-hint` : undefined}
         onChange={(e) => {
           const value = e.target.value
-          // 輸入逗號（含全形）時把前面的文字當成一個標籤
+          // 打出逗號（含全形）時把前面的文字加入；貼上以逗號分隔的多個標籤時由 addTag 拆開
           if (/[,，]$/.test(value)) {
             commit(value.slice(0, -1))
             return
