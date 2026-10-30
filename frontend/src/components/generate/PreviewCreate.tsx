@@ -2,7 +2,7 @@
  * Card Generator 的預覽流程（`create.flow="preview"`）：以 `draft_schema` 的表單請 LLM 生成草稿 → 預覽、
  * 勾選 → 建立或廢棄（計畫書 `docs/wip/trilingual_web_create_FEAT_2026-10-30.md` §3）。
  *
- * 草稿不存在後端：輸入與草稿（含勾選、修改過的情境）存在這個分頁的 sessionStorage（`useSessionStore`），
+ * 草稿不存在後端：輸入與草稿（含勾選、修改過的情境）存在這個分頁的 sessionStorage（`useSessionStorage`），
  * 切換頁面、重新整理都還在；生成中離開頁面，結果回來時照樣存下。建立時把勾選的內容送到一般的建卡端點，
  * 成功後清空；「廢棄」只丟掉草稿、回到輸入；「清除」把輸入與草稿一起清掉。預覽畫面依卡片類型而定，
  * 目前只有三語對話卡。
@@ -15,7 +15,7 @@ import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-quer
 import { Eraser, Loader2, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../../api/client'
-import { useSessionStore, writeSession } from '../../hooks/useSessionStore'
+import { removeStored, useSessionStorage, writeStored } from '../../hooks/useStoredState'
 import { describeApiError, failureTitle, isBackendError } from '../../lib/apiError'
 import { formErrorsFrom, initialValues, missingRequired, schemaFields, type FormErrors } from '../../lib/createForm'
 import {
@@ -66,11 +66,11 @@ export function PreviewCreate({
   // 輸入與草稿依卡片類型分開存，切換類型再回來也還在
   const formKey = `generate_form:${handler.name}`
   const draftKey = `generate_draft:${handler.name}`
-  const [storedValues, setStoredValues] = useSessionStore<Record<string, string>>(formKey, {})
+  const [storedValues, setStoredValues] = useSessionStorage<Record<string, string>>(formKey, {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const values = useMemo(() => ({ ...initialValues(fields), ...storedValues }), [storedValues])
   const [inputErrors, setInputErrors] = useState<FormErrors | null>(null)
-  const [state, setState] = useSessionStore<DraftState | null>(draftKey, null)
+  const [state, setState] = useSessionStorage<DraftState | null>(draftKey, null)
   const [createError, setCreateError] = useState<string | null>(null)
   const [result, setResult] = useState<CreateNoteResponse | null>(null)
 
@@ -87,7 +87,7 @@ export function PreviewCreate({
     // 這裡的回呼在元件卸載後也會執行（TanStack Query v5）：草稿直接寫進 sessionStorage，回到頁面就看得到
     onSuccess: (data) => {
       const draft = readDraft(data.params)
-      writeSession<DraftState>(draftKey, {
+      writeStored<DraftState>('session', draftKey, {
         draft,
         selection: selectAll(draft),
         prompt: draft.prompt,
@@ -120,8 +120,8 @@ export function PreviewCreate({
       }),
     onSuccess: (data) => {
       setResult(data)
-      writeSession(draftKey, null)
-      writeSession(formKey, null)
+      removeStored('session', draftKey)
+      removeStored('session', formKey)
       setCreateError(null)
       toast.success(`已建立 ${data.note_ids.length} 張筆記`, { description: `牌組：${data.deck}` })
       if (data.sync_warning) toast.warning('同步 AnkiWeb 失敗', { description: data.sync_warning })
@@ -153,8 +153,8 @@ export function PreviewCreate({
 
   /** 一鍵清除：輸入、草稿與提示一起清掉（生成中仍會在完成時存下草稿）。Clears inputs and the draft. */
   const clearAll = () => {
-    setState(null)
-    setStoredValues(null)
+    removeStored('session', draftKey)
+    removeStored('session', formKey)
     setInputErrors(null)
     setCreateError(null)
     setResult(null)

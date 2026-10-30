@@ -32,8 +32,7 @@ import { Panel } from '../components/shared/Panel'
 import { SplitLayout } from '../components/shared/SplitLayout'
 import { Button } from '../components/ui/button'
 import { Skeleton } from '../components/ui/skeleton'
-import { useLocalStorage } from '../hooks/useLocalStorage'
-import { useSessionStore } from '../hooks/useSessionStore'
+import { removeStored, useLocalStorage, useSessionStorage } from '../hooks/useStoredState'
 import { usePanelWidths } from '../hooks/usePanelWidths'
 import { describeApiError, failureTitle, isBackendError, retryTransient } from '../lib/apiError'
 import { GENERATE_LAYOUT } from '../lib/cardLayout'
@@ -249,7 +248,8 @@ function CreateForm({
   const create = handler.capabilities.create
   const { fields, skipped } = schemaFields(handler.create_schema)
   // 填到一半的內容存在這個分頁的 sessionStorage：切換頁面、重新整理都還在，建立成功或按「清除」才清掉
-  const [storedValues, setStoredValues] = useSessionStore<Record<string, string>>(`generate_form:${handler.name}`, {})
+  const formKey = `generate_form:${handler.name}`
+  const [storedValues, setStoredValues] = useSessionStorage<Record<string, string>>(formKey, {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const values = useMemo(() => ({ ...initialValues(fields), ...storedValues }), [storedValues])
   const [errors, setErrors] = useState<FormErrors | null>(null)
@@ -266,7 +266,7 @@ function CreateForm({
     onSuccess: (data) => {
       setResult(data)
       setErrors(null)
-      setStoredValues(null)
+      removeStored('session', formKey)
       toast.success(`已建立 ${data.note_ids.length} 張筆記`, { description: `牌組：${data.deck}` })
       if (data.sync_warning) toast.warning('同步 AnkiWeb 失敗', { description: data.sync_warning })
       for (const queryKey of [['graph'], ['cards'], ['decks']]) queryClient.invalidateQueries({ queryKey })
@@ -340,7 +340,7 @@ function CreateForm({
           variant="ghost"
           disabled={mutation.isPending || !Object.values(storedValues).some((value) => value.trim() !== '')}
           onClick={() => {
-            setStoredValues(null)
+            removeStored('session', formKey)
             setErrors(null)
             setResult(null)
           }}

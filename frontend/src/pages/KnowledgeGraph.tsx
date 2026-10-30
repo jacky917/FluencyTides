@@ -5,7 +5,7 @@ import { RefreshCw, Settings, Link as LinkIcon, Loader2, X, Maximize2, Minimize2
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../api/client'
 import { useElementSize } from '../hooks/useElementSize'
-import { useLocalStorage } from '../hooks/useLocalStorage'
+import { useLocalStorage } from '../hooks/useStoredState'
 import { usePanelWidths } from '../hooks/usePanelWidths'
 import { collectNodePositions, readGraphView, seedNodePositions, writeGraphCamera, writeGraphView } from '../lib/graphView'
 import { GRAPH_LAYOUT } from '../lib/cardLayout'

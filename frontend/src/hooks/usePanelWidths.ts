@@ -1,6 +1,6 @@
 import { createRef, useRef, type RefObject } from 'react'
 import type { Layout, LayoutChangedMeta, PanelImperativeHandle, PanelSize } from 'react-resizable-panels'
-import { useLocalStorage } from './useLocalStorage'
+import { useLocalStorage } from './useStoredState'
 import { defaultWidths, panelWidthsKey, sanitizeWidths, type SplitPageConfig } from '../lib/splitLayout'
 
 /**

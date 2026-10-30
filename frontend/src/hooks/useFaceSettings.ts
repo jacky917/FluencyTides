@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useLocalStorage } from './useLocalStorage'
+import { useLocalStorage } from './useStoredState'
 import { DEFAULT_FACE_SETTINGS, sanitizeFaceSettings, type FaceSettings } from '../lib/faceTransitions'
 
 /**
