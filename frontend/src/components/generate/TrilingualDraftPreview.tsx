@@ -2,11 +2,13 @@
  * 三語對話卡草稿的預覽：卡面的情境與補充可修改；三種語言的說法依熟識度排序，預設全選、可取消勾選。
  * 刻度條的配色與卡片背面相同（`lib/trilingualDraft.ts`）。
  *
+ * 三種語言各是一個可折疊的區塊（標題列顯示已選幾句），句子多時可以收起已看完的語言。
+ *
  * Preview of a trilingual draft: the prompt and context are editable; the
  * sayings are sorted by familiarity, all selected by default.
  */
 
-import { useId } from 'react'
+import { useId, useState } from 'react'
 import {
   FAMILIARITY_COLORS,
   REFERENCE_LANGS,
@@ -16,7 +18,7 @@ import {
 } from '../../lib/trilingualDraft'
 import { cn } from '../../lib/utils'
 import type { TrilingualCreateParams } from '../../types/api'
-import { TEXTAREA_CLASS } from './formParts'
+import { CollapsibleSection, TEXTAREA_CLASS } from './formParts'
 
 /**
  * 熟識度刻度條：十格，熟識度 N 填滿 N+1 格，右邊是數字（配色同卡片背面）。
@@ -73,6 +75,7 @@ export function TrilingualDraftPreview({
   disabled: boolean
 }) {
   const id = useId()
+  const [closed, setClosed] = useState<Partial<Record<ReferenceKey, boolean>>>({})
 
   const toggle = (key: ReferenceKey, index: number) =>
     onSelectionChange({ ...selection, [key]: selection[key].map((on, i) => (i === index ? !on : on)) })
@@ -111,15 +114,15 @@ export function TrilingualDraftPreview({
         const references = draft[key]
         const chosen = selection[key].filter(Boolean).length
         return (
-          <section key={key} className="space-y-2" aria-labelledby={`${id}-${key}`}>
-            <div className="flex items-center justify-between gap-2">
-              <h3 id={`${id}-${key}`} className="text-sm font-medium">
-                {label}
-                <span className="ml-2 text-xs font-normal text-muted-foreground">
-                  已選 {chosen}／{references.length}
-                </span>
-              </h3>
-              {references.length > 0 && (
+          <CollapsibleSection
+            key={key}
+            title={label}
+            summary={`已選 ${chosen}／${references.length}`}
+            open={!closed[key]}
+            onOpenChange={(open) => setClosed((prev) => ({ ...prev, [key]: !open }))}
+          >
+            {references.length > 0 && (
+              <div className="mb-2 flex justify-end">
                 <button
                   type="button"
                   disabled={disabled}
@@ -128,8 +131,8 @@ export function TrilingualDraftPreview({
                 >
                   {chosen < references.length ? '全選' : '全不選'}
                 </button>
-              )}
-            </div>
+              </div>
+            )}
             {references.length === 0 ? (
               <p className="text-xs text-muted-foreground">沒有生成這個語言的說法。</p>
             ) : (
@@ -168,7 +171,7 @@ export function TrilingualDraftPreview({
                 })}
               </ul>
             )}
-          </section>
+          </CollapsibleSection>
         )
       })}
     </div>

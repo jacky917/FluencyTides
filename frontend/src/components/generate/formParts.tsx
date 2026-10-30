@@ -3,7 +3,9 @@
  * Form parts shared by the form and preview create flows.
  */
 
+import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
+import { ChevronRight } from 'lucide-react'
 import { Input } from '../ui/input'
 import type { FormField } from '../../lib/createForm'
 import { cn } from '../../lib/utils'
@@ -12,6 +14,46 @@ import type { CreateNoteResponse } from '../../types/api'
 /** 多行輸入框的樣式（與 Input 一致）。The textarea style, matching Input. */
 export const TEXTAREA_CLASS =
   'flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
+
+/**
+ * 可折疊的區塊：標題列顯示名稱與目前的值（折起來也看得到選了什麼），點標題列展開或收合。
+ * A collapsible section whose header shows the current value.
+ * @param props.title - 區塊名稱。The section name.
+ * @param props.summary - 標題列右側的目前值。The current value shown in the header.
+ * @param props.open - 是否展開。Whether open.
+ * @param props.onOpenChange - 使用者展開或收合時。Called when the user toggles it.
+ * @param props.children - 內容。The content.
+ * @returns 區塊 JSX。The section JSX.
+ */
+export function CollapsibleSection({
+  title,
+  summary,
+  open,
+  onOpenChange,
+  children,
+}: {
+  title: ReactNode
+  summary?: ReactNode
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  children: ReactNode
+}) {
+  return (
+    <details
+      open={open}
+      // open 由外部控制時 toggle 也會觸發；值相同時呼叫端的 setState 不會造成重繪迴圈
+      onToggle={(e) => onOpenChange(e.currentTarget.open)}
+      className="group rounded-md border"
+    >
+      <summary className="flex cursor-pointer select-none list-none items-center gap-2 px-3 py-2 text-sm hover:bg-accent/50 [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="h-4 w-4 shrink-0 transition-transform group-open:rotate-90" />
+        <span className="shrink-0 font-medium">{title}</span>
+        {summary && <span className="min-w-0 truncate text-muted-foreground">{summary}</span>}
+      </summary>
+      <div className="border-t px-3 py-3">{children}</div>
+    </details>
+  )
+}
 
 /**
  * 牌組與筆記類型的說明；沒選牌組或牌組已不存在時說明原因（`id` 給送出按鈕的 aria-describedby）。

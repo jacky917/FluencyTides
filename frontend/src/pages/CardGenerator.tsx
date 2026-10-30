@@ -24,7 +24,7 @@ import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../api/client'
 import { DeckTreePanel } from '../components/shared/DeckTreePanel'
 import { ErrorNote } from '../components/shared/ErrorNote'
-import { CreatedNotice, DeckSummary, SchemaFieldInput } from '../components/generate/formParts'
+import { CollapsibleSection, CreatedNotice, DeckSummary, SchemaFieldInput } from '../components/generate/formParts'
 import { PreviewCreate } from '../components/generate/PreviewCreate'
 import { PageHeader } from '../components/shared/PageHeader'
 import { Panel } from '../components/shared/Panel'
@@ -61,6 +61,8 @@ export default function CardGenerator() {
   )
   const [deckToggled, setDeckToggled] = useLocalStorage<Record<string, boolean>>('generate_deck_toggled', {})
   const [storedHandler, setStoredHandler] = useLocalStorage<string | null>('generate_handler', null)
+  // 卡片類型選單是否展開；選好類型後自動收起，標題列仍看得到選了哪一種
+  const [pickerOpen, setPickerOpen] = useLocalStorage<boolean>('generate_picker_open', true)
   const panels = usePanelWidths(GENERATE_LAYOUT)
 
   const {
@@ -101,7 +103,21 @@ export default function CardGenerator() {
         <ErrorNote title="無法載入卡片類型，暫時無法建立卡片" error={handlersError} />
       ) : (
         <>
-          <HandlerPicker entries={entries} selected={current?.name ?? null} onSelect={setStoredHandler} />
+          <CollapsibleSection
+            title="卡片類型"
+            summary={current?.title ?? '未選擇'}
+            open={pickerOpen}
+            onOpenChange={setPickerOpen}
+          >
+            <HandlerPicker
+              entries={entries}
+              selected={current?.name ?? null}
+              onSelect={(name) => {
+                setStoredHandler(name)
+                setPickerOpen(false)
+              }}
+            />
+          </CollapsibleSection>
           {current ? (
             // 換卡片類型時重新掛載，表單內容與錯誤一起重設
             current.capabilities.create.flow === 'preview' ? (
@@ -175,7 +191,7 @@ function HandlerPicker({
 }) {
   return (
     <fieldset className="space-y-2">
-      <legend className="mb-2 text-sm font-medium">卡片類型</legend>
+      <legend className="sr-only">卡片類型</legend>
       {entries.map(({ handler, availability }) => {
         const disabled = availability.kind === 'disabled'
         return (
