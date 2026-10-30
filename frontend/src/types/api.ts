@@ -76,6 +76,11 @@ export interface HandlerInfo {
   capabilities: HandlerCapabilities;
   /** 網頁建卡表單的 JSON Schema；沒有表單時為 null。The create form schema, or null. */
   create_schema: Record<string, unknown> | null;
+  /**
+   * 網頁預覽流程的草稿表單（JSON Schema），送到 `POST /handlers/{name}/draft`；沒有這個流程時為 null。
+   * The draft form schema of the web preview flow, or null.
+   */
+  draft_schema?: Record<string, unknown> | null;
   /** JSON 欄位：不能直接修改，網頁唯讀顯示。JSON fields, read-only. */
   json_fields: string[];
   /** 能以表單編輯的 JSON 欄位：標題與每一筆的 JSON Schema。Editable JSON fields. */
@@ -158,6 +163,29 @@ export interface CreateNoteRequest {
   note_type: string;
   /** 標準建立是 `{欄位名: 值}`；其他 handler 依 `create_schema`。The parameters. */
   params: Record<string, unknown>;
+}
+
+/** `POST /handlers/{name}/draft` 的回應：預先填好的建立參數。The draft create parameters. */
+export interface DraftResponse {
+  params: Record<string, unknown>;
+}
+
+/** 三語對話卡的一句參考答案（草稿與建卡參數）。One trilingual reference answer. */
+export interface TrilingualReference {
+  content: string;
+  /** 說明：對象與場合、語氣的關鍵或場景補充。The note. */
+  note: string;
+  /** 熟識度 0–9；null 表示未標。Familiarity, or null. */
+  familiarity: number | null;
+}
+
+/** 三語對話卡的建立參數（草稿就是這個形狀）。Trilingual create parameters. */
+export interface TrilingualCreateParams {
+  prompt: string;
+  context: string;
+  references_zh: TrilingualReference[];
+  references_ja: TrilingualReference[];
+  references_en: TrilingualReference[];
 }
 
 /** 建卡結果。The created notes. */

@@ -7,7 +7,9 @@
  *
  * - 卡片類型依 `capabilities.create.channels` 呈現：含 web 可選；只能在 TG、本機腳本建立的反灰並
  *   顯示原因；沒有任何管道的不顯示。前端不自行判斷，只看宣告（`lib/handlerCapabilities.ts`）。
- * - 表單由 `create_schema` 產生（`lib/createForm.ts`）：網頁只做手動填表，不呼叫 LLM。
+ * - 填表流程（`flow="form"`）：表單由 `create_schema` 產生（`lib/createForm.ts`），不呼叫 LLM。
+ * - 預覽流程（`flow="preview"`，目前只有三語對話卡）：先以 `draft_schema` 的表單請 LLM 生成草稿，勾選後
+ *   建立或廢棄（`components/generate/PreviewCreate.tsx`）。
  * - 後端寫入後會同步 AnkiWeb 並等它完成，所以送出期間顯示「建立中、同步中」；422 的欄位錯誤標在
  *   欄位旁。
  *
@@ -17,17 +19,17 @@
 
 import { useId, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
 import { Loader2, PlusCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../api/client'
 import { DeckTreePanel } from '../components/shared/DeckTreePanel'
 import { ErrorNote } from '../components/shared/ErrorNote'
+import { CreatedNotice, DeckSummary, SchemaFieldInput } from '../components/generate/formParts'
+import { PreviewCreate } from '../components/generate/PreviewCreate'
 import { PageHeader } from '../components/shared/PageHeader'
 import { Panel } from '../components/shared/Panel'
 import { SplitLayout } from '../components/shared/SplitLayout'
 import { Button } from '../components/ui/button'
-import { Input } from '../components/ui/input'
 import { Skeleton } from '../components/ui/skeleton'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { usePanelWidths } from '../hooks/usePanelWidths'
@@ -102,12 +104,21 @@ export default function CardGenerator() {
           <HandlerPicker entries={entries} selected={current?.name ?? null} onSelect={setStoredHandler} />
           {current ? (
             // 換卡片類型時重新掛載，表單內容與錯誤一起重設
-            <CreateForm
-              key={current.name}
-              handler={current}
-              selectedDeck={selectedDeck}
-              deckMissing={deckMissing}
-            />
+            current.capabilities.create.flow === 'preview' ? (
+              <PreviewCreate
+                key={current.name}
+                handler={current}
+                selectedDeck={selectedDeck}
+                deckMissing={deckMissing}
+              />
+            ) : (
+              <CreateForm
+                key={current.name}
+                handler={current}
+                selectedDeck={selectedDeck}
+                deckMissing={deckMissing}
+              />
+            )
           ) : (
             <p className="text-sm text-muted-foreground">目前沒有能在網頁建立的卡片類型。</p>
           )}
@@ -121,7 +132,7 @@ export default function CardGenerator() {
       header={
         <PageHeader
           title="Card Generator"
-          description="在牌組樹選牌組，再選卡片類型、填寫欄位建立。網頁只做手動填表；自動產生內容請用 TG 或本機腳本。"
+          description="在牌組樹選牌組，再選卡片類型建立。三語對話卡由 LLM 生成說法、勾選後建立；其他卡片手動填表。"
         />
       }
       panels={panels}
@@ -263,78 +274,29 @@ function CreateForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4" aria-busy={mutation.isPending}>
-      <div className="space-y-1 text-sm">
-        <p className="font-medium">牌組</p>
-        {fixedDeck ? (
-          <p className="break-all">{fixedDeck}（這種卡片固定建在這裡）</p>
-        ) : selectedDeck === null ? (
-          <p id={`${formId}-deck`} role="status" className="text-muted-foreground">
-            請先在牌組樹選擇一個牌組（選「全部牌組」時無法建立卡片）。
-          </p>
-        ) : deckMissing ? (
-          <p id={`${formId}-deck`} role="status" className="break-all text-destructive">
-            牌組「{selectedDeck}」已不存在，請在牌組樹重新選擇。
-          </p>
-        ) : (
-          <p className="break-all">{selectedDeck}</p>
-        )}
-        <p className="text-xs text-muted-foreground">筆記類型：{create.note_type}</p>
-      </div>
+      <DeckSummary
+        id={`${formId}-deck`}
+        fixedDeck={fixedDeck}
+        selectedDeck={selectedDeck}
+        deckMissing={deckMissing}
+        noteType={create.note_type}
+      />
 
       {!formReady && (
         <ErrorNote title="暫時無法建立" error={{ error_code: 'UNAVAILABLE', message: create.reason ?? '沒有建卡表單' }} />
       )}
 
-      {fields.map((field) => {
-        const id = `${formId}-${field.name}`
-        const error = errors?.fields[field.name]
-        const listId = field.examples.length > 0 ? `${id}-examples` : undefined
-        const common = {
-          id,
-          value: values[field.name] ?? '',
-          disabled: mutation.isPending,
-          'aria-invalid': error ? true : undefined,
-          'aria-describedby': error ? `${id}-error` : field.description ? `${id}-desc` : undefined,
-          onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-            setValues((prev) => ({ ...prev, [field.name]: e.target.value })),
-        }
-        return (
-          <div key={field.name} className="space-y-1">
-            <label htmlFor={id} className="text-sm font-medium">
-              {field.title}
-              {field.required && <span className="ml-1 text-destructive">*</span>}
-            </label>
-            {field.multiline ? (
-              <textarea
-                {...common}
-                className={cn(
-                  'flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                  error && 'border-destructive',
-                )}
-              />
-            ) : (
-              <Input {...common} list={listId} className={cn(error && 'border-destructive')} />
-            )}
-            {listId && (
-              <datalist id={listId}>
-                {field.examples.map((example) => (
-                  <option key={example} value={example} />
-                ))}
-              </datalist>
-            )}
-            {field.description && !error && (
-              <p id={`${id}-desc`} className="text-xs text-muted-foreground">
-                {field.description}
-              </p>
-            )}
-            {error && (
-              <p id={`${id}-error`} role="alert" className="text-xs text-destructive">
-                {error}
-              </p>
-            )}
-          </div>
-        )
-      })}
+      {fields.map((field) => (
+        <SchemaFieldInput
+          key={field.name}
+          id={`${formId}-${field.name}`}
+          field={field}
+          value={values[field.name] ?? ''}
+          error={errors?.fields[field.name]}
+          disabled={mutation.isPending}
+          onChange={(value) => setValues((prev) => ({ ...prev, [field.name]: value }))}
+        />
+      ))}
 
       {skipped.length > 0 && (
         <p className="text-xs text-muted-foreground">網頁表單不提供這些參數：{skipped.join('、')}</p>
@@ -357,17 +319,7 @@ function CreateForm({
         </p>
       )}
 
-      {result && (
-        <div role="status" className="space-y-1 rounded-md border border-emerald-500/50 bg-emerald-500/10 px-3 py-2 text-sm">
-          <p className="font-medium">
-            已建立 {result.note_ids.length} 張筆記（牌組：{result.deck}）
-          </p>
-          {result.sync_warning && <p className="text-amber-900">{result.sync_warning}</p>}
-          <Link className="text-primary underline" to={`/cards?deck=${encodeURIComponent(result.deck)}`}>
-            到 Cards 頁查看這個牌組
-          </Link>
-        </div>
-      )}
+      {result && <CreatedNotice result={result} />}
     </form>
   )
 }

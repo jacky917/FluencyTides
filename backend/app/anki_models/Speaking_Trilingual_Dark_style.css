@@ -390,6 +390,17 @@ html, body {
     white-space: pre-line;
 }
 
+/* 說明：對象、語氣重點或場景補充，比句子小、較淡 */
+.ref-note {
+    margin-top: 6px;
+    padding-left: 8px;
+    border-left: 2px solid #444;
+    font-size: 13px;
+    color: #9aa5ab;
+    line-height: 1.6;
+    white-space: pre-line;
+}
+
 /* ============================
    熟識度刻度條（0＝最正式 … 9＝最親密）：0–3 藍、4–6 紫、7–9 粉紅到火紅
    ============================ */
@@ -515,6 +526,10 @@ html, body {
 
     .ref-content {
         font-size: 16px;
+    }
+
+    .ref-note {
+        font-size: 12px;
     }
 }
 

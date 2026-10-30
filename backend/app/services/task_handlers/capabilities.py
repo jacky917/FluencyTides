@@ -59,7 +59,8 @@ class CreateCapability:
     Attributes:
         supported: 服務層（網頁與 TG）能否建卡。Whether the service layer creates cards.
         channels: 實際能從哪些管道建立（給人看的說明）。Where cards can be created.
-        flow: ``"form"`` 一張表單送出即可；``"preview"`` 先看 LLM 結果再勾選。The flow.
+        flow: ``"form"`` 一張表單送出即可；``"preview"`` 先看 LLM 結果再勾選（網頁的預覽流程先以
+            ``DRAFT_PARAMS`` 的表單向 ``/draft`` 要草稿，勾選後再建卡）。The flow.
         deck: ``"selected"`` 建在指定牌組；``"fixed"`` 固定在 ``fixed_deck``。Deck rule.
         fixed_deck: ``deck`` 為 ``"fixed"`` 時的牌組。The fixed deck.
         note_type: 建出的筆記類型。The note type created.
@@ -89,8 +90,8 @@ class CreateCapability:
                 raise ValueError("開放建卡時 channels 至少要有 web 或 tg（服務層的管道）")
             if "web" not in self.channels and not self.reason:
                 raise ValueError("開放建卡但不能從網頁建卡時必須寫 reason，說明要去哪裡建")
-        if "web" in self.channels and not (self.supported and self.flow == "form"):
-            raise ValueError("channels 含 web 時必須開放建卡且 flow 為 form")
+        if "web" in self.channels and not self.supported:
+            raise ValueError("channels 含 web 時必須開放建卡")
 
 
 @dataclass(frozen=True)

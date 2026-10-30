@@ -18,6 +18,7 @@ import type {
   CardRelationCreate,
   CreateNoteRequest,
   CreateNoteResponse,
+  DraftResponse,
   DeleteNoteResponse,
   GenericNoteDetail,
   HandlerInfo,
@@ -105,6 +106,16 @@ export const FluencyTidesAPI = {
    */
   createNote: (handlerName: string, body: CreateNoteRequest): Promise<CreateNoteResponse> =>
     apiClient.post(`/handlers/${encodeURIComponent(handlerName)}/notes`, body),
+
+  /**
+   * 網頁預覽流程：請 LLM 生成建卡草稿（不寫入 Anki）。
+   * Asks the LLM for a draft in the web preview flow; nothing is written.
+   * @param handlerName - handler 名稱。Handler name.
+   * @param params - 草稿輸入（依 `draft_schema`）。The draft input.
+   * @returns 預先填好的建立參數。The draft create parameters.
+   */
+  createDraft: (handlerName: string, params: Record<string, unknown>): Promise<DraftResponse> =>
+    apiClient.post(`/handlers/${encodeURIComponent(handlerName)}/draft`, { params }),
 
   /**
    * 通用讀取：任何筆記類型，附上負責的 handler 與能不能改、刪。

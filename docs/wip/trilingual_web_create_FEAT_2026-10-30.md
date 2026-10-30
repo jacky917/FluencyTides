@@ -53,7 +53,8 @@
 提示詞的重點，依重要程度：
 
 1. **自然優先**：每句都要是母語者在這個場景裡真的會說出口的話（口語、會話語氣），不是教科書翻譯。
-   三種語言各自從場景出發去想，不是把中文翻成日文、英文。
+   三種語言各自從場景出發去想，不是把中文翻成日文、英文。每句只用那個語言（實測出現過「family の予定」）；
+   不編人名、公司名、數字等場景沒提到的細節（實測出現過「陳經理」），稱呼用通用的稱呼。
 2. **先寫句子，再判斷**：輸出結構固定為 `content → note → familiarity`。熟識度是對已經寫好的這句話
    下判斷：「這句話會對什麼關係的人說」。禁止先定熟識度再造句。
 3. **數量**：使用者會從中挑選，所以盡量列出母語者實際會用的各種說法；沒指定想怎麼答時，涵蓋正反各種回應。
@@ -62,10 +63,11 @@
    熟識度的分布也不必相同（例如英文的語氣層次比日文少，少幾句是正常的）。
 4. **熟識度刻度**：沿用評分提示詞的說明，讓生成與評分的標準一致：0＝正式場合、對重要客戶或長官（最客氣），
    3＝初次見面、店員與客人，5＝同事，7＝朋友，9＝家人（最親密、最隨意）。
-5. **說明**：中文、簡短；寫這句用在什麼對象與場合、語氣的關鍵（例如「ございます是鄭重語，對客人用」），
+5. **說明**：一律繁體中文（實測日文句的說明曾整段寫成日文）、簡短；寫這句用在什麼對象與場合、語氣的關鍵（例如「ございます是鄭重語，對客人用」），
    或是對場景的補充（例如「這是答應但保留時間的說法」）。不重複句子的翻譯。
 6. **卡面情境**：根據背景與想怎麼答，寫成卡片正面的中文情境（`prompt`，對學習者說「你……」），
-   不寫對象（對象差異由各句的熟識度與說明呈現）；其他值得記下的背景放 `context`（可空）。
+   不寫對象（對象差異由各句的熟識度與說明呈現）；其他值得記下的背景放 `context`（可空），只整理場景寫到的事，
+   不推測使用者的心情或動機。
 
 ### 4.1 LLM 輸出結構（`app/schemas/llm/speaking_trilingual.py`）
 
@@ -111,6 +113,9 @@
   `date`（今天）、`status: 1`、`audios: []` 後寫入三個參考答案欄位；熟識度沿用 `trilingual_familiarity.py` 的規則。
   沒帶參考答案時行為與現在相同（空陣列）。
 
+- **反向代理**：`frontend/nginx.conf.template` 的 `/api/` 加 `proxy_read_timeout 180s`。實測生成一張要 40–60 秒
+  （claude-code opus），nginx 預設的 60 秒會切斷草稿請求。
+
 ### 6.2 卡片背面（模板與 CSS）
 
 - `Speaking_Trilingual_Dark_back.html` 的 `buildReferenceItem`：句子下方加 `<div class="ref-note">`（`textContent`
@@ -121,10 +126,14 @@
 
 ### 6.3 前端
 
-- `lib/handlerCapabilities.ts`：`preview` 流程且開放網頁時視為可建卡。
-- `CardGenerator.tsx`：`flow="preview"` 時改用「草稿輸入 → 預覽 → 建立／廢棄」三段；輸入表單由 `draft_schema` 產生。
-- 新元件 `TrilingualDraftPreview.tsx`：情境／補充可編輯、三語分區、勾選、刻度條（配色與卡片相同）、說明小字。
-- `api.ts`／`client.ts`：`createDraft(handler, params)`；型別補 `draft_schema`。
+- `lib/handlerCapabilities.ts`：不用改（含 web 的管道本來就可選）。
+- `lib/createForm.ts`：支援 `enum`（只能選的下拉，用於「對象」）。
+- `CardGenerator.tsx`：`flow="preview"` 時改用 `components/generate/PreviewCreate.tsx`（「草稿輸入 → 預覽 → 建立／廢棄」）；
+  牌組說明、schema 欄位、建立成功提示抽到 `components/generate/formParts.tsx`，兩種流程共用。
+- 新元件 `TrilingualDraftPreview.tsx`：情境／補充可編輯、三語分區（各有全選／全不選）、勾選、刻度條（配色與卡片相同；
+  數字用一般文字色，淺藍在亮色主題上太淡）、說明小字。勾選與排序的邏輯在 `lib/trilingualDraft.ts`。
+- 廢棄回到輸入畫面並保留輸入內容；生成中切換卡片類型會丟掉草稿（元件重新掛載）。
+- `api.ts`／`client.ts`：`createDraft(handler, params)`；型別補 `draft_schema` 與三語建立參數。
 
 ## 7. 測試
 

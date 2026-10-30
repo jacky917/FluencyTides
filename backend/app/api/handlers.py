@@ -4,6 +4,7 @@ Task Handlers REST API 路由模組（handlers 計畫書 D5、§4）。
 Task handlers REST API router module.
 
 - ``GET    /handlers``                               所有 handler、能力與建卡表單
+- ``POST   /handlers/{name}/draft``                  網頁預覽流程的草稿（LLM 生成，不寫入）
 - ``POST   /handlers/{name}/notes``                  建卡（201）
 - ``GET    /handlers/{name}/notes/{note_id}``        handler 讀取
 - ``PATCH  /handlers/{name}/notes/{note_id}``        修改欄位
@@ -31,6 +32,8 @@ from app.schemas.notes import (
     CreateNoteRequest,
     CreateNoteResponse,
     DeleteNoteResponse,
+    DraftRequest,
+    DraftResponse,
     GraphResponse,
     HandlerInfo,
     NoteDetail,
@@ -92,12 +95,47 @@ async def create_note(
     try:
         return await note_service.create(handler_name, body.deck, body.note_type, body.params)
     except ValidationError as exc:
-        # 端點內拋的 ValidationError 不會被 FastAPI 自動轉成 422，要改拋 RequestValidationError
-        errors = [
-            {**error, "loc": ("body", "params", *error["loc"])}
-            for error in exc.errors(include_url=False, include_context=False)
-        ]
-        raise RequestValidationError(errors) from exc
+        raise RequestValidationError(_params_errors(exc)) from exc
+
+
+def _params_errors(exc: ValidationError) -> list[dict[str, object]]:
+    """參數驗證錯誤轉成 FastAPI 的 422 形狀，``loc`` 前面接上 ``body``、``params``（前端對回表單欄位）。
+
+    端點內拋的 ValidationError 不會被 FastAPI 自動轉成 422，要改拋 RequestValidationError。
+    Parameter errors in FastAPI's 422 shape.
+    """
+    return [
+        {**error, "loc": ("body", "params", *error["loc"])}
+        for error in exc.errors(include_url=False, include_context=False)
+    ]
+
+
+@router.post(
+    "/{handler_name}/draft",
+    response_model=DraftResponse,
+    summary="網頁預覽流程：請 LLM 生成建卡草稿",
+    description="只生成、不寫入 Anki。回傳預先填好的建立參數，網頁勾選、修改後送到 POST /handlers/{name}/notes。",
+    responses={
+        **_REFUSED,
+        **_NOT_FOUND,
+        422: {"description": "輸入驗證失敗（detail），或 LLM 回傳的格式不對（ErrorResponse）"},
+        502: {"model": ErrorResponse, "description": "LLM 服務錯誤"},
+    },
+)
+async def draft_note(
+    handler_name: str,
+    body: DraftRequest,
+    note_service: NoteService = Depends(get_note_service),
+) -> dict[str, object]:
+    """生成草稿。Generate a draft.
+
+    Raises:
+        RequestValidationError: 輸入驗證失敗；``loc`` 前面接上 ``body``、``params``。On invalid input.
+    """
+    try:
+        return {"params": await note_service.draft(handler_name, body.params)}
+    except ValidationError as exc:
+        raise RequestValidationError(_params_errors(exc)) from exc
 
 
 @router.get(

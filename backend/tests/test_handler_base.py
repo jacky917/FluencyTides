@@ -164,11 +164,14 @@ class TestCapabilityShapes:
         with pytest.raises(ValueError):
             CreateCapability(channels=("email",), reason="x")
 
-    def test_web_channel_requires_supported_form(self):
+    def test_web_channel_requires_supported(self):
         with pytest.raises(ValueError):
             CreateCapability(channels=("web",), reason="x")
-        with pytest.raises(ValueError):
-            CreateCapability(supported=True, channels=("web",), flow="preview", deck="selected", note_type=V2)
+
+    def test_web_channel_allows_preview_flow(self):
+        """網頁也能用預覽流程（三語對話卡網頁建卡計畫 §6.1）。"""
+        create = CreateCapability(supported=True, channels=("web",), flow="preview", deck="selected", note_type=V2)
+        assert create.reason is None
 
     def test_supported_create_needs_settings(self):
         with pytest.raises(ValueError, match="note_type、flow、deck"):

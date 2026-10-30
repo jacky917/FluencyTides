@@ -305,6 +305,14 @@
             content.textContent = ref.content || '';
             refItem.appendChild(content);
 
+            // 說明（網頁建卡時 LLM 寫的對象、語氣重點或場景補充）：小字顯示在句子下方
+            if (ref.note) {
+                var note = document.createElement('div');
+                note.className = 'ref-note';
+                note.textContent = String(ref.note);
+                refItem.appendChild(note);
+            }
+
             var refAudios = ref.audios || [];
             if (refAudios.length > 0 || tgBot) {
                 var avatarRow = document.createElement('div');

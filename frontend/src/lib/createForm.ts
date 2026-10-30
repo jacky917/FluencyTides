@@ -1,13 +1,13 @@
 /**
- * 建卡表單：把 `GET /handlers` 的 `create_schema`（JSON Schema）轉成表單欄位，並把後端 422 的
- * 錯誤對回欄位（handlers 計畫書 D3、§6）。
+ * 建卡表單：把 `GET /handlers` 的 `create_schema`（或預覽流程的 `draft_schema`，JSON Schema）轉成
+ * 表單欄位，並把後端 422 的錯誤對回欄位（handlers 計畫書 D3、§6）。
  *
  * The create form: turns a handler's `create_schema` into form fields and
  * maps the backend's 422 errors back onto them.
  *
  * 支援的 schema 寫法：`title`、`description`、`required`、`default`、`examples`（可輸入的下拉）、
- * `pattern`、`x-ui: textarea`（多行）；不認得的 `x-ui` 值當一般文字欄位。只畫字串欄位：網頁建卡
- * 只做手動填表（D9），其他型別的參數（例如外語糾錯預覽流程的 LLM 結果）不會出現在網頁表單。
+ * `enum`（只能選的下拉）、`pattern`、`x-ui: textarea`（多行）；不認得的 `x-ui` 值當一般文字欄位。
+ * 只畫字串欄位：其他型別的參數（例如外語糾錯預覽流程的 LLM 結果）不會出現在網頁表單。
  */
 
 /** 表單的一個欄位。One form field. */
@@ -21,6 +21,8 @@ export interface FormField {
   defaultValue: string
   /** 建議值（可輸入的下拉）。Suggested values. */
   examples: string[]
+  /** 只能從中選一個的值（下拉選單）；空陣列表示自由輸入。Allowed values, or empty. */
+  options: string[]
   multiline: boolean
   /** 格式（正規表示式），用來提示；實際驗證由後端負責。A format hint. */
   pattern: string | null
@@ -34,6 +36,7 @@ interface SchemaProperty {
   description?: string
   default?: unknown
   examples?: unknown[]
+  enum?: unknown[]
   pattern?: string
   'x-ui'?: string
 }
@@ -67,6 +70,7 @@ export function schemaFields(schema: Record<string, unknown> | null): { fields: 
       required: required.has(name),
       defaultValue: typeof prop.default === 'string' ? prop.default : '',
       examples: (prop.examples ?? []).filter((example): example is string => typeof example === 'string'),
+      options: (prop.enum ?? []).filter((option): option is string => typeof option === 'string'),
       multiline: prop['x-ui'] === 'textarea',
       pattern: prop.pattern ?? null,
     })

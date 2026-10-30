@@ -242,8 +242,8 @@ def _db_down():
     return mock.patch.object(routing, "_fetch_choices", mock.AsyncMock(side_effect=error))
 
 
-def _to_capability(key_prefix: str, capability_prefix: str = "文字 LLM"):
-    """從 /setconfig 點到某用途的某能力詳情，回傳 (畫面文字, 鍵盤)。
+def _menu_with(key_prefix: str):
+    """開啟 /setconfig 並翻到有這個用途按鈕的那一頁，回傳鍵盤。
 
     用途不在第一頁時往後翻（正式宣告的用途鍵變多時，排在後面的會被擠到下一頁）。
     """
@@ -252,6 +252,12 @@ def _to_capability(key_prefix: str, capability_prefix: str = "文字 LLM"):
         label.startswith("下一頁") for label in _buttons(markup)
     ):
         _, markup, _ = _click(_button_starting(markup, "下一頁"))
+    return markup
+
+
+def _to_capability(key_prefix: str, capability_prefix: str = "文字 LLM"):
+    """從 /setconfig 點到某用途的某能力詳情，回傳 (畫面文字, 鍵盤)。"""
+    markup = _menu_with(key_prefix)
     _, markup, _ = _click(_button_starting(markup, key_prefix))
     text, markup, _ = _click(_button_starting(markup, capability_prefix))
     return text, markup
@@ -408,7 +414,7 @@ def test_saved_but_screen_update_failed_says_saved(llm_route_db, llm_whitelist):
 
 def test_stale_button_after_whitelist_change(llm_route_db, llm_whitelist):
     """白名單改了（例如重新部署）：舊按鈕提示過期，不做任何事。"""
-    _, markup = _open_menu()
+    markup = _menu_with(f"{KEY}：")
     old_button = _button_starting(markup, f"{KEY}：")
     with mock.patch.object(settings, "LLM_CLAUDE_CODE_MODELS", ("opus@low",)):
         text, _, query = _click(old_button)
@@ -431,7 +437,7 @@ def test_db_failure_while_saving_says_outcome_unknown(llm_route_db, llm_whitelis
 
 def test_db_down_menu_is_read_only(llm_route_db, llm_whitelist):
     """讀不到資料庫：/setconfig 仍列出清單並附警示，但任何按鈕都只提示讀不到 DB、不做操作。"""
-    _, markup = _open_menu()
+    markup = _menu_with(f"{KEY}：")
     button = _button_starting(markup, f"{KEY}：")
     with _db_down():
         routing.invalidate_cache()  # 快取中的設定在故障期間仍有效；清掉才會真的去讀 DB
@@ -493,7 +499,7 @@ def test_command_error_reply_is_valid_html(llm_route_db, llm_whitelist):
 
 def test_unexpected_error_is_reported_with_context(llm_route_db, llm_whitelist, caplog):
     """服務層拋出非預期例外：彈出錯誤訊息，log 帶 user id 與用途鍵。"""
-    _, markup = _open_menu()
+    markup = _menu_with(f"{KEY}：")
     button = _button_starting(markup, f"{KEY}：")
     with mock.patch.object(models_menu.capability_route_service, "describe", side_effect=RuntimeError("boom")):
         _, _, query = _click(button)
@@ -505,7 +511,7 @@ def test_unexpected_error_is_reported_with_context(llm_route_db, llm_whitelist, 
 
 def test_unchanged_message_is_not_an_error(llm_route_db, llm_whitelist):
     """重按同一個按鈕（內容沒變）時 Telegram 回 400，視為成功。"""
-    _, markup = _open_menu()
+    markup = _menu_with(f"{KEY}：")
     query = _callback_query(_button_starting(markup, f"{KEY}："))
     query.message.edit_text.side_effect = TelegramBadRequest(
         method=mock.MagicMock(), message="Bad Request: message is not modified"
@@ -592,7 +598,7 @@ def test_missing_package_does_not_lock_the_menu(llm_route_db, llm_whitelist):
         return real(provider)
 
     with mock.patch.object(factory, "resolve_client_class", side_effect=resolve):
-        _, markup = _open_menu()
+        markup = _menu_with(f"⚠️ {KEY}：")
         _, markup, _ = _click(_button_starting(markup, f"⚠️ {KEY}："))
         text, markup, query = _click(_button_starting(markup, "文字 LLM"))
 
@@ -694,7 +700,7 @@ def test_saving_the_global_key_rebuilds_the_global_client(llm_route_db, llm_whit
 
 def test_long_error_alert_fits_telegram_limit(llm_route_db, llm_whitelist):
     """非預期錯誤的訊息很長：彈出提示截在 Telegram 的 200 字元上限內（超過會被拒收、管理員什麼都看不到）。"""
-    _, markup = _open_menu()
+    markup = _menu_with(f"{KEY}：")
     button = _button_starting(markup, f"{KEY}：")
     with mock.patch.object(models_menu.capability_route_service, "describe", side_effect=RuntimeError("x" * 500)):
         _, _, query = _click(button)

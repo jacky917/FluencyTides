@@ -61,6 +61,10 @@ class HandlerInfo(BaseModel):
     create_schema: dict[str, Any] | None = Field(
         description="網頁建卡表單的 JSON Schema；不開放、不是表單流程或 Anki 連不上時為 null"
     )
+    draft_schema: dict[str, Any] | None = Field(
+        default=None,
+        description="網頁預覽流程的草稿表單（JSON Schema）：送到 POST /handlers/{name}/draft；沒有這個流程時為 null",
+    )
     json_fields: list[str] = Field(description="JSON 欄位：建卡表單不列、不能直接修改、網頁唯讀顯示")
     json_field_specs: dict[str, "JsonFieldSpecOut"] = Field(
         default_factory=dict, description="能以表單編輯的 JSON 欄位：標題與每一筆的 JSON Schema"
@@ -154,6 +158,18 @@ class CreateNoteRequest(BaseModel):
         default_factory=dict,
         description="建立參數：標準建立是 {欄位名: 值}；覆寫建立的 handler 依 create_schema",
     )
+
+
+class DraftRequest(BaseModel):
+    """``POST /handlers/{name}/draft``：網頁預覽流程的草稿輸入。"""
+
+    params: dict[str, Any] = Field(default_factory=dict, description="草稿輸入，依 draft_schema")
+
+
+class DraftResponse(BaseModel):
+    """草稿：預先填好的建立參數。The draft create parameters."""
+
+    params: dict[str, Any] = Field(description="建立參數的草稿；勾選、修改後原樣送到 POST /handlers/{name}/notes")
 
 
 class CreateNoteResponse(BaseModel):

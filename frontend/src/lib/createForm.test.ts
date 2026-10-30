@@ -48,6 +48,17 @@ describe('schemaFields', () => {
     expect(skipped).toEqual(['llm_result'])
   })
 
+  it('reads enum as select options (the trilingual draft audience)', () => {
+    const { fields } = schemaFields({
+      properties: {
+        audience: { type: 'string', title: '對象', default: '不指定', enum: ['不指定', '同事', '朋友'] },
+        audience_note: { type: 'string', title: '對象補充', default: '' },
+      },
+    })
+    expect(fields[0]).toMatchObject({ defaultValue: '不指定', options: ['不指定', '同事', '朋友'] })
+    expect(fields[1].options).toEqual([])
+  })
+
   it('has no fields without a schema', () => {
     expect(schemaFields(null)).toEqual({ fields: [], skipped: [] })
   })

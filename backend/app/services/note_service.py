@@ -118,6 +118,7 @@ class NoteService:
                 "note_types": list(handler.supported_models),
                 "capabilities": capabilities,
                 "create_schema": create_schema,
+                "draft_schema": _draft_schema(handler),
                 "json_fields": list(handler.JSON_FIELDS),
                 "json_field_specs": json_field_specs(handler),
                 "media_fields": list(handler.MEDIA_FIELDS),
@@ -208,6 +209,30 @@ class NoteService:
 
         note_ids = await handler.execute_create(self.card_service, self.relation_service, deck, note_type, parameters)
         return {"note_ids": list(note_ids), "deck": deck, "sync_warning": await self.sync_after_write()}
+
+    async def draft(self, handler_name: str, params: Mapping[str, object]) -> dict[str, object]:
+        """網頁預覽流程的草稿：檢查能力 → 驗證輸入 → ``execute_draft``；不寫入 Anki。
+
+        Draft for the web preview flow; nothing is written.
+
+        Args:
+            handler_name: handler 名稱。The handler.
+            params: 草稿輸入（``DRAFT_PARAMS``）。The draft input.
+
+        Returns:
+            建立參數的草稿。The draft create parameters.
+
+        Raises:
+            HandlerNotFoundError: handler 不存在。Unknown handler.
+            HandlerOperationUnsupportedError: 沒有網頁的預覽流程。No web preview flow.
+            pydantic.ValidationError: 輸入驗證失敗（REST 轉成 422）。Invalid input.
+            LLMServiceError、LLMGenerationError 等：LLM 呼叫失敗或回傳格式不對。When the LLM fails.
+        """
+        handler = self.registry.get_handler(handler_name)
+        if handler.DRAFT_PARAMS is None or _draft_schema(handler) is None:
+            raise HandlerOperationUnsupportedError(f"「{handler.title}」沒有網頁的預覽建卡流程")
+        parameters = handler.DRAFT_PARAMS.model_validate(dict(params)).model_dump()
+        return await handler.execute_draft(parameters)
 
     async def read(self, handler_name: str, note_id: int) -> dict[str, object]:
         """handler 讀取（§4.3）：成組卡片的 handler 之後會附上整組。
@@ -550,6 +575,17 @@ def json_field_specs(handler: BaseHandler) -> dict[str, object]:
         name: {"title": spec.title, "item_schema": spec.item.model_json_schema()}
         for name, spec in handler.JSON_FIELD_SPECS.items()
     }
+
+
+def _draft_schema(handler: BaseHandler) -> dict[str, object] | None:
+    """網頁預覽流程的草稿表單（``DRAFT_PARAMS`` 的 JSON Schema）；沒有這個流程時為 None。
+
+    The draft form schema of the web preview flow, or None.
+    """
+    create = handler.CAPABILITIES.create
+    if handler.DRAFT_PARAMS is None or not create.supported or create.flow != "preview" or "web" not in create.channels:
+        return None
+    return handler.DRAFT_PARAMS.model_json_schema()
 
 
 def _require(operation: Operation) -> None:

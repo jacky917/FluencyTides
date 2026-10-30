@@ -64,6 +64,9 @@ class BaseHandler(ABC):
         SEARCH_FIELDS: 網頁欄位搜尋的欄位按鈕（要搭配 ``CAPABILITIES.search``）；不宣告時由
             :meth:`search_fields` 從 ``CREATE_PARAMS`` 與 ``JSON_FIELD_SPECS`` 自動產生。
             The web field-search buttons; derived when not declared.
+        DRAFT_PARAMS: 網頁預覽流程（``create.flow="preview"``）向 LLM 要草稿的輸入模型；服務層以它驗證
+            輸入、產生網頁表單，再交給 :meth:`execute_draft`。The draft input model of the
+            web preview flow.
     """
 
     CAPABILITIES: ClassVar[HandlerCapabilities] = HandlerCapabilities()
@@ -75,6 +78,7 @@ class BaseHandler(ABC):
     CREATE_TAGS: ClassVar[tuple[str, ...]] = ("HandlerGenerated",)
     CREATE_PARAMS: ClassVar[type[BaseModel] | None] = None
     SEARCH_FIELDS: ClassVar[tuple[SearchField, ...]] = ()
+    DRAFT_PARAMS: ClassVar[type[BaseModel] | None] = None
 
     def search_fields(self) -> tuple[SearchField, ...]:
         """網頁欄位搜尋的欄位按鈕：有宣告 ``SEARCH_FIELDS`` 就用它；否則依建立參數（媒體欄位除外）
@@ -163,6 +167,22 @@ class BaseHandler(ABC):
             tags=list(self.CREATE_TAGS),
         )
         return [note_id]
+
+    async def execute_draft(self, parameters: dict[str, object]) -> dict[str, object]:
+        """網頁預覽流程的草稿：依使用者的輸入（已經 ``DRAFT_PARAMS`` 驗證）請 LLM 生成，不寫入 Anki。
+
+        Draft for the web preview flow, generated from the validated input; nothing is written.
+
+        回傳值是預先填好的建立參數（``CREATE_PARAMS`` 的形狀）：網頁讓使用者勾選、修改後，原樣送回
+        建卡端點。
+
+        Args:
+            parameters: ``DRAFT_PARAMS`` 驗證後的輸入。The validated input.
+
+        Returns:
+            建立參數的草稿。The draft create parameters.
+        """
+        raise NotImplementedError(f"{self.handler_name} 沒有草稿流程")
 
     async def execute_read(
         self,

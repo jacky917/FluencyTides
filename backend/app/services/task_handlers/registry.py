@@ -217,6 +217,14 @@ def validate_handler(handler: BaseHandler) -> None:
     if handler.CREATE_PARAMS is not None and not overrides_create:
         problems.append("宣告了 CREATE_PARAMS，但用的是標準建立（參數就是筆記欄位）")
 
+    # 網頁的預覽流程：先以 DRAFT_PARAMS 的表單要草稿（execute_draft），草稿就是 CREATE_PARAMS 的形狀
+    web_preview = create.supported and create.flow == "preview" and "web" in create.channels
+    overrides_draft = cls.execute_draft is not BaseHandler.execute_draft
+    if web_preview and (handler.DRAFT_PARAMS is None or not overrides_draft or handler.CREATE_PARAMS is None):
+        problems.append("網頁的預覽流程要宣告 DRAFT_PARAMS、CREATE_PARAMS，並覆寫 execute_draft")
+    if (handler.DRAFT_PARAMS is not None or overrides_draft) and not web_preview:
+        problems.append("宣告了草稿（DRAFT_PARAMS 或 execute_draft），但沒有開放網頁的預覽流程")
+
     # JSON 欄位的表單編輯：開放就要有格式；格式只能宣告在 JSON_FIELDS 之內
     if caps.update_json.supported and not handler.JSON_FIELD_SPECS:
         problems.append("開放 update_json，但沒有宣告 JSON_FIELD_SPECS")

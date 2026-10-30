@@ -89,9 +89,11 @@ class TestInitialCapabilities:
 
     def test_speaking_trilingual(self):
         caps = _caps("speaking_trilingual")
-        assert caps["create"]["supported"] is False
-        assert caps["create"]["channels"] == []  # TG 沒有建卡入口，Generate 頁不顯示
-        assert caps["create"]["reason"] == "網頁建卡尚未開放"
+        # 網頁的預覽流程（三語對話卡網頁建卡計畫）；TG 沒有建卡入口
+        assert caps["create"] == {
+            "supported": True, "channels": ["web"], "flow": "preview", "deck": "selected",
+            "fixed_deck": None, "note_type": "Speaking_Trilingual_Dark", "reason": None,
+        }
         assert caps["update_fields"] == {"supported": False, "reason": "三語對話卡的欄位修改尚未開放"}
         assert caps["delete"] == {"supported": False, "reason": "三語對話卡的刪除尚未開放"}
         assert caps["actions"] == SPEAKING_ACTIONS
@@ -127,9 +129,9 @@ class TestInitialCapabilities:
         assert verb_pair.CAPABILITIES.existing_note_ops() == core_verb.CAPABILITIES.existing_note_ops()
 
     def test_web_creatable_handlers(self):
-        """Generate 頁可選單字卡（§6）與人脈卡（人脈卡計畫書 §3.11）。"""
+        """Generate 頁可選單字卡（§6）、人脈卡（人脈卡計畫書 §3.11）與三語對話卡（預覽流程）。"""
         web = [h.handler_name for h in handler_registry.all_handlers() if "web" in h.CAPABILITIES.create.channels]
-        assert web == ["vocabulary_mining", "person_profile"]
+        assert sorted(web) == ["person_profile", "speaking_trilingual", "vocabulary_mining"]
 
 
 # =============================================================================
@@ -235,7 +237,9 @@ class TestCreateParams:
     def test_trilingual_prompt_required(self):
         with pytest.raises(ValidationError):
             SpeakingTrilingualCreateParams.model_validate({"context": "x"})
-        assert SpeakingTrilingualCreateParams(prompt="x").model_dump() == {"prompt": "x", "context": ""}
+        assert SpeakingTrilingualCreateParams(prompt="x").model_dump() == {
+            "prompt": "x", "context": "", "references_zh": [], "references_ja": [], "references_en": [],
+        }
 
     def test_expression_accepts_exactly_what_tg_sends(self):
         """expression_fsm 不傳語言欄位；預設值要與 handler 自己讀參數時的預設相同。"""
