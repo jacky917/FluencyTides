@@ -69,6 +69,20 @@ def contains_term(field: str | None, value: str) -> str:
     return f'"{field}:*{escaped}*"' if field else f'"{escaped}"'
 
 
+def tag_term(tag: str) -> str:
+    """有這個標籤（含子標籤，例如 ``Interview`` 也找到 ``Interview::Final``）的條件，照字面比對。
+
+    A term matching notes with this tag or its child tags, literally.
+
+    Args:
+        tag: 標籤，例如 ``BusinessJapanese``。The tag.
+
+    Returns:
+        例如 ``"tag:Business\\_Japanese"``。The search term.
+    """
+    return f'"tag:{escape_search_value(tag)}"'
+
+
 def deck_term(deck: str) -> str:
     """只比對這個牌組（含子牌組）的條件，名稱中的萬用字元照字面比對。
 

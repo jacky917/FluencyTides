@@ -163,11 +163,28 @@ export interface CreateNoteRequest {
   note_type: string;
   /** 標準建立是 `{欄位名: 值}`；其他 handler 依 `create_schema`。The parameters. */
   params: Record<string, unknown>;
+  /** 使用者加的標籤（不能有空白、不能是系統標籤）；建卡後另外加上。User tags. */
+  tags?: string[];
+}
+
+/** 這種卡片用過的一個標籤與次數。A tag and how many notes use it. */
+export interface TagCount {
+  tag: string;
+  count: number;
+}
+
+/** 草稿建議的標籤。A tag suggested with a draft. */
+export interface SuggestedTag {
+  tag: string;
+  /** 這種卡片是否用過；false 表示建卡時會新增一個標籤。Whether it already exists. */
+  existing: boolean;
 }
 
 /** `POST /handlers/{name}/draft` 的回應：預先填好的建立參數。The draft create parameters. */
 export interface DraftResponse {
   params: Record<string, unknown>;
+  /** LLM 建議的標籤（建卡時放進請求的 `tags`）。Suggested tags. */
+  suggested_tags: SuggestedTag[];
 }
 
 /** 三語對話卡的一句參考答案（草稿與建卡參數）。One trilingual reference answer. */

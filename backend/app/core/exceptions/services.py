@@ -324,3 +324,12 @@ class InvalidNoteFieldsError(ServiceBaseError):
     """
     error_code = "INVALID_NOTE_FIELDS"
     status_code = 422
+
+
+class TagInvalidError(ServiceBaseError):
+    """建卡時加的標籤不合格：含空白、是系統標籤、太長或太多。
+
+    A tag given at creation is invalid: whitespace, a system tag, too long or too many.
+    """
+    error_code = "TAG_INVALID"
+    status_code = 400

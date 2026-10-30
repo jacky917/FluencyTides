@@ -30,11 +30,17 @@ from app.core.exceptions import (
     JsonFieldConflictError,
     NoteNotOwnedByHandlerError,
     NoteTypeNotCreatableError,
+    TagInvalidError,
 )
+from app.services.tag_rules import is_system_tag, normalize_tags
+
+#: 生成草稿時放進提示詞的既有標籤數（依次數取前幾個）。Existing tags given to the LLM.
+MAX_PROMPT_TAGS = 50
 from app.infrastructure.anki.client import AnkiConnectError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
-from app.infrastructure.anki.search import contains_term, note_types_query
+from app.infrastructure.anki.search import contains_term, note_types_query, tag_term
 from app.services.task_handlers.base import note_detail, note_field_values
+from app.services.task_handlers.capabilities import ANY_FIELD_KEY, TAG_SEARCH_KEY
 from app.services.task_handlers.registry import handler_registry
 
 if TYPE_CHECKING:
@@ -165,8 +171,9 @@ class NoteService:
         params: Mapping[str, object],
         *,
         tg_bot: str | None = None,
+        tags: list[str] | None = None,
     ) -> dict[str, object]:
-        """建卡：檢查能力 → 驗證參數 → ``execute_create`` → 寫入後同步（§4.2）。
+        """建卡：檢查能力 → 驗證參數與標籤 → ``execute_create`` → 加標籤 → 寫入後同步（§4.2）。
 
         Create cards: capability check, parameter validation, the handler's
         create, then the sync after writing.
@@ -178,6 +185,8 @@ class NoteService:
             params: 建立參數（標準建立是筆記欄位；否則是 ``CREATE_PARAMS``）。The parameters.
             tg_bot: 寫進卡片的 TG Bot 名稱；預設 ``settings.TG_BOT_USERNAME``，TG 傳入自己的覆寫。
                 只用於宣告了 ``CREATE_PARAMS`` 的 handler。The bot username.
+            tags: 使用者加的標籤（``tag_rules.normalize_tags`` 整理）；建卡後另外加上，各 handler 的
+                建卡程式不用管。User tags, added after the handler creates the notes.
 
         Returns:
             ``{"note_ids", "deck", "sync_warning"}``。
@@ -190,6 +199,7 @@ class NoteService:
             FieldNotEditableError: 填了 JSON、媒體欄位。A locked field was given.
             FieldMismatchError: 欄位不屬於這個筆記類型。Unknown fields.
             DuplicateCardError: 首欄位重複。Duplicate first field.
+            TagInvalidError: 標籤不合格（在建卡之前檢查，不會建出卡片）。Invalid tags.
         """
         handler = self.registry.get_handler(handler_name)
         create = handler.CAPABILITIES.create
@@ -207,8 +217,48 @@ class NoteService:
             model = await self._standard_params_model(handler, note_type)
             parameters = model.model_validate(dict(params)).model_dump(by_alias=True)
 
+        user_tags = normalize_tags(tags or [])
+
         note_ids = await handler.execute_create(self.card_service, self.relation_service, deck, note_type, parameters)
-        return {"note_ids": list(note_ids), "deck": deck, "sync_warning": await self.sync_after_write()}
+        tag_warning = await self._add_tags(list(note_ids), user_tags)
+        sync = await self.sync_after_write()
+        warning = "\n".join(w for w in (tag_warning, sync) if w) or None
+        return {"note_ids": list(note_ids), "deck": deck, "sync_warning": warning}
+
+    async def _add_tags(self, note_ids: list[int], tags: list[str]) -> str | None:
+        """建卡後加上使用者的標籤；失敗時卡片已建立，回傳提醒而不拋錯（避免使用者以為沒建成而重建）。
+
+        Add the user's tags after creation; on failure return a warning instead of raising.
+        """
+        if not tags or not note_ids:
+            return None
+        try:
+            await self.anki_client.add_tags(note_ids, " ".join(tags))
+        except AnkiConnectError as exc:
+            logger.warning("筆記 %s 加標籤 %s 失敗: %s", note_ids, tags, exc)
+            return f"卡片已建立，但標籤沒加上（{'、'.join(tags)}）：{exc}"
+        return None
+
+    async def tags(self, handler_name: str) -> list[dict[str, object]]:
+        """這個 handler 的筆記類型用過的標籤與次數，依次數排序，排除系統標籤（自動完成與 LLM 推薦用）。
+
+        The tags used by the handler's notes with counts, most used first, system tags excluded.
+
+        Raises:
+            HandlerNotFoundError: handler 不存在。Unknown handler.
+            HandlerOperationUnsupportedError: 不開放讀取。Reading not offered.
+        """
+        handler = self.registry.get_handler(handler_name)
+        _require(handler.CAPABILITIES.read)
+        note_ids = await self.anki_client.find_notes(note_types_query(list(handler.supported_models)))
+        notes = await self.anki_client.get_notes_info(note_ids) if note_ids else []
+        counts: dict[str, int] = {}
+        for note in notes:
+            for tag in note.tags:
+                if not is_system_tag(tag):
+                    counts[tag] = counts.get(tag, 0) + 1
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0].casefold()))
+        return [{"tag": tag, "count": count} for tag, count in ranked]
 
     async def draft(self, handler_name: str, params: Mapping[str, object]) -> dict[str, object]:
         """網頁預覽流程的草稿：檢查能力 → 驗證輸入 → ``execute_draft``；不寫入 Anki。
@@ -220,7 +270,8 @@ class NoteService:
             params: 草稿輸入（``DRAFT_PARAMS``）。The draft input.
 
         Returns:
-            建立參數的草稿。The draft create parameters.
+            ``{"params": 建立參數的草稿, "suggested_tags": [{"tag", "existing"}]}``。建議的標籤去掉不合格與
+            系統標籤；與既有標籤只差大小寫時改用既有的寫法。The draft and its suggested tags.
 
         Raises:
             HandlerNotFoundError: handler 不存在。Unknown handler.
@@ -232,7 +283,10 @@ class NoteService:
         if handler.DRAFT_PARAMS is None or _draft_schema(handler) is None:
             raise HandlerOperationUnsupportedError(f"「{handler.title}」沒有網頁的預覽建卡流程")
         parameters = handler.DRAFT_PARAMS.model_validate(dict(params)).model_dump()
-        return await handler.execute_draft(parameters)
+        existing = [str(item["tag"]) for item in await self.tags(handler_name)]
+        draft = dict(await handler.execute_draft(parameters, existing[:MAX_PROMPT_TAGS]))
+        raw_tags = draft.pop("tags", None)
+        return {"params": draft, "suggested_tags": _suggested_tags(raw_tags, existing)}
 
     async def read(self, handler_name: str, note_id: int) -> dict[str, object]:
         """handler 讀取（§4.3）：成組卡片的 handler 之後會附上整組。
@@ -356,7 +410,8 @@ class NoteService:
         Turn field-search conditions into an Anki query; conditions are ANDed.
 
         - 限定這個 handler 負責的筆記類型。
-        - 每個條件比對欄位按鈕對應的 Anki 欄位，任一個「包含」關鍵字就算；鍵 ``*`` 表示任何欄位。
+        - 每個條件比對欄位按鈕對應的 Anki 欄位，任一個「包含」關鍵字就算；鍵 ``*`` 表示任何欄位，
+          鍵 ``#`` 表示標籤（有這個標籤或它的子標籤，不做部分比對）。
         - 關鍵字照字面比對（萬用字元等會被跳脫）；含 ``&``、``<`` 等時也比對 HTML 轉義後的寫法
           （JSON 欄位與 Anki 編輯器存的是轉義後的文字）。空白的關鍵字略過。
 
@@ -380,9 +435,12 @@ class NoteService:
             value = value.strip()
             if not value:
                 continue
-            if key != "*" and key not in fields:
+            if key == TAG_SEARCH_KEY:
+                terms.append(tag_term(value))
+                continue
+            if key != ANY_FIELD_KEY and key not in fields:
                 raise InvalidNoteFieldsError(f"「{handler.title}」不能搜尋這個欄位：{key}")
-            targets: tuple[str | None, ...] = (None,) if key == "*" else fields[key]
+            targets: tuple[str | None, ...] = (None,) if key == ANY_FIELD_KEY else fields[key]
             variants = dict.fromkeys((value, html.escape(value)))
             alternatives = [contains_term(field, variant) for field in targets for variant in variants]
             terms.append(alternatives[0] if len(alternatives) == 1 else "(" + " OR ".join(alternatives) + ")")
@@ -575,6 +633,27 @@ def json_field_specs(handler: BaseHandler) -> dict[str, object]:
         name: {"title": spec.title, "item_schema": spec.item.model_json_schema()}
         for name, spec in handler.JSON_FIELD_SPECS.items()
     }
+
+
+def _suggested_tags(raw: object, existing: list[str]) -> list[dict[str, object]]:
+    """整理 LLM 建議的標籤：不合格（含空白、系統標籤等）的丟掉、去重；與既有標籤只差大小寫時用既有的寫法。
+
+    Clean up the LLM's suggested tags and mark which already exist.
+    """
+    known = {tag.casefold(): tag for tag in existing}
+    result: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for item in raw if isinstance(raw, list) else []:
+        try:
+            cleaned = normalize_tags([str(item)])
+        except TagInvalidError:
+            continue
+        if not cleaned or cleaned[0].casefold() in seen:
+            continue
+        tag = known.get(cleaned[0].casefold(), cleaned[0])
+        seen.add(tag.casefold())
+        result.append({"tag": tag, "existing": tag.casefold() in known})
+    return result
 
 
 def _draft_schema(handler: BaseHandler) -> dict[str, object] | None:

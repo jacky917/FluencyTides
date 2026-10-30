@@ -17,6 +17,7 @@ from typing import Type
 
 from app.core.exceptions import FluencyTidesError
 from app.services.task_handlers.base import BaseHandler
+from app.services.task_handlers.capabilities import ANY_FIELD_KEY, TAG_SEARCH_KEY
 from app.services.task_handlers.model_fields import model_field_names
 from app.services.task_handlers.relation_graph import RelationGraphMixin
 
@@ -238,8 +239,8 @@ def validate_handler(handler: BaseHandler) -> None:
         keys = [f.key for f in search_fields]
         if not search_fields:
             problems.append("開放 search，但沒有可搜尋的欄位（宣告 SEARCH_FIELDS 或 CREATE_PARAMS）")
-        if len(set(keys)) != len(keys) or "*" in keys:
-            problems.append(f"SEARCH_FIELDS 的鍵重複或用了保留的「*」：{keys}")
+        if len(set(keys)) != len(keys) or {ANY_FIELD_KEY, TAG_SEARCH_KEY} & set(keys):
+            problems.append(f"SEARCH_FIELDS 的鍵重複或用了保留的「*」「#」：{keys}")
         if any(not f.fields for f in search_fields):
             problems.append("SEARCH_FIELDS 有欄位按鈕沒有對應的 Anki 欄位")
 

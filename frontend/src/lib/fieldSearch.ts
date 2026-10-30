@@ -9,6 +9,9 @@ import type { HandlerInfo, SearchCondition } from '../types/api'
 /** 「全部欄位」的鍵（後端保留）。The key for "any field". */
 export const ANY_FIELD = '*'
 
+/** 「標籤」的鍵（後端保留；比對這個標籤與它的子標籤）。The key for tags. */
+export const TAG_FIELD = '#'
+
 /** 一個條件（`id` 給 React 的 key 與刪除用）。One condition. */
 export interface FieldCondition {
   id: number
@@ -93,7 +96,7 @@ export function requestConditions(state: FieldSearchState): SearchCondition[] {
 }
 
 /**
- * 欄位按鈕的名稱（`*` 是「全部欄位」；找不到時顯示鍵）。
+ * 欄位按鈕的名稱（`*` 是「全部欄位」、`#` 是「標籤」；找不到時顯示鍵）。
  * The label of a field button.
  * @param handler - handler。The handler.
  * @param key - 欄位按鈕的鍵。The key.
@@ -101,6 +104,7 @@ export function requestConditions(state: FieldSearchState): SearchCondition[] {
  */
 export function fieldTitle(handler: HandlerInfo | undefined, key: string): string {
   if (key === ANY_FIELD) return '全部欄位'
+  if (key === TAG_FIELD) return '標籤'
   return handler?.search_fields?.find((f) => f.key === key)?.title ?? key
 }
 

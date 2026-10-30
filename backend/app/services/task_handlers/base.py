@@ -168,19 +168,21 @@ class BaseHandler(ABC):
         )
         return [note_id]
 
-    async def execute_draft(self, parameters: dict[str, object]) -> dict[str, object]:
+    async def execute_draft(self, parameters: dict[str, object], existing_tags: list[str]) -> dict[str, object]:
         """網頁預覽流程的草稿：依使用者的輸入（已經 ``DRAFT_PARAMS`` 驗證）請 LLM 生成，不寫入 Anki。
 
         Draft for the web preview flow, generated from the validated input; nothing is written.
 
         回傳值是預先填好的建立參數（``CREATE_PARAMS`` 的形狀）：網頁讓使用者勾選、修改後，原樣送回
-        建卡端點。
+        建卡端點。另可帶 ``tags`` 鍵（建議的標籤），服務層取出來整理成 ``suggested_tags``。
 
         Args:
             parameters: ``DRAFT_PARAMS`` 驗證後的輸入。The validated input.
+            existing_tags: 這種卡片用過的標籤（依次數排序、不含系統標籤），給 LLM 優先沿用。
+                Tags already used by this kind of card, most used first.
 
         Returns:
-            建立參數的草稿。The draft create parameters.
+            建立參數的草稿（可帶 ``tags``）。The draft create parameters, optionally with ``tags``.
         """
         raise NotImplementedError(f"{self.handler_name} 沒有草稿流程")
 

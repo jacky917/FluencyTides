@@ -5,7 +5,8 @@ Task handlers REST API router module.
 
 - ``GET    /handlers``                               所有 handler、能力與建卡表單
 - ``POST   /handlers/{name}/draft``                  網頁預覽流程的草稿（LLM 生成，不寫入）
-- ``POST   /handlers/{name}/notes``                  建卡（201）
+- ``POST   /handlers/{name}/notes``                  建卡（201），可帶使用者的標籤
+- ``GET    /handlers/{name}/tags``                   這種卡片用過的標籤與次數（自動完成、推薦用）
 - ``GET    /handlers/{name}/notes/{note_id}``        handler 讀取
 - ``PATCH  /handlers/{name}/notes/{note_id}``        修改欄位
 - ``PUT    /handlers/{name}/notes/{note_id}/json/{field}``  整欄寫入 JSON 欄位（json_field_editor 計畫）
@@ -39,6 +40,7 @@ from app.schemas.notes import (
     NoteDetail,
     SearchQueryRequest,
     SearchQueryResponse,
+    TagCount,
     UpdateJsonRequest,
     UpdateJsonResponse,
     UpdateNoteRequest,
@@ -93,7 +95,7 @@ async def create_note(
             前端可以把錯誤對到表單欄位。On invalid parameters.
     """
     try:
-        return await note_service.create(handler_name, body.deck, body.note_type, body.params)
+        return await note_service.create(handler_name, body.deck, body.note_type, body.params, tags=body.tags)
     except ValidationError as exc:
         raise RequestValidationError(_params_errors(exc)) from exc
 
@@ -108,6 +110,18 @@ def _params_errors(exc: ValidationError) -> list[dict[str, object]]:
         {**error, "loc": ("body", "params", *error["loc"])}
         for error in exc.errors(include_url=False, include_context=False)
     ]
+
+
+@router.get(
+    "/{handler_name}/tags",
+    response_model=list[TagCount],
+    summary="這種卡片用過的標籤",
+    description="依使用次數排序，排除系統標籤（建卡固定加的、流程標記用的、LLM:: 開頭的等）。",
+    responses={**_REFUSED, **_NOT_FOUND, **_ANKI_ERROR},
+)
+async def list_tags(handler_name: str, note_service: NoteService = Depends(get_note_service)) -> list[dict[str, object]]:
+    """標籤與次數。Tags with counts."""
+    return await note_service.tags(handler_name)
 
 
 @router.post(
@@ -133,7 +147,7 @@ async def draft_note(
         RequestValidationError: 輸入驗證失敗；``loc`` 前面接上 ``body``、``params``。On invalid input.
     """
     try:
-        return {"params": await note_service.draft(handler_name, body.params)}
+        return await note_service.draft(handler_name, body.params)
     except ValidationError as exc:
         raise RequestValidationError(_params_errors(exc)) from exc
 

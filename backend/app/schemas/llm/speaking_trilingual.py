@@ -27,3 +27,7 @@ class LLMTrilingualDraft(BaseModel):
     zh: list[GeneratedSaying] = Field(description="中文（台灣口語，繁體字）的說法")
     ja: list[GeneratedSaying] = Field(description="日文的說法")
     en: list[GeneratedSaying] = Field(description="英文的說法")
+    tags: list[str] = Field(
+        default_factory=list,
+        description="建議的主題標籤 0–3 個：優先照原寫法沿用提示中列出的既有標籤；不能有空白",
+    )

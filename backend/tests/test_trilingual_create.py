@@ -73,7 +73,7 @@ def _handler(create: CreateCapability, *, draft_params=None, with_draft=False, c
             return []
 
     if with_draft:
-        async def execute_draft(self, parameters):  # pragma: no cover - 不會被呼叫
+        async def execute_draft(self, parameters, existing_tags):  # pragma: no cover - 不會被呼叫
             return {}
 
         Probe.execute_draft = execute_draft
@@ -186,9 +186,11 @@ class TestExecuteDraft:
         generate = mock.AsyncMock(return_value=_draft())
         with mock.patch.object(generate_service, "generate", generate):
             result = asyncio.run(SpeakingTrilingualHandler().execute_draft(
-                {"background": "背景", "intent": "", "audience": "同事", "audience_note": "比我資深"}
+                {"background": "背景", "intent": "", "audience": "同事", "audience_note": "比我資深"},
+                ["Interview"],
             ))
-        assert generate.await_args.args == ("背景", "", "同事（比我資深）")
+        assert generate.await_args.args == ("背景", "", "同事（比我資深）", ["Interview"])
+        assert result.pop("tags") == []
         assert result["prompt"] == "朋友約你週末爬山，但你已經有約了。"
         assert result["references_ja"] == [{"content": "今週はちょっと無理かも。", "note": "對朋友。", "familiarity": 7}]
         assert len(result["references_zh"]) == 1 and len(result["references_en"]) == 1

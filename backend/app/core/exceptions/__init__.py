@@ -57,6 +57,7 @@ from .services import (
     JsonItemChangedError,
     InvalidNoteQueryError,
     InvalidNoteFieldsError,
+    TagInvalidError,
 )
 
 __all__ = [
@@ -104,4 +105,5 @@ __all__ = [
     "JsonItemChangedError",
     "InvalidNoteQueryError",
     "InvalidNoteFieldsError",
+    "TagInvalidError",
 ]

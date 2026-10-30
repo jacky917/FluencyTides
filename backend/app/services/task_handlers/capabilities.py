@@ -170,6 +170,12 @@ class JsonFieldSpec:
     title: str
 
 
+#: 欄位搜尋的保留鍵：``*`` 比對任何欄位，``#`` 比對標籤；``SEARCH_FIELDS`` 不能用。
+#: Reserved field-search keys: any field and tags.
+ANY_FIELD_KEY = "*"
+TAG_SEARCH_KEY = "#"
+
+
 @dataclass(frozen=True)
 class SearchField:
     """網頁欄位搜尋的一個欄位按鈕：搜尋時比對哪些 Anki 欄位（任一個包含關鍵字就算）。
@@ -177,7 +183,7 @@ class SearchField:
     One field button of the web field search: the Anki fields it matches (any of them).
 
     Attributes:
-        key: API 用的鍵（英數字；``*`` 保留給「全部欄位」）。The API key.
+        key: API 用的鍵（英數字；``*``、``#`` 保留給「任何欄位」與「標籤」）。The API key.
         title: 按鈕上的名稱。The button label.
         fields: 比對的 Anki 欄位（多個時任一個包含即可，例如「名字」比對各語言的姓名）。The Anki fields.
     """

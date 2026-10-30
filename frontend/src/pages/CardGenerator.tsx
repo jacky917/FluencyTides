@@ -27,6 +27,7 @@ import { DeckTreePanel } from '../components/shared/DeckTreePanel'
 import { ErrorNote } from '../components/shared/ErrorNote'
 import { CollapsibleSection, CreatedNotice, DeckSummary, SchemaFieldInput } from '../components/generate/formParts'
 import { PreviewCreate } from '../components/generate/PreviewCreate'
+import { TagInput } from '../components/generate/TagInput'
 import { PageHeader } from '../components/shared/PageHeader'
 import { Panel } from '../components/shared/Panel'
 import { SplitLayout } from '../components/shared/SplitLayout'
@@ -249,7 +250,9 @@ function CreateForm({
   const { fields, skipped } = schemaFields(handler.create_schema)
   // 填到一半的內容存在這個分頁的 sessionStorage：切換頁面、重新整理都還在，建立成功或按「清除」才清掉
   const formKey = `generate_form:${handler.name}`
+  const tagsKey = `generate_tags:${handler.name}`
   const [storedValues, setStoredValues] = useSessionStorage<Record<string, string>>(formKey, {})
+  const [tags, setTags] = useSessionStorage<string[]>(tagsKey, [])
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const values = useMemo(() => ({ ...initialValues(fields), ...storedValues }), [storedValues])
   const [errors, setErrors] = useState<FormErrors | null>(null)
@@ -262,14 +265,15 @@ function CreateForm({
 
   const mutation = useMutation({
     mutationFn: () =>
-      FluencyTidesAPI.createNote(handler.name, { deck: deck!, note_type: create.note_type!, params: values }),
+      FluencyTidesAPI.createNote(handler.name, { deck: deck!, note_type: create.note_type!, params: values, tags }),
     onSuccess: (data) => {
       setResult(data)
       setErrors(null)
       removeStored('session', formKey)
+      removeStored('session', tagsKey)
       toast.success(`已建立 ${data.note_ids.length} 張筆記`, { description: `牌組：${data.deck}` })
       if (data.sync_warning) toast.warning('同步 AnkiWeb 失敗', { description: data.sync_warning })
-      for (const queryKey of [['graph'], ['cards'], ['decks']]) queryClient.invalidateQueries({ queryKey })
+      for (const queryKey of [['graph'], ['cards'], ['decks'], ['tags']]) queryClient.invalidateQueries({ queryKey })
     },
     onError: (err) => {
       setResult(null)
@@ -319,6 +323,8 @@ function CreateForm({
         />
       ))}
 
+      <TagInput handlerName={handler.name} tags={tags} onChange={setTags} disabled={mutation.isPending} />
+
       {skipped.length > 0 && (
         <p className="text-xs text-muted-foreground">網頁表單不提供這些參數：{skipped.join('、')}</p>
       )}
@@ -338,9 +344,12 @@ function CreateForm({
         <Button
           type="button"
           variant="ghost"
-          disabled={mutation.isPending || !Object.values(storedValues).some((value) => value.trim() !== '')}
+          disabled={
+            mutation.isPending || (!Object.values(storedValues).some((value) => value.trim() !== '') && tags.length === 0)
+          }
           onClick={() => {
             removeStored('session', formKey)
+            removeStored('session', tagsKey)
             setErrors(null)
             setResult(null)
           }}

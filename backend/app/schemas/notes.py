@@ -158,6 +158,24 @@ class CreateNoteRequest(BaseModel):
         default_factory=dict,
         description="建立參數：標準建立是 {欄位名: 值}；覆寫建立的 handler 依 create_schema",
     )
+    tags: list[str] = Field(
+        default_factory=list,
+        description="使用者加的標籤（不能有空白、不能是系統標籤、最多 20 個）；建卡後另外加上",
+    )
+
+
+class TagCount(BaseModel):
+    """一個標籤與使用次數。A tag and how many notes use it."""
+
+    tag: str
+    count: int
+
+
+class SuggestedTag(BaseModel):
+    """草稿建議的標籤。A tag suggested with a draft."""
+
+    tag: str
+    existing: bool = Field(description="這種卡片是否用過這個標籤（false 表示建卡時會新增一個標籤）")
 
 
 class DraftRequest(BaseModel):
@@ -170,6 +188,9 @@ class DraftResponse(BaseModel):
     """草稿：預先填好的建立參數。The draft create parameters."""
 
     params: dict[str, Any] = Field(description="建立參數的草稿；勾選、修改後原樣送到 POST /handlers/{name}/notes")
+    suggested_tags: list[SuggestedTag] = Field(
+        default_factory=list, description="LLM 建議的標籤（建卡時放進請求的 tags）；沒有建議時為空"
+    )
 
 
 class CreateNoteResponse(BaseModel):

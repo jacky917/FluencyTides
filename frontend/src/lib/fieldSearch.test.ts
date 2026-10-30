@@ -3,6 +3,7 @@ import type { HandlerInfo, Operation } from '../types/api'
 import {
   ANY_FIELD,
   EMPTY_FIELD_SEARCH,
+  TAG_FIELD,
   addCondition,
   fieldTitle,
   removeCondition,
@@ -67,9 +68,10 @@ describe('conditions', () => {
 })
 
 describe('fieldTitle', () => {
-  it('* 是全部欄位；找不到時顯示鍵', () => {
+  it('* 是全部欄位、# 是標籤；找不到時顯示鍵', () => {
     const person = handler('person', open)
     expect(fieldTitle(person, ANY_FIELD)).toBe('全部欄位')
+    expect(fieldTitle(person, TAG_FIELD)).toBe('標籤')
     expect(fieldTitle(person, 'relationship')).toBe('關係')
     expect(fieldTitle(person, 'gone')).toBe('gone')
   })

@@ -86,6 +86,7 @@ def normalize_tags(tags: list[str]) -> list[str]
 
 - 不把標籤傳進 `execute_create`：各卡片類型的建卡程式都不用改（考慮過改 `execute_create` 的簽名讓標籤跟筆記
   一起寫入，要動 6 個 handler，換來的只是「加標籤失敗」這個極少見情況的原子性，不划算）。
+- `AnkiClient.add_tags` 會先做一次自動同步（10 秒內不重複），建卡會多花一兩秒。
 - `addTags` 失敗時（卡片已建立）：照樣同步，回應的 `sync_warning` 寫明「卡片已建立，但標籤沒加上：…」，
   不回錯誤（避免使用者以為沒建成而重建一張）。
 
@@ -109,7 +110,10 @@ def normalize_tags(tags: list[str]) -> list[str]
 - 後端整理：不合格式的（含空白等）丟掉；比對清單標出哪些是既有的。
 - 草稿回應多 `suggested_tags: [{"tag": "Interview", "existing": true}, {"tag": "HairSalon", "existing": false}]`
   （不放進建立參數，因為標籤是建卡請求層級的欄位）。
-  - `execute_draft` 回傳的 dict 可帶 `tags` 鍵，`NoteService.draft` 取出來整理成 `suggested_tags`。
+  - `execute_draft(parameters, existing_tags)` 多收既有標籤清單（`NoteService.draft` 先查好傳入），回傳的 dict
+    可帶 `tags` 鍵，`NoteService.draft` 取出來整理成 `suggested_tags`。
+  - 實測（claude-code opus）：剪髮預約 → `HairSalon`（新）；最終面接的逆質問 → `Interview`、`最終面接`、`逆質問`
+    （都沿用既有寫法）；花店 → `FlowerShop`；沒有建議 `Step1` 這類排序標籤。
 
 ### 6.3 前端：標籤輸入元件 `components/generate/TagInput.tsx`（新）
 

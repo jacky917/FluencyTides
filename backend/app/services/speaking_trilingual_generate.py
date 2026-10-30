@@ -36,23 +36,27 @@ def target_audience(audience: str, audience_note: str) -> str | None:
     return f"{audience}（{note}）" if note else audience
 
 
-def build_prompt(background: str, intent: str, audience: str | None) -> str:
+def build_prompt(background: str, intent: str, audience: str | None, existing_tags: list[str] | None = None) -> str:
     """組出提示詞。Render the prompt.
 
     Args:
         background: 場景背景。The scene.
         intent: 想怎麼答；空字串時由 LLM 想出各種正反回應。What to say, or empty.
         audience: 對象；None 表示各種對象。The audience, or None.
+        existing_tags: 三語卡用過的主題標籤（依次數排序），讓 LLM 建議標籤時優先沿用。Existing tags.
     """
     return get_template_engine().render(
         "prompts/anki/Speaking_Trilingual_Generate.j2",
         background=background.strip(),
         intent=intent.strip(),
         audience=audience,
+        existing_tags=existing_tags or [],
     )
 
 
-async def generate(background: str, intent: str, audience: str | None) -> LLMTrilingualDraft:
+async def generate(
+    background: str, intent: str, audience: str | None, existing_tags: list[str] | None = None
+) -> LLMTrilingualDraft:
     """呼叫 LLM 生成草稿。Ask the LLM for a draft.
 
     Raises:
@@ -66,7 +70,7 @@ async def generate(background: str, intent: str, audience: str | None) -> LLMTri
             "You are a native-level conversation coach in Taiwanese Mandarin, Japanese and English. "
             "You only write what native speakers really say. Output strict JSON."
         ),
-        user_prompt=build_prompt(background, intent, audience),
+        user_prompt=build_prompt(background, intent, audience, existing_tags),
         response_schema=LLMTrilingualDraft.model_json_schema(),
     )
     try:

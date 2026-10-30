@@ -29,6 +29,7 @@ import type { CreateNoteResponse, HandlerInfo, TrilingualCreateParams } from '..
 import { ErrorNote } from '../shared/ErrorNote'
 import { Button } from '../ui/button'
 import { CreatedNotice, DeckSummary, SchemaFieldInput } from './formParts'
+import { TagInput } from './TagInput'
 import { TrilingualDraftPreview } from './TrilingualDraftPreview'
 
 /** 有預覽畫面的 handler。Handlers with a preview screen. */
@@ -40,6 +41,8 @@ interface DraftState {
   selection: DraftSelection
   prompt: string
   context: string
+  /** 要加的標籤（LLM 建議的預設全加，可增減）。The tags to add. */
+  tags: string[]
 }
 
 /**
@@ -65,7 +68,8 @@ export function PreviewCreate({
   const fieldNames = fields.map((field) => field.name)
   // 輸入與草稿依卡片類型分開存，切換類型再回來也還在
   const formKey = `generate_form:${handler.name}`
-  const draftKey = `generate_draft:${handler.name}`
+  // 草稿格式改了就換鍵名（v2 加了標籤），舊格式的草稿不再讀取
+  const draftKey = `generate_draft_v2:${handler.name}`
   const [storedValues, setStoredValues] = useSessionStorage<Record<string, string>>(formKey, {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const values = useMemo(() => ({ ...initialValues(fields), ...storedValues }), [storedValues])
@@ -92,6 +96,7 @@ export function PreviewCreate({
         selection: selectAll(draft),
         prompt: draft.prompt,
         context: draft.context,
+        tags: data.suggested_tags.map((item) => item.tag),
       })
       toast.success('三語草稿已生成', { description: '在 Card Generator 勾選後建立' })
       setInputErrors(null)
@@ -112,11 +117,12 @@ export function PreviewCreate({
   })
 
   const createMutation = useMutation({
-    mutationFn: (params: TrilingualCreateParams) =>
+    mutationFn: ({ params, tags }: { params: TrilingualCreateParams; tags: string[] }) =>
       FluencyTidesAPI.createNote(handler.name, {
         deck: deck!,
         note_type: create.note_type!,
         params: params as unknown as Record<string, unknown>,
+        tags,
       }),
     onSuccess: (data) => {
       setResult(data)
@@ -125,7 +131,7 @@ export function PreviewCreate({
       setCreateError(null)
       toast.success(`已建立 ${data.note_ids.length} 張筆記`, { description: `牌組：${data.deck}` })
       if (data.sync_warning) toast.warning('同步 AnkiWeb 失敗', { description: data.sync_warning })
-      for (const queryKey of [['graph'], ['cards'], ['decks']]) queryClient.invalidateQueries({ queryKey })
+      for (const queryKey of [['graph'], ['cards'], ['decks'], ['tags']]) queryClient.invalidateQueries({ queryKey })
     },
     onError: (err) => {
       const mapped = formErrorsFrom(err, [])
@@ -169,7 +175,10 @@ export function PreviewCreate({
 
   const handleCreate = () => {
     if (state && canCreate) {
-      createMutation.mutate(selectedParams(state.draft, state.selection, state.prompt.trim(), state.context.trim()))
+      createMutation.mutate({
+        params: selectedParams(state.draft, state.selection, state.prompt.trim(), state.context.trim()),
+        tags: state.tags,
+      })
     }
   }
 
@@ -210,6 +219,12 @@ export function PreviewCreate({
           onPromptChange={(prompt) => setState({ ...state, prompt })}
           context={state.context}
           onContextChange={(context) => setState({ ...state, context })}
+          disabled={createMutation.isPending}
+        />
+        <TagInput
+          handlerName={handler.name}
+          tags={state.tags}
+          onChange={(tags) => setState({ ...state, tags })}
           disabled={createMutation.isPending}
         />
         {createError && <ErrorNote title="建立失敗" error={{ error_code: 'VALIDATION', message: createError }} />}

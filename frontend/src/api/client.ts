@@ -19,6 +19,7 @@ import type {
   CreateNoteRequest,
   CreateNoteResponse,
   DraftResponse,
+  TagCount,
   DeleteNoteResponse,
   GenericNoteDetail,
   HandlerInfo,
@@ -106,6 +107,15 @@ export const FluencyTidesAPI = {
    */
   createNote: (handlerName: string, body: CreateNoteRequest): Promise<CreateNoteResponse> =>
     apiClient.post(`/handlers/${encodeURIComponent(handlerName)}/notes`, body),
+
+  /**
+   * 這種卡片用過的標籤與次數（依次數排序，不含系統標籤），給自動完成用。
+   * Tags used by a handler's notes, most used first.
+   * @param handlerName - handler 名稱。Handler name.
+   * @returns 標籤與次數。Tags with counts.
+   */
+  listTags: (handlerName: string): Promise<TagCount[]> =>
+    apiClient.get(`/handlers/${encodeURIComponent(handlerName)}/tags`),
 
   /**
    * 網頁預覽流程：請 LLM 生成建卡草稿（不寫入 Anki）。

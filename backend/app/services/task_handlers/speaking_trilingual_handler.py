@@ -40,6 +40,7 @@ from app.services.task_handlers.capabilities import (
     GraphCapability,
     HandlerCapabilities,
     Operation,
+    SearchField,
 )
 from app.services.task_handlers.registry import register_handler
 from app.services.task_handlers.shared.trilingual_familiarity import parse_familiarity
@@ -167,10 +168,22 @@ class SpeakingTrilingualHandler(BaseHandler):
         update_fields=Operation(reason="三語對話卡的欄位修改尚未開放"),
         delete=Operation(reason="三語對話卡的刪除尚未開放"),
         actions=SPEAKING_ACTIONS,
+        search=Operation(supported=True),
         graph=GraphCapability(reason="口說卡沒有知識圖譜"),
     )
     CREATE_PARAMS = SpeakingTrilingualCreateParams
     DRAFT_PARAMS = SpeakingTrilingualDraftParams
+    CREATE_TAGS = ("Speaking_Trilingual", "HandlerGenerated")
+    #: 網頁欄位搜尋的按鈕。參考答案是 JSON，句子與說明都在裡面，「包含」比對會一起找到。
+    #: The field-search buttons; references hold both sentences and notes.
+    SEARCH_FIELDS = (
+        SearchField("prompt", "情境", ("Prompt",)),
+        SearchField("context", "補充", ("Context",)),
+        SearchField("refs", "說法（三語）", tuple(references_field(lang) for lang in LANG_CODES)),
+        SearchField("zh", "中文", (references_field("ZH"),)),
+        SearchField("ja", "日文", (references_field("JA"),)),
+        SearchField("en", "英文", (references_field("EN"),)),
+    )
 
     @property
     @override
@@ -197,28 +210,32 @@ class SpeakingTrilingualHandler(BaseHandler):
         return ["Speaking_Trilingual_Dark"]
 
     @override
-    async def execute_draft(self, parameters: dict[str, object]) -> dict[str, object]:
-        """請 LLM 為場景生成三語說法，整理成建立參數的草稿（不寫入）。
+    async def execute_draft(self, parameters: dict[str, object], existing_tags: list[str]) -> dict[str, object]:
+        """請 LLM 為場景生成三語說法與建議標籤，整理成建立參數的草稿（不寫入）。
 
-        Ask the LLM for sayings and shape them as draft create parameters.
+        Ask the LLM for sayings and tags, shaped as draft create parameters.
 
         Args:
             parameters: ``SpeakingTrilingualDraftParams`` 驗證後的輸入。The validated input.
+            existing_tags: 三語卡用過的標籤，讓 LLM 優先沿用。Existing tags.
 
         Returns:
-            ``SpeakingTrilingualCreateParams`` 形狀的草稿。The draft create parameters.
+            ``SpeakingTrilingualCreateParams`` 形狀的草稿，另帶 ``tags``（建議的標籤）。The draft plus tags.
         """
         audience = generate_service.target_audience(str(parameters["audience"]), str(parameters["audience_note"]))
-        draft = await generate_service.generate(str(parameters["background"]), str(parameters["intent"]), audience)
+        draft = await generate_service.generate(
+            str(parameters["background"]), str(parameters["intent"]), audience, existing_tags
+        )
         references = {
             f"references_{lang.lower()}": [
                 saying.model_dump() for saying in getattr(draft, lang.lower()) if saying.content.strip()
             ]
             for lang in LANG_CODES
         }
-        return SpeakingTrilingualCreateParams.model_validate(
+        params = SpeakingTrilingualCreateParams.model_validate(
             {"prompt": draft.prompt, "context": draft.context, **references}
         ).model_dump()
+        return {**params, "tags": draft.tags}
 
     @override
     async def execute_create(
@@ -274,7 +291,7 @@ class SpeakingTrilingualHandler(BaseHandler):
             deck_name=deck_name,
             model_name=model_name,
             fields=fields,
-            tags=["Speaking_Trilingual", "HandlerGenerated"],
+            tags=list(self.CREATE_TAGS),
         )
         return [note_id]
 
