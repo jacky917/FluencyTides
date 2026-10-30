@@ -4,7 +4,6 @@
  */
 
 import type { ReactNode } from 'react'
-import { useLocalStorage } from '../../hooks/useLocalStorage'
 import { Link } from 'react-router-dom'
 import { ChevronRight } from 'lucide-react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible'
@@ -55,10 +54,9 @@ export function CollapsibleSection({
 }
 
 /**
- * 牌組與筆記類型（可折疊）。標題列顯示牌組；沒選牌組或牌組已不存在時，原因直接顯示在標題列（`id` 給送出按鈕的
- * aria-describedby，收起來時也要在）。展開狀態記在 localStorage。
- * The deck and note type, collapsible; the header shows the deck or why none can be used.
- * @param props.id - 原因文字的 id。The id of the reason text.
+ * 牌組與筆記類型的說明；沒選牌組或牌組已不存在時說明原因（`id` 給送出按鈕的 aria-describedby）。
+ * The deck and note type, or why no deck can be used.
+ * @param props.id - 說明文字的 id。The id of the status text.
  * @param props.fixedDeck - 固定的牌組；null 表示用牌組樹選的。The fixed deck, or null.
  * @param props.selectedDeck - 牌組樹選的牌組。The deck picked in the tree.
  * @param props.deckMissing - 選的牌組是否已不存在。Whether that deck is gone.
@@ -78,28 +76,24 @@ export function DeckSummary({
   deckMissing: boolean
   noteType: string | null
 }) {
-  const [open, setOpen] = useLocalStorage<boolean>('generate_deck_open', false)
-  const summary = fixedDeck ? (
-    fixedDeck
-  ) : selectedDeck === null ? (
-    <span id={id} role="status">
-      未選擇：請在牌組樹選擇一個牌組（選「全部牌組」時無法建立卡片）
-    </span>
-  ) : deckMissing ? (
-    <span id={id} role="status" className="text-destructive">
-      「{selectedDeck}」已不存在，請在牌組樹重新選擇
-    </span>
-  ) : (
-    selectedDeck
-  )
   return (
-    <CollapsibleSection title="牌組" summary={summary} open={open} onOpenChange={setOpen}>
-      <div className="space-y-1 text-sm">
-        <p className="break-all">{fixedDeck ?? selectedDeck ?? '（未選擇）'}</p>
-        {fixedDeck && <p className="text-xs text-muted-foreground">這種卡片固定建在這個牌組。</p>}
-        <p className="text-xs text-muted-foreground">筆記類型：{noteType}</p>
-      </div>
-    </CollapsibleSection>
+    <div className="space-y-1 text-sm">
+      <p className="font-medium">牌組</p>
+      {fixedDeck ? (
+        <p className="break-all">{fixedDeck}（這種卡片固定建在這裡）</p>
+      ) : selectedDeck === null ? (
+        <p id={id} role="status" className="text-muted-foreground">
+          請先在牌組樹選擇一個牌組（選「全部牌組」時無法建立卡片）。
+        </p>
+      ) : deckMissing ? (
+        <p id={id} role="status" className="break-all text-destructive">
+          牌組「{selectedDeck}」已不存在，請在牌組樹重新選擇。
+        </p>
+      ) : (
+        <p className="break-all">{selectedDeck}</p>
+      )}
+      <p className="text-xs text-muted-foreground">筆記類型：{noteType}</p>
+    </div>
   )
 }
 

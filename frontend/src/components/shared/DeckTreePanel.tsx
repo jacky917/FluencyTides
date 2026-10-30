@@ -1,11 +1,12 @@
 import { useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, FolderTree, RefreshCw } from 'lucide-react'
+import { ChevronRight, FolderTree, RefreshCw } from 'lucide-react'
 import { FluencyTidesAPI } from '../../api/client'
 import { useRevealSelected } from '../../hooks/useRevealSelected'
 import { buildDeckTree, deckAncestors, type DeckNode } from '../../lib/deckTree'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible'
 import { Skeleton } from '../ui/skeleton'
 import { ErrorNote } from './ErrorNote'
 import { Panel } from './Panel'
@@ -107,46 +108,52 @@ interface DeckItemProps {
 }
 
 /**
- * 牌組樹的一個節點（遞迴）。One deck tree node, recursively.
+ * 牌組樹的一個節點（遞迴）。子牌組以 Collapsible 展開收合，有高度動畫。
+ * One deck tree node, recursively; children expand with a height animation.
  * @returns 節點 JSX。Node JSX.
  */
 function DeckItem({ node, depth, selected, isOpen, onToggle, onSelect }: DeckItemProps) {
   const open = isOpen(node)
   const hasChildren = node.children.length > 0
   return (
-    <li role="treeitem" aria-selected={selected === node.fullName} aria-expanded={hasChildren ? open : undefined}>
-      <div className="flex items-center">
-        {hasChildren ? (
-          <button
-            type="button"
-            className="p-0.5 rounded hover:bg-accent"
-            style={{ marginLeft: depth * 12 }}
-            onClick={() => onToggle(node.fullName, !open)}
-            aria-label={open ? `收合 ${node.name}` : `展開 ${node.name}`}
-          >
-            {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          </button>
-        ) : (
-          <span className="inline-block w-[18px]" style={{ marginLeft: depth * 12 }} />
+    <Collapsible asChild open={hasChildren && open} onOpenChange={(next) => onToggle(node.fullName, next)}>
+      <li role="treeitem" aria-selected={selected === node.fullName} aria-expanded={hasChildren ? open : undefined}>
+        <div className="flex items-center">
+          {hasChildren ? (
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="p-0.5 rounded hover:bg-accent"
+                style={{ marginLeft: depth * 12 }}
+                aria-label={open ? `收合 ${node.name}` : `展開 ${node.name}`}
+              >
+                <ChevronRight className={cn('h-3.5 w-3.5 transition-transform duration-200', open && 'rotate-90')} />
+              </button>
+            </CollapsibleTrigger>
+          ) : (
+            <span className="inline-block w-[18px]" style={{ marginLeft: depth * 12 }} />
+          )}
+          <DeckButton label={node.name} active={selected === node.fullName} onClick={() => onSelect(node.fullName)} />
+        </div>
+        {hasChildren && (
+          <CollapsibleContent asChild>
+            <ul role="group">
+              {node.children.map((child) => (
+                <DeckItem
+                  key={child.fullName}
+                  node={child}
+                  depth={depth + 1}
+                  selected={selected}
+                  isOpen={isOpen}
+                  onToggle={onToggle}
+                  onSelect={onSelect}
+                />
+              ))}
+            </ul>
+          </CollapsibleContent>
         )}
-        <DeckButton label={node.name} active={selected === node.fullName} onClick={() => onSelect(node.fullName)} />
-      </div>
-      {hasChildren && open && (
-        <ul role="group">
-          {node.children.map((child) => (
-            <DeckItem
-              key={child.fullName}
-              node={child}
-              depth={depth + 1}
-              selected={selected}
-              isOpen={isOpen}
-              onToggle={onToggle}
-              onSelect={onSelect}
-            />
-          ))}
-        </ul>
-      )}
-    </li>
+      </li>
+    </Collapsible>
   )
 }
 
