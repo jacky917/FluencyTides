@@ -24,6 +24,8 @@ from app.services.task_handlers.base import BaseHandler
 from app.services.task_handlers.capabilities import CreateCapability, HandlerCapabilities
 from app.services.task_handlers.registry import handler_registry, validate_handler
 from app.services.task_handlers.speaking_trilingual_handler import (
+    MAX_REFERENCES_PER_LANG,
+    MAX_TEXT_LENGTH,
     SpeakingTrilingualCreateParams,
     SpeakingTrilingualHandler,
 )
@@ -212,6 +214,20 @@ class TestCreateParams:
             SpeakingTrilingualCreateParams.model_validate(
                 {"prompt": "p", "references_en": [{"content": "a", "familiarity": bad}]}
             )
+
+    def test_generous_limits(self):
+        """上限只擋異常的量：正常草稿（二十幾句、每句幾十字）遠遠碰不到。"""
+        ok = {"content": "あ" * MAX_TEXT_LENGTH, "note": "說" * MAX_TEXT_LENGTH}
+        SpeakingTrilingualCreateParams.model_validate(
+            {"prompt": "p", "references_ja": [ok] * MAX_REFERENCES_PER_LANG}
+        )
+        too_many = {"prompt": "p", "references_ja": [{"content": "a"}] * (MAX_REFERENCES_PER_LANG + 1)}
+        too_long = {"prompt": "p", "references_en": [{"content": "a" * (MAX_TEXT_LENGTH + 1)}]}
+        too_long_note = {"prompt": "p", "references_zh": [{"content": "a", "note": "n" * (MAX_TEXT_LENGTH + 1)}]}
+        long_prompt = {"prompt": "p" * (MAX_TEXT_LENGTH + 1)}
+        for bad in (too_many, too_long, too_long_note, long_prompt):
+            with pytest.raises(ValidationError):
+                SpeakingTrilingualCreateParams.model_validate(bad)
 
     def test_blank_content_rejected(self):
         with pytest.raises(ValidationError):

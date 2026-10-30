@@ -56,6 +56,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# 建卡參數的上限：只防前端 bug 或手動呼叫 API 寫進超大內容（AnkiDroid 打開會很慢），
+# 正常使用遠遠碰不到——LLM 一次約生成二十幾句，每句幾十字
+MAX_REFERENCES_PER_LANG = 100
+MAX_TEXT_LENGTH = 2000
+
 
 class ReferenceDraft(BaseModel):
     """建卡時的一句參考答案；``date``、``status``、``audios`` 由建卡補上。
@@ -63,8 +68,12 @@ class ReferenceDraft(BaseModel):
     One reference answer given at creation.
     """
 
-    content: str = Field(min_length=1, description="句子")
-    note: str = Field(default="", description="說明：對象與場合、語氣的關鍵或場景補充（卡片背面以小字顯示）")
+    content: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH, description="句子")
+    note: str = Field(
+        default="",
+        max_length=MAX_TEXT_LENGTH,
+        description="說明：對象與場合、語氣的關鍵或場景補充（卡片背面以小字顯示）",
+    )
     familiarity: int | None = Field(default=None, description="熟識度 0–9；省略表示未標")
 
     @field_validator("content", "note", mode="before")
@@ -88,16 +97,27 @@ class SpeakingTrilingualCreateParams(BaseModel):
 
     prompt: str = Field(
         min_length=1,
+        max_length=MAX_TEXT_LENGTH,
         title="情境提示",
         description="共通口說情境提示（三語共用）",
         json_schema_extra={"x-ui": "textarea"},
     )
     context: str = Field(
-        default="", title="情境", description="情境描述（選填）", json_schema_extra={"x-ui": "textarea"}
+        default="",
+        max_length=MAX_TEXT_LENGTH,
+        title="情境",
+        description="情境描述（選填）",
+        json_schema_extra={"x-ui": "textarea"},
     )
-    references_zh: list[ReferenceDraft] = Field(default_factory=list, title="中文說法")
-    references_ja: list[ReferenceDraft] = Field(default_factory=list, title="日文說法")
-    references_en: list[ReferenceDraft] = Field(default_factory=list, title="英文說法")
+    references_zh: list[ReferenceDraft] = Field(
+        default_factory=list, max_length=MAX_REFERENCES_PER_LANG, title="中文說法"
+    )
+    references_ja: list[ReferenceDraft] = Field(
+        default_factory=list, max_length=MAX_REFERENCES_PER_LANG, title="日文說法"
+    )
+    references_en: list[ReferenceDraft] = Field(
+        default_factory=list, max_length=MAX_REFERENCES_PER_LANG, title="英文說法"
+    )
 
 
 class SpeakingTrilingualDraftParams(BaseModel):
