@@ -403,11 +403,23 @@ def test_real_app_requires_api_key_for_cards_and_media(real_app_client):
             assert (missing.status_code, wrong.status_code, ok.status_code) == (401, 401, 200), url
 
 
-def test_note_detail_keeps_the_notes_info_shape(real_app_client):
-    """網頁的筆記欄位彈窗依賴 /handlers/cards/{note_id} 回傳 notesInfo 的 camelCase 形狀。"""
-    with mock.patch.object(settings, "API_SECRET_KEY", ""):
-        body = real_app_client.get("/api/v1/handlers/cards/7").json()
+def test_generic_note_read_shape(real_app_client):
+    """筆記欄位彈窗改讀 /notes/{note_id}（handlers 計畫書 §4.3）：snake_case、欄位依順序排成陣列，
+    附上負責的 handler 與權限；舊的 /handlers/cards/{note_id} 已移除。"""
+    from app.core.dependencies import get_relation_service
+    from app.main import app
 
-    assert set(body) == {"noteId", "modelName", "tags", "fields", "cards"}
-    assert body["noteId"] == 7
-    assert body["fields"]["Prompt"] == {"value": "やあ", "order": 0}
+    app.dependency_overrides[get_relation_service] = lambda: mock.Mock()
+    try:
+        with mock.patch.object(settings, "API_SECRET_KEY", ""):
+            body = real_app_client.get("/api/v1/notes/7").json()
+            old = real_app_client.get("/api/v1/handlers/cards/7")
+    finally:
+        app.dependency_overrides.pop(get_relation_service, None)
+
+    assert body["note_id"] == 7
+    assert body["note_type"] == "Speaking_Coach_Dark"
+    assert body["fields"] == [{"name": "Prompt", "value": "やあ"}]
+    assert body["handler"] == "speaking_coach"
+    assert body["permissions"]["delete"] == {"allowed": False, "reason": "對話卡的刪除尚未開放"}
+    assert old.status_code == 404

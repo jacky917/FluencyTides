@@ -4,6 +4,7 @@ import { Search } from 'lucide-react'
 import { FluencyTidesAPI } from '../../api/client'
 import { useRevealSelected } from '../../hooks/useRevealSelected'
 import { retryTransient } from '../../lib/apiError'
+import { searchableHandlers, type FieldSearchState } from '../../lib/fieldSearch'
 import { BROWSE_PAGE_SIZE } from '../../lib/cardBrowse'
 import { cardPreview } from '../../lib/cardFields'
 import { relativeDeckPath } from '../../lib/deckTree'
@@ -12,8 +13,9 @@ import { Button } from '../ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card'
 import { Input } from '../ui/input'
 import { Skeleton } from '../ui/skeleton'
-import { ErrorNote } from './ErrorNote'
-import { STICKY_HEADER, panelScrollClass } from './panelStyles'
+import { ErrorNote } from '../shared/ErrorNote'
+import { STICKY_HEADER, panelScrollClass } from '../shared/panelStyles'
+import { FieldSearchPanel } from './FieldSearchPanel'
 
 /** {@link CardListPanel} 的 props。Props of {@link CardListPanel}. */
 interface CardListPanelProps {
@@ -22,6 +24,9 @@ interface CardListPanelProps {
   /** 搜尋框中還沒送出的文字（由呼叫端保存）。The unsubmitted search text. */
   draft: string
   onDraft: (draft: string) => void
+  /** 欄位搜尋的狀態（由呼叫端保存）。The field-search state. */
+  fieldSearch: FieldSearchState
+  onFieldSearch: (state: FieldSearchState) => void
   deck: string | null
   search: string
   page: number
@@ -40,6 +45,8 @@ export function CardListPanel({
   scrollable,
   draft,
   onDraft,
+  fieldSearch,
+  onFieldSearch,
   deck,
   search,
   page,
@@ -55,6 +62,10 @@ export function CardListPanel({
     // 搜尋語法錯誤（400）重試也沒用；只在連線中斷或 5xx 時重試一次
     retry: retryTransient,
   })
+  // 開放欄位搜尋的筆記類型；讀不到時只顯示 Anki 語法搜尋
+  const { data: handlers } = useQuery({ queryKey: ['handlers'], queryFn: FluencyTidesAPI.listHandlers, retry: retryTransient })
+  const searchable = searchableHandlers(handlers)
+  const fieldSearchOn = searchable.some((h) => h.name === fieldSearch.handler)
   const pages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1
   // 回到頁面時，把選取的卡片捲到看得到的地方
   const panelRef = useRef<HTMLDivElement>(null)
@@ -69,17 +80,34 @@ export function CardListPanel({
     <Card ref={panelRef} className={panelScrollClass(scrollable)}>
       <CardHeader className={cn('pb-2 space-y-3', scrollable && STICKY_HEADER)}>
         <CardTitle className="text-base break-all">{deck ?? '全部牌組'}</CardTitle>
-        <form onSubmit={submit} className="flex gap-2">
-          <Input
-            value={draft}
-            onChange={(e) => onDraft(e.target.value)}
-            placeholder="Anki 搜尋，例如 note:Speaking_Coach_Dark"
-            aria-label="Anki 搜尋"
+        {searchable.length > 0 && (
+          <FieldSearchPanel
+            handlers={searchable}
+            state={fieldSearch}
+            onChange={onFieldSearch}
+            onQuery={(query) => {
+              onDraft(query)
+              onSearch(query)
+            }}
           />
-          <Button type="submit" size="icon" variant="outline" aria-label="搜尋">
-            <Search className="h-4 w-4" />
-          </Button>
-        </form>
+        )}
+        {/* 用欄位搜尋時 Anki 語法收起來（展開可看、可改組好的查詢）；沒用時照常展開 */}
+        <details key={String(fieldSearchOn)} open={!fieldSearchOn} className="group">
+          {fieldSearchOn && (
+            <summary className="cursor-pointer select-none text-xs text-muted-foreground">進階：Anki 語法</summary>
+          )}
+          <form onSubmit={submit} className={cn('flex gap-2', fieldSearchOn && 'mt-2')}>
+            <Input
+              value={draft}
+              onChange={(e) => onDraft(e.target.value)}
+              placeholder="Anki 搜尋，例如 note:Speaking_Coach_Dark"
+              aria-label="Anki 搜尋"
+            />
+            <Button type="submit" size="icon" variant="outline" aria-label="搜尋">
+              <Search className="h-4 w-4" />
+            </Button>
+          </form>
+        </details>
         {data && (
           <p className="text-xs text-muted-foreground">
             共 {data.total} 張{isFetching && '，更新中…'}

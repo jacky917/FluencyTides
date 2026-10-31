@@ -143,8 +143,10 @@
                 refEmpty.textContent = '尚無範本';
                 refContainer.appendChild(refEmpty);
             } else {
-                for (var j = 0; j < references.length; j++) {
-                    refContainer.appendChild(buildReferenceItem(references[j], j, suffix));
+                // 依熟識度由低到高顯示（沒填的排最後）；帶著原本的序號，深連結與狀態切換仍指向同一句
+                var order = familiarityOrder(references);
+                for (var j = 0; j < order.length; j++) {
+                    refContainer.appendChild(buildReferenceItem(references[order[j]], order[j], suffix));
                 }
             }
             refSection.appendChild(refContainer);
@@ -239,6 +241,44 @@
         }
 
         // ============================
+        // 熟識度（0＝最正式 … 9＝最親密、最隨意）。判斷規則與後端
+        // app/services/task_handlers/shared/trilingual_familiarity.py 的 parse_familiarity 相同
+        // （tests/test_trilingual_familiarity.py 以同一張表驗證兩邊）：整數或只含半形數字的字串，0–9
+        // ============================
+        /** 參考答案的熟識度；沒填或不合格時為 null（卡片只讀，不合格的當成未標）。 */
+        function readFamiliarity(ref) {
+            var v = ref ? ref.familiarity : null;
+            var n = null;
+            if (typeof v === 'number') n = v;
+            else if (typeof v === 'string' && /^\s*[0-9]+\s*$/.test(v)) n = parseInt(v, 10);
+            return (n !== null && n % 1 === 0 && n >= 0 && n <= 9) ? n : null;
+        }
+
+        /** 顯示順序：熟識度由低到高，沒填的排最後；同熟識度維持原本順序。回傳原本的序號。 */
+        function familiarityOrder(refs) {
+            var order = [];
+            for (var i = 0; i < refs.length; i++) order.push(i);
+            order.sort(function (a, b) {
+                var fa = readFamiliarity(refs[a]);
+                var fb = readFamiliarity(refs[b]);
+                var ka = fa === null ? 99 : fa;
+                var kb = fb === null ? 99 : fb;
+                return ka !== kb ? ka - kb : a - b;
+            });
+            return order;
+        }
+
+        /**
+         * 刻度條：十格，熟識度 N 填滿 N+1 格，右邊是數字；顏色由 .fam-N 決定。
+         * n 必須是 readFamiliarity 回傳的 0–9 整數：它直接拼進 HTML，不可傳未驗證的值。
+         */
+        function familiarityBar(n) {
+            var html = '<span class="fam-bar fam-' + n + '" title="熟識度 ' + n + '／9">';
+            for (var i = 0; i < 10; i++) html += '<i class="fam-seg' + (i <= n ? ' on' : '') + '"></i>';
+            return html + '<b class="fam-num">' + n + '</b></span>';
+        }
+
+        // ============================
         // 單筆參考範本 (含語音頭像列與狀態切換)
         // ============================
         function buildReferenceItem(ref, index, suffix) {
@@ -253,15 +293,25 @@
 
             var header = document.createElement('div');
             header.className = 'ref-header';
+            var familiarity = readFamiliarity(ref);
             header.innerHTML =
                 '<span class="status-dot ' + statusDot + '"></span>' +
-                '<span class="ref-date">' + escapeHtml(ref.date || '') + '</span>';
+                '<span class="ref-date">' + escapeHtml(ref.date || '') + '</span>' +
+                (familiarity === null ? '' : familiarityBar(familiarity));
             refItem.appendChild(header);
 
             var content = document.createElement('div');
             content.className = 'ref-content';
             content.textContent = ref.content || '';
             refItem.appendChild(content);
+
+            // 說明（網頁建卡時 LLM 寫的對象、語氣重點或場景補充）：小字顯示在句子下方
+            if (ref.note) {
+                var note = document.createElement('div');
+                note.className = 'ref-note';
+                note.textContent = String(ref.note);
+                refItem.appendChild(note);
+            }
 
             var refAudios = ref.audios || [];
             if (refAudios.length > 0 || tgBot) {

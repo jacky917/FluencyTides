@@ -44,13 +44,16 @@ def setup_dispatcher() -> Dispatcher:
 
     # 2. 註冊 Routers (Handlers)
     # 這裡採用延遲匯入，避免模組循環依賴
-    from app.bot.handlers import commands, messages, voice, callbacks, media
+    from app.bot.handlers import commands, messages, voice, callbacks, media, person_profile
     from app.bot.handlers.fsm import expression_fsm, speaking_fsm, vocabulary_fsm
     from app.bot.handlers import models_menu, newcard_menu
     
     dp.include_router(commands.router)
     dp.include_router(models_menu.router)  # /setconfig：各用途的工具設定（管理員）
     dp.include_router(newcard_menu.router)  # 統一 /newcard 入口與卡片類型選單
+    # 人脈卡（/p、pp: 按鈕、等照片）：要在 callbacks 與 media 之前——media 的照片處理不看狀態，
+    # 放在它後面就收不到照片
+    dp.include_router(person_profile.router)
     dp.include_router(callbacks.router) # 回呼處理
     dp.include_router(media.router)     # 圖片處理
     dp.include_router(voice.router)     # 語音處理必須在文字訊息之前註冊

@@ -13,6 +13,58 @@ from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 logger = logging.getLogger(__name__)
 
 
+def _read_card_templates(
+    base_path: Path, model_name: str, data: dict[str, object]
+) -> tuple[list[dict[str, str]], str]:
+    """讀出模型的卡片模板與 CSS。
+
+    Reads a model's card templates and CSS.
+
+    定義檔有 ``cardTemplates``（``[{"Name", "Front", "Back"}]``，Front/Back 為檔名）時照它讀，
+    可以有多種卡片；``css`` 為 CSS 檔名。沒有時沿用單一卡片的慣例：
+    ``{model_name}_front.html``、``{model_name}_back.html``，模板名 ``Card 1``；CSS 為
+    ``{model_name}_style.css``。
+
+    With ``cardTemplates`` in the definition, its file names are used (several
+    card types allowed); otherwise the single-card convention applies.
+
+    Args:
+        base_path: 模型資料夾。The model asset directory.
+        model_name: 模型名（找預設檔名用）。The model name.
+        data: 已讀入的 JSON 定義（可為空 dict）。The parsed definition.
+
+    Returns:
+        ``({"Name", "Front", "Back"} 模板清單（內容為 HTML）, CSS 內容)``。
+        The templates with HTML contents, and the CSS.
+
+    Raises:
+        FileNotFoundError: 任一模板或 CSS 檔丟失時。When a file is missing.
+        ValueError: ``cardTemplates`` 格式錯誤時。When ``cardTemplates`` is malformed.
+    """
+    raw_templates = data.get("cardTemplates")
+    if raw_templates is None:
+        specs = [{"Name": "Card 1", "Front": f"{model_name}_front.html", "Back": f"{model_name}_back.html"}]
+    elif isinstance(raw_templates, list) and raw_templates:
+        specs = []
+        for item in raw_templates:
+            if not isinstance(item, dict) or not all(isinstance(item.get(k), str) for k in ("Name", "Front", "Back")):
+                raise ValueError("cardTemplates 每一項都要有字串的 Name、Front、Back。")
+            specs.append({"Name": item["Name"], "Front": item["Front"], "Back": item["Back"]})
+    else:
+        raise ValueError("cardTemplates 必須是非空陣列。")
+    css_name = data.get("css") if isinstance(data.get("css"), str) else f"{model_name}_style.css"
+
+    def read(name: str) -> str:
+        path = base_path / name
+        if not path.is_file():
+            logger.error("缺少必要匯入文件：%s", path)
+            raise FileNotFoundError(f"找不到檔案: {path}")
+        return path.read_text(encoding="utf-8")
+
+    templates = [{"Name": spec["Name"], "Front": read(spec["Front"]), "Back": read(spec["Back"])} for spec in specs]
+    return templates, read(str(css_name))
+
+
 class AnkiSchemaBuilder:
     """專門負責 Anki 筆記模型結構 (Schema) 的建置與管理。
 
@@ -41,11 +93,9 @@ class AnkiSchemaBuilder:
 
         Import a complete note type into Anki from local template files.
 
-        讀取四個對應檔案：
-        - {model_name}.json: 欄位定義（inOrderFields）
-        - {model_name}_front.html: 正面 HTML 模板
-        - {model_name}_back.html: 背面 HTML 模板
-        - {model_name}_style.css: 共用 CSS 樣式表
+        讀取定義檔 {model_name}.json（欄位 inOrderFields；可選的 cardTemplates 與 css），
+        模板與 CSS 的檔名見 ``_read_card_templates``：沒有 cardTemplates 時為
+        {model_name}_front.html、{model_name}_back.html、{model_name}_style.css。
 
         Args:
             model_name: 欲匯入的模型名（例如 'TOEIC_Coach_Dark'）。
@@ -60,16 +110,11 @@ class AnkiSchemaBuilder:
         base_path = Path(model_dir)
 
         json_path = base_path / f"{model_name}.json"
-        front_path = base_path / f"{model_name}_front.html"
-        back_path = base_path / f"{model_name}_back.html"
-        css_path = base_path / f"{model_name}_style.css"
+        if not json_path.is_file():
+            logger.error("缺少必要匯入文件：%s", json_path)
+            raise FileNotFoundError(f"找不到檔案: {json_path}")
 
-        for path in [json_path, front_path, back_path, css_path]:
-            if not path.is_file():
-                logger.error("缺少必要匯入文件：%s", path)
-                raise FileNotFoundError(f"找不到檔案: {path}")
-
-        logger.info("檢測到 4 份必要文件，正在讀取模型: %s", model_name)
+        logger.info("正在讀取模型: %s", model_name)
 
         try:
             with open(json_path, "r", encoding="utf-8") as f:
@@ -84,25 +129,14 @@ class AnkiSchemaBuilder:
             logger.error("解析 %s 時發生 JSON 錯誤。", json_path)
             raise ValueError(f"無效的 JSON 檔案: {decode_error}")
 
-        with open(front_path, "r", encoding="utf-8") as f:
-            front_html = f.read()
-        with open(back_path, "r", encoding="utf-8") as f:
-            back_html = f.read()
-        with open(css_path, "r", encoding="utf-8") as f:
-            css_style = f.read()
+        card_templates, css_style = _read_card_templates(base_path, model_name, data)
 
-        logger.info("檔案檢驗通過，準備向 AnkiConnect 提交模型建置請求...")
+        logger.info("檔案檢驗通過（%d 種卡片），準備向 AnkiConnect 提交模型建置請求...", len(card_templates))
         await self._client.create_model(
             model_name=actual_model_name,
             in_order_fields=in_order_fields,
             css=css_style,
-            card_templates=[
-                {
-                    "Name": "Card 1",
-                    "Front": front_html,
-                    "Back": back_html,
-                }
-            ],
+            card_templates=card_templates,
             is_cloze=False,
         )
 
@@ -130,14 +164,12 @@ class AnkiSchemaBuilder:
         base_path = Path(model_dir)
 
         json_path = base_path / f"{model_name}.json"
-        front_path = base_path / f"{model_name}_front.html"
-        back_path = base_path / f"{model_name}_back.html"
-        css_path = base_path / f"{model_name}_style.css"
-
-        for path in [front_path, back_path, css_path]:
-            if not path.is_file():
-                logger.error("缺少必要匯入文件：%s", path)
-                raise FileNotFoundError(f"找不到檔案: {path}")
+        definition: dict[str, object] = {}
+        if json_path.is_file():
+            with open(json_path, "r", encoding="utf-8") as f:
+                definition = json.load(f)
+        # 先讀齊模板與 CSS：缺檔時在動到欄位結構之前就停下
+        card_templates, css_style = _read_card_templates(base_path, model_name, definition)
 
         actual_model_name = model_name
         if json_path.is_file():
@@ -214,22 +246,10 @@ class AnkiSchemaBuilder:
 
         logger.info("正在讀取並更新模型樣板: %s", actual_model_name)
 
-        with open(front_path, "r", encoding="utf-8") as f:
-            front_html = f.read()
-        with open(back_path, "r", encoding="utf-8") as f:
-            back_html = f.read()
-        with open(css_path, "r", encoding="utf-8") as f:
-            css_style = f.read()
-
-        logger.info("提交 HTML 樣板更新請求...")
+        logger.info("提交 HTML 樣板更新請求（%d 種卡片）...", len(card_templates))
         await self._client.update_model_templates(
             model_name=actual_model_name,
-            templates={
-                "Card 1": {
-                    "Front": front_html,
-                    "Back": back_html
-                }
-            }
+            templates={t["Name"]: {"Front": t["Front"], "Back": t["Back"]} for t in card_templates},
         )
 
         logger.info("提交 CSS 樣式更新請求...")

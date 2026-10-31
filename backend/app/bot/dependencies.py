@@ -42,6 +42,7 @@ from app.core.dependencies import _ANKI_MODELS_DIR
 from app.infrastructure.database.database import async_session_factory
 from app.services.anki_model_manager import AnkiModelManager
 from app.services.card_service import CardService
+from app.services.note_service import NoteService
 from app.services.relation_service import RelationService
 from app.services.task_handlers.registry import handler_registry
 
@@ -129,6 +130,7 @@ class ServiceInjectionMiddleware(BaseMiddleware):
     - handler_registry: HandlerRegistry (任務處理器註冊表)
     - model_manager: AnkiModelManager
     - relation_service: RelationService
+    - note_service: NoteService（handlers 計畫書 D1：TG 的建卡與動作經過服務層）
     - anki_client: AnkiClient
     - user_state_manager: UserStateManager (Singleton)
     """
@@ -188,6 +190,7 @@ class ServiceInjectionMiddleware(BaseMiddleware):
             data["handler_registry"] = handler_registry
             data["model_manager"] = model_manager
             data["relation_service"] = relation_service
+            data["note_service"] = NoteService(card_service, relation_service)
             data["anki_client"] = anki_client
 
             # 注入 UserStateManager Singleton

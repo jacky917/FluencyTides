@@ -1,58 +1,61 @@
-import { useRef } from 'react'
-import { usePanelRef, type Layout, type LayoutChangedMeta, type PanelSize } from 'react-resizable-panels'
-import { useLocalStorage } from './useLocalStorage'
-import { defaultPanelWidths, sanitizePanelWidths, type PanelWidths } from '../lib/cardLayout'
-
-/** 存面板寬度的 localStorage 鍵。localStorage key of the panel widths. */
-const PANEL_WIDTHS_KEY = 'cards_panel_widths_v2'
-
-/** 可調寬度的面板。A resizable panel. */
-export type PanelKey = keyof PanelWidths
+import { createRef, useRef, type RefObject } from 'react'
+import type { Layout, LayoutChangedMeta, PanelImperativeHandle, PanelSize } from 'react-resizable-panels'
+import { useLocalStorage } from './useStoredState'
+import { defaultWidths, panelWidthsKey, sanitizeWidths, type SplitPageConfig } from '../lib/splitLayout'
 
 /**
- * 卡片瀏覽頁可拖曳面板（牌組、卡面）的寬度：預設值、使用者拖曳過的寬度（存在 localStorage）、
- * 以及接到 react-resizable-panels 的各種回呼。只存使用者正在拖曳的那一個面板；程式為了放得下
- * 而被動縮小的寬度不會蓋掉偏好。
+ * 某頁可拖曳面板的寬度：預設值、使用者拖曳過的寬度（依頁面 ID 分開存在 localStorage）、以及接到
+ * react-resizable-panels 的各種回呼。只存使用者正在拖曳的那一個面板；程式為了放得下而被動縮小的
+ * 寬度不會蓋掉偏好。回傳值帶著同一份版面設定，交給 `SplitLayout` 用，兩邊的設定一定一致。
  *
- * Widths of the resizable panels: defaults, the user's stored widths and the
- * callbacks for react-resizable-panels. Only the panel being dragged is saved.
+ * Widths of a page's resizable panels: defaults, the user's stored widths
+ * (per page) and the callbacks for react-resizable-panels. Only the panel
+ * being dragged is saved. The result carries the layout config for
+ * `SplitLayout`, so both use the same one.
  *
- * @returns 目前的寬度、面板的 ref 與回呼。Widths, panel refs and callbacks.
+ * @param layout - 頁面的版面設定。The page's layout config.
+ * @returns 版面設定、目前的寬度、面板的 ref 與回呼。The layout, widths, panel refs and callbacks.
  */
-export function usePanelWidths() {
-  const [storedRaw, setStored] = useLocalStorage<Partial<PanelWidths>>(PANEL_WIDTHS_KEY, {})
-  const stored = sanitizePanelWidths(storedRaw)
-  const defaults = defaultPanelWidths(window.innerWidth)
-  const widths: PanelWidths = { ...defaults, ...stored }
-  const deckRef = usePanelRef()
-  const viewerRef = usePanelRef()
-  const live = useRef<PanelWidths>(widths)
-  const activeHandle = useRef<PanelKey | null>(null)
+export function usePanelWidths<K extends string>(layout: SplitPageConfig<K>) {
+  const { specs } = layout
+  const [storedRaw, setStored] = useLocalStorage<Partial<Record<K, number>>>(panelWidthsKey(layout.id), {})
+  const stored = sanitizeWidths(storedRaw, specs)
+  const defaults = defaultWidths(window.innerWidth, specs)
+  const widths: Readonly<Record<K, number>> = { ...defaults, ...stored }
+  const refs = useRef<Partial<Record<K, RefObject<PanelImperativeHandle | null>>>>({})
+  const live = useRef<Record<K, number>>({ ...widths })
+  const activeHandle = useRef<K | null>(null)
+
+  /** 某個面板的 ref（第一次用到時建立）。A panel's ref, created on first use. */
+  const refFor = (key: K) => (refs.current[key] ??= createRef<PanelImperativeHandle | null>())
 
   return {
+    layout,
     widths,
-    deckRef,
-    viewerRef,
+    refFor,
     /** 面板大小改變時記下目前寬度。Tracks a panel's current width. */
-    trackWidth: (key: PanelKey) => (size: PanelSize) => {
+    trackWidth: (key: K) => (size: PanelSize) => {
       live.current = { ...live.current, [key]: size.inPixels }
     },
     /** 使用者開始拖曳（或用鍵盤調整）某條分隔線。The user grabbed a separator. */
-    grab: (key: PanelKey) => {
+    grab: (key: K) => {
       activeHandle.current = key
     },
     /** 版面改變後：使用者操作造成的才存。Saves after a user-driven layout change. */
     save: (_layout: Layout, meta: LayoutChangedMeta) => {
       const key = activeHandle.current
       if (!meta.isUserInteraction || key === null) return
-      setStored(sanitizePanelWidths({ ...stored, [key]: live.current[key] }))
+      setStored(sanitizeWidths({ ...stored, [key]: live.current[key] }, specs))
     },
     /** 恢復預設寬度並忘記使用者的設定。Restores a panel's default width. */
-    reset: (key: PanelKey) => {
-      ;(key === 'deck' ? deckRef : viewerRef).current?.resize(defaults[key])
+    reset: (key: K) => {
+      refFor(key).current?.resize(defaults[key])
       const rest = { ...stored }
       delete rest[key]
       setStored(rest)
     },
   }
 }
+
+/** {@link usePanelWidths} 的回傳值。The value returned by {@link usePanelWidths}. */
+export type PanelWidthsState<K extends string> = ReturnType<typeof usePanelWidths<K>>

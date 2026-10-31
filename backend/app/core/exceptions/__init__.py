@@ -48,6 +48,16 @@ from .services import (
     InvalidMediaFilenameError,
     MediaFileNotFoundError,
     InvalidAnkiSearchError,
+    HandlerOperationUnsupportedError,
+    NoteNotFoundError,
+    NoteTypeNotCreatableError,
+    NoteNotOwnedByHandlerError,
+    FieldNotEditableError,
+    JsonFieldConflictError,
+    JsonItemChangedError,
+    InvalidNoteQueryError,
+    InvalidNoteFieldsError,
+    TagInvalidError,
 )
 
 __all__ = [
@@ -86,4 +96,14 @@ __all__ = [
     "InvalidMediaFilenameError",
     "MediaFileNotFoundError",
     "InvalidAnkiSearchError",
+    "HandlerOperationUnsupportedError",
+    "NoteNotFoundError",
+    "NoteTypeNotCreatableError",
+    "NoteNotOwnedByHandlerError",
+    "FieldNotEditableError",
+    "JsonFieldConflictError",
+    "JsonItemChangedError",
+    "InvalidNoteQueryError",
+    "InvalidNoteFieldsError",
+    "TagInvalidError",
 ]

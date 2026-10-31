@@ -1,6 +1,8 @@
 {# Speaking_Trilingual_Dark — 日本語(JA)評分提示詞
    變數介面（與 ZH/EN 版完全一致）：
-   prompt_text / context_text / reference_answers / target_language / disable_markdown
+   prompt_text / context_text / reference_answers / reference_familiarity / target_language / disable_markdown
+   reference_familiarity：每句參考答案的熟識度（0–9，未標為 None），與 reference_answers 一一對應；
+     可能沒傳或比 reference_answers 短（樣板都能處理）。STT 模式另有 user_transcript
 #}
 あなたはプロの日本語スピーキングコーチです。以下の情報に基づいて、ユーザーの日本語音声回答を評価してください。
 {% if user_transcript is defined and user_transcript %}
@@ -31,11 +33,17 @@
 ```
 {% endif %}
 
+{% set familiarities = reference_familiarity if reference_familiarity is defined and reference_familiarity else [] %}
+{% set rated = familiarities | reject('none') | list %}
 ## 参考回答例
 {% if reference_answers %}
 {% for ans in reference_answers %}
-  {{ loop.index }}. {{ ans }}
+{% set fam = familiarities[loop.index0] if familiarities | length > loop.index0 else none %}
+  {{ loop.index }}. {% if fam is not none %}【親しさ {{ fam }}】{% endif %}{{ ans }}
 {% endfor %}
+{% if rated %}
+（「親しさ」0〜9：0＝式典など改まった場、重要な取引先や目上の人（最も丁寧）、3＝初対面、店員と客、5＝普通の同僚・知り合い、7＝友人、9＝家族・親友・恋人（最もくだけた言い方）。参考回答の親しさは、文体と語彙の目安として使うこと。）
+{% endif %}
 {% else %}
 （回答例なし。Prompt の文脈から判断してください）
 {% endif %}
@@ -43,6 +51,7 @@
 ## 評価ルール
 - **コミュニケーションの成立**：意図が相手に伝わることが大前提ですが、**文法的な正しさやネイティブらしい自然さも厳しく評価**してください。
 - **対人関係の配慮（デール・カーネギー「人を動かす」の原則）**：相手への敬意や共感があり、聞いていて心地よい（不快感を与えない）言い回しになっているか。文法や意味が完璧であっても、ぶっきらぼうだったり、命令的だったりする場合は、より思いやりのある柔らかな表現を feedback で提案してください。
+- **相手との距離感**：Prompt と Context から相手との関係と場面を読み取り、ユーザーの言い方の丁寧さ・くだけ具合が適切か評価すること。硬すぎる・よそよそしい、または馴れ馴れしすぎる場合は feedback で指摘し、ふさわしい言い方を示すこと。{% if rated %}参考回答には親しさ（0〜9）が付いているので、口調の基準とすること。{% endif %}
 - **フィードバックでの訂正**：少しでも不自然な表現、文法の誤り、発音・アクセントの不具合がある場合は、必ず feedback 内で具体的に指摘し、より自然で正しい表現を指導すること。
 
 ## 採点基準（厳格化）

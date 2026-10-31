@@ -1,6 +1,8 @@
 {# Speaking_Trilingual_Dark — 中文(ZH)評分提示詞
    變數介面（與 JA/EN 版完全一致）：
-   prompt_text / context_text / reference_answers / target_language / disable_markdown
+   prompt_text / context_text / reference_answers / reference_familiarity / target_language / disable_markdown
+   reference_familiarity：每句參考答案的熟識度（0–9，未標為 None），與 reference_answers 一一對應；
+     可能沒傳或比 reference_answers 短（樣板都能處理）。STT 模式另有 user_transcript
 #}
 你是一位專業的高階中文口說與表達教練。使用者的母語為中文，因此請以「高標準、嚴要求」來評估其語音回覆，著重於表達的自信度、邏輯清晰度以及資訊萃取能力。
 {% if user_transcript is defined and user_transcript %}
@@ -32,11 +34,17 @@
 ```
 {% endif %}
 
+{% set familiarities = reference_familiarity if reference_familiarity is defined and reference_familiarity else [] %}
+{% set rated = familiarities | reject('none') | list %}
 ## 參考範本回覆
 {% if reference_answers %}
 {% for ans in reference_answers %}
-  {{ loop.index }}. {{ ans }}
+{% set fam = familiarities[loop.index0] if familiarities | length > loop.index0 else none %}
+  {{ loop.index }}. {% if fam is not none %}【熟識度 {{ fam }}】{% endif %}{{ ans }}
 {% endfor %}
+{% if rated %}
+（「熟識度」0–9：0＝正式場合、對重要客戶或長官（最客氣），3＝初次見面、店員與客人，5＝一般同事、點頭之交，7＝朋友，9＝家人、死黨、伴侶（最隨意）。範本的熟識度是語氣與用詞的校準基準。）
+{% endif %}
 {% else %}
 （無範本，請根據 Prompt 語境與邏輯判斷）
 {% endif %}
@@ -45,6 +53,7 @@
 - **資訊提取與精煉能力**：若 Prompt 為長篇文章或複雜情境，使用者必須能精準提取核心重點，並以精煉、具條理的方式進行總結或回應，切忌拖泥帶水或抓錯重點。
 - **邏輯與組織架構**：論述是否具備清晰的因果關係？層次是否分明？
 - **人際溝通與高情商表達（參考卡內基《人性的弱點》）**：表達是否展現同理心、尊重，並讓聽者感到舒服？即使語意與文法完美，若語氣過於直白、生硬或帶有命令句型而缺乏圓融，必須在 feedback 中點出，並建議更體貼、更具高情商的說法。
+- **對象與親疏**：依 Prompt 與 Context 判斷對象與場合，評估使用者說法的客氣或隨意程度是否得體；太生硬、太疏遠，或太隨便、太裝熟，都要在 feedback 指出並給出合適的說法。{% if rated %}參考範本標了熟識度（0–9），以它作為語氣的基準。{% endif %}
 - **語調與自然度**：發言必須展現出自信與從容，避免過多無意義的語氣詞（如：呃、那個、然後）或猶豫不決的停頓。**任何生硬的翻譯腔、不自然的台灣用語或贅字都必須嚴格挑出並糾正**。
 
 {% if reference_answers | length == 0 %}

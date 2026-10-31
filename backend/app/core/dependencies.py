@@ -34,6 +34,7 @@ Dependencies:
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, Request
 
@@ -48,6 +49,9 @@ from app.services.relation_service import RelationService
 from app.services.storage_service import StorageService
 
 from app.core.config import settings
+
+if TYPE_CHECKING:
+    from app.services.note_service import NoteService
 
 logger = logging.getLogger(__name__)
 
@@ -231,3 +235,29 @@ def get_storage_service(
         StorageService 實例。A StorageService instance.
     """
     return StorageService(minio_client=minio_client)
+
+
+def get_note_service(
+    card_service: CardService = Depends(get_card_service),
+    relation_service: RelationService = Depends(get_relation_service),
+) -> "NoteService":
+    """建立 NoteService 實例（handlers 計畫書 D1）。
+
+    Create a NoteService instance.
+
+    在函式內 import：``note_service`` 經註冊表載入所有 handler，而有些 handler 在模組層 import 本模組的
+    ``get_template_engine``；放在檔案開頭會形成循環 import。
+
+    Imported lazily: loading ``note_service`` loads every handler, and some
+    handlers import this module at their top level.
+
+    Args:
+        card_service: 注入的 CardService。Injected CardService.
+        relation_service: 注入的 RelationService。Injected RelationService.
+
+    Returns:
+        NoteService 實例。A NoteService instance.
+    """
+    from app.services.note_service import NoteService
+
+    return NoteService(card_service=card_service, relation_service=relation_service)

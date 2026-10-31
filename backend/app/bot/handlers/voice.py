@@ -5,7 +5,7 @@ Telegram Bot 語音訊息處理模組 (Workflow B)。
 是否為 Recording 流程，並執行以下完整管線：
 1. 下載 .ogg 語音檔
 2. 交由 AudioEvaluator 進行語音辨識與評分
-3. 透過 SpeakingCoachHandler.execute_update 寫回 Anki
+3. 透過服務層的 ``add_recording`` 動作寫回 Anki（依筆記類型找對話卡或三語卡的 handler）
 4. 顯示進度與結果
 5. 清除使用者狀態
 
@@ -23,7 +23,7 @@ Receives user voice messages, checks the UserStateManager state to decide
 whether this is the Recording flow, and runs the full pipeline:
 1. Download the .ogg voice file
 2. Let AudioEvaluator transcribe and score the audio
-3. Write back to Anki via SpeakingCoachHandler.execute_update
+3. Write back to Anki through the service layer's ``add_recording`` action
 4. Show progress and results
 5. Clear the user state
 
@@ -50,16 +50,15 @@ from app.infrastructure.anki.search import field_term
 from app.core.exceptions import FluencyTidesError
 
 from app.bot.state import UserStateManager
-from app.bot.utils.texts import CARD_NOT_FOUND, error_detail, state_minutes
+from app.bot.utils.texts import CARD_NOT_FOUND, error_detail, state_minutes, sync_suffix
 from app.core.exceptions import AnkiFieldCorruptedError, AudioEvaluatorUnavailableError
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.audio_evaluator.base import AudioNotScoredError, BaseAudioEvaluator
 from app.infrastructure.audio_evaluator.factory import EvaluatorPlan
 from app.services import recording_eval
-from app.services.card_service import CardService
-from app.services.relation_service import RelationService
-from app.services.task_handlers.registry import HandlerRegistry
+from app.services.task_handlers.shared.trilingual_familiarity import familiarity_or_none
+from app.services.note_service import NoteService
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +72,8 @@ _RETRY_FROM_ANKI = "請回 Anki 卡片重新點按鈕。"
 async def process_voice_handler(
     message: Message,
     anki_client: AnkiClient,
-    handler_registry: HandlerRegistry,
+    note_service: NoteService,
     user_state_manager: UserStateManager,
-    card_service: CardService,
-    relation_service: RelationService,
 ) -> None:
     """處理使用者發送的語音訊息。
 
@@ -92,11 +89,9 @@ async def process_voice_handler(
     Args:
         message: Telegram 語音訊息物件。The Telegram voice message object.
         anki_client: 注入的 AnkiClient 實例。Injected AnkiClient instance.
-        handler_registry: 注入的 HandlerRegistry。Injected HandlerRegistry.
+        note_service: 注入的筆記服務；錄音紀錄經它寫回並同步。Injected NoteService.
         user_state_manager: 注入的 UserStateManager 實例。
             Injected UserStateManager instance.
-        card_service: 注入的 CardService。Injected CardService instance.
-        relation_service: 注入的 RelationService。Injected RelationService.
     """
     chat_id = message.chat.id
     state = user_state_manager.get_state(chat_id)
@@ -178,14 +173,14 @@ async def process_voice_handler(
         if trilingual_lang:
             target_language = LANG_TO_LOCALE[trilingual_lang]
             eval_template = f"prompts/anki/{LANG_TEMPLATE_MAP[trilingual_lang]}"
-            ref_json_str = str(
-                fields.get(references_field(trilingual_lang), {}).get("value", "[]")
-            )
+            ref_field_name = references_field(trilingual_lang)
+            ref_json_str = str(fields.get(ref_field_name, {}).get("value", "[]"))
         else:
             # Speaking_Coach_Dark 既有路徑：讀 Target_Language 欄位與共用樣板
             target_language = str(fields.get("Target_Language", {}).get("value", ""))
             eval_template = "prompts/audio_evaluator.j2"
-            ref_json_str = str(fields.get("References", {}).get("value", "[]"))
+            ref_field_name = "References"
+            ref_json_str = str(fields.get(ref_field_name, {}).get("value", "[]"))
         # 以共用解析器讀取（S065）：References 欄位可能是未轉義的原始 JSON
         # （匯入腳本直寫），也可能是 HTML 轉義過的（經 AnkiJsonFieldManager
         # 寫入）。直接 json.loads 只對前者成立，後者會被 except 吞掉而導致
@@ -199,14 +194,26 @@ async def process_voice_handler(
         # evaluators would lose their comparison baseline.
         try:
             ref_list = AnkiJsonFieldManager.parse_field_string(ref_json_str)
-            reference_answers = [
-                str(r.get("content", ""))
-                for r in ref_list
-                if isinstance(r, dict) and r.get("status", 1) == 1
-            ]
-        except (AnkiFieldCorruptedError, TypeError):
-            logger.warning("References 欄位解析失敗，本次評分將不帶參考範本。")
-            reference_answers = []
+        except AnkiFieldCorruptedError as e:
+            logger.warning(
+                "卡片 %s 的 %s 欄位解析失敗，本次評分不帶參考範本：%s", card_id, ref_field_name, e.message
+            )
+            ref_list = []
+        active_refs = [r for r in ref_list if isinstance(r, dict) and r.get("status", 1) == 1]
+        reference_answers = [str(r.get("content", "")) for r in active_refs]
+        # 三語卡每句參考答案可帶熟識度（0–9），與文字一一對應交給評分器（LLM 類放進提示詞，stt_diff 寫進
+        # feedback）；對話卡的參考答案沒有這個鍵，一律為 None。不合格的值當成未標，但記下來：匯入會擋，
+        # 讀到代表有人在 Anki 手動改壞了。
+        # Familiarity per reference (None for speaking-coach cards); invalid values count as unrated but are logged.
+        reference_familiarity = []
+        for number, ref in enumerate(active_refs, 1):
+            familiarity = familiarity_or_none(ref)
+            if familiarity is None and ref.get("familiarity") not in (None, ""):
+                logger.warning(
+                    "卡片 %s 的 %s 第 %d 句（啟用中）熟識度 %r 不合格（應為 0–9 的整數），本次評分視為未標。",
+                    card_id, ref_field_name, number, ref.get("familiarity"),
+                )
+            reference_familiarity.append(familiarity)
     except AnkiConnectError as e:
         logger.error("讀取卡片資訊失敗: %s", e)
         await status_msg.edit_text(f"❌ 讀取卡片失敗：{error_detail(e)}\n{_RETRY_FROM_ANKI}")
@@ -262,6 +269,7 @@ async def process_voice_handler(
                 reference_answers=reference_answers,
                 target_language=target_language if target_language else None,
                 template_name=eval_template,
+                reference_familiarity=reference_familiarity,
             )
         except AudioNotScoredError as e:
             # 不是 0 分而是沒有評分：不寫入紀錄（否則卡片上多一筆 0 分），照實說明並給重新進入的入口
@@ -301,24 +309,12 @@ async def process_voice_handler(
                 "comment": result.feedback_anki_html or result.feedback,
                 "score": result.score,
             }
-            speaking_handler = handler_registry.get_handler(handler_name)
             if trilingual_lang:
-                update_params = {
-                    "action": "add_recording",
-                    "lang": trilingual_lang,
-                    "recording": new_recording,
-                }
+                action_params = {"lang": trilingual_lang, "recording": new_recording}
             else:
-                update_params = {
-                    "action": "add_recording",
-                    "recording": new_recording,
-                }
-            await speaking_handler.execute_update(
-                card_service,
-                relation_service,
-                note_id,
-                update_params,
-            )
+                action_params = {"recording": new_recording}
+            # 服務層依筆記類型找 handler，寫入後同步並回傳提醒
+            sync_warning = sync_suffix(await note_service.run_action(note_id, "add_recording", action_params))
         except FluencyTidesError as e:
             logger.error("寫回 Anki 失敗: %s", e)
             await status_msg.edit_text(f"❌ 寫回 Anki 失敗：{error_detail(e)}\n{_RETRY_FROM_ANKI}")
@@ -334,10 +330,6 @@ async def process_voice_handler(
 
         score = result.score
         score_emoji = "🟢" if score >= 90 else ("🟡" if score >= 60 else "🔴")
-
-        # 嘗試觸發同步
-        from app.bot.handlers.callbacks import _sync_with_warning
-        sync_warning = await _sync_with_warning(anki_client)
 
         # feedback_anki_html 存在時，feedback 為 evaluator 自行組裝的 TG 安全
         # 標記（stt_diff 差異），不可再轉義也不可截斷（避免切斷標籤）；

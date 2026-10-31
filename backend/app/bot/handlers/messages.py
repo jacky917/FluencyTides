@@ -1,24 +1,14 @@
 """
 Telegram Bot 一般文字訊息處理模組。
 
-負責接收使用者發送的文字（視為單字/片語），
-透過 HandlerRegistry 動態分派到 VocabularyMiningHandler 進行生卡。
-
-Phase 9 更新：
-- 不再直接呼叫 CardService.generate_card()。
-- 改為透過 HandlerRegistry 取得 vocabulary_mining handler 並呼叫 execute_create。
-- 不再依賴硬編碼的 TG_DEFAULT_DECK / TG_DEFAULT_MODEL_NAME。
+處理不屬於任何 FSM 流程的文字：等待說話者名稱時完成上傳語音的寫回（經服務層的 ``add_audio`` 動作），
+其餘依目前的等待狀態回覆說明（建單字卡改由 /newcard 的單字卡流程處理）。
 
 Telegram Bot plain-text message handler module.
 
-Receives user-sent text (treated as a word/phrase) and dispatches it to
-VocabularyMiningHandler via HandlerRegistry for card generation.
-
-Phase 9 update:
-- No longer calls CardService.generate_card() directly.
-- Instead fetches the vocabulary_mining handler from HandlerRegistry and
-  calls execute_create.
-- No longer relies on hard-coded TG_DEFAULT_DECK / TG_DEFAULT_MODEL_NAME.
+Handles text outside any FSM flow: while waiting for a speaker name it
+finishes the uploaded-audio write-back through the service layer's
+``add_audio`` action; otherwise it replies according to the waiting state.
 """
 
 import logging
@@ -28,12 +18,10 @@ from aiogram.types import Message
 
 from app.infrastructure.anki.search import field_term
 from app.core.exceptions import FluencyTidesError
-from app.services.card_service import CardService
-from app.services.relation_service import RelationService
-from app.services.task_handlers.registry import HandlerRegistry
+from app.services.note_service import NoteService
 
 from app.bot.state import UserStateManager
-from app.bot.utils.texts import CARD_NOT_FOUND, UPLOAD_RETRY, error_detail, upload_done_text
+from app.bot.utils.texts import CARD_NOT_FOUND, UPLOAD_RETRY, error_detail, sync_suffix, upload_done_text
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 
 logger = logging.getLogger(__name__)
@@ -44,9 +32,7 @@ router = Router(name="messages_router")
 @router.message(F.text)
 async def process_word_handler(
     message: Message,
-    handler_registry: HandlerRegistry,
-    card_service: CardService,
-    relation_service: RelationService,
+    note_service: NoteService,
     user_state_manager: UserStateManager,
     anki_client: AnkiClient
 ) -> None:
@@ -54,18 +40,16 @@ async def process_word_handler(
 
     Handle plain text messages sent by the user.
 
-    如果狀態為 wait_speaker_name，則攔截作為說話者名稱，並完成上傳語音流程。
-    否則將文字視為要學習的字詞，呼叫 VocabularyMiningHandler 自動生成卡片。
+    如果狀態為 wait_speaker_name，則攔截作為說話者名稱，並完成上傳語音流程；
+    否則依目前的等待狀態回覆說明。
 
     If the state is wait_speaker_name, the text is intercepted as the
-    speaker's name to finish the audio-upload flow. Otherwise the text is
-    treated as a word to learn and VocabularyMiningHandler generates a card.
+    speaker's name to finish the audio-upload flow; otherwise the reply
+    explains what the bot is waiting for.
 
     Args:
         message: Telegram 訊息物件。The Telegram message object.
-        handler_registry: 注入的 HandlerRegistry。Injected HandlerRegistry.
-        card_service: 注入的 CardService。Injected CardService instance.
-        relation_service: 注入的 RelationService。Injected RelationService.
+        note_service: 注入的筆記服務。Injected NoteService.
         user_state_manager: 注入的使用者狀態管理器。
             Injected UserStateManager instance.
         anki_client: 注入的 AnkiClient。Injected AnkiClient instance.
@@ -83,9 +67,6 @@ async def process_word_handler(
         status_msg = await message.reply("⏳ 寫入 Anki 中…")
 
         try:
-            # 取前同步 (有防抖)
-            await anki_client.sync(raise_errors=False)
-
             card_id = state.card_id
             note_ids = await anki_client.find_notes(field_term("Card_ID", card_id))
             if not note_ids:
@@ -100,19 +81,16 @@ async def process_word_handler(
                 return
             note_id = notes_info[0].noteId
 
-            speaking_handler = handler_registry.get_handler("speaking_coach")
-
             field_name = state.extra.get("field_name")
             index_str = state.extra.get("index")
             audio_filename = state.extra.get("audio_filename")
             avatar_filename = state.extra.get("avatar", "")
 
-            await speaking_handler.execute_update(
-                card_service,
-                relation_service,
+            # 服務層依筆記類型找 handler：三語卡的自訂頭像原本寫死用對話卡的 handler，會寫錯格式
+            warning = await note_service.run_action(
                 note_id,
+                "add_audio",
                 {
-                    "action": "add_audio",
                     "field_name": field_name,
                     "index": index_str,
                     "audio": audio_filename,
@@ -120,12 +98,9 @@ async def process_word_handler(
                     "speaker": speaker_name
                 },
             )
+            sync_warning = sync_suffix(warning)
 
             user_state_manager.clear_state(chat_id)
-
-            # 寫入完成後觸發同步
-            from app.bot.handlers.callbacks import _sync_with_warning
-            sync_warning = await _sync_with_warning(anki_client)
 
             await status_msg.edit_text(upload_done_text(field_name, speaker_name, sync_warning))
         except (AnkiConnectError, FluencyTidesError) as e:

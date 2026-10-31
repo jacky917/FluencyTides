@@ -326,32 +326,42 @@ class RelationService:
         logger.info("已刪除卡片 %d 的所有關聯，共 %d 筆", note_id, deleted_count)
         return deleted_count
 
-    async def update_source_label(self, note_id: int, new_label: str) -> int:
-        """更新關聯紀錄中的 source_label。
+    async def update_labels_for_note(self, note_id: int, new_label: str) -> int | None:
+        """更新關聯表裡這張筆記兩端的標籤（handlers 計畫書 D12）。
 
-        Update the redundant source_label on relation rows.
+        Update the denormalized labels on both ends that point at this note.
 
-        當 Anki 卡片的主要欄位 (如 Expression) 改變時，同步更新冗餘資料。
-        Keeps the denormalized label in sync when the card's primary
-        field (e.g. Expression) changes.
+        關聯以文字辨認圖譜節點；只更新起點的話，這張筆記當終點的連線還是舊文字，圖譜會分裂成兩個節點。
+        Relations identify graph nodes by text; updating only the source side
+        would split the node in two.
 
         Args:
-            note_id: 來源筆記 ID。Source note ID.
-            new_label: 新的標籤文字。New label text.
+            note_id: 筆記 ID。The note ID.
+            new_label: 新的標籤文字。The new label.
 
         Returns:
-            更新的紀錄數量。Number of updated rows.
+            更新的紀錄數量（同一列兩端都是這張筆記時算兩次）；資料庫驅動未回報筆數時為 None。
+            Rows updated, a row counted once per matching end; None when the
+            driver reports no row count.
         """
-        stmt = (
+        source = await self._db_session.execute(
             update(CardRelation)
-            .where(CardRelation.source_note_id == note_id)
+            .where(col(CardRelation.source_note_id) == note_id)
             .values(source_label=new_label)
         )
-        result = await self._db_session.execute(stmt)
+        target = await self._db_session.execute(
+            update(CardRelation)
+            .where(col(CardRelation.target_note_id) == note_id)
+            .values(target_label=new_label)
+        )
         await self._db_session.commit()
-        updated_count = result.rowcount
-        logger.info("已更新卡片 %d 的 source_label 為 '%s'，共 %d 筆", note_id, new_label, updated_count)
-        return updated_count
+        counts = [cast(CursorResult[Any], result).rowcount for result in (source, target)]
+        if any(count is None or count < 0 for count in counts):
+            logger.info("已更新卡片 %d 兩端的關聯標籤為 '%s'（資料庫未回報筆數）", note_id, new_label)
+            return None
+        updated = sum(counts)
+        logger.info("已更新卡片 %d 兩端的關聯標籤為 '%s'，共 %d 筆", note_id, new_label, updated)
+        return updated
 
     async def get_all_relation_types(self) -> list[str]:
         """取得所有已註冊的關聯類型名稱。
