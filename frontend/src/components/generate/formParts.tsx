@@ -11,6 +11,7 @@ import { Input } from '../ui/input'
 import type { FormField } from '../../lib/createForm'
 import { cn } from '../../lib/utils'
 import type { CreateNoteResponse } from '../../types/api'
+import type { DeckStatus } from '../../hooks/useDeckStatus'
 
 /** 多行輸入框的樣式（與 Input 一致）。The textarea style, matching Input. */
 export const TEXTAREA_CLASS =
@@ -54,12 +55,12 @@ export function CollapsibleSection({
 }
 
 /**
- * 牌組與筆記類型的說明；沒選牌組或牌組已不存在時說明原因（`id` 給送出按鈕的 aria-describedby）。
+ * 牌組與筆記類型的說明；沒選牌組、牌組已不存在或還無法確認時說明原因（`id` 給送出按鈕的 aria-describedby）。
  * The deck and note type, or why no deck can be used.
  * @param props.id - 說明文字的 id。The id of the status text.
  * @param props.fixedDeck - 固定的牌組；null 表示用牌組樹選的。The fixed deck, or null.
  * @param props.selectedDeck - 牌組樹選的牌組。The deck picked in the tree.
- * @param props.deckMissing - 選的牌組是否已不存在。Whether that deck is gone.
+ * @param props.deckStatus - 牌組樹所選牌組的狀態（見 `useDeckStatus`）。The selected deck's status.
  * @param props.noteType - 建出的筆記類型。The note type.
  * @returns 說明 JSX。The summary JSX.
  */
@@ -67,13 +68,13 @@ export function DeckSummary({
   id,
   fixedDeck,
   selectedDeck,
-  deckMissing,
+  deckStatus,
   noteType,
 }: {
   id: string
   fixedDeck: string | null
   selectedDeck: string | null
-  deckMissing: boolean
+  deckStatus: DeckStatus
   noteType: string | null
 }) {
   return (
@@ -81,11 +82,19 @@ export function DeckSummary({
       <p className="font-medium">牌組</p>
       {fixedDeck ? (
         <p className="break-all">{fixedDeck}（這種卡片固定建在這裡）</p>
-      ) : selectedDeck === null ? (
+      ) : deckStatus === 'all' || selectedDeck === null ? (
         <p id={id} role="status" className="text-muted-foreground">
           請先在牌組樹選擇一個牌組（選「全部牌組」時無法建立卡片）。
         </p>
-      ) : deckMissing ? (
+      ) : deckStatus === 'loading' ? (
+        <p id={id} role="status" className="break-all text-muted-foreground">
+          {selectedDeck}（正在確認牌組是否存在…）
+        </p>
+      ) : deckStatus === 'error' ? (
+        <p id={id} role="status" className="break-all text-destructive">
+          無法載入牌組清單，暫時無法確認牌組「{selectedDeck}」是否存在；請在牌組樹重新整理。
+        </p>
+      ) : deckStatus === 'missing' ? (
         <p id={id} role="status" className="break-all text-destructive">
           牌組「{selectedDeck}」已不存在，請在牌組樹重新選擇。
         </p>
