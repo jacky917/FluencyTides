@@ -39,7 +39,7 @@ from aiogram.types import TelegramObject, User
 from app.bot.state import user_state_manager
 from app.core.config import settings
 from app.core.dependencies import _ANKI_MODELS_DIR
-from app.infrastructure.database.database import async_session_factory
+from app.infrastructure.database.corpus_database import corpus_async_session_factory
 from app.services.anki_model_manager import AnkiModelManager
 from app.services.card_service import CardService
 from app.services.note_service import NoteService
@@ -175,7 +175,12 @@ class ServiceInjectionMiddleware(BaseMiddleware):
             model_dir=_ANKI_MODELS_DIR,
         )
 
-        async with async_session_factory() as session:
+        # 卡片關聯存在語料庫（MySQL）的 rel_links（corpus_db_rebuild D9 的 C）
+        if not corpus_async_session_factory:
+            logger.error("語料庫 (MySQL) 連線尚未設定，無法建立 RelationService！")
+            raise RuntimeError("Corpus database is not configured.")
+
+        async with corpus_async_session_factory() as session:
             relation_service = RelationService(session)
 
             # Phase 9: CardService 已退化，只需 anki_client + model_manager

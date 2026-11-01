@@ -1,10 +1,12 @@
-"""以 generated_sentences_log 的 id 為入口的通用卡片刪除核心。
+"""以 card_gen_log（原 generated_sentences_log）的 id 為入口的通用卡片刪除核心。
 
-Card-type-agnostic deletion core keyed by generated_sentences_log row ids.
+Card-type-agnostic deletion core keyed by card_gen_log (formerly
+generated_sentences_log) row ids. Every DB access goes through
+GeneratedLogRepository, so the card relations (rel_links) follow the record.
 
 使用者只需提供 DB 紀錄的 id（支援複數與範圍），工具會：
-1. 查出每筆紀錄的 project / master / cloze / context note id。
-2. 依 project 欄自動掛上對應的 ProjectProfile（JP_VerbPair / JP_CoreVerb），
+1. 查出每筆紀錄的卡片類型（card_type）/ master / cloze / context note id。
+2. 依卡片類型自動掛上對應的 ProjectProfile（JP_VerbPair / JP_CoreVerb），
    不需要也不能手動指定卡片類型。
 3. 按專案分組後調用 child_deleter 共用核心——筆記類型驗證、
    「不可逆操作留最後」的步驟順序、失敗回滾、事後完整性檢查全部繼承。
@@ -23,8 +25,6 @@ return to the generation pool.
 """
 
 import logging
-
-from sqlalchemy import text
 
 from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.database.corpus_database import corpus_async_session_factory
@@ -79,38 +79,22 @@ def parse_id_tokens(tokens: list[str]) -> list[int]:
 
 
 async def resolve_log_rows(session, ids: list[int]) -> tuple[list[dict], list[int]]:
-    """從 generated_sentences_log 撈出指定 id 的紀錄。
+    """從 card_gen_log 撈出指定 id 的紀錄。
 
-    Fetch the requested rows from generated_sentences_log.
+    Fetch the requested rows from card_gen_log.
 
     Args:
         session: 非同步資料庫連線 session。Async database session.
         ids: 要查詢的紀錄 id。Row ids to fetch.
 
     Returns:
-        tuple[list[dict], list[int]]: (查到的紀錄, 查無資料的 id)。
-        (Found rows, missing ids.)
+        tuple[list[dict], list[int]]: (查到的紀錄, 查無資料的 id)。每筆紀錄含
+        ``id / project / verb_lemma / is_deleted / master_note_id / context_note_id /
+        cloze_note_id``。(Found rows, missing ids.)
     """
     if not ids:
         return [], []
-    placeholders = ", ".join(str(int(i)) for i in ids)
-    result = await session.execute(text(
-        "SELECT id, project, verb_lemma, is_deleted, "
-        "       master_note_id, context_note_id, cloze_note_id "
-        f"FROM generated_sentences_log WHERE id IN ({placeholders})"
-    ))
-    rows = [
-        {
-            "id": int(r[0]),
-            "project": r[1],
-            "verb_lemma": r[2],
-            "is_deleted": bool(r[3]),
-            "master_note_id": int(r[4]) if r[4] is not None else None,
-            "context_note_id": int(r[5]) if r[5] is not None else None,
-            "cloze_note_id": int(r[6]) if r[6] is not None else None,
-        }
-        for r in result.fetchall()
-    ]
+    rows = await GeneratedLogRepository().get_records_by_ids(session, ids)
     found_ids = {row["id"] for row in rows}
     missing = [i for i in ids if i not in found_ids]
     return rows, missing
@@ -124,11 +108,11 @@ async def run_deletion_by_log_ids(
 ) -> None:
     """依 DB 紀錄 id 刪除對應的卡片組（自動辨識卡片專案）。
 
-    Delete the card sets behind the given generated_sentences_log ids,
+    Delete the card sets behind the given card_gen_log ids,
     auto-detecting each row's project.
 
     Args:
-        ids: generated_sentences_log 的紀錄 id 清單。Row ids to delete.
+        ids: card_gen_log 的紀錄 id 清單。Row ids to delete.
         dry_run: True 時僅預覽。Preview only when True.
         allow_regen: True 時 DB 紀錄硬刪除（該句可重新生成）。Hard-delete
             DB records so the sentences may be regenerated.
@@ -215,15 +199,12 @@ async def run_deletion_by_log_ids(
         if dry_run:
             logger.info(f"🗃️ 預計硬刪除 {len(db_only_ids)} 筆無卡紀錄: {db_only_ids} (目前為 Dry Run，未實際執行)")
         else:
-            placeholders = ", ".join(str(int(i)) for i in db_only_ids)
+            repo = GeneratedLogRepository()
             async with corpus_async_session_factory() as session:
-                result = await session.execute(text(
-                    f"DELETE FROM generated_sentences_log WHERE id IN ({placeholders})"
-                ))
-                await session.commit()
+                deleted = await repo.hard_delete_by_ids(session, db_only_ids)
                 # 硬刪除後收斂 AUTO_INCREMENT，避免尾端留下大段空號
-                await GeneratedLogRepository().reset_auto_increment(session)
-            logger.info(f"🗃️ 已硬刪除 {result.rowcount} 筆無卡紀錄: {db_only_ids}（AUTO_INCREMENT 已重置）")
+                await repo.reset_auto_increment(session)
+            logger.info(f"🗃️ 已硬刪除 {deleted} 筆無卡紀錄: {db_only_ids}（AUTO_INCREMENT 已重置，rel_links 已標成 deleted）")
 
     if not tasks_by_project:
         if not db_only_ids:

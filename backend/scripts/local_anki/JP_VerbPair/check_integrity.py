@@ -3,9 +3,9 @@
 JP_VerbPair integrity check and auto-repair script (thin wrapper around
 scripts.local_anki.common.deletion.integrity).
 
-交叉比對 MySQL (generated_sentences_log 中本專案的紀錄) 與 Anki 牌組的
+交叉比對 MySQL (card_gen_log 中本卡片類型的紀錄，原 generated_sentences_log) 與 Anki 牌組的
 四個維度：DB 斷鏈、孤兒卡片、母卡 JSON 失效連結、孤兒媒體。
-DB 讀寫以 project 欄過濾、共用的 Context 模型先做歸屬分流、
+DB 讀寫以 card_type 欄過濾、共用的 Context 模型先做歸屬分流、
 孤兒媒體以全專案引用聯集判定——不會誤傷 JP_CoreVerb 的資料。
 
 預設為 Dry-Run 模式（不修改任何資料，僅印出診斷報告與預計操作）。

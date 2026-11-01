@@ -9,21 +9,22 @@ surface has multiple readings.
 1. 依 ``--project`` 的 ``ProjectProfile`` 掃全部母卡，建同表層多讀表
    （只留讀音數 ≥ 2 的表層，例：汚す → けがす / よごす）。
 2. 對每個表層收集待判台詞：ES 依**漢字表層**搜尋的候選（假名寫法的句子
-   讀音本身就是明的，不需要判）＋ ``generated_sentences_log`` 該表層已生成
-   的存量紀錄；扣掉 ``jp_verb_reading_judgments`` 已判過的。
+   讀音本身就是明的，不需要判）＋ ``card_gen_log`` 該表層已生成
+   的存量紀錄；扣掉 ``nlp_line_readings`` 已判過的。ES 只搜 ``--game`` 指定的遊戲
+   （預設 SabbatOfTheWitch，``game_profiles``）。
 3. 每批 ``--batch-size`` 句（附前後各 2 行上下文）送後端
    ``POST /api/v1/jp/verb-readings/judge``，結果寫入判斷表。
 4. 結尾輸出「歸屬對帳報告」：存量紀錄的判定讀音 ≠ 所屬母卡讀音者逐筆列出，
    交人工複核。
 
-它不做什麼：不生成卡片、不動 ``generated_sentences_log``、不直連 LLM
+它不做什麼：不生成卡片、不動 ``card_gen_log``、不直連 LLM
 （標籤以後端回應為準）。
 
 用哪個模型由後端用途鍵 ``jp_verb_reading`` 決定：要換模型或思考深度，先在 TG
 ``/setconfig`` 設定 ``jp_verb_reading``，跑完再「恢復預設」。腳本不再有 ``--model`` /
 ``--effort``（模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D8）。
 
-快取規則：是否跳過只看 ``(script_id, 表層)`` 是否已有紀錄，**不比對模型**；
+快取規則：是否跳過只看 ``(台詞 ID, 表層)`` 是否已有紀錄，**不比對模型**；
 重判必須用 ``--rejudge*`` 明確指定（三者互斥）。
 
 ``--batch-size`` 建議值 **20**、硬上限 40：每句附前後各 2 行，20 句約 100 行
@@ -47,8 +48,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
-from sqlalchemy import text
-
 _backend_dir = Path(__file__).resolve().parents[3]
 if str(_backend_dir) not in sys.path:
     sys.path.insert(0, str(_backend_dir))
@@ -58,7 +57,8 @@ from app.core.config import settings
 from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.database.corpus_database import corpus_async_session_factory, dispose_corpus_engine
 from app.infrastructure.database.elasticsearch_client import dispose_elasticsearch_client, search_dialogue_by_verb
-from scripts.common.database.log_repository import KNOWN_PROJECTS
+from scripts.common.database.corpus_repository import DEFAULT_GAME_ID, get_context, get_game_profile
+from scripts.common.database.log_repository import KNOWN_PROJECTS, GeneratedLogRepository
 from scripts.common.database.reading_judgment_repository import ReadingJudgmentRepository, ReadingJudgmentRow
 from scripts.common.jp_homograph_table import HomographEntry, load_homograph_table
 from scripts.local_anki.common.deletion.profiles import get_profile
@@ -165,32 +165,24 @@ async def _fetch_es_ids(surface: str, game_name_jp: str, limit: int) -> set[int]
 
 
 async def _fetch_existing(session, project: str, surface: str) -> list[tuple[int, int, int]]:
-    r = await session.execute(text(
-        "SELECT id, script_id, master_note_id FROM generated_sentences_log "
-        "WHERE project = :p AND verb_lemma = :s AND is_deleted = FALSE "
-        "AND (cloze_note_id IS NOT NULL OR context_note_id IS NOT NULL)"
-    ), {"p": project, "s": surface})
-    return [(int(a), int(b), int(c)) for a, b, c in r.fetchall()]
+    """該表層已成功生成的存量紀錄 ``(紀錄 id, 台詞 ID, 母卡 note id)``。"""
+    records = await GeneratedLogRepository().get_generated_records(session, surface, project=project)
+    return [(r["id"], r["script_id"], r["master_note_id"]) for r in records]
 
 
 async def _fetch_lines_with_context(session, script_ids: list[int]) -> dict[int, dict]:
-    """取台詞與前後各 CONTEXT_LINES 行（同 source、依 id 相鄰）。"""
+    """取台詞與前後各 CONTEXT_LINES 句（同一遊戲、同一章節，依劇情順序）。"""
     out: dict[int, dict] = {}
+    fmt = lambda x: f"{x.speaker}：{x.dialogue}" if x.speaker and x.speaker not in ("-", "none") else x.dialogue
     for sid in script_ids:
-        r = await session.execute(text(
-            "SELECT id, dialogue, role_name, source FROM scripts "
-            "WHERE id BETWEEN :lo AND :hi ORDER BY id"
-        ), {"lo": sid - CONTEXT_LINES, "hi": sid + CONTEXT_LINES})
-        rows = r.fetchall()
-        target = next((x for x in rows if int(x[0]) == sid), None)
+        lines = await get_context(session, sid, CONTEXT_LINES, CONTEXT_LINES)
+        target = next((x for x in lines if x.id == sid), None)
         if not target:
             continue
-        same = [x for x in rows if x[3] == target[3]]
-        fmt = lambda x: f"{x[2]}：{x[1]}" if x[2] and x[2] not in ("-", "none") else str(x[1])
         out[sid] = {
             "line": fmt(target),
-            "context_before": [fmt(x) for x in same if int(x[0]) < sid],
-            "context_after": [fmt(x) for x in same if int(x[0]) > sid],
+            "context_before": [fmt(x) for x in lines if x.story_order < target.story_order],
+            "context_after": [fmt(x) for x in lines if x.story_order > target.story_order],
         }
     return out
 
@@ -210,8 +202,9 @@ async def _call_judge(client: httpx.AsyncClient, url: str, items: list[dict]) ->
 # ============================================================
 
 async def _run() -> None:
-    parser = argparse.ArgumentParser(description="判讀同表層多讀動詞在台詞中的實際讀音，寫入 jp_verb_reading_judgments")
+    parser = argparse.ArgumentParser(description="判讀同表層多讀動詞在台詞中的實際讀音，寫入 nlp_line_readings")
     parser.add_argument("--project", default="jp_verb_pair", choices=KNOWN_PROJECTS)
+    parser.add_argument("--game", default=DEFAULT_GAME_ID, help=f"ES 候選只搜這款遊戲（game_profiles.game_id，預設 {DEFAULT_GAME_ID}）")
     parser.add_argument("--surface", nargs="*", default=None, help="只處理指定表層（可多個）")
     parser.add_argument("--max-surfaces", type=int, default=None, help="本次最多處理幾個表層（順序固定）")
     parser.add_argument("--limit", type=int, default=200, help="每表層 ES 候選上限")
@@ -252,10 +245,11 @@ async def _run() -> None:
     plans: list[SurfacePlan] = []
     existing_by_surface: dict[str, list[tuple[int, int, int]]] = {}
     async with corpus_async_session_factory() as session:
+        game = await get_game_profile(session, args.game)
         for surface in surfaces:
             entry = table[surface]
             plan = SurfacePlan(surface=surface, candidates=entry.candidates)
-            plan.es_ids = await _fetch_es_ids(surface, profile.game_name_jp, args.limit)
+            plan.es_ids = await _fetch_es_ids(surface, game.es_source, args.limit)
             existing = await _fetch_existing(session, args.project, surface)
             existing_by_surface[surface] = existing
             plan.existing_ids = {sid for _, sid, _ in existing}

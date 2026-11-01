@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import Depends, Request
 
+from app.infrastructure.database.corpus_database import get_corpus_async_session
 from app.infrastructure.database.database import get_async_session
 
 from app.infrastructure.anki.client import AnkiClient
@@ -166,18 +167,20 @@ def get_model_manager(
 
 
 def get_relation_service(
-    db_session=Depends(get_db_session),
+    db_session=Depends(get_corpus_async_session),
 ) -> RelationService:
     """建立 RelationService 實例。
 
     Create a RelationService instance.
 
-    注入 AsyncSession，提供卡片關聯資料庫的操作功能。
+    注入**語料庫**（MySQL）的 AsyncSession：卡片關聯存在 ``rel_links`` / ``rel_types``
+    （docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9 的 C），不再用網站的 SQLite。
 
-    Injects an AsyncSession to provide card-relation database operations.
+    Injects the corpus (MySQL) AsyncSession: card relations live in
+    ``rel_links`` / ``rel_types``, no longer in the website's SQLite.
 
     Args:
-        db_session: 注入的 AsyncSession。Injected AsyncSession.
+        db_session: 注入的語料庫 AsyncSession。Injected corpus AsyncSession.
 
     Returns:
         RelationService 實例。A RelationService instance.

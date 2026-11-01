@@ -16,7 +16,7 @@ Two dedup layers: the key layer (canonical verb lemma) and the text layer
 (normalized dialogue vs. every logged line of the verb).
 
 同表層多讀的讀音歸屬**不在此處**處理：那是選句階段查
-``jp_verb_reading_judgments`` 的事（生卡腳本），被擋的句子不會走到這裡、
+``nlp_line_readings`` 的事（生卡腳本），被擋的句子不會走到這裡、
 也不會留下任何紀錄（docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.3）。
 """
 
@@ -52,12 +52,12 @@ class DedupManager:
             session: 語料庫 async session。Corpus async session.
             voice_dir: 音檔本地目錄。Local voice-file directory.
             avatar_dir: 頭像本地目錄。Local avatar directory.
-            source_game: 遊戲來源代號。Source game id.
+            source_game: 遊戲代號（``game_id``，也是媒體檔名前綴）。Game id
+                (also the media filename prefix).
             context_prev: 上下文往前行數。Context lines before the target.
             context_next: 上下文往後行數。Context lines after the target.
-            project: generated_sentences_log 的專案識別
-                （log_repository.KNOWN_PROJECTS）。Project identifier for
-                generated_sentences_log.
+            project: card_gen_log 的卡片類型
+                （log_repository.KNOWN_PROJECTS）。Card type in card_gen_log.
         """
         self.session = session
         self.voice_dir = voice_dir
@@ -103,7 +103,7 @@ class DedupManager:
         return False
 
     async def prepare_generation(
-        self, script_id: int, verb_lemma: str, chapter: str, *, dialogue: str | None = None,
+        self, script_id: int, verb_lemma: str, *, dialogue: str | None = None,
     ) -> list[dict] | None:
         """準備生成卡片。檢查是否重複或已達到失敗上限，若允許則回傳上下文對話。
 
@@ -114,7 +114,6 @@ class DedupManager:
             script_id: 目標台詞主鍵。Target line's primary key.
             verb_lemma: 動詞正規表記（母卡標準表層去標音，**非**搜尋
                 關鍵字）。Canonical verb lemma, never the search keyword.
-            chapter: 目標台詞章節。Target line's chapter.
             dialogue: 候選句原文；有給時啟用文字層去重（同文異 id 的分身
                 視為重複）。Raw candidate dialogue; enables text-level
                 dedup when provided.
@@ -158,7 +157,6 @@ class DedupManager:
         context_dialogue = await self.builder.build(
             session=self.session,
             script_id=script_id,
-            chapter=chapter,
             voice_dir=self.voice_dir,
             avatar_dir=self.avatar_dir,
             source_game=self.source_game,
@@ -169,7 +167,7 @@ class DedupManager:
         return context_dialogue
 
     async def record_failure(
-        self, script_id: int, verb_lemma: str, chapter: str, master_note_id: int, llm_model: str,
+        self, script_id: int, verb_lemma: str, master_note_id: int, llm_model: str,
     ) -> None:
         """紀錄生成失敗。
 
@@ -178,12 +176,11 @@ class DedupManager:
         Args:
             script_id: 目標台詞主鍵。Target line's primary key.
             verb_lemma: 動詞正規表記。Canonical verb lemma.
-            chapter: 章節。Chapter.
             master_note_id: 母卡 note id。Master note id.
             llm_model: 使用的 LLM 模型標籤。LLM model label used.
         """
         await self.repo.increment_failure_count(
-            self.session, script_id, verb_lemma, self.source_game, chapter, master_note_id, llm_model,
+            self.session, script_id, verb_lemma, master_note_id, llm_model,
             project=self.project,
         )
         logger.warning(f"⚠️ 紀錄一次生成失敗: script_id={script_id}, verb_lemma='{verb_lemma}'")
@@ -192,7 +189,6 @@ class DedupManager:
         self,
         script_id: int,
         verb_lemma: str,
-        chapter: str,
         master_note_id: int,
         context_note_id: int | None = None,
         cloze_note_id: int | None = None,
@@ -202,12 +198,14 @@ class DedupManager:
         """生成成功後，寫入 MySQL 紀錄（或恢復軟刪除狀態）。
 
         After a successful generation, write the MySQL record (or restore a
-        soft-deleted one).
+        soft-deleted one); the repository also writes the card relations.
+
+        遊戲與章節由 repository 依台詞查出，這裡不再傳。The game and chapter are
+        derived from the line by the repository.
 
         Args:
             script_id: 目標台詞主鍵。Target line's primary key.
             verb_lemma: 動詞正規表記。Canonical verb lemma.
-            chapter: 章節。Chapter.
             master_note_id: 母卡 note id。Master note id.
             context_note_id: Context 子卡 note id。Context child note id.
             cloze_note_id: Cloze 子卡 note id。Cloze child note id.
@@ -216,8 +214,6 @@ class DedupManager:
         record_data = {
             "script_id": script_id,
             "verb_lemma": verb_lemma,
-            "source": self.source_game,
-            "chapter": chapter,
             "master_note_id": master_note_id,
             "context_note_id": context_note_id,
             "cloze_note_id": cloze_note_id,

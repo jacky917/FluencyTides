@@ -333,6 +333,7 @@ def build(anchor_rows: list[dict], legacy: list[LegacyRow], calib_dir: Path,
 def _build_links(c: Content, anchor_rows: list[dict], calib_dir: Path, ensure_scene, scene_ids) -> None:
     """由校準紀錄組出 game_scene_links。Build scene links from calibration logs."""
     seen: set[tuple] = set()
+    label_of = {sid: s.split("*", 1)[1] for s, sid in scene_ids.items()}
     choice_tw: dict[str, list[str]] = {}
     for r in anchor_rows:
         if r["text_jp"].startswith("選択肢") and r.get("text_tw"):
@@ -341,7 +342,13 @@ def _build_links(c: Content, anchor_rows: list[dict], calib_dir: Path, ensure_sc
 
     def add(**kw) -> None:
         key = (kw["from_scene_id"], kw["kind"], kw.get("option_index"), kw.get("to_scene_id"))
-        if kw["from_scene_id"] is None or key in seen:
+        if kw["from_scene_id"] is None or key in seen or kw["from_scene_id"] == kw.get("to_scene_id"):
+            return
+        # 選項畫面只會經由選項離開；calib_state 在選項標籤上記的「下一個場景」
+        # 是整個章節跑完後的位置，會接錯（例：019 dummyselect1 → 015 015_01B）
+        # Choice labels only exit via choices; calib_state's chapter-level "next"
+        # recorded on them points at the wrong scene.
+        if kw["kind"] == "next" and label_of.get(kw["from_scene_id"], "").startswith("dummyselect"):
             return
         seen.add(key)
         base = {"game_id": GAME_ID, "to_point": None, "option_index": None, "option_text_ja_jp": None,

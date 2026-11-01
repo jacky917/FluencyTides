@@ -46,6 +46,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# 圖譜關聯寫進語料庫 rel_links 時的建立者與 attrs.card_type（與 card_gen_log.card_type 一致）。
+# created_by / attrs.card_type of the relations this handler writes to rel_links.
+CARD_TYPE = "jp_core_verb"
+
 # LLM 用途鍵（生效設定的解析見 app.infrastructure.llm.routing）
 CHILD_CARD_LLM = route("jp_core_verb", "核心動詞子卡生成", capabilities={"llm"})
 
@@ -373,37 +377,45 @@ class JPCoreVerbHandler(BaseHandler):
             )
 
         # 9. 圖譜關聯
-        # S003：卡片與母卡 JSON 此時已提交，圖譜關聯失敗屬「可事後補救」等級
-        # （/sync 的孤兒清理會處理），不應為了圖譜一致性回頭刪除使用者已看得到
-        # 的卡片。因此改為記錄警告並以旗標回報，不讓例外中斷整個生成流程。
-        # S003: the notes and the master JSON are already committed here, so a
-        # failed graph link is recoverable (the /sync orphan sweep handles it)
-        # and must not delete notes the user can already see. It is logged and
-        # reported via a flag instead of aborting the whole generation.
+        # S003：卡片與母卡 JSON 此時已提交，圖譜關聯失敗不應為了圖譜一致性回頭刪除使用者
+        # 已看得到的卡片，所以只記錄並以旗標回報，不讓例外中斷整個生成流程。兩條關聯在同一個
+        # transaction 寫入（batch_create_relations），不會只留下一半。
+        # 注意 /relations/sync 只會撤銷孤兒關聯、不會補上缺的；缺的關聯由建卡管線寫
+        # card_gen_log 時補上（create_or_restore_record 的 _ensure_link）。
+        # S003: the notes and the master JSON are already committed, so a
+        # failed graph link is logged and flagged instead of deleting cards
+        # the user can see. Both links go in one transaction. /relations/sync
+        # only retires orphans; missing links are restored when the pipeline
+        # records the card (create_or_restore_record -> _ensure_link).
         relation_failed = False
         try:
-            await relation_service.create_relation(
-                CardRelationCreate(
-                    source_note_id=master_note_id,
-                    target_note_id=new_context_id,
-                    relation_type="has_context",
-                    source_label=target_verb,
-                    target_label=f"{target_verb}_context"
-                )
+            await relation_service.batch_create_relations(
+                [
+                    CardRelationCreate(
+                        source_note_id=master_note_id,
+                        target_note_id=new_context_id,
+                        relation_type="has_context",
+                        source_label=target_verb,
+                        target_label=f"{target_verb}_context"
+                    ),
+                    CardRelationCreate(
+                        source_note_id=master_note_id,
+                        target_note_id=new_cloze_id,
+                        relation_type="has_cloze",
+                        source_label=target_verb,
+                        target_label=f"{target_verb}_cloze"
+                    ),
+                ],
+                created_by=CARD_TYPE,
+                attrs={"card_type": CARD_TYPE},
             )
-            await relation_service.create_relation(
-                CardRelationCreate(
-                    source_note_id=master_note_id,
-                    target_note_id=new_cloze_id,
-                    relation_type="has_cloze",
-                    source_label=target_verb,
-                    target_label=f"{target_verb}_cloze"
-                )
-            )
-        except Exception as e:  # noqa: BLE001 - 圖譜失敗不得中斷已成功的建卡
+        except Exception:  # noqa: BLE001 - 圖譜失敗不得中斷已成功的建卡
             relation_failed = True
             logger.warning(
-                "圖譜關聯建立失敗（卡片已建立，可由 /sync 後續修正）: %s", e
+                "圖譜關聯建立失敗（卡片已建立；建卡管線寫入 card_gen_log 時會補上）"
+                "：master=%s, context=%s, cloze=%s",
+                master_note_id, new_context_id, new_cloze_id,
+                exc_info=True,
             )
 
         return {

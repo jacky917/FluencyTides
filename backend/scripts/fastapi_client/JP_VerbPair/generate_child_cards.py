@@ -24,6 +24,10 @@ Example:
 
     測試模式 (Dry-Run)：模擬執行並計算預計生成的卡片數，但不實際調用 LLM 或寫入資料：
         $ python backend/scripts/fastapi_client/JP_VerbPair/generate_child_cards.py --limit 0 --dry-run
+
+    指定遊戲（預設 SabbatOfTheWitch；名稱、語音與頭像資料夾從 `game_profiles` 讀，
+    資料夾相對於 `.env` 的 `GAME_ASSETS_ROOT`）：
+        $ python backend/scripts/fastapi_client/JP_VerbPair/generate_child_cards.py --limit 0 --game SabbatOfTheWitch
 """
 
 import asyncio
@@ -49,7 +53,12 @@ from app.infrastructure.database.elasticsearch_client import search_dialogue_by_
 from app.infrastructure.utils.jp_tokenizer import create_tagger
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.core.config import settings
-from sqlalchemy import text
+from scripts.common.database.corpus_repository import (
+    DEFAULT_GAME_ID,
+    get_game_profile,
+    get_lines,
+    require_media_dirs,
+)
 from scripts.common.database.log_repository import PROJECT_JP_VERB_PAIR
 from scripts.common.llm_label import build_llm_model_label
 from scripts.common.database.canonicalize_verb_lemma import load_keyword_map
@@ -185,6 +194,7 @@ async def process_verb_group(
     rejection_stats: dict[str, int] = None,
     filter_moan: bool = True,
     sibling_surfaces: frozenset[str] = frozenset(),
+    es_source: str | None = None,
 ) -> int:
     """處理自動詞或他動詞欄位中的所有同義動詞。回傳本次新增的卡片數量。
 
@@ -200,7 +210,8 @@ async def process_verb_group(
         master_note_id: 母卡 note id。Master note id.
         raw_verb_str: 動詞欄位原始字串。Raw verb field string.
         max_cards: 單一動詞欄位生成上限。Per-field generation cap.
-        game_name_jp: 遊戲來源名稱。Source game name.
+        game_name_jp: 遊戲日文標題（送給後端的 ``source_game``）。Japanese game title
+            sent to the backend.
         current_count: 既有紀錄數（起算值）。Existing record count.
         global_limit: 本次執行全域上限（0 為不限）。Global cap (0 = none).
         global_total: 進入本函數前的全域生成數。Global count so far.
@@ -295,12 +306,12 @@ async def process_verb_group(
             # 取出 100 筆備用彈藥，確保足夠應對後端生成失敗
             es_results = await search_dialogue_by_verb(
                 target_verb=kw,
-                game_name_jp=game_name_jp,
+                game_name_jp=es_source or game_name_jp,
                 limit=100,
                 last_script_id=0
             )
             # 同表層多讀（汚す＝けがす/よごす）：只在關鍵字是漢字表層時查
-            # jp_verb_reading_judgments 過濾——假名寫法的句子讀音本身就是明的。
+            # nlp_line_readings 過濾——假名寫法的句子讀音本身就是明的。
             # 有判斷且不符 → 丟棄且不留紀錄；無判斷 → 放行（表空時行為與現況相同）。
             # 詳見 docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.3。
             if reading_filter is not None and kw == normalized_verb and reading_filter.is_homograph(normalized_verb):
@@ -384,10 +395,8 @@ async def process_verb_group(
                         )
                         continue
 
-                target_query = text("SELECT chapter FROM scripts WHERE id = :script_id")
-                target_result = await session.execute(target_query, {"script_id": script_id})
-                target_row = target_result.fetchone()
-                chapter = target_row[0] if target_row else ""
+                target_line = (await get_lines(session, [script_id])).get(int(script_id))
+                chapter = (target_line.chapter or "") if target_line else ""
                 
                 # 去重鍵一律用母卡標準表層（target_lemma），不用命中的關鍵字
                 # （假名擴展 まとめる 等）——否則同句會因拼寫不同重複生成
@@ -399,7 +408,6 @@ async def process_verb_group(
                 context_dialogue = await dedup_manager.prepare_generation(
                     script_id=script_id,
                     verb_lemma=kd["target_lemma"],
-                    chapter=chapter,
                     dialogue=row.get("dialogue") or "",
                 )
                 
@@ -458,7 +466,6 @@ async def process_verb_group(
                     await dedup_manager.record_success(
                         script_id=script_id,
                         verb_lemma=kd["target_lemma"],
-                        chapter=chapter,
                         master_note_id=master_note_id,
                         context_note_id=data.get("context_note_id"),
                         cloze_note_id=data.get("cloze_note_id"),
@@ -481,7 +488,7 @@ async def process_verb_group(
 
                         if error_code == "CLOZE_POSITIONING_FAILED":
                             logger.warning(f"⚠️ 該句子挖空定位失敗被後端拒絕，自動跳過並嘗試下一句: {e.response.text}")
-                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name)
+                            await dedup_manager.record_failure(script_id, kd["target_lemma"], master_note_id, llm_model_name)
                             continue
                         
                         logger.error(f"❌ 發生預期外的業務邏輯錯誤 (HTTP 422): {e.response.text}")
@@ -495,12 +502,12 @@ async def process_verb_group(
                             
                         if "LLM API 在所有重試後仍回傳空內容" in e.response.text or "PROHIBITED_CONTENT" in e.response.text:
                             logger.warning("⚠️ 遭遇 LLM 安全審查攔截，自動跳過此句並繼續...")
-                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name)
+                            await dedup_manager.record_failure(script_id, kd["target_lemma"], master_note_id, llm_model_name)
                             continue
 
                         if e.response.status_code >= 500:
                             logger.warning(f"⚠️ 遭遇伺服器錯誤 ({e.response.status_code})，文字內容: '{e.response.text[:100]}'。將紀錄失敗並跳過...")
-                            await dedup_manager.record_failure(script_id, kd["target_lemma"], chapter, master_note_id, llm_model_name)
+                            await dedup_manager.record_failure(script_id, kd["target_lemma"], master_note_id, llm_model_name)
                             await asyncio.sleep(3)
                             continue
                             
@@ -562,6 +569,7 @@ async def main() -> None:
     parser.add_argument("--limit", type=int, required=True, help="本次執行一共添加幾張卡片 (0 代表無限制全部添加)")
     parser.add_argument("--dry-run", action="store_true", help="測試執行，僅計算預計生成的卡片數量，不調用後端 API 且不寫入資料庫")
     parser.add_argument("--skip-narrator", action="store_true", help="跳過所有旁白/無角色台詞的生成")
+    parser.add_argument("--game", default=DEFAULT_GAME_ID, help=f"從哪款遊戲選句（game_profiles.game_id，預設 {DEFAULT_GAME_ID}）")
     args = parser.parse_args()
     
     global_limit = args.limit
@@ -637,17 +645,21 @@ async def main() -> None:
         sibling_surfaces = frozenset(_surfaces)
         logger.info(f"🔤 表記兄弟集合: {len(sibling_surfaces)} 個母卡表層")
         
-        # 準備音檔和頭像的路徑
-        voice_dir = Path(settings.JP_VERB_PAIR_VOICE_DIR)
-        avatar_dir = Path(settings.JP_VERB_PAIR_AVATAR_DIR)
-        source_game = settings.JP_VERB_PAIR_SOURCE_GAME
-        game_name_jp = settings.JP_VERB_PAIR_GAME_NAME_JP
-        
         # 從 .env 讀取每個動詞最大生成張數
         max_cards_per_verb = settings.JP_VERB_PAIR_MAX_CARDS_PER_VERB
         logger.info(f"⚙️ 每個動詞（自/他獨立計算）最大生成上限：{max_cards_per_verb} 張")
         
         async with corpus_async_session_factory() as session:
+            # 遊戲設定從 game_profiles 讀（D9 的 H）：source_game 是 game_id（媒體前綴），
+            # game_name_jp 是卡片與提示詞上的日文標題，es_source 是 ES 文件的 source 欄。
+            game = await get_game_profile(session, args.game)
+            # 資料夾不存在時直接中止（FileNotFoundError 由外層記錄後以結束碼 1 離開），
+            # 不讓整批卡片都沒有音檔與頭像
+            voice_dir, avatar_dir = require_media_dirs(game)
+            source_game = game.game_id
+            game_name_jp = game.title_ja_jp
+            logger.info(f"🎮 遊戲: {game.game_id}（{game_name_jp}），語音 {voice_dir}，頭像 {avatar_dir}")
+
             # 初始化生成管線模組
             dedup_manager = DedupManager(
                 session=session,
@@ -670,7 +682,7 @@ async def main() -> None:
                 session, load_keyword_map(), project=PROJECT_JP_VERB_PAIR,
             )
             if stale:
-                logger.error("🛑 generated_sentences_log 仍有非正規拼寫的 verb_lemma，繼續生成會產生重複卡：")
+                logger.error("🛑 card_gen_log 仍有非正規拼寫的詞（term_key），繼續生成會產生重複卡：")
                 for lemma, master_nid, count in stale:
                     logger.error(f"   '{lemma}'（母卡 {master_nid}）: {count} 筆")
                 logger.error("   請先執行 python scripts/common/database/canonicalize_verb_lemma.py --execute，再重跑本腳本。")
@@ -732,6 +744,7 @@ async def main() -> None:
                         raw_verb_str=intransitive,
                         max_cards=max_cards_per_verb,
                         game_name_jp=game_name_jp,
+                        es_source=game.es_source,
                         current_count=intransitive_current_count,
                         global_limit=global_limit,
                         global_total=global_total,
@@ -774,6 +787,7 @@ async def main() -> None:
                         raw_verb_str=transitive,
                         max_cards=max_cards_per_verb,
                         game_name_jp=game_name_jp,
+                        es_source=game.es_source,
                         current_count=transitive_current_count,
                         global_limit=global_limit,
                         global_total=global_total,

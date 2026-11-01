@@ -45,6 +45,11 @@ class CardRelation(SQLModel, table=True):
 
     Card relation table.
 
+    **已停用（2026-11-01）**：卡片關聯改存語料庫的 ``rel_links``（``RelationService``，
+    docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9 的 C）；這張 SQLite 表原樣保留不刪，程式不再讀寫。
+    No longer used: relations moved to the corpus ``rel_links``; the SQLite table
+    is kept but nothing reads or writes it.
+
     儲存兩張 Anki 卡片（筆記）之間的有向關係，
     支援多對多、多父節點等複雜圖譜結構。
 
@@ -141,6 +146,11 @@ class RelationType(SQLModel, table=True):
     """關聯類型表。
 
     Relation type table.
+
+    **已停用（2026-11-01）**：卡片關聯改存語料庫的 ``rel_types``（``RelationService``，
+    docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9 的 C）；這張 SQLite 表原樣保留不刪，程式不再讀寫。
+    No longer used: relations moved to the corpus ``rel_types``; the SQLite table
+    is kept but nothing reads or writes it.
 
     動態儲存使用者建立的所有關聯類型，以便前端下拉選單展示。
 

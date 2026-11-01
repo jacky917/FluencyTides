@@ -246,23 +246,27 @@ class TestScriptBootstrapS004S006(unittest.TestCase):
 
 
 class TestInitDbSchemaS007(unittest.TestCase):
-    """DDL 與 Repository 欄位一致性（S007）。DDL/repository parity (S007)."""
+    """DDL 與 Repository 欄位一致性（S007）。DDL/repository parity (S007).
+
+    語料庫重建後 init_db 直接取 schema.sql 的建表 SQL（唯一來源），不再有舊表的欄位補齊。
+    After the corpus rebuild init_db takes its DDL from schema.sql.
+    """
 
     def test_ddl_contains_all_repository_columns(self) -> None:
-        """init_db 的 DDL 必須涵蓋 repository 使用的所有欄位。"""
-        ddl_src = (
-            _BACKEND_DIR / "scripts/common/database/init_db.py"
-        ).read_text(encoding="utf-8")
-        for column in ("failure_count", "llm_model"):
-            self.assertIn(column, ddl_src, f"DDL 缺少欄位: {column}")
+        """init_db 建的 card_gen_log 必須涵蓋 repository 使用的所有欄位。"""
+        from scripts.common.database.init_db import SCHEMA_PATH, table_ddl
 
-    def test_backfill_helper_exists(self) -> None:
-        """必須提供既有資料表的冪等欄位補齊（CREATE IF NOT EXISTS 不會補欄位）。"""
-        src = (_BACKEND_DIR / "scripts/common/database/init_db.py").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("_ensure_columns", src)
-        self.assertIn("information_schema", src)
+        ddl = table_ddl(SCHEMA_PATH.read_text(encoding="utf-8"), "card_gen_log")
+        self.assertTrue(ddl.startswith("CREATE TABLE IF NOT EXISTS card_gen_log ("))
+        for column in ("failure_count", "llm_model", "term_key", "card_type", "line_id", "game_id"):
+            self.assertIn(column, ddl, f"DDL 缺少欄位: {column}")
+
+    def test_reading_table_ddl_comes_from_schema(self) -> None:
+        """讀音判斷快取表同樣取自 schema.sql。"""
+        from scripts.common.database.init_db import SCHEMA_PATH, table_ddl
+
+        ddl = table_ddl(SCHEMA_PATH.read_text(encoding="utf-8"), "nlp_line_readings")
+        self.assertIn("PRIMARY KEY (line_id, verb_surface)", ddl)
 
 
 class TestBuildNlpIndexConnectionsS008(unittest.TestCase):
