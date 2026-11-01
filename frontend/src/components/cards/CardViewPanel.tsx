@@ -18,6 +18,7 @@ import { Button } from '../ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card'
 import { Skeleton } from '../ui/skeleton'
 import { ErrorNote } from '../shared/ErrorNote'
+import { ShowInStoryButton } from '../story/ShowInStoryButton'
 import { STICKY_HEADER, panelScrollClass } from '../shared/panelStyles'
 
 /** {@link CardViewPanel} 的 props。Props of {@link CardViewPanel}. */
@@ -239,6 +240,7 @@ export function CardViewPanel({
           <Button size="sm" variant="outline" disabled={!card} onClick={() => onFieldsOpen(true)}>
             筆記欄位
           </Button>
+          <ShowInStoryButton noteId={card?.note_id} modelName={card?.model_name} />
         </div>
       </div>
     </CardHeader>

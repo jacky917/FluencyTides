@@ -1,0 +1,608 @@
+/*
+ * 劇情流程圖的預設樣式（D9、D15）。所有顏色、尺寸、字型、素材都來自主題的 CSS 變數
+ * （--sf-color-*、--sf-size-*、--sf-font-*、--sf-asset-*），缺的素材以 CSS 形狀退回。
+ * 主題可以在自己的 CSS 檔針對 .sf-* 與 data-* 任意覆寫。
+ * Default styles; everything comes from theme CSS variables, missing assets
+ * fall back to CSS shapes. Themes may override any .sf-* selector.
+ */
+
+.sf-root {
+  container-type: inline-size;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--sf-color-canvas-text, #27272a);
+  background-color: var(--sf-color-canvas, #f4f4f5);
+  background-image: var(--sf-asset-background-overlay, none), var(--sf-asset-background, none);
+  background-size: auto, cover;
+  background-position: center;
+  font-family: var(--sf-font-node, system-ui, sans-serif);
+}
+
+.sf-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.sf-viewport {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--sf-color-band-accent, #71717a) transparent;
+}
+
+.sf-canvas {
+  position: relative;
+  margin: 0 auto;
+}
+
+/* ---------- 章節帶 ---------- */
+
+.sf-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 0 6px;
+  border-bottom: 1px solid var(--sf-color-band-line, #d4d4d8);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+}
+
+.sf-band__head {
+  position: sticky;
+  left: 12px;
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.sf-band__accent {
+  position: absolute;
+  left: -12px;
+  bottom: -9px;
+  width: 270px;
+  height: 5px;
+  background: var(--sf-color-band-accent, #71717a);
+}
+
+.sf-band__icon {
+  width: 18px;
+  height: 18px;
+  background: var(--sf-asset-chapter-icon, none) center / contain no-repeat;
+  display: var(--sf-band-icon-display, inline-block);
+}
+
+.sf-band__label {
+  font-family: var(--sf-font-band, serif);
+  font-size: 26px;
+  letter-spacing: 0.06em;
+  color: var(--sf-color-band-text, #71717a);
+  line-height: 1;
+}
+
+/* ---------- 連線 ---------- */
+
+.sf-edges {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.sf-edge {
+  fill: none;
+  stroke: var(--sf-color-edge, #a1a1aa);
+  stroke-width: var(--sf-size-edgeWidth, 4px);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sf-edge--inferred,
+.sf-edge--unlock {
+  stroke-dasharray: 10 9;
+}
+
+.sf-edge--back {
+  stroke-dasharray: 4 5;
+  stroke-width: calc(var(--sf-size-edgeWidth, 4px) * 0.6);
+}
+
+.sf-edge--path {
+  stroke: var(--sf-color-edge-path, #f59e0b);
+}
+
+.sf-edge--branch-path {
+  stroke: var(--sf-color-edge-branch-path, #f472b6);
+}
+
+.sf-edge-casing {
+  fill: none;
+  stroke: var(--sf-color-edge-casing, #18181b);
+  stroke-width: calc(var(--sf-size-edgeWidth, 4px) + 4px);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sf-arrow {
+  fill: none;
+  stroke: var(--sf-color-edge, #a1a1aa);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sf-arrow--path {
+  stroke: var(--sf-color-edge-path, #f59e0b);
+}
+
+.sf-arrow--branch-path {
+  stroke: var(--sf-color-edge-branch-path, #f472b6);
+}
+
+.sf-edge__label,
+.sf-back__label {
+  font-size: 12px;
+  fill: var(--sf-color-edge-label, #71717a);
+  paint-order: stroke;
+  stroke: var(--sf-color-canvas, #f4f4f5);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+.sf-back__label {
+  font-size: 12px;
+  stroke: none;
+  fill: var(--sf-color-node-text, #3f3f46);
+}
+
+.sf-back__dot {
+  fill: var(--sf-color-node-bg, #fff);
+  stroke: var(--sf-color-edge, #a1a1aa);
+  stroke-width: 2;
+}
+
+.sf-back:hover .sf-back__dot {
+  stroke: var(--sf-color-edge-path, #f59e0b);
+}
+
+/* ---------- 節點 ---------- */
+
+.sf-node {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 18px;
+  color: var(--sf-color-node-text, #3f3f46);
+  background-color: var(--sf-color-node-bg, #fff);
+  background-image: var(--sf-asset-node-texture, none);
+  background-size: cover;
+  border: 2px solid var(--sf-color-node-border, #a1a1aa);
+  font-family: var(--sf-font-node, system-ui, sans-serif);
+  font-size: 15px;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 120ms, box-shadow 120ms, opacity 120ms, filter 120ms;
+  outline: none;
+}
+
+.sf-node:hover {
+  background-color: var(--sf-color-node-hover, #f4f4f5);
+}
+
+.sf-node:focus-visible {
+  box-shadow: 0 0 0 3px var(--sf-color-node-selected, #18181b);
+}
+
+.sf-node__title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.sf-node[data-narrow] {
+  padding: 0 8px;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.sf-node__decorations {
+  position: absolute;
+  top: -11px;
+  right: -8px;
+  display: flex;
+  gap: 3px;
+  pointer-events: none;
+}
+
+/* 膠囊：一般場景 */
+.sf-node--scene {
+  border-radius: 9999px;
+}
+
+/* 票券形：選項發生的場景（上下中央各一個半圓缺口） */
+.sf-node--choice {
+  border-radius: 8px;
+  -webkit-mask:
+    radial-gradient(circle 8px at 50% 0, #0000 97%, #000) top / 100% 51% no-repeat,
+    radial-gradient(circle 8px at 50% 100%, #0000 97%, #000) bottom / 100% 51% no-repeat;
+  mask:
+    radial-gradient(circle 8px at 50% 0, #0000 97%, #000) top / 100% 51% no-repeat,
+    radial-gradient(circle 8px at 50% 100%, #0000 97%, #000) bottom / 100% 51% no-repeat;
+}
+
+/* 直角矩形＋粗外框：選項結果、合流 */
+.sf-node--option,
+.sf-node--merge {
+  border-radius: 2px;
+  border-width: 4px;
+  border-color: var(--sf-color-node-border-strong, #52525b);
+}
+
+/* 菱形：條件分歧（四格窗） */
+.sf-node--condition {
+  padding: 0;
+  background: none;
+  border: none;
+}
+
+.sf-node--condition:hover {
+  background: none;
+}
+
+.sf-node__shape {
+  position: absolute;
+  inset: 0;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  background: var(--sf-color-condition-line, #a1a1aa);
+}
+
+.sf-node__shape-fill {
+  position: absolute;
+  inset: 3px 6px;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  background:
+    linear-gradient(var(--sf-color-condition-line, #a1a1aa), var(--sf-color-condition-line, #a1a1aa)) center / 2px 100% no-repeat,
+    linear-gradient(var(--sf-color-condition-line, #a1a1aa), var(--sf-color-condition-line, #a1a1aa)) center / 100% 2px no-repeat,
+    var(--sf-color-condition-bg, #fff);
+}
+
+.sf-node--condition:hover .sf-node__shape-fill {
+  background-color: var(--sf-color-node-hover, #f4f4f5);
+}
+
+/* 結局 */
+.sf-node--ending {
+  border-radius: 14px;
+  border: 4px double var(--sf-color-ending-border, #b91c1c);
+  background-color: var(--sf-color-ending-bg, #fee2e2);
+}
+
+.sf-node__ending-mark {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  color: var(--sf-color-ending-border, #b91c1c);
+}
+
+/* 路線出口：和分頁按鈕同款的卡片 */
+.sf-node--route_exit {
+  justify-content: flex-start;
+  padding: 0 10px 0 4px;
+  border-radius: 6px;
+  color: var(--sf-color-tab-text, #3f3f46);
+  background-color: var(--sf-color-tab-bg, #fff);
+  background-image: var(--sf-asset-tab-button, none);
+  letter-spacing: 0.08em;
+}
+
+.sf-node__avatar,
+.sf-tab__avatar {
+  height: calc(100% - 6px);
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.sf-node__exit-arrow {
+  margin-left: auto;
+  font-size: 22px;
+  line-height: 1;
+}
+
+/* 自訂遮罩（主題素材） */
+.sf-node[data-mask='custom'] {
+  -webkit-mask: none;
+  mask: none;
+}
+.sf-node--scene[data-mask='custom'] { -webkit-mask: var(--sf-asset-mask-scene) center / 100% 100% no-repeat; mask: var(--sf-asset-mask-scene) center / 100% 100% no-repeat; }
+.sf-node--choice[data-mask='custom'] { -webkit-mask: var(--sf-asset-mask-choice) center / 100% 100% no-repeat; mask: var(--sf-asset-mask-choice) center / 100% 100% no-repeat; }
+.sf-node--option[data-mask='custom'] { -webkit-mask: var(--sf-asset-mask-option) center / 100% 100% no-repeat; mask: var(--sf-asset-mask-option) center / 100% 100% no-repeat; }
+.sf-node--merge[data-mask='custom'] { -webkit-mask: var(--sf-asset-mask-merge) center / 100% 100% no-repeat; mask: var(--sf-asset-mask-merge) center / 100% 100% no-repeat; }
+
+/* ---------- 狀態（D10） ---------- */
+
+.sf-node[data-state='dim'] {
+  color: var(--sf-color-node-dim-text, #a1a1aa);
+  background-color: var(--sf-color-node-dim-bg, #e4e4e7);
+  border-color: var(--sf-color-node-dim-text, #a1a1aa);
+  opacity: 0.75;
+}
+
+.sf-node[data-on-path] {
+  box-shadow: 0 0 0 7px color-mix(in srgb, var(--sf-color-edge-path, #f59e0b) 55%, transparent);
+}
+
+.sf-node[data-state='highlight'] {
+  box-shadow: 0 0 0 4px var(--sf-color-node-highlight, #f59e0b), 0 0 18px 4px color-mix(in srgb, var(--sf-color-node-highlight, #f59e0b) 60%, transparent);
+}
+
+.sf-node[data-selected] {
+  border-color: var(--sf-color-node-selected, #18181b);
+  box-shadow: 0 0 0 3px var(--sf-color-node-selected, #18181b), 0 0 0 9px color-mix(in srgb, var(--sf-color-edge-path, #f59e0b) 55%, transparent);
+}
+
+/* 菱形與票券有遮罩，外框光暈改用 filter */
+.sf-node--condition[data-selected] .sf-node__shape,
+.sf-node--condition[data-on-path] .sf-node__shape {
+  background: var(--sf-color-edge-path, #f59e0b);
+}
+.sf-node--choice[data-selected],
+.sf-node--choice[data-on-path],
+.sf-node--choice[data-state='highlight'] {
+  box-shadow: none;
+  filter: drop-shadow(0 0 0 var(--sf-color-node-selected, #18181b)) drop-shadow(0 0 5px var(--sf-color-edge-path, #f59e0b));
+}
+.sf-node--choice[data-state='highlight'] {
+  filter: drop-shadow(0 0 6px var(--sf-color-node-highlight, #f59e0b)) drop-shadow(0 0 2px var(--sf-color-node-highlight, #f59e0b));
+}
+.sf-node--choice[data-selected] {
+  border-color: var(--sf-color-node-selected, #18181b);
+  border-width: 3px;
+}
+
+/* ---------- 徽章（網站整合層用 .sf-badge） ---------- */
+
+.sf-badge {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--sf-color-badge-text, #fff);
+  background: var(--sf-color-badge-bg, #2563eb);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* ---------- 側欄：分頁、小地圖 ---------- */
+
+.sf-side {
+  width: 196px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 12px 12px 4px;
+  overflow-y: auto;
+}
+
+.sf-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sf-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 12px 0 4px;
+  border-radius: 6px;
+  border: 1px solid var(--sf-color-node-border, #a1a1aa);
+  color: var(--sf-color-tab-text, #3f3f46);
+  background-color: var(--sf-color-tab-bg, #fff);
+  background-image: var(--sf-asset-tab-button, none);
+  background-size: cover;
+  font-family: var(--sf-font-node, system-ui, sans-serif);
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sf-tab[data-tab='overview'] {
+  padding-left: 12px;
+}
+
+.sf-tab[data-active] {
+  color: var(--sf-color-tab-active-text, #fafafa);
+  background-color: var(--sf-color-tab-active-bg, #27272a);
+}
+
+.sf-tab[data-active]::before {
+  content: '›';
+  position: absolute;
+  left: -12px;
+  font-size: 20px;
+  color: var(--sf-color-tab-active-bg, #27272a);
+}
+
+.sf-tab__title {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sf-tab__badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  color: var(--sf-color-badge-text, #fff);
+  background: var(--sf-color-badge-bg, #2563eb);
+  letter-spacing: 0;
+}
+
+.sf-minimap {
+  align-self: center;
+  border-radius: 4px;
+  background: var(--sf-color-minimap-bg, rgba(255, 255, 255, 0.7));
+  cursor: pointer;
+  touch-action: none;
+}
+
+.sf-minimap svg {
+  display: block;
+}
+
+.sf-minimap__node {
+  fill: var(--sf-color-minimap-node, #52525b);
+}
+
+.sf-minimap__node[data-highlight] {
+  fill: var(--sf-color-node-highlight, #f59e0b);
+}
+
+.sf-minimap__edge {
+  stroke: var(--sf-color-minimap-edge, #a1a1aa);
+  stroke-width: 6;
+}
+
+.sf-minimap__band {
+  stroke: var(--sf-color-band-line, #d4d4d8);
+  stroke-width: 6;
+}
+
+.sf-minimap__view {
+  fill: var(--sf-color-minimap-view, rgba(37, 99, 235, 0.18));
+  stroke: var(--sf-color-minimap-node, #52525b);
+  stroke-width: 4;
+}
+
+/* ---------- 捲動控制 ---------- */
+
+.sf-scroll {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 6px;
+}
+
+.sf-scroll__button {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid var(--sf-color-node-border, #a1a1aa);
+  color: var(--sf-color-scroll-button-text, #3f3f46);
+  background: var(--sf-color-scroll-button-bg, #fff);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.sf-scroll__button img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* ---------- 總覽 ---------- */
+
+.sf-overview {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 32px 16px;
+}
+
+.sf-overview__row {
+  display: flex;
+  align-items: center;
+  gap: 40px;
+  padding: 24px 32px;
+  border-bottom: 1px solid var(--sf-color-band-line, #d4d4d8);
+  width: min(100%, 720px);
+}
+
+.sf-overview__tab {
+  width: var(--sf-size-exitW, 160px);
+  flex-shrink: 0;
+}
+
+.sf-overview__node {
+  position: relative;
+  width: var(--sf-size-nodeW, 240px);
+  height: var(--sf-size-nodeH, 48px);
+  flex-shrink: 0;
+}
+
+.sf-overview__meta {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--sf-color-band-text, #71717a);
+  white-space: nowrap;
+}
+
+/* ---------- 窄螢幕：分頁改到上方橫排，隱藏小地圖與捲動鈕 ---------- */
+
+@container (max-width: 720px) {
+  .sf-body {
+    flex-direction: column;
+  }
+  .sf-side {
+    order: -1;
+    width: auto;
+    padding: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .sf-tabs {
+    flex-direction: row;
+  }
+  .sf-tab {
+    flex-shrink: 0;
+    height: 36px;
+  }
+  .sf-tab[data-active]::before {
+    display: none;
+  }
+  .sf-minimap,
+  .sf-scroll {
+    display: none;
+  }
+  .sf-overview__row {
+    gap: 12px;
+    padding: 16px 8px;
+    flex-wrap: wrap;
+  }
+}

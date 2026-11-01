@@ -1,5 +1,6 @@
+import { lazy, Suspense } from 'react'
 import { Routes, Route, Link, Navigate, useLocation } from 'react-router-dom'
-import { LayoutDashboard, PlusCircle, Network, Bot, Layers, SlidersHorizontal } from 'lucide-react'
+import { LayoutDashboard, PlusCircle, Network, Bot, Layers, SlidersHorizontal, GitBranch } from 'lucide-react'
 import { Toaster } from './components/ui/sonner'
 import {
   Sidebar,
@@ -23,12 +24,17 @@ import KnowledgeGraph from './pages/KnowledgeGraph'
 import ToolSettings from './pages/ToolSettings'
 import Cards from './pages/Cards'
 import Preferences from './pages/Preferences'
+import StoryGraph, { StoryIndex } from './pages/StoryGraph'
+
+// 主題預覽頁只在開發模式提供（fixtures 不進正式版）。Dev-only theme playground.
+const StoryPlayground = import.meta.env.DEV ? lazy(() => import('./pages/StoryPlayground')) : null
 
 const navItems = [
   { name: 'Dashboard', path: '/', icon: LayoutDashboard },
   { name: 'Cards', path: '/cards', icon: Layers },
   { name: 'Card Generator', path: '/generate', icon: PlusCircle },
   { name: 'Knowledge Graph', path: '/graph', icon: Network },
+  { name: 'Story Flowchart', path: '/story', icon: GitBranch },
   { name: 'Tool Settings', path: '/tools', icon: Bot },
   { name: 'Preferences', path: '/preferences', icon: SlidersHorizontal },
 ]
@@ -53,7 +59,7 @@ function AppSidebar() {
           <SidebarMenu>
             {navItems.map((item) => (
               <SidebarMenuItem key={item.path}>
-                <SidebarMenuButton asChild isActive={location.pathname === item.path}>
+                <SidebarMenuButton asChild isActive={location.pathname === item.path || (item.path === '/story' && location.pathname.startsWith('/story/'))}>
                   {/* 手機上選了頁面就收起選單 */}
                   {/* 已經在這頁時連到目前的網址：不會清掉這頁記住的位置（例如卡片瀏覽的牌組與卡片） */}
                   <Link
@@ -94,6 +100,11 @@ function App() {
             <Route path="/cards" element={<Cards />} />
             <Route path="/generate" element={<CardGenerator />} />
             <Route path="/graph" element={<KnowledgeGraph />} />
+            <Route path="/story" element={<StoryIndex />} />
+            {StoryPlayground && (
+              <Route path="/story/_playground" element={<Suspense fallback={null}><StoryPlayground /></Suspense>} />
+            )}
+            <Route path="/story/:gameId" element={<StoryGraph />} />
             <Route path="/tools" element={<ToolSettings />} />
             <Route path="/preferences" element={<Preferences />} />
             {/* 舊網址（LLM 模型設定頁）。The former LLM settings URL. */}

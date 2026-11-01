@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-10-31 |
 | **性質** | 新增機能設計 + 實作工作項 |
-| **狀態** | 📝 未實作（需求討論中） |
+| **狀態** | 🔨 實作中：P1–P3 完成、P4 後端與存檔下載完成、P5 主題完成（2026-11-01）；P0 遊戲內讀檔驗證、MinIO 上傳未做。見 §12 |
 | **範圍** | 前端：新增可共用模組 `frontend/src/features/story-flowchart/`；網站整合層 `pages/StoryGraph.tsx`、`components/story/`、`hooks/useStory*.ts`、`lib/storyParams.ts`；卡片瀏覽頁的卡面面板加一顆按鈕。後端：新增 `api/story.py`、`services/story/`（含遊戲適配器註冊表）、`schemas/story.py`、`infrastructure/krkr/`；`fluencytides_corpus` 新增 `story_builds`、`story_node_lines`（台詞相關的表由語料庫計畫建立）。建置：`backend/scripts/story/`（通用匯入，加上各遊戲的擷取器） |
 | **不動** | 既有圖譜頁 `/graph`（`KnowledgeGraph.tsx`、`graphView.ts`）；建卡流程與 `card_gen_log` 的寫入邏輯；`scripts` 表的內容；校準程式 `SW_calib`（只讀它的產出）；遊戲本體與加密封存檔（不解 xp3） |
 | **PR / 進度** | 尚未開始 |
@@ -739,3 +739,31 @@ python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch
 - [ ] P3：重新整理、上一頁都能還原分頁、抽屜與選取的台詞；重新匯入同一份資料後，舊網址仍然有效。
 - [ ] P4：在抽屜下載的檔名與格子正確；選項分支內的台詞，解碼存檔後 `user` 變數和選取路徑一致。
 - [ ] P5：只改主題設定檔與素材資料夾，就能把背景、節點底紋與形狀遮罩、分頁按鈕、捲動按鈕全部換掉，元件程式碼不用動。
+
+## 12. 實作紀錄（2026-11-01）
+
+**已完成並驗證**
+- 擷取器只讀語料庫（`game_lines`、`game_scenes`、`game_scene_links`），建置包經不變式檢查後匯入；版本 1 已上線（`story_builds.status=active`）。匯入可以重跑：`source_hash` 相同就略過。
+- 後端 story API、遊戲適配器註冊表、`kirikiri_packinone` 存檔寫入器：產出的存檔和 `krkr_savepack.py` 位元組完全相同（約 25 ms）。
+- 前端模組 `features/graph-views/engines/story-flowchart/`、`/story/:gameId` 頁、兩個主題（`default`、`sabbat-night`）、卡片頁的「在流程圖中顯示」按鈕。
+- 測試：後端 story 測試 62 個、前端 vitest（排版、路徑、主題、網址參數）；`tsc`、`npm run build` 通過。實機在瀏覽器確認共通、寧々、和奏分頁、選項、路線分歧、搜尋、抽屜、路徑高亮、手機寬度。
+
+**和設計不同的地方**
+- 縮圖由後端代讀（一年 immutable 快取），不回 302：MinIO 位址在內網，瀏覽器連不到。
+- repository 用原生 SQL（全是唯讀的多表 join），沒有建 SQLModel。
+- 節點徽章的數字是「有卡的台詞句數」：情境卡和填空卡指向同一句，算筆記數會重複。
+- 「下一句有卡」的參數改成 `annotated_after=`。
+- schema 多了節點的 `target_tab`、`titles`，邊的 `condition_vars`，`card_types` 的 `note_types`（卡片頁反查不用寫死筆記類型）。
+- 020 的四個檔案檔號相同，節點鍵改用檔名主幹（例 `sw:020.共通－パーティ寧々`）。
+- 資料庫和其他功能一樣讀 `MYSQL_DATABASE`，共用 `corpus_database.py` 的引擎（整個分支和語料庫切換一起上線）。本機的 `MYSQL_DATABASE` 還沒切換時，可用 `STORY_CORPUS_DATABASE` 明確覆寫（只供本機測試，會另建一個連線池）；擷取器與匯入腳本則用 `--database fluencytides_corpus`。本機素材可用 `--assets local:<資料夾>` 與 `STORY_ASSETS_DIR`（兩個 `STORY_*` 都可以寫在 `backend/.env`）。
+
+**語料庫連接資料的問題**
+- `calib_state.json` 的「下一個場景」是整個章節跑完後的位置，記在章節起點的標籤上，所以會接錯。遷移腳本已濾掉兩種：選項標籤出發的自然接續（例 019 `dummyselect1` → 015 `015_01B`）與自迴圈。
+- 仍有 7 條往回跳的連接，畫成 back 邊的小圖示，待 P0 在遊戲裡確認：019 `019_01A` → `chapter47`、`105_01A` → `ne_H_4`、`113_01A` → `ne_H_7`、115 `dummy1` → `ne_H_8`、112 `dummy1` → `chapter23`、`219_01A` → `me_H_4`、`508_02A` → `508_01com`。
+- 語料庫缺少的連接由 SW 擷取器的 `EXTRA_LINKS` 補上：019 結尾依好感的路線分歧、015 `chapter38` → `015_01B`、009 `009_03B` → `dummy1`，以及全部通關後入口（和奏入口、寧々 RESTART、5 條 AFTER）。之後可考慮把它們移進 `game_scene_links`（`evidence=inferred`）。
+
+**還沒做**
+- P0：在遊戲裡讀下載的存檔，確認位置與變數（含 R1 的三種特殊位置）。
+- MinIO 實際上傳（程式已寫，本機 MinIO 沒開，只測過 local 模式）。
+- Mermaid 匯出的人工核對、分頁頭像素材、遠端主題的頁面入口。
+- 卡片頁「流程圖」按鈕只通過型別檢查，還沒實機點過（要開 Anki 與完整後端）。
