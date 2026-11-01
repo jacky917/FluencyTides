@@ -31,6 +31,7 @@ import { Button } from '../ui/button'
 import { CreatedNotice, DeckSummary, SchemaFieldInput } from './formParts'
 import { TagInput } from './TagInput'
 import { TrilingualDraftPreview } from './TrilingualDraftPreview'
+import type { DeckStatus } from '../../hooks/useDeckStatus'
 
 /** 有預覽畫面的 handler。Handlers with a preview screen. */
 const PREVIEW_HANDLERS = new Set(['speaking_trilingual'])
@@ -49,17 +50,17 @@ interface DraftState {
  * 預覽流程的建卡。The preview create flow.
  * @param props.handler - 預覽流程的 handler。The handler.
  * @param props.selectedDeck - 牌組樹選的牌組。The deck picked in the tree.
- * @param props.deckMissing - 選的牌組是否已不存在。Whether that deck is gone.
+ * @param props.deckStatus - 牌組樹所選牌組的狀態（見 `useDeckStatus`）。The selected deck's status.
  * @returns 建卡畫面 JSX。The create screen JSX.
  */
 export function PreviewCreate({
   handler,
   selectedDeck,
-  deckMissing,
+  deckStatus,
 }: {
   handler: HandlerInfo
   selectedDeck: string | null
-  deckMissing: boolean
+  deckStatus: DeckStatus
 }) {
   const formId = useId()
   const queryClient = useQueryClient()
@@ -79,7 +80,7 @@ export function PreviewCreate({
   const [result, setResult] = useState<CreateNoteResponse | null>(null)
 
   const fixedDeck = create.deck === 'fixed' ? create.fixed_deck : null
-  const deck = fixedDeck ?? (deckMissing ? null : selectedDeck)
+  const deck = fixedDeck ?? (deckStatus === 'ok' ? selectedDeck : null)
   const ready = handler.draft_schema && create.note_type !== null && PREVIEW_HANDLERS.has(handler.name)
 
   // 生成中離開再回來時，新的元件看不到原本那次呼叫的 isPending：用 mutationKey 查有沒有還在跑的
@@ -187,7 +188,7 @@ export function PreviewCreate({
       id={`${formId}-deck`}
       fixedDeck={fixedDeck}
       selectedDeck={selectedDeck}
-      deckMissing={deckMissing}
+      deckStatus={deckStatus}
       noteType={create.note_type}
     />
   )
