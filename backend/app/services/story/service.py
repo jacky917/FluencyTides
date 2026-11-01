@@ -1,4 +1,4 @@
-"""劇情流程圖的通用服務：manifest、劇情圖、註記、台詞、定位、存檔、縮圖（D11–D13）。
+"""劇情流程圖的通用服務：manifest、劇情圖、註記、台詞、定位、存檔、縮圖、語音（D11–D13）。
 
 Game-agnostic story service behind ``/api/v1/story``.
 
@@ -55,6 +55,9 @@ ANNOTATION_TTL_SECONDS = 60.0
 #: Max lines per page; keep in sync with the API and the frontend hook.
 MAX_LINES_PAGE = 2000
 _THUMB_HASH = re.compile(r"^[0-9a-f]{16}$")
+#: 語音檔名主幹（``game_lines.voice_file``，例 ``nen002_039``）：只收英數與底線，不能帶路徑字元或副檔名。
+#: Voice stems: letters, digits and underscores only (no path characters).
+_VOICE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 #: ``game_id`` 白名單：它會進物件鍵（``story/{game_id}/...``），不能帶路徑字元。
 #: Game ids go into object keys, so only these characters are accepted.
 _GAME_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -113,6 +116,7 @@ class StoryService:
         return StoryCapabilities(
             saves=bool(config.saves) and save_writer_for(build.engine) is not None,
             thumbs=self.assets.available,
+            voices=self.assets.available,
             annotations=[kind for kind, p in PROVIDERS.items() if p.enabled(config)],
             route_presets=bool(config.route_presets),
             languages=langs,
@@ -250,7 +254,7 @@ class StoryService:
         what = f"筆記 {note_id}" if note_id is not None else f"台詞 {line_id}"
         raise StoryLineNotFoundError(f"{what} 不在 {game_id} 的流程圖上")
 
-    # ---------- 存檔與縮圖 ----------
+    # ---------- 存檔、縮圖與語音 ----------
 
     async def make_save(self, game_id: str, line_id: int, slot_id: str, route_preset: str | None) -> SaveFile:
         """產生某句台詞的欄位存檔。Generate a slot save for a line."""
@@ -303,4 +307,25 @@ class StoryService:
         data = await self.assets.get(self.thumb_key(game_id, thumb))
         if data is None:
             raise StoryAssetNotFoundError(f"縮圖 {thumb} 不存在")
+        return data
+
+    @staticmethod
+    def voice_key(game_id: str, voice: str) -> str:
+        """語音的物件鍵。Object key of a voice file."""
+        return f"story/{game_id}/voices/{voice}.mp3"
+
+    async def voice(self, game_id: str, voice: str) -> bytes:
+        """一句台詞的語音 MP3（不進記憶體快取）。A line's voice MP3 (not cached in memory).
+
+        Raises:
+            StoryGameNotFoundError: ``game_id`` 不合白名單。Bad game id.
+            StoryAssetNotFoundError: 名稱格式不對或檔案不存在。Bad name or missing file.
+            StoryAssetUnavailableError: 素材來源出錯。The asset source failed.
+        """
+        self._check_game_id(game_id)
+        if not _VOICE.match(voice):
+            raise StoryAssetNotFoundError("語音名稱格式不對")
+        data = await self.assets.get(self.voice_key(game_id, voice), cache=False)
+        if data is None:
+            raise StoryAssetNotFoundError(f"語音 {voice} 不存在")
         return data

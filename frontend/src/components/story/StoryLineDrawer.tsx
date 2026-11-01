@@ -1,22 +1,28 @@
 /**
- * 劇情流程圖的台詞抽屜（D12）：列出節點的台詞，有卡的台詞可以跳到卡片，有 point 的台詞可以下載存檔。
- * The line drawer: a node's lines, card chips that jump to /cards, and save downloads.
+ * 劇情流程圖的台詞抽屜（D12）：列出節點的台詞，有卡的台詞可以跳到卡片，有語音的台詞可以播放，
+ * 有 point 的台詞可以下載存檔。
+ * The line drawer: a node's lines, card chips that jump to /cards, voice
+ * playback, and save downloads.
  *
  * - `kind=choice`：顯示成選項清單，每個選項標出它通往哪個節點。
  * - `kind=bgv`：背景語音，較淡的樣式；存檔改用它的播放位置（後端處理）。
+ * - 語音：存檔鍵左邊的播放鍵；同一時間只播一句，換節點、關閉抽屜時停止。沒有語音（旁白）
+ *   或後端沒有素材來源（`capabilities.voices=false`）時改成停用的靜音喇叭圖示（不顯示文字或提示框）。選項列不放。
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { ChevronDown, Download, Loader2, X } from 'lucide-react'
+import { ChevronDown, Download, Loader2, Play, Square, VolumeX, X } from 'lucide-react'
 import { FluencyTidesAPI } from '../../api/client'
 import { StoryAPI } from '../../api/story'
 import { useStoryLines } from '../../hooks/useStoryLines'
 import { useLocalStorage } from '../../hooks/useStoredState'
+import { useVoicePlayer } from '../../hooks/useVoicePlayer'
 import { describeApiError } from '../../lib/apiError'
 import { cardPageUrl } from '../../lib/storyParams'
 import { cn } from '../../lib/utils'
+import { describeVoiceFailure } from '../../lib/voicePlayer'
 import { pathTo, pathVariables, localizedTitle, type StoryGraph, type StoryNode } from '@/features/graph-views/engines/story-flowchart'
 import type { StoryCardAnnotation, StoryLine, StoryManifest } from '../../types/story'
 import { Button } from '../ui/button'
@@ -64,6 +70,17 @@ export function StoryLineDrawer({
   const listRef = useRef<HTMLDivElement>(null)
   const sentinel = useRef<HTMLDivElement>(null)
   const canSave = manifest.capabilities.saves && manifest.save_slots.length > 0
+  const canPlay = manifest.capabilities.voices === true
+  // 播放鍵是 line_id（不同台詞可能共用同一個語音檔，用檔名當鍵會讓兩個按鈕一起顯示播放中）
+  const voiceOf = useRef(new Map<number, string>())
+  const onVoiceError = useCallback((lineId: number, _url: string, cause: unknown) => {
+    const voice = voiceOf.current.get(lineId)
+    const probe = voice ? () => StoryAPI.probeVoice(gameId, voice) : () => Promise.resolve()
+    void describeVoiceFailure(cause, probe, (e) => describeApiError(e).message)
+      .then((message) => toast.error(`語音播放失敗：${message}`, { description: voice }))
+  }, [gameId])
+  const voice = useVoicePlayer<number>(onVoiceError)
+  const { stop: stopVoice } = voice
   const tabTitles = useMemo(() => Object.fromEntries(graph.tabs.map((t) => [t.key, localizedTitle(t, 'zh-Hant')])), [graph.tabs])
   const byKey = useMemo(() => new Map(graph.nodes.map((n) => [n.key, n])), [graph])
   const pathVars = useMemo(() => pathVariables(pathTo(graph, node.key)), [graph, node.key])
@@ -72,12 +89,19 @@ export function StoryLineDrawer({
     [graph.edges, node.key],
   )
 
-  // 換節點時重設
+  // 換節點時重設（語音也停掉；關閉抽屜時元件卸載，由 useVoicePlayer 停止）
   useEffect(() => {
     setMinSeq(0)
     setPendingSeq(null)
     listRef.current?.scrollTo({ top: 0 })
-  }, [node.key])
+    stopVoice()
+  }, [node.key, gameId, stopVoice])
+
+  const playVoice = (line: StoryLine) => {
+    if (!line.voice) return
+    voiceOf.current.set(line.line_id, line.voice)
+    voice.toggle(line.line_id, StoryAPI.voiceUrl(gameId, line.voice))
+  }
 
   // 網址指定的台詞（`line=` 是 line_id）：先問它的 seq，再確定會載入到它所在的頁。
   // 第一頁最多讀到 MAX_LINES_PAGE，更後面的由下面的 pending 機制逐頁往下讀。
@@ -279,6 +303,10 @@ export function StoryLineDrawer({
             {all.map((line) => {
               const cards = (line.annotations.cards ?? []).filter((c) => !kindFilter || c.card_type === kindFilter)
               const selected = line.line_id === selectedLine
+              // 選項列是選單、不是台詞，不放播放鍵；其他台詞都放，沒有語音時停用
+              const showPlay = line.kind !== 'choice'
+              const playable = canPlay && !!line.voice
+              const playingThis = voice.playing === line.line_id
               return (
                 <li key={line.line_id} data-line={line.line_id}
                   className={cn('group relative px-3 py-2 text-sm', selected && 'bg-amber-50 dark:bg-amber-950/30',
@@ -314,7 +342,7 @@ export function StoryLineDrawer({
                           <p key={i} className={cn('whitespace-pre-wrap break-words', i === 1 && 'text-muted-foreground')}>{t}</p>
                         ))
                       )}
-                      {(cards.length > 0 || (canSave && line.can_save)) && (
+                      {(cards.length > 0 || (canSave && line.can_save) || showPlay) && (
                         <div className="flex flex-wrap items-center gap-1 pt-1">
                           {cards.map((c) => (
                             <button key={`${c.card_type}:${c.verb}`} type="button" disabled={jumping === line.line_id}
@@ -324,15 +352,36 @@ export function StoryLineDrawer({
                               {c.label}{c.verb ? `：${c.verb}` : ''}
                             </button>
                           ))}
-                          {canSave && line.can_save && (
-                            <button type="button" disabled={saving === line.line_id}
-                              className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground opacity-70 hover:bg-accent hover:opacity-100 group-hover:opacity-100"
-                              title={line.kind === 'bgv' ? '背景語音沒有自己的位置：下載它播放位置那句的存檔' : '下載這一句的存檔'}
-                              onClick={(ev) => { ev.stopPropagation(); download(line) }}>
-                              {saving === line.line_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
-                              存檔
-                            </button>
-                          )}
+                          <div className="ml-auto flex items-center gap-1">
+                            {showPlay && (playable ? (
+                              <button type="button" aria-pressed={playingThis}
+                                aria-label={playingThis ? '停止播放語音' : '播放這一句的語音'}
+                                title={playingThis ? '停止播放' : '播放語音'}
+                                className={cn('inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground',
+                                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                  playingThis ? 'bg-accent text-foreground opacity-100' : 'opacity-70 hover:bg-accent hover:opacity-100 group-hover:opacity-100')}
+                                onClick={(ev) => { ev.stopPropagation(); playVoice(line) }}>
+                                {playingThis ? <Square className="h-3 w-3 fill-current" /> : <Play className="h-3 w-3" />}
+                                {playingThis ? '停止' : '語音'}
+                              </button>
+                            ) : (
+                              // 沒有語音：只用「靜音喇叭」圖示表示，不顯示文字或提示框（螢幕閱讀器讀 aria-label）
+                              <button type="button" disabled aria-label={canPlay ? '這句沒有語音' : '沒有語音素材來源'}
+                                className="inline-flex cursor-not-allowed items-center rounded px-1.5 py-0.5 text-muted-foreground opacity-40"
+                                onClick={(ev) => ev.stopPropagation()}>
+                                <VolumeX className="h-3 w-3" aria-hidden="true" />
+                              </button>
+                            ))}
+                            {canSave && line.can_save && (
+                              <button type="button" disabled={saving === line.line_id}
+                                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground opacity-70 hover:bg-accent hover:opacity-100 group-hover:opacity-100"
+                                title={line.kind === 'bgv' ? '背景語音沒有自己的位置：下載它播放位置那句的存檔' : '下載這一句的存檔'}
+                                onClick={(ev) => { ev.stopPropagation(); download(line) }}>
+                                {saving === line.line_id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                                存檔
+                              </button>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>

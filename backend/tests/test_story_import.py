@@ -2,7 +2,8 @@
 
 Tests for the build package and the import flow against an in-memory
 store: validation failures never create a build, atomic activation,
-rollback, duplicate-content skip, pruning, local asset upload, config
+rollback, duplicate-content skip, pruning, local asset upload (templates,
+thumbnails, voices), ``--assets-only`` for the active build, config
 validation with the game adapter's model, and loud cleanup failures.
 """
 
@@ -25,7 +26,9 @@ from scripts.story.import_story_build import (  # noqa: E402
     diff_graphs,
     import_package,
     prune_retired,
+    refresh_assets,
     rollback,
+    upload_assets,
 )
 
 GAME = "SabbatOfTheWitch"
@@ -41,9 +44,10 @@ CONFIG = {
 class MemoryStore:
     """記憶體裡的 story_builds／story_node_lines。In-memory build store."""
 
-    def __init__(self, line_ids, thumbs=()):
+    def __init__(self, line_ids, thumbs=(), voices=()):
         self.lines = set(line_ids)
         self.thumbs = set(thumbs)
+        self.voices = set(voices)
         self.builds: dict[int, dict] = {}
         self.node_lines: dict[int, list] = {}
         self.fail_insert = False
@@ -59,6 +63,9 @@ class MemoryStore:
     def game_thumbs(self, game_id):
         return set(self.thumbs)
 
+    def game_voices(self, game_id):
+        return set(self.voices)
+
     def find_by_hash(self, game_id, source_hash):
         for b in self.builds.values():
             if b["source_hash"] == source_hash:
@@ -68,7 +75,7 @@ class MemoryStore:
     def active_build(self, game_id):
         for b in self.builds.values():
             if b["status"] == "active":
-                return {"build_id": b["build_id"], "graph": b["graph"]}
+                return {"build_id": b["build_id"], "source_hash": b["source_hash"], "graph": b["graph"]}
         return None
 
     def list_builds(self, game_id):
@@ -110,7 +117,8 @@ class MemoryStore:
         return {k: v["status"] for k, v in self.builds.items()}
 
 
-def _package(tmp_path: Path, name="pkg", titles=None, thumbs_dir=None, with_template=True, config=None):
+def _package(tmp_path: Path, name="pkg", titles=None, thumbs_dir=None, with_template=True, config=None,
+             voices_dir=None):
     result = build_story_graph(*F.rows(), F.rules(titles=titles or {}))
     template = tmp_path / "quick.jpg"
     template.write_bytes(b"\xff\xd8template\xff\xd9")
@@ -119,7 +127,9 @@ def _package(tmp_path: Path, name="pkg", titles=None, thumbs_dir=None, with_temp
         config.pop("saves")
     manifest = BuildManifest(game_id=GAME, extractor="test@1", config=config, stats=result.stats,
                              assets={"thumbs_dir": str(thumbs_dir) if thumbs_dir else None,
-                                     "thumbs_prefix": f"story/{GAME}/thumbs/"})
+                                     "thumbs_prefix": f"story/{GAME}/thumbs/",
+                                     "voices_dir": str(voices_dir) if voices_dir else None,
+                                     "voices_prefix": f"story/{GAME}/voices/"})
     write_package(tmp_path / name, manifest, result.graph, result.rows,
                   templates={CONFIG["saves"]["template"]: template} if with_template else None)
     return read_package(tmp_path / name)
@@ -261,3 +271,79 @@ def test_local_assets_upload_templates_archive_and_missing_thumbs(tmp_path):
     assert (root / "templates" / "quick.jpg").read_bytes().startswith(b"\xff\xd8")
     assert (root / "thumbs" / "aaaaaaaaaaaaaaaa.jpg").read_bytes() == b"thumb"
     assert (root / "builds" / "1" / "package.zip").exists()
+
+
+def _voices(tmp_path: Path, *names: str) -> Path:
+    folder = tmp_path / "voices"
+    folder.mkdir(exist_ok=True)
+    for name in names:
+        (folder / f"{name}.mp3").write_bytes(b"ID3" + name.encode())
+    return folder
+
+
+def test_upload_voices_only_referenced_skips_existing_and_reports_missing(tmp_path):
+    voices = _voices(tmp_path, "nen002_039", "nen002_040", "unused_001", "evil")
+    (tmp_path / "evil.mp3").write_bytes(b"x")
+    pkg = _package(tmp_path, voices_dir=voices)
+    root = tmp_path / "assets"
+    sink = LocalAssetSink(root)
+    vdir = root / "story" / GAME / "voices"
+    vdir.mkdir(parents=True)
+    (vdir / "nen002_040.mp3").write_bytes(b"already")
+    logs = []
+    stats = upload_assets(pkg, sink, set(), {"nen002_039", "nen002_040", "nen999_001", "../evil", "a.b"},
+                          log=logs.append)
+    assert stats["voices_uploaded"] == 1 and stats["voices_skipped"] == 1 and stats["voices_missing"] == 1
+    assert stats["voices_invalid"] == 2 and stats["voices_bytes"] == len(b"ID3nen002_039")
+    assert (vdir / "nen002_039.mp3").read_bytes() == b"ID3nen002_039"
+    assert (vdir / "nen002_040.mp3").read_bytes() == b"already"  # 已存在不覆寫
+    assert sorted(p.name for p in vdir.iterdir()) == ["nen002_039.mp3", "nen002_040.mp3"]  # 沒用到的不上傳
+    assert not (root / "story" / GAME / "evil.mp3").exists()
+    assert any(m.startswith("⚠") and "語音資料夾" in m and "nen999_001" in m for m in logs)
+    assert any(m.startswith("⚠") and "格式不對" in m for m in logs)
+
+
+def test_no_voices_dir_uploads_no_voices(tmp_path):
+    stats = upload_assets(_package(tmp_path), LocalAssetSink(tmp_path / "assets"), set(), {"nen002_039"},
+                          log=lambda *_: None)
+    assert "voices_uploaded" not in stats and not (tmp_path / "assets" / "story" / GAME / "voices").exists()
+
+
+def test_import_uploads_voices_referenced_by_game_lines(tmp_path):
+    voices = _voices(tmp_path, "nen002_039")
+    store = MemoryStore(_all_lines(), voices={"nen002_039"})
+    result = import_package(_package(tmp_path, voices_dir=voices), store, LocalAssetSink(tmp_path / "assets"),
+                            log=lambda *_: None)
+    assert result.status == "imported"
+    assert (tmp_path / "assets" / "story" / GAME / "voices" / "nen002_039.mp3").exists()
+
+
+def test_assets_only_uploads_for_active_build_without_new_build(tmp_path):
+    """語音資料夾不算進 source_hash：同內容重跑會被略過，要靠 --assets-only 補上傳。"""
+    store = MemoryStore(_all_lines(), voices={"nen002_039"})
+    sink = LocalAssetSink(tmp_path / "assets")
+    assert import_package(_package(tmp_path, "a"), store, sink, log=lambda *_: None).status == "imported"
+    with_voices = _package(tmp_path, "b", voices_dir=_voices(tmp_path, "nen002_039"))
+    logs = []
+    assert import_package(with_voices, store, sink, log=logs.append).status == "skipped"
+    assert any("--assets-only" in m for m in logs)
+    voice = tmp_path / "assets" / "story" / GAME / "voices" / "nen002_039.mp3"
+    assert not voice.exists()
+
+    result = refresh_assets(with_voices, store, sink, log=lambda *_: None)
+    assert result.status == "assets" and result.build_id == 1
+    assert voice.exists() and store.status() == {1: "active"}
+    again = refresh_assets(with_voices, store, sink, log=lambda *_: None)  # 重跑：已存在就跳過
+    assert again.status == "assets" and "voices_skipped" in again.messages[0]
+
+
+def test_assets_only_refuses_other_content_or_no_active_build(tmp_path):
+    store = MemoryStore(_all_lines())
+    sink = LocalAssetSink(tmp_path / "assets")
+    result = refresh_assets(_package(tmp_path, "a"), store, sink, log=lambda *_: None)
+    assert result.status == "invalid" and "沒有上線版本" in result.errors[0]
+    import_package(_package(tmp_path, "a"), store, sink, log=lambda *_: None)
+    other = _package(tmp_path, "b", titles={"sw:001": "別名"})
+    result = refresh_assets(other, store, sink, log=lambda *_: None)
+    assert result.status == "invalid" and "不同" in result.errors[0]
+    assert store.status() == {1: "active"}

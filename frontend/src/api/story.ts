@@ -64,4 +64,14 @@ export const StoryAPI = {
 
   /** 縮圖網址（同源，給 `<img>` 用）。Thumbnail URL. */
   thumbUrl: (gameId: string, thumb: string): string => `/api/v1/story${game(gameId)}/thumbs/${encodeURIComponent(thumb)}`,
+
+  /** 語音網址（同源，給 `<audio>`／`new Audio()` 用；`voice` 是 `StoryLine.voice`）。Voice URL. */
+  voiceUrl: (gameId: string, voice: string): string => `/api/v1/story${game(gameId)}/voices/${encodeURIComponent(voice)}`,
+
+  /**
+   * 重新請求一次語音，只為了在播放失敗時取得後端的錯誤訊息（音訊元素拿不到 HTTP 狀態）。
+   * Re-requests a voice only to surface the backend error after a playback failure.
+   */
+  probeVoice: (gameId: string, voice: string): Promise<void> =>
+    storyClient.get(`${game(gameId)}/voices/${encodeURIComponent(voice)}`, { responseType: 'blob' }).then(() => undefined),
 }

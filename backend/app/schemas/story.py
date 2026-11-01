@@ -335,9 +335,11 @@ class BuildManifest(BaseModel):
     """建置包的 ``manifest.json``。The build package manifest.
 
     ``assets.templates``：物件鍵 → 建置包內的相對路徑；``assets.thumbs_dir``：縮圖來源資料夾
-    （不算進 ``source_hash``，檔名就是雜湊，內容不會變）。
+    （不算進 ``source_hash``，檔名就是雜湊，內容不會變）；``assets.voices_dir``：語音來源資料夾
+    （``<game_lines.voice_file>.mp3``，同樣不算進 ``source_hash``），物件鍵前綴是 ``voices_prefix``。
     ``assets.templates`` maps object keys to package-relative files;
-    ``assets.thumbs_dir`` is a source folder excluded from the hash.
+    ``assets.thumbs_dir`` and ``assets.voices_dir`` are source folders
+    excluded from the hash (``voices_prefix`` is the voice key prefix).
     """
 
     schema_version: int = SCHEMA_VERSION
@@ -359,6 +361,7 @@ class StoryCapabilities(BaseModel):
 
     saves: bool = False
     thumbs: bool = False
+    voices: bool = False
     annotations: list[str] = Field(default_factory=list)
     route_presets: bool = False
     languages: list[str] = Field(default_factory=list)

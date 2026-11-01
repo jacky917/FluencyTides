@@ -39,9 +39,11 @@
   scrollbar-color: var(--sf-color-band-accent, #71717a) transparent;
 }
 
+/* isolation：畫布內的 z-index（例如疊加物圖層）只在畫布裡比，不會蓋過抽屜、選單等外部浮層 */
 .sf-canvas {
   position: relative;
   margin: 0 auto;
+  isolation: isolate;
 }
 
 /* ---------- 章節帶 ---------- */
@@ -221,13 +223,35 @@
   letter-spacing: 0.04em;
 }
 
+/*
+ * 疊加物（徽章）不在節點框裡：節點層之後的獨立圖層 .sf-decorations 依節點右上角定位（left/top 由
+ * NodeLayer 給），總覽則是 .sf-overview__slot 的子元素。節點框的 mask、filter、opacity 與後面才畫的
+ * 相鄰節點、連線、章節帶都蓋不到它；z-index 只在 .sf-canvas（isolation）內有效，不會蓋過畫布外的
+ * 小地圖、捲動鈕、分頁列與抽屜。
+ * Decorations live outside the node box, on a layer above every node.
+ */
+.sf-decorations {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
 .sf-node__decorations {
   position: absolute;
-  top: -11px;
-  right: -8px;
   display: flex;
   gap: 3px;
+  transform: translate(calc(-100% + 8px), -11px);
+  white-space: nowrap;
   pointer-events: none;
+}
+
+/* 節點變淡時徽章跟著淡一點（以前是跟著節點的 opacity），但仍保持在最上層 */
+.sf-node__decorations[data-state='dim'] {
+  opacity: 0.75;
 }
 
 /* 膠囊：一般場景 */
@@ -557,6 +581,16 @@
 .sf-overview__tab {
   width: var(--sf-size-exitW, 160px);
   flex-shrink: 0;
+}
+
+.sf-overview__slot {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.sf-overview__slot > .sf-node__decorations {
+  left: 100%;
+  top: 0;
 }
 
 .sf-overview__node {

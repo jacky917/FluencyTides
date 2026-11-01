@@ -10,7 +10,12 @@ database and writes a build package (docs/wip/story_flowchart_FEAT_2026-10-31.md
 
     python backend/scripts/story/extractors/sabbat_of_the_witch.py --out build/sabbat_of_the_witch \\
         --template "C:/Users/forip/Desktop/WorkSpace/game/SW_calib/quick_template.jpg" \\
-        --thumbs "C:/Users/forip/Desktop/WorkSpace/game/SW_calib/thumbs"
+        --thumbs "C:/Users/forip/Desktop/WorkSpace/game/SW_calib/thumbs" \\
+        --voices "C:/Users/forip/Desktop/WorkSpace/material/voice/yuzusoft/SabbatOfTheWitch"
+
+``--voices`` 是語音資料夾（``<game_lines.voice_file>.mp3``，即 ``GAME_ASSETS_ROOT`` 接上
+``game_profiles.voice_dir``）。只記在 manifest，不算進 ``source_hash``；匯入時只上傳台詞用到的檔案。
+``--voices`` is the voice folder; only referenced files are uploaded.
 """
 
 from __future__ import annotations
@@ -181,7 +186,8 @@ def _json(raw):
     return json.loads(raw)
 
 
-def extract(conn, out_dir: Path, template: Path | None, thumbs: Path | None, note: str | None = None) -> dict:
+def extract(conn, out_dir: Path, template: Path | None, thumbs: Path | None, note: str | None = None,
+            voices: Path | None = None) -> dict:
     """擷取並寫出建置包；回傳摘要。Extract and write the package; returns a summary."""
     files, scenes, lines, links = load_rows(conn)
     result = build_story_graph(files, scenes, lines, links, rules())
@@ -193,7 +199,9 @@ def extract(conn, out_dir: Path, template: Path | None, thumbs: Path | None, not
     get_story_game(GAME_ID).parse_config(config)  # 和匯入、API 用同一個設定模型（SabbatConfig）
     manifest = BuildManifest(game_id=GAME_ID, extractor=EXTRACTOR, config=config, stats=result.stats,
                              assets={"thumbs_dir": str(thumbs) if thumbs else None,
-                                     "thumbs_prefix": f"story/{GAME_ID}/thumbs/"},
+                                     "thumbs_prefix": f"story/{GAME_ID}/thumbs/",
+                                     "voices_dir": str(voices) if voices else None,
+                                     "voices_prefix": f"story/{GAME_ID}/voices/"},
                              note=note)
     source_hash = write_package(out_dir, manifest, result.graph, result.rows,
                                 templates={TEMPLATE_KEY: template} if template else None,
@@ -210,13 +218,16 @@ def main() -> None:
     parser.add_argument("--out", required=True, type=Path, help="建置包輸出資料夾")
     parser.add_argument("--template", type=Path, help="快速存檔樣板（data_quick_01.jpg）；省略時不提供存檔")
     parser.add_argument("--thumbs", type=Path, help="縮圖資料夾（<雜湊>.jpg），匯入時上傳")
+    parser.add_argument("--voices", type=Path, help="語音資料夾（<voice_file>.mp3），匯入時只上傳台詞用到的檔案")
     parser.add_argument("--database", help="語料庫名稱（預設 backend/.env 的 MYSQL_DATABASE；"
                                            "語料庫切換前可指定 fluencytides_corpus）")
     parser.add_argument("--note", help="這個版本的備註")
     args = parser.parse_args()
     conn = corpus_db.connect(args.database)
     try:
-        summary = extract(conn, args.out, args.template, args.thumbs, args.note)
+        if args.voices and not args.voices.is_dir():
+            raise SystemExit(f"語音資料夾不存在：{args.voices}")
+        summary = extract(conn, args.out, args.template, args.thumbs, args.note, voices=args.voices)
     finally:
         conn.close()
     stats = summary["stats"]

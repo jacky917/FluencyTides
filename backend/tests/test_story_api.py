@@ -4,7 +4,8 @@ HTTP-level tests for ``/api/v1/story`` against an in-memory repository:
 manifest and capabilities, graph ETag, annotation stats and verb index,
 line pages with card annotations, locate (direct and via a master note's
 children), save generation (filename, MIME, variables along the selected
-path, route presets, background voices), thumbnails, and error codes.
+path, route presets, background voices), thumbnails, voice playback, and
+error codes.
 Also covers the path rule shared with the frontend, asset-key safety
 (Windows ``..\\`` traversal), MinIO error mapping, config validation and
 effect typing.
@@ -39,6 +40,8 @@ from scripts.story.common.scene_graph import build_story_graph  # noqa: E402
 GAME = "SabbatOfTheWitch"
 TEMPLATE_KEY = f"story/{GAME}/templates/quick.jpg"
 THUMB = "0123456789abcdef"
+VOICE = "meg009_001"
+MP3 = b"ID3\x03\x00fake-mp3"
 
 CONFIG = {
     "languages": [{"code": "ja-JP", "label": "日本語"}, {"code": "zh-Hant", "label": "繁中"}],
@@ -87,7 +90,7 @@ class FakeRepo:
                 line_id=row.line_id, seq=row.seq, kind="bgv" if row.line_id == 1001 else line.kind,
                 point=point, file_name=file_by_id[scene.file_id].file_name, label=scene.label,
                 speaker_ja="めぐる", speaker_zh=None, text_ja=f"台詞{row.line_id}\n続き", text_zh=f"繁中{row.line_id}",
-                voice=None, thumb=THUMB, is_h=False, h_label=None, chapter_label=line.chapter_label,
+                voice=VOICE if row.line_id == 2700 else None, thumb=THUMB, is_h=False, h_label=None, chapter_label=line.chapter_label,
                 attrs={"plays_at": {"scene": "001.共通－始まり.ks*chapter11", "point": 9}} if row.line_id == 1001 else {}))
         # 2700（009_02B 的第 1 句）有兩張核心動詞卡；筆記 900 是母卡，經由子卡 901 找到 2700
         self.cards = [CardLink(2700, 901, "jp_core_verb", "見る"), CardLink(2700, 902, "jp_core_verb", "見る"),
@@ -164,6 +167,9 @@ def setup(tmp_path):
     thumb = assets / f"story/{GAME}/thumbs/{THUMB}.jpg"
     thumb.parent.mkdir(parents=True)
     thumb.write_bytes(_jpeg(b"\x07\x07"))
+    voice = assets / f"story/{GAME}/voices/{VOICE}.mp3"
+    voice.parent.mkdir(parents=True)
+    voice.write_bytes(MP3)
     repo = FakeRepo()
     service = StoryService(repo, StoryAssetStore(local_dir=str(assets)))
     return _app(service), repo, service
@@ -176,7 +182,7 @@ def test_games_and_manifest(setup):
     client, _, _ = setup
     games = client.get("/api/v1/story/games").json()
     assert games[0]["game_id"] == GAME and games[0]["title"] == "魔女的夜宴"
-    assert games[0]["capabilities"] == {"saves": True, "thumbs": True, "annotations": ["cards"],
+    assert games[0]["capabilities"] == {"saves": True, "thumbs": True, "voices": True, "annotations": ["cards"],
                                         "route_presets": True, "languages": ["ja-JP", "zh-Hant"]}
     assert games[0]["card_types"][0]["note_types"] == ["JP_Context_Dark"]
     manifest = client.get(BASE).json()
@@ -219,6 +225,7 @@ def test_lines_page_with_annotations(setup):
     assert line["speakers"] == {"ja-JP": "めぐる", "zh-Hant": "めぐる"}
     assert line["annotations"]["cards"] == [{"card_type": "jp_core_verb", "label": "核心動詞", "verb": "見る",
                                              "note_ids": [901, 902]}]
+    assert line["voice"] == VOICE
     assert line["can_save"] is True and line["anchor_key"].startswith("009.共通－休日デート.ks*009_02B@")
     assert body["next_annotated_seq"] == 0
     assert client.get(f"{BASE}/nodes/sw:nope/lines").json()["error_code"] == "STORY_NODE_NOT_FOUND"
@@ -296,6 +303,46 @@ def test_thumb_game_id_traversal_is_rejected(setup, tmp_path):
     assert asyncio.run(service.assets.get(str(evil))) is None
     for path in (f"{BASE}/../x", "/api/v1/story/games/a.b", "/api/v1/story/games/..%5Cx/graph"):
         assert client.get(path).status_code == 404
+
+
+def test_voices(setup):
+    client, _, service = setup
+    for path in (f"{BASE}/voices/{VOICE}", f"{BASE}/voices/{VOICE}.mp3"):
+        r = client.get(path)
+        assert r.status_code == 200 and r.headers["content-type"] == "audio/mpeg" and r.content == MP3
+        assert "immutable" in r.headers["cache-control"] and r.headers["x-content-type-options"] == "nosniff"
+    # 語音不進記憶體快取（縮圖會）
+    assert service.assets._cache.get(StoryService.voice_key(GAME, VOICE)) is None
+    r = client.get(f"{BASE}/voices/nen999_999")
+    assert r.status_code == 404 and r.json()["error_code"] == "STORY_ASSET_NOT_FOUND"
+    for bad in ("a-b", "a.b", "%E8%AA%9E", "x" * 65, "a%20b"):
+        r = client.get(f"{BASE}/voices/{bad}")
+        assert r.status_code == 404 and r.json()["error_code"] == "STORY_ASSET_NOT_FOUND", bad
+    assert client.get("/api/v1/story/games/Nope/voices/nen002_039").status_code == 404
+
+
+def test_voice_traversal_is_rejected(setup, tmp_path):
+    """``%5C``／``%2F`` 解碼後的路徑字元進不了物件鍵；``game_id`` 也一樣擋。"""
+    client, _, _ = setup
+    evil = tmp_path / "evil.mp3"  # 素材根目錄（tmp_path/assets）之外
+    evil.write_bytes(b"SECRET")
+    for path in (f"{BASE}/voices/..%5C..%5C..%5C..%5Cevil", f"{BASE}/voices/..%2F..%2F..%2F..%2Fevil",
+                 f"/api/v1/story/games/..%5C..%5C..%5C/voices/evil"):
+        r = client.get(path)
+        assert r.status_code == 404 and b"SECRET" not in r.content, path
+
+
+def test_voice_store_error_is_503():
+    broken = StoryAssetStore(minio_client=_FakeMinio(ConnectionError("refused")), bucket="b", local_dir="")
+    client = _app(StoryService(FakeRepo(), broken))
+    r = client.get(f"{BASE}/voices/{VOICE}")
+    assert r.status_code == 503 and r.json()["error_code"] == "STORY_ASSET_UNAVAILABLE"
+
+
+def test_no_asset_store_disables_voices_capability():
+    client = _app(StoryService(FakeRepo(), StoryAssetStore(local_dir="")))
+    caps = client.get(BASE).json()["capabilities"]
+    assert caps["voices"] is False and caps["thumbs"] is False
 
 
 def test_safe_key_parts():

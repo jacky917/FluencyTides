@@ -37,6 +37,7 @@ export function Overview({ graph, theme, renderers, lang, badges, nodeState, dec
         const avatar = tab.avatar ? theme.assets.tabAvatars?.[tab.avatar] : undefined
         const type = node ? renderType(node.type, known) : 'scene'
         const Renderer = renderers[type]
+        const decoration = node ? decorations?.(node) : null
         return (
           <div key={tab.key} className="sf-overview__row" data-tab={tab.key}>
             <button type="button" className="sf-tab sf-overview__tab" onClick={() => onOpen(tab.key)}>
@@ -45,18 +46,26 @@ export function Overview({ graph, theme, renderers, lang, badges, nodeState, dec
               {badges?.[tab.key] != null && <span className="sf-tab__badge">{badges[tab.key]}</span>}
             </button>
             {node && (
-              <div
-                className={`sf-node sf-node--${type} sf-overview__node`}
-                data-type={node.type}
-                data-state={nodeState?.(node) ?? 'normal'}
-                role="button"
-                tabIndex={0}
-                onClick={() => onOpen(tab.key)}
-                onKeyDown={(e) => e.key === 'Enter' && onOpen(tab.key)}
-                title={`${localizedTitle(node, lang)} · ${lines.toLocaleString()} 句`}
-              >
-                <Renderer node={node} title={localizedTitle(node, lang)} state="normal" selected={false}
-                  onPath={false} narrow={false} decorations={decorations?.(node)} theme={theme} graph={graph} lang={lang} />
+              // 疊加物放在節點框外面（框可能有 mask／filter／opacity），以外層定位
+              <div className="sf-overview__slot">
+                <div
+                  className={`sf-node sf-node--${type} sf-overview__node`}
+                  data-type={node.type}
+                  data-state={nodeState?.(node) ?? 'normal'}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onOpen(tab.key)}
+                  onKeyDown={(e) => e.key === 'Enter' && onOpen(tab.key)}
+                  title={`${localizedTitle(node, lang)} · ${lines.toLocaleString()} 句`}
+                >
+                  <Renderer node={node} title={localizedTitle(node, lang)} state="normal" selected={false}
+                    onPath={false} narrow={false} theme={theme} graph={graph} lang={lang} />
+                </div>
+                {decoration && (
+                  <span className="sf-node__decorations" aria-hidden="true" data-state={nodeState?.(node) ?? 'normal'}>
+                    {decoration}
+                  </span>
+                )}
               </div>
             )}
             <span className="sf-overview__meta">{lines.toLocaleString()} 句</span>

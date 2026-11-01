@@ -8,6 +8,7 @@ Write, read and validate a story build package.
     graph.json           劇情圖（schema v1）
     node_lines.jsonl     每行一筆 {node_key, seq, line_id}
     assets/templates/…   存檔樣板（物件鍵見 manifest.assets.templates）
+                         （縮圖與語音不在建置包裡：manifest.assets 的 thumbs_dir／voices_dir 指向來源資料夾）
     graph.mmd.md         Mermaid 版，人工核對用（不算進雜湊）
 
 ``source_hash`` 是內容的 SHA-256：圖、成員列、設定與擷取器、樣板檔。同一份內容重複匯入時
@@ -57,6 +58,11 @@ class BuildPackage:
     def thumbs_dir(self) -> Path | None:
         """縮圖來源資料夾（可能沒有）。The thumbnail source folder, if any."""
         raw = self.manifest.assets.get("thumbs_dir")
+        return Path(raw) if raw else None
+
+    def voices_dir(self) -> Path | None:
+        """語音來源資料夾（``<voice_file>.mp3``，可能沒有）。The voice source folder, if any."""
+        raw = self.manifest.assets.get("voices_dir")
         return Path(raw) if raw else None
 
 

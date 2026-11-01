@@ -9,6 +9,8 @@ export type { StoryGraph, StoryNode, StoryEdge, StoryTab } from '@/features/grap
 export interface StoryCapabilities {
   saves: boolean
   thumbs: boolean
+  /** 有素材來源、可以播放台詞語音（`GET .../voices/{voice}`）。Whether voices can be played. */
+  voices: boolean
   annotations: string[]
   route_presets: boolean
   languages: string[]
@@ -85,6 +87,7 @@ export interface StoryLine {
   speaker: string | null
   speakers: Record<string, string>
   texts: Record<string, string>
+  /** 語音檔名主幹（`game_lines.voice_file`）；旁白等沒有語音時為 null。Voice stem, or null. */
   voice: string | null
   thumb: string | null
   chapter_label: string | null

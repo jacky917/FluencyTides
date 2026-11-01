@@ -5,12 +5,14 @@ Reads story assets (thumbnails, save templates) from a local folder or MinIO.
 物件鍵即 MinIO 的物件名稱，例 ``story/SabbatOfTheWitch/thumbs/<雜湊>.jpg``。設定 ``STORY_ASSETS_DIR``
 時先讀 ``<資料夾>/<物件鍵>``（本機開發用，匯入腳本 ``--assets local:<資料夾>`` 寫的就是這個結構），
 找不到再問 MinIO（``MINIO_DEFAULT_BUCKET``）。讀到的物件放在記憶體 LRU 快取（最近 512 個，
-不看檔案大小；實際上是縮圖與存檔樣板，都只有幾十 KB）。
+不看檔案大小；實際上是縮圖與存檔樣板，都只有幾十 KB）。語音（一款遊戲約兩萬個、合計約 2 GB）
+以 ``cache=False`` 讀取，不進快取，免得把縮圖擠出去、也不讓記憶體隨播放量成長。
 
 Object keys are MinIO object names. ``STORY_ASSETS_DIR`` (if set) is
 checked first, then MinIO. The last 512 objects read are kept in an
 in-memory LRU regardless of size (in practice thumbnails and save
-templates of a few dozen KB each).
+templates of a few dozen KB each). Voices are read with ``cache=False``
+so they neither evict thumbnails nor grow memory with playback.
 
 錯誤分兩種：物件不存在回 ``None``（呼叫端轉成 404）；來源本身出問題（MinIO 連不上、檔案讀不了）
 記 WARNING 並拋 :class:`StoryAssetUnavailableError`（503），不偽裝成「不存在」。
@@ -83,8 +85,14 @@ class StoryAssetStore:
         """有沒有任何素材來源（MinIO 要有用戶端也要有 bucket）。Whether any source is configured."""
         return self.local_root is not None or (self.minio is not None and bool(self.bucket))
 
-    async def get(self, key: str) -> bytes | None:
+    async def get(self, key: str, *, cache: bool = True) -> bytes | None:
         """讀取一個物件；不存在或物件鍵不安全時回 None。Read an object, or None.
+
+        Args:
+            key: 物件鍵。The object key.
+            cache: 讀到後放進 LRU 快取（已在快取裡的照樣從快取回傳）。語音傳 False。
+                Whether to keep the object in the LRU (cached objects are still
+                served from it). False for voices.
 
         Raises:
             StoryAssetUnavailableError: 來源出錯（不是「不存在」）時。When the
@@ -99,7 +107,7 @@ class StoryAssetStore:
         data = self._read_local(key, parts)
         if data is None and self.minio is not None and self.bucket:
             data = await self._read_minio(key)
-        if data is not None:
+        if data is not None and cache:
             self._cache[key] = data
             while len(self._cache) > _CACHE_ITEMS:
                 self._cache.popitem(last=False)

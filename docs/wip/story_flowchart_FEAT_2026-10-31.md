@@ -538,7 +538,10 @@ src/lib/storyParams.ts
 ```html
 <div class="sf-node sf-node--choice" data-type="choice" data-state="highlight" data-selected="true" data-on-path="true">
   <span class="sf-node__title">休日デート</span>
-  <span class="sf-node__decorations">…</span>
+</div>
+<!-- 疊加物（徽章）在所有節點之後的獨立圖層，對齊節點右上角，不受節點框的 mask／filter／opacity 影響 -->
+<div class="sf-decorations">
+  <span class="sf-node__decorations" data-key="sw:009" data-state="highlight">…</span>
 </div>
 ```
 
@@ -623,7 +626,7 @@ interface StoryTheme {
 重建與匯入魔女的夜宴：
 
 ```bash
-python backend/scripts/story/extractors/sabbat_of_the_witch.py --thumbs "C:/Users/forip/Desktop/WorkSpace/game/SW_calib/thumbs" --out build/sabbat_of_the_witch
+python backend/scripts/story/extractors/sabbat_of_the_witch.py --out build/sabbat_of_the_witch --template "C:/Users/forip/Desktop/WorkSpace/game/SW_calib/quick_template.jpg" --thumbs "C:/Users/forip/Desktop/WorkSpace/game/SW_calib/thumbs" --voices "C:/Users/forip/Desktop/WorkSpace/material/voice/yuzusoft/SabbatOfTheWitch"
 ```
 
 ```bash
@@ -632,6 +635,12 @@ python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch --d
 
 ```bash
 python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch
+```
+
+縮圖、語音的來源資料夾不算進 `source_hash`。內容沒變、只是補上 `--voices` 的建置包重跑匯入會被略過，改用 `--assets-only`：不建新版本，只替上線版本上傳（補齊）樣板、縮圖、語音；建置包必須和上線版本的 `source_hash` 相同，已存在的檔案跳過。本機資料夾（後端以 `STORY_ASSETS_DIR` 指向它）：
+
+```bash
+python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch --assets-only --assets local:<資料夾>
 ```
 
 ### Backend
@@ -754,6 +763,8 @@ python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch
 - 節點徽章的數字是「有卡的台詞句數」：情境卡和填空卡指向同一句，算筆記數會重複。
 - 「下一句有卡」的參數改成 `annotated_after=`。
 - schema 多了節點的 `target_tab`、`titles`，邊的 `condition_vars`，`card_types` 的 `note_types`（卡片頁反查不用寫死筆記類型）。
+- 抽屜加了語音播放（存檔鍵左邊）：`GET /story/games/{game}/voices/{voice}` 由後端代讀 `story/<game>/voices/<voice_file>.mp3`（名稱只收 `[A-Za-z0-9_]{1,64}`，不進記憶體快取），`capabilities.voices` 有素材來源時為 true。沒有語音的台詞顯示停用的靜音喇叭圖示。匯入只上傳 `game_lines.voice_file` 用到的檔案（SW 23,493 個、約 2.0 GiB；`local:` 模式同一顆磁碟用硬連結）。正式機的語音從哪裡來還沒決定，目前只放進本機素材資料夾。
+- 節點徽章改畫在節點層之後的獨立圖層 `.sf-decorations`（總覽則在節點框外）：原本畫在節點框裡，票券形節點的 `mask` 會把它裁掉，`opacity`／`filter` 也會影響它，後面才畫的相鄰節點還可能蓋住它。渲染器的 `decorations` 參數因此移除。
 - 020 的四個檔案檔號相同，節點鍵改用檔名主幹（例 `sw:020.共通－パーティ寧々`）。
 - 資料庫和其他功能一樣讀 `MYSQL_DATABASE`，共用 `corpus_database.py` 的引擎（整個分支和語料庫切換一起上線）。本機的 `MYSQL_DATABASE` 還沒切換時，可用 `STORY_CORPUS_DATABASE` 明確覆寫（只供本機測試，會另建一個連線池）；擷取器與匯入腳本則用 `--database fluencytides_corpus`。本機素材可用 `--assets local:<資料夾>` 與 `STORY_ASSETS_DIR`（兩個 `STORY_*` 都可以寫在 `backend/.env`）。
 

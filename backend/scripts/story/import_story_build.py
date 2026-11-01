@@ -5,17 +5,26 @@ Generic story-build importer: validate, diff summary, write
 (docs/wip/story_flowchart_FEAT_2026-10-31.md D2 版本生命週期、§7).
 
 可以重跑：同一份內容（``source_hash`` 相同）已經匯入過就直接略過；語料庫重建（drop 再建表）後
-重跑也會重新匯入。素材（存檔樣板、縮圖）上傳到 MinIO，或用 ``--assets local:<資料夾>`` 寫到本機
-資料夾（後端以 ``STORY_ASSETS_DIR`` 指向同一個資料夾即可讀到）。
+重跑也會重新匯入。素材（存檔樣板、縮圖、語音）上傳到 MinIO，或用 ``--assets local:<資料夾>`` 寫到
+本機資料夾（後端以 ``STORY_ASSETS_DIR`` 指向同一個資料夾即可讀到）。
+
+縮圖與語音的來源資料夾不算進 ``source_hash``，所以「內容沒變、只是補上語音資料夾」的建置包重跑時
+會被略過、不會上傳素材。這時改用 ``--assets-only``：不建新版本，只替目前上線的版本上傳（補齊）
+素材。建置包必須和上線版本是同一份內容（``source_hash`` 相同），否則拒絕：樣板的物件鍵是各版本
+共用的，用別份內容的樣板覆寫會弄壞上線版本的存檔。縮圖、語音已存在就跳過，可以放心重跑。
 
 Re-runnable: an identical package is skipped. Assets go to MinIO or, with
 ``--assets local:<dir>``, to a local folder served via ``STORY_ASSETS_DIR``.
+Thumbnail/voice folders are not part of ``source_hash``; ``--assets-only``
+uploads (or tops up) the assets of the active build without creating a new
+build, and requires the package to match the active build's hash.
 
 用法 / Usage::
 
     python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch --dry-run
     python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch
     python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch --assets local:D:/story-assets
+    python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch --assets-only --assets local:D:/story-assets
     python backend/scripts/story/import_story_build.py --game SabbatOfTheWitch --list
     python backend/scripts/story/import_story_build.py --game SabbatOfTheWitch --rollback 3
 
@@ -30,6 +39,7 @@ import argparse
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import traceback
@@ -48,8 +58,14 @@ from app.schemas.story import StoryGraph  # noqa: E402
 #: 每款遊戲保留幾個 retired 版本（加上 1 個 active）。Retired builds kept per game.
 KEEP_RETIRED = 3
 INSERT_CHUNK = 2000
-#: 縮圖缺檔時列出幾個雜湊當例子。How many missing thumbnail hashes to print.
-MISSING_THUMB_EXAMPLES = 10
+#: 縮圖、語音缺檔時列出幾個名稱當例子。How many missing asset names to print.
+MISSING_ASSET_EXAMPLES = 10
+#: 語音檔名主幹的格式，和 API（``services/story/service.py`` 的 ``_VOICE``）一致。不合的不上傳：
+#: 名稱會接進物件鍵，也就是本機資料夾的路徑。
+#: Voice stems accepted by the API; others are never uploaded (they become keys).
+VOICE_NAME = re.compile(r"^[A-Za-z0-9_]{1,64}$")
+#: 上傳到 MinIO 時依副檔名設定的 Content-Type。Content types by suffix.
+CONTENT_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".mp3": "audio/mpeg"}
 
 
 # ============================================================================
@@ -63,6 +79,7 @@ class BuildStore(Protocol):
     def game_exists(self, game_id: str) -> bool: ...
     def game_line_ids(self, game_id: str) -> set[int]: ...
     def game_thumbs(self, game_id: str) -> set[str]: ...
+    def game_voices(self, game_id: str) -> set[str]: ...
     def find_by_hash(self, game_id: str, source_hash: str) -> dict | None: ...
     def active_build(self, game_id: str) -> dict | None: ...
     def list_builds(self, game_id: str) -> list[dict]: ...
@@ -102,12 +119,18 @@ class MySQLBuildStore:
         rows = self._all("SELECT DISTINCT thumb FROM game_lines WHERE game_id=%s AND thumb IS NOT NULL", (game_id,))
         return {r["thumb"] for r in rows}
 
+    def game_voices(self, game_id: str) -> set[str]:
+        rows = self._all("SELECT DISTINCT voice_file FROM game_lines WHERE game_id=%s AND status='active' "
+                         "AND voice_file IS NOT NULL AND voice_file <> ''", (game_id,))
+        return {r["voice_file"] for r in rows}
+
     def find_by_hash(self, game_id: str, source_hash: str) -> dict | None:
         return self._one("SELECT build_id, status FROM story_builds WHERE game_id=%s AND source_hash=%s",
                          (game_id, source_hash))
 
     def active_build(self, game_id: str) -> dict | None:
-        row = self._one("SELECT build_id, graph FROM story_builds WHERE game_id=%s AND status='active'", (game_id,))
+        row = self._one("SELECT build_id, source_hash, graph FROM story_builds WHERE game_id=%s AND status='active'",
+                        (game_id,))
         if row and isinstance(row["graph"], (str, bytes)):
             row["graph"] = json.loads(row["graph"])
         return row
@@ -188,7 +211,7 @@ class AssetSink(Protocol):
 
 
 class LocalAssetSink:
-    """寫到本機資料夾（物件鍵即相對路徑）；縮圖優先用硬連結。Local-folder sink."""
+    """寫到本機資料夾（物件鍵即相對路徑）；縮圖、語音優先用硬連結（同一顆磁碟不佔額外空間）。Local-folder sink."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -245,7 +268,7 @@ class MinioAssetSink:
         return {o.object_name for o in self.client.list_objects(self.bucket, prefix=prefix, recursive=True)}
 
     def put(self, key: str, src: Path) -> None:
-        content_type = "image/jpeg" if src.suffix.lower() in (".jpg", ".jpeg") else "application/octet-stream"
+        content_type = CONTENT_TYPES.get(src.suffix.lower(), "application/octet-stream")
         self.client.fput_object(self.bucket, key, str(src), content_type=content_type)
 
     def put_bytes(self, key: str, data: bytes, content_type: str) -> None:
@@ -263,39 +286,82 @@ def make_sink(spec: str) -> AssetSink | None:
     raise SystemExit(f"不認得的 --assets：{spec}")
 
 
-def upload_assets(pkg: BuildPackage, sink: AssetSink, thumbs: set[str], log=print) -> dict[str, int]:
-    """上傳樣板（一律覆寫）與縮圖（已存在就跳過）。Upload templates and missing thumbs.
+def upload_assets(pkg: BuildPackage, sink: AssetSink, thumbs: set[str], voices: set[str] = frozenset(),
+                  log=print) -> dict[str, int]:
+    """上傳樣板（一律覆寫）、縮圖與語音（已存在就跳過）。Upload templates, then missing thumbs and voices.
 
-    縮圖資料夾裡找不到的雜湊算進 ``thumbs_missing``，並印出警告與前幾個例子。
-    Thumbnails absent from the source folder are counted and reported.
+    Args:
+        pkg: 建置包（來源資料夾取自 ``manifest.assets`` 的 ``thumbs_dir``／``voices_dir``）。The package.
+        sink: 目的地。The sink.
+        thumbs: 要上傳的縮圖雜湊（``game_lines.thumb``）。Thumbnail hashes.
+        voices: 要上傳的語音檔名主幹（``game_lines.voice_file``）；只傳台詞用到的，資料夾裡其他檔案不上傳。
+            Voice stems referenced by the game's lines; nothing else is uploaded.
+        log: 輸出函式。Logger.
+
+    來源資料夾裡找不到的算進 ``*_missing``，並印出警告與前幾個例子；格式不合的語音名稱算進
+    ``voices_invalid``（不會拿來組物件鍵）。
+    Names absent from the source folder are counted and reported; malformed
+    voice names are counted as ``voices_invalid`` and never used in a key.
     """
-    stats = {"templates": 0, "thumbs_uploaded": 0, "thumbs_missing": 0, "thumbs_skipped": 0}
-    missing: list[str] = []
+    stats = {"templates": 0}
     for key, path in pkg.template_files().items():
         sink.put(key, path)
         stats["templates"] += 1
-    thumbs_dir = pkg.thumbs_dir()
-    prefix = pkg.manifest.assets.get("thumbs_prefix") or f"story/{pkg.manifest.game_id}/thumbs/"
-    if thumbs_dir and thumbs:
-        have = sink.existing(prefix)
-        for i, h in enumerate(sorted(thumbs)):
-            key = f"{prefix}{h}.jpg"
-            if key in have:
-                stats["thumbs_skipped"] += 1
-                continue
-            src = thumbs_dir / f"{h}.jpg"
-            if not src.exists():
-                stats["thumbs_missing"] += 1
-                missing.append(h)
-                continue
-            sink.put(key, src)
-            stats["thumbs_uploaded"] += 1
-            if stats["thumbs_uploaded"] % 2000 == 0:
-                log(f"  縮圖已上傳 {stats['thumbs_uploaded']}（{i + 1}/{len(thumbs)}）")
-    if missing:
-        log(f"⚠ 縮圖資料夾 {thumbs_dir} 缺 {len(missing)} 張（抽屜與存檔會沒有縮圖），例："
-            f"{', '.join(missing[:MISSING_THUMB_EXAMPLES])}")
+    game_id = pkg.manifest.game_id
+    assets = pkg.manifest.assets
+    _upload_folder(sink, "thumbs", "縮圖", pkg.thumbs_dir(), assets.get("thumbs_prefix") or f"story/{game_id}/thumbs/",
+                   ".jpg", thumbs, stats, log, unit="張", consequence="抽屜與存檔會沒有縮圖")
+    valid = {v for v in voices if VOICE_NAME.match(v)}
+    if voices and pkg.voices_dir():
+        stats["voices_invalid"] = len(voices) - len(valid)
+        if stats["voices_invalid"]:
+            bad = sorted(set(voices) - valid)[:MISSING_ASSET_EXAMPLES]
+            log(f"⚠ {stats['voices_invalid']} 個語音名稱格式不對（只接受英數與底線），不上傳，例：{', '.join(bad)}")
+    _upload_folder(sink, "voices", "語音", pkg.voices_dir(), assets.get("voices_prefix") or f"story/{game_id}/voices/",
+                   ".mp3", valid, stats, log, unit="個", consequence="這些台詞的播放按鈕會播放失敗")
     return stats
+
+
+def _upload_folder(sink: AssetSink, kind: str, label: str, src_dir: Path | None, prefix: str, suffix: str,
+                   names: set[str], stats: dict[str, int], log, *, unit: str, consequence: str) -> None:
+    """把每個名稱的 ``src_dir/<名稱><suffix>`` 上傳成 ``<prefix><名稱><suffix>``；已存在就跳過。
+
+    Upload ``src_dir/<name><suffix>`` to ``<prefix><name><suffix>`` for each
+    name, skipping keys that already exist. Fills ``<kind>_uploaded``,
+    ``_skipped``, ``_missing`` and ``_bytes`` (bytes uploaded) in ``stats``.
+    """
+    if not src_dir or not names:
+        return
+    for k in ("uploaded", "skipped", "missing", "bytes"):
+        stats[f"{kind}_{k}"] = 0
+    have = sink.existing(prefix)
+    missing: list[str] = []
+    for i, name in enumerate(sorted(names)):
+        key = f"{prefix}{name}{suffix}"
+        if key in have:
+            stats[f"{kind}_skipped"] += 1
+            continue
+        src = src_dir / f"{name}{suffix}"
+        if not src.is_file():
+            stats[f"{kind}_missing"] += 1
+            missing.append(name)
+            continue
+        sink.put(key, src)
+        stats[f"{kind}_uploaded"] += 1
+        stats[f"{kind}_bytes"] += src.stat().st_size
+        if stats[f"{kind}_uploaded"] % 2000 == 0:
+            log(f"  {label}已上傳 {stats[f'{kind}_uploaded']}（{i + 1}/{len(names)}）")
+    if missing:
+        log(f"⚠ {label}資料夾 {src_dir} 缺 {len(missing)} {unit}（{consequence}），例："
+            f"{', '.join(missing[:MISSING_ASSET_EXAMPLES])}")
+
+
+def _referenced_assets(pkg: BuildPackage, store: BuildStore) -> tuple[set[str], set[str]]:
+    """這款遊戲的台詞用到的縮圖與語音；建置包沒給來源資料夾的那種不查。Thumbs and voices to upload."""
+    game_id = pkg.manifest.game_id
+    thumbs = store.game_thumbs(game_id) if pkg.thumbs_dir() else set()
+    voices = store.game_voices(game_id) if pkg.voices_dir() else set()
+    return thumbs, voices
 
 
 def package_archive(pkg: BuildPackage) -> bytes:
@@ -362,7 +428,7 @@ def diff_graphs(old: dict | None, new: StoryGraph) -> DiffSummary:
 class ImportResult:
     """匯入結果。Import outcome."""
 
-    status: str  # invalid / skipped / dry_run / failed / imported
+    status: str  # invalid / skipped / dry_run / failed / imported / assets（--assets-only）
     build_id: int | None = None
     errors: list[str] = field(default_factory=list)
     messages: list[str] = field(default_factory=list)
@@ -416,6 +482,8 @@ def import_package(
         msg = f"同一份內容已匯入為版本 {existing['build_id']}（{existing['status']}），略過"
         if existing["status"] != "active":
             msg += f"；要改用它請執行 --rollback {existing['build_id']}"
+        else:
+            msg += "；只要上傳或補齊素材（例如新加的語音資料夾）請改用 --assets-only"
         log(msg)
         return ImportResult("skipped", build_id=existing["build_id"], messages=messages + [msg])
     if dry_run:
@@ -423,7 +491,7 @@ def import_package(
         return ImportResult("dry_run", messages=messages)
 
     if sink is not None:
-        stats = upload_assets(pkg, sink, store.game_thumbs(game_id) if pkg.thumbs_dir() else set(), log)
+        stats = upload_assets(pkg, sink, *_referenced_assets(pkg, store), log=log)
         log(f"素材：{stats}")
 
     build_id = store.insert_build({
@@ -457,6 +525,34 @@ def import_package(
         log(f"版本 {build_id} 已上線（active）")
         prune_retired(store, game_id, log=log)
     return ImportResult("imported", build_id=build_id, messages=messages)
+
+
+def refresh_assets(pkg: BuildPackage, store: BuildStore, sink: AssetSink, log=print) -> ImportResult:
+    """只替上線版本上傳（補齊）素材，不建新版本（``--assets-only``）。Upload assets for the active build only.
+
+    建置包必須和上線版本的 ``source_hash`` 相同：樣板一律覆寫，物件鍵又是各版本共用的，用別份內容的
+    樣板覆寫可能弄壞上線版本的存檔。縮圖與語音已存在就跳過，可以重跑。
+    The package must match the active build's ``source_hash`` because
+    templates are overwritten under shared keys. Existing thumbs/voices are
+    skipped, so this is safe to re-run.
+    """
+    game_id = pkg.manifest.game_id
+    errors = validate_package(pkg)
+    if not store.game_exists(game_id):
+        errors.append(f"game_profiles 沒有 {game_id}")
+    if errors:
+        return ImportResult("invalid", errors=errors)
+    active = store.active_build(game_id)
+    if active is None:
+        return ImportResult("invalid", errors=[f"{game_id} 沒有上線版本；請先正常匯入（不加 --assets-only）"])
+    if active.get("source_hash") != pkg.source_hash:
+        return ImportResult("invalid", build_id=active["build_id"], errors=[
+            f"建置包內容（source_hash={pkg.source_hash[:12]}…）和上線版本 {active['build_id']}"
+            f"（{str(active.get('source_hash'))[:12]}…）不同；內容有變時請正常匯入、建立新版本"])
+    stats = upload_assets(pkg, sink, *_referenced_assets(pkg, store), log=log)
+    msg = f"素材（上線版本 {active['build_id']}）：{stats}"
+    log(msg)
+    return ImportResult("assets", build_id=active["build_id"], messages=[msg])
 
 
 def _cleanup(store: BuildStore, build_id: int, log=print) -> list[str]:
@@ -506,6 +602,8 @@ def main() -> None:
     parser.add_argument("--no-activate", action="store_true", help="寫入成 ready，不切換上線")
     parser.add_argument("--note", help="版本備註")
     parser.add_argument("--assets", default="minio", help="素材目的地：minio（預設）、local:<資料夾>、none")
+    parser.add_argument("--assets-only", action="store_true",
+                        help="不建新版本，只替上線版本上傳（補齊）樣板、縮圖、語音；建置包須和上線版本內容相同")
     parser.add_argument("--database", help="語料庫名稱（預設 backend/.env 的 MYSQL_DATABASE；"
                                            "語料庫切換前可指定 fluencytides_corpus）")
     parser.add_argument("--game", help="--list／--rollback 用的 game_id")
@@ -531,9 +629,17 @@ def main() -> None:
         if not args.package:
             raise SystemExit("需要建置包資料夾")
         pkg = read_package(args.package)
-        sink = None if args.dry_run else make_sink(args.assets)
-        result = import_package(pkg, store, sink, dry_run=args.dry_run, activate=not args.no_activate,
-                                note=args.note)
+        if args.assets_only:
+            if args.dry_run or args.no_activate or args.note:
+                raise SystemExit("--assets-only 不能和 --dry-run、--no-activate、--note 一起用")
+            sink = make_sink(args.assets)
+            if sink is None:
+                raise SystemExit("--assets-only 需要 --assets minio 或 --assets local:<資料夾>")
+            result = refresh_assets(pkg, store, sink)
+        else:
+            sink = None if args.dry_run else make_sink(args.assets)
+            result = import_package(pkg, store, sink, dry_run=args.dry_run, activate=not args.no_activate,
+                                    note=args.note)
         for e in result.errors:
             print("✗ " + e)
         print(f"結果：{result.status}" + (f"（版本 {result.build_id}）" if result.build_id else ""))

@@ -11,6 +11,7 @@ Story flowchart API. All endpoints live under ``/api/v1/story`` and require
 - ``GET  /story/games/{game}/locate?note_id=|line_id=``  台詞或筆記的位置
 - ``POST /story/games/{game}/saves``                     產生欄位存檔
 - ``GET  /story/games/{game}/thumbs/{hash}``             縮圖（後端代讀，見下）
+- ``GET  /story/games/{game}/voices/{voice}``            台詞語音 MP3（同上，``voice`` 是 ``game_lines.voice_file``）
 
 ``{game}`` 只接受 ``[A-Za-z0-9_-]{1,64}``，其他一律 404（它會進素材的物件鍵）。
 ``{game}`` must match ``[A-Za-z0-9_-]{1,64}``; anything else is a 404.
@@ -19,6 +20,11 @@ Story flowchart API. All endpoints live under ``/api/v1/story`` and require
 改由後端讀出後回傳，並帶一年的 ``immutable`` 快取（檔名就是內容雜湊）。
 Thumbnails are proxied instead of redirected to presigned URLs because the
 MinIO host is not reachable from browsers; responses are immutable.
+
+語音也一樣由後端代讀。檔名是 ``game_lines.voice_file``（不是內容雜湊），但同一個名稱的語音不會換內容，
+所以同樣帶一年的 ``immutable`` 快取；名稱只接受 ``[A-Za-z0-9_]{1,64}``（可帶 ``.mp3``），其他一律 404。
+Voices are proxied the same way and cached as immutable; names must match
+``[A-Za-z0-9_]{1,64}`` (optionally with ``.mp3``).
 """
 
 from __future__ import annotations
@@ -39,6 +45,7 @@ router = APIRouter(prefix="/story", tags=["Story"], dependencies=[Depends(verify
 
 _NOT_FOUND = {404: {"model": ErrorResponse, "description": "遊戲、版本、節點或台詞不存在"}}
 _UNAVAILABLE = {503: {"model": ErrorResponse, "description": "素材來源（本機資料夾或 MinIO）暫時讀不到"}}
+_IMMUTABLE = {"Cache-Control": "private, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"}
 
 
 def get_story_service(request: Request) -> StoryService:
@@ -152,6 +159,12 @@ async def create_save(game_id: str, body: SaveRequest, service: StoryService = D
 async def read_thumb(game_id: str, thumb: str, service: StoryService = Depends(get_story_service)) -> Response:
     """縮圖 JPEG（檔名即內容雜湊，可永久快取）。A thumbnail JPEG."""
     data = await service.thumb(game_id, thumb.removesuffix(".jpg"))
-    return Response(content=data, media_type="image/jpeg",
-                    headers={"Cache-Control": "private, max-age=31536000, immutable",
-                             "X-Content-Type-Options": "nosniff"})
+    return Response(content=data, media_type="image/jpeg", headers=_IMMUTABLE)
+
+
+@router.get("/games/{game_id}/voices/{voice}", summary="台詞語音", response_class=Response,
+            responses={200: {"content": {"audio/mpeg": {}}}, **_NOT_FOUND, **_UNAVAILABLE})
+async def read_voice(game_id: str, voice: str, service: StoryService = Depends(get_story_service)) -> Response:
+    """台詞語音 MP3（``voice`` 是 ``StoryLine.voice``，可帶 ``.mp3``）。A line's voice MP3."""
+    data = await service.voice(game_id, voice.removesuffix(".mp3"))
+    return Response(content=data, media_type="audio/mpeg", headers=_IMMUTABLE)
