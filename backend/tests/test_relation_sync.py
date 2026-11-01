@@ -6,6 +6,11 @@ and its failure is tolerated and reported, an empty Anki answer is refused
 created after the scan started are kept, deletions are batched and atomic,
 an unreported row count falls back to the estimate, tens of thousands of note
 IDs do not hit SQLite's parameter limit, and the API maps refusals to 409.
+
+關聯改存語料庫的 ``rel_links``（docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9 的 C）：測試用 SQLite 建
+``corpus_metadata`` 的表；「刪除」是把 ``status`` 標成 ``deleted``，所以計數只算 active 的列。
+檔案後段另外測對外名稱與 ``core.*`` / ``user.*`` 的對照、圖譜回應格式不變。
+Relations now live in ``rel_links``; "deleting" marks rows ``deleted``.
 """
 
 import asyncio
@@ -15,10 +20,9 @@ from unittest import mock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlmodel import SQLModel
 
 from app.core.exceptions import (
     FluencyTidesError,
@@ -26,7 +30,7 @@ from app.core.exceptions import (
     RelationSyncNeedsForceError,
 )
 from app.infrastructure.anki.client import AnkiConnectError
-from app.infrastructure.database.models import CardRelation
+from app.infrastructure.database.corpus_tables import corpus_metadata, rel_links_table, rel_types_table
 from app.services import relation_service
 from app.services.relation_service import (
     SYNC_DELETE_BATCH,
@@ -49,30 +53,50 @@ def session_factory():
 
     async def setup():
         async with engine.begin() as conn:
-            await conn.run_sync(SQLModel.metadata.create_all)
+            await conn.run_sync(corpus_metadata.create_all)
 
     _run(setup())
     yield async_sessionmaker(engine, expire_on_commit=False)
     _run(engine.dispose())
 
 
-def _seed(session_factory, pairs, created_at=OLD):
+def _link(source, target, *, relation_type="user.parent", created_at=None, dst_type="note", **extra):
+    """一列 rel_links 的值（筆記 ID 存字串）。Values of one rel_links row."""
+    values = {
+        "relation_type": relation_type, "src_type": "note", "src_id": None if source is None else str(source),
+        "src_label": "s", "dst_type": dst_type, "dst_id": None if target is None else str(target),
+        "dst_label": "t", "created_by": "user", **extra,
+    }
+    if created_at is not None:
+        values["created_at"] = created_at
+    return values
+
+
+async def _insert_link(session_factory, source, target, **kwargs):
+    async with session_factory() as session:
+        await session.execute(insert(rel_links_table).values(**_link(source, target, **kwargs)))
+        await session.commit()
+
+
+def _seed(session_factory, pairs, created_at=OLD, **kwargs):
     async def seed():
         async with session_factory() as session:
             for source, target in pairs:
-                session.add(CardRelation(
-                    source_note_id=source, target_note_id=target, relation_type="parent",
-                    source_label="s", target_label="t", created_at=created_at,
-                ))
+                await session.execute(
+                    insert(rel_links_table).values(**_link(source, target, created_at=created_at, **kwargs))
+                )
             await session.commit()
 
     _run(seed())
 
 
 def _count(session_factory) -> int:
+    """有效（active）的關聯數；刪除只會把 status 標成 deleted。Active relations."""
     async def count():
         async with session_factory() as session:
-            return (await session.execute(select(func.count()).select_from(CardRelation))).scalar_one()
+            return (await session.execute(
+                select(func.count()).select_from(rel_links_table).where(rel_links_table.c.status == "active")
+            )).scalar_one()
 
     return _run(count())
 
@@ -170,9 +194,7 @@ def test_relations_created_after_the_scan_started_are_kept(session_factory):
 
     async def find_notes_while_generating(_query):
         # 模擬取 Anki 筆記時，另一個流程剛建立了新筆記 99 與它的關聯（created_at 由資料庫填入＝現在）
-        async with session_factory() as session:
-            session.add(CardRelation(source_note_id=1, target_note_id=99, relation_type="has_cloze"))
-            await session.commit()
+        await _insert_link(session_factory, 1, 99, relation_type="core.has_cloze")
         return [1, 2]
 
     anki = _anki(find_notes=mock.AsyncMock(side_effect=find_notes_while_generating))
@@ -192,9 +214,7 @@ def test_scan_time_is_taken_before_reading_anki(session_factory, monkeypatch):
     _seed(session_factory, [(1, 2)])
 
     async def slow_find_notes(_query):
-        async with session_factory() as session:
-            session.add(CardRelation(source_note_id=1, target_note_id=99, relation_type="has_cloze"))
-            await session.commit()
+        await _insert_link(session_factory, 1, 99, relation_type="core.has_cloze")
         await asyncio.sleep(1.1)
         return [1, 2]
 
@@ -222,10 +242,10 @@ def test_failure_mid_batches_deletes_nothing(session_factory, monkeypatch):
 
         async def execute(statement, *args, **kwargs):
             nonlocal deletes
-            if getattr(statement, "is_delete", False):
+            if getattr(statement, "is_update", False):
                 deletes += 1
                 if deletes == 2:
-                    raise OperationalError("DELETE", {}, Exception("disk I/O error"))
+                    raise OperationalError("UPDATE", {}, Exception("disk I/O error"))
             return await original(statement, *args, **kwargs)
 
         session.execute = execute
@@ -311,9 +331,7 @@ def test_new_relations_to_an_orphan_note_are_kept(session_factory):
     _seed(session_factory, [(5, 6)])
 
     async def find_notes_while_linking(_query):
-        async with session_factory() as session:
-            session.add(CardRelation(source_note_id=7, target_note_id=6, relation_type="parent"))
-            await session.commit()
+        await _insert_link(session_factory, 7, 6)
         return [5, 7]
 
     result = _sync(session_factory, anki=_anki(find_notes=mock.AsyncMock(side_effect=find_notes_while_linking)))
@@ -349,7 +367,7 @@ def test_unreported_rowcount_falls_back_to_the_estimate(session_factory, caplog)
 
         async def execute(statement, *args, **kwargs):
             outcome = await original(statement, *args, **kwargs)
-            if getattr(statement, "is_delete", False):
+            if getattr(statement, "is_update", False):
                 return mock.MagicMock(rowcount=None)
             return outcome
 
@@ -368,3 +386,229 @@ def test_empty_anki_with_failed_ankiweb_sync_points_to_the_sync(session_factory)
     with pytest.raises(RelationSyncEmptyAnkiError, match="AnkiWeb 同步也失敗"):
         _sync(session_factory, anki=anki)
     assert _count(session_factory) == 1
+
+
+# =============================================================================
+# 語料庫 rel_links 的對照（corpus_db_rebuild D9 的 C）
+# =============================================================================
+
+
+def test_sync_also_retires_pipeline_links_of_orphan_notes(session_factory):
+    """建卡管線寫的「筆記 → 台詞／詞」：筆記已不在 Anki 時一樣標成 deleted；另一端不是筆記，不算孤兒筆記。"""
+    _seed(session_factory, [(1, 53000)], relation_type="core.example_from", dst_type="script_line")
+    _seed(session_factory, [(2, "ja-JP:見る")], relation_type="core.teaches", dst_type="term")
+    result = _sync(session_factory, [2])
+    assert (result.deleted, result.orphan_notes, result.considered) == (1, 1, 2)
+    assert _count(session_factory) == 1
+
+
+def test_already_deleted_links_are_ignored(session_factory):
+    """已標成 deleted 的列不在考慮範圍，也不會被重算。"""
+    _seed(session_factory, [(1, 2)], status="deleted")
+    _seed(session_factory, [(3, 4)])
+    result = _sync(session_factory, [3, 4])
+    assert (result.deleted, result.considered) == (0, 1)
+
+
+def _service_call(session_factory, method, *args, **kwargs):
+    async def call():
+        async with session_factory() as session:
+            return await getattr(RelationService(session), method)(*args, **kwargs)
+
+    return _run(call())
+
+
+def _rows(session_factory, table):
+    async def read():
+        async with session_factory() as session:
+            return [dict(row._mapping) for row in (await session.execute(select(table))).all()]
+
+    return _run(read())
+
+
+def _seed_type(session_factory, relation_type, *, owner="system", dst="note"):
+    async def seed():
+        async with session_factory() as session:
+            await session.execute(insert(rel_types_table).values(
+                relation_type=relation_type, owner=owner, name_ja_jp="x", name_zh_hant="x",
+                src_types=["note"], dst_types=[dst],
+            ))
+            await session.commit()
+
+    _run(seed())
+
+
+@pytest.mark.parametrize(
+    ("public", "stored", "owner"),
+    [("has_context", "core.has_context", None), ("has_cloze", "core.has_cloze", None),
+     ("Synonym", "user.synonym", "user"), ("conversation", "user.conversation", "user"),
+     ("travel", "user.travel", "user")],
+)
+def test_public_names_map_to_namespaced_types(session_factory, public, stored, owner):
+    """對外的名稱存成 core.* / user.*；回應照舊用對外名稱；使用者的類型自動註冊成 owner=user。"""
+    from app.schemas.relation import CardRelationCreate
+
+    if owner is None:  # 系統類型由遷移登記
+        _seed_type(session_factory, stored)
+    created = _service_call(session_factory, "create_relation", CardRelationCreate(
+        source_note_id=1, target_note_id=None, relation_type=public, source_label="a", target_label="b",
+    ))
+    assert created.relation_type == public.lower()
+    assert (created.source_note_id, created.target_note_id) == (1, None)
+    (link,) = _rows(session_factory, rel_links_table)
+    assert (link["relation_type"], link["src_type"], link["src_id"], link["dst_id"]) == (stored, "note", "1", None)
+    assert link["created_by"] == "user" and link["status"] == "active"
+    types = {row["relation_type"]: row["owner"] for row in _rows(session_factory, rel_types_table)}
+    assert types[stored] == (owner or "system")
+
+
+def test_handler_relations_carry_card_type(session_factory):
+    """卡片 handler 寫的關係帶 created_by 與 attrs.card_type（與建卡管線同一份資料）。"""
+    from app.schemas.relation import CardRelationCreate
+
+    _seed_type(session_factory, "core.has_context")
+    _service_call(session_factory, "create_relation", CardRelationCreate(
+        source_note_id=10, target_note_id=11, relation_type="has_context", source_label="見る",
+        target_label="見る_context",
+    ), created_by="jp_core_verb", attrs={"card_type": "jp_core_verb"})
+    (link,) = _rows(session_factory, rel_links_table)
+    assert link["created_by"] == "jp_core_verb" and link["attrs"] == {"card_type": "jp_core_verb"}
+
+
+def test_batch_create_registers_types_once_and_returns_public_names(session_factory):
+    """批次建立（JSON 匯入用）：同一類型只註冊一次，回應用對外名稱。"""
+    from app.schemas.relation import CardRelationCreate
+
+    created = _service_call(session_factory, "batch_create_relations", [
+        CardRelationCreate(source_note_id=1, relation_type="synonym", source_label="a", target_label="b"),
+        CardRelationCreate(target_note_id=1, relation_type="synonym", source_label="b", target_label="a"),
+    ])
+    assert [(r.relation_type, r.source_note_id, r.target_note_id) for r in created] == [
+        ("synonym", 1, None), ("synonym", None, 1),
+    ]
+    assert [row["relation_type"] for row in _rows(session_factory, rel_types_table)] == ["user.synonym"]
+
+
+def test_graph_and_type_list_keep_the_old_shape(session_factory):
+    """圖譜只看筆記 → 筆記的有效關係，連線標籤照舊（Has_context）；類型清單只列筆記 → 筆記的類型。"""
+    _seed_type(session_factory, "core.has_context")
+    _seed_type(session_factory, "core.example_from", dst="script_line")
+    _seed_type(session_factory, "user.synonym", owner="user")
+    _seed(session_factory, [(1, 2)], relation_type="core.has_context")
+    _seed(session_factory, [(1, 53000)], relation_type="core.example_from", dst_type="script_line")
+    _seed(session_factory, [(1, 3)], relation_type="user.synonym", status="deleted")
+
+    graph = _service_call(session_factory, "get_graph_data", None, None)
+    assert [(link["source"], link["target"], link["label"]) for link in graph["links"]] == [("s", "t", "Has_context")]
+    assert {node["id"]: node["note_id"] for node in graph["nodes"]} == {"s": 1, "t": 2}
+    assert _service_call(session_factory, "get_all_relation_types") == ["has_context", "synonym"]
+    (relation,) = _service_call(session_factory, "get_relations_by_note_ids", {2})
+    assert (relation.relation_type, relation.source_note_id, relation.target_note_id) == ("has_context", 1, 2)
+
+
+def test_note_deletion_and_label_updates_touch_every_relation_of_the_note(session_factory):
+    """刪卡把這張筆記當任一端的關係都標成 deleted；改名稱只動這張筆記那一端的標籤。"""
+    _seed(session_factory, [(1, 2), (3, 1)])
+    _seed(session_factory, [(1, 53000)], relation_type="core.example_from", dst_type="script_line")
+    _seed(session_factory, [(4, 5)])
+    assert _service_call(session_factory, "update_labels_for_note", 1, "new") == 3
+    labels = sorted((row["src_label"], row["dst_label"]) for row in _rows(session_factory, rel_links_table))
+    assert labels == [("new", "t"), ("new", "t"), ("s", "new"), ("s", "t")]
+    assert _service_call(session_factory, "delete_relations_for_note", 1) == 3
+    assert _count(session_factory) == 1
+
+
+def test_delete_by_nodes_matches_both_directions(session_factory):
+    """依標籤刪除：兩個方向都標成 deleted，只限指定的關係類型。"""
+    from app.schemas.relation import CardRelationDelete
+
+    async def seed():
+        async with session_factory() as session:
+            for src_label, dst_label, relation_type in (("a", "b", "user.synonym"), ("b", "a", "user.synonym"),
+                                                        ("a", "b", "user.parent")):
+                await session.execute(insert(rel_links_table).values(
+                    **_link(1, 2, relation_type=relation_type, src_label=src_label, dst_label=dst_label)
+                ))
+            await session.commit()
+
+    _run(seed())
+    result = _service_call(session_factory, "delete_relation_by_nodes", CardRelationDelete(
+        source_label="a", target_label="b", relation_type="synonym",
+    ))
+    assert result == {"deleted_count": 2}
+    assert _count(session_factory) == 1
+
+
+@pytest.mark.parametrize("name", ["", "   ", "core.example_from", "CORE.teaches", "user.synonym", "a b", "x;drop", "a" * 60])
+def test_invalid_user_relation_names_are_rejected(session_factory, name):
+    """使用者不能用系統命名空間、空白或怪字元；不會自動註冊任何類型。Invalid names → 400, nothing registered."""
+    from app.core.exceptions import InvalidRelationTypeError
+    from app.schemas.relation import CardRelationCreate
+
+    with pytest.raises(InvalidRelationTypeError) as caught:
+        _service_call(session_factory, "create_relation", CardRelationCreate.model_construct(
+            source_note_id=1, target_note_id=2, relation_type=name, source_label="a", target_label="b",
+        ))
+    assert caught.value.status_code == 400
+    assert _rows(session_factory, rel_types_table) == []
+    assert _rows(session_factory, rel_links_table) == []
+
+
+def test_unicode_user_relation_name_is_allowed():
+    assert relation_service.storage_relation_type(" 同義-語_2 ") == "user.同義-語_2"
+
+
+def test_missing_system_type_is_not_auto_registered(session_factory):
+    """``core.*`` 不存在時報錯，不會被當成使用者類型自動建立。A missing core type raises."""
+    from app.schemas.relation import CardRelationCreate
+
+    with pytest.raises(FluencyTidesError):
+        _service_call(session_factory, "create_relation", CardRelationCreate(
+            source_note_id=1, target_note_id=2, relation_type="has_context", source_label="a", target_label="b",
+        ))
+    assert _rows(session_factory, rel_types_table) == []
+
+
+def test_create_schema_rejects_an_empty_relation_type():
+    from pydantic import ValidationError
+
+    from app.schemas.relation import CardRelationCreate
+
+    with pytest.raises(ValidationError):
+        CardRelationCreate(source_note_id=1, relation_type="")
+
+
+def test_batch_create_is_all_or_nothing(session_factory):
+    """一筆失敗就全部回滾，不會只留下一半。A failing batch leaves nothing behind."""
+    from app.core.exceptions import InvalidRelationTypeError
+    from app.schemas.relation import CardRelationCreate
+
+    _seed_type(session_factory, "core.has_context")
+    with pytest.raises(InvalidRelationTypeError):
+        _service_call(session_factory, "batch_create_relations", [
+            CardRelationCreate(source_note_id=1, target_note_id=2, relation_type="has_context"),
+            CardRelationCreate.model_construct(source_note_id=1, target_note_id=3, relation_type="core.teaches",
+                                               source_label="", target_label=""),
+        ])
+    assert _rows(session_factory, rel_links_table) == []
+
+
+def test_note_deletion_unreported_rowcount_falls_back_to_the_estimate(session_factory):
+    """驅動沒回報 rowcount 時，刪除數是預估值而不是 0。Unknown rowcount is not reported as 0."""
+    _seed(session_factory, [(1, 2), (3, 1)])
+
+    async def call():
+        async with session_factory() as session:
+            original = session.execute
+
+            async def execute(statement, *args, **kwargs):
+                result = await original(statement, *args, **kwargs)
+                if str(statement).lstrip().upper().startswith("UPDATE"):
+                    return mock.MagicMock(rowcount=-1)
+                return result
+
+            session.execute = execute
+            return await RelationService(session).delete_relations_for_note(1)
+
+    assert _run(call()) == 2
+    assert _count(session_factory) == 0

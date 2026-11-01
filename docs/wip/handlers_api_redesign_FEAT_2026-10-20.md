@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-10-20 |
 | **性質** | 服務層與 API 重新設計 + 實作工作項 |
-| **狀態** | 🚧 實作中（2026-10-20 定案；先做 D13 三頁版面統一與共用元件抽取）。2026-10-20 已定：對照程式碼更正（§12）；本機腳本與網頁分流（D7）；清除殘骸（D8）；網頁建卡只做純手動填表（D9）；能力綁在 handler 上、以開關宣告（D2）；增刪改查都提供 `/handlers/{name}/notes/...` 版本，另保留通用的卡片查詢（D5）；`BaseHandler` 提供標準 CRUD，本次以單字卡 `TOEIC_Coach_Dark_v2` 為試點、不覆寫跑通整套流程（D10）；寫入後等同步完成（D1）；工具設定頁顯示 handler 能力（§6）；前端最後實作；口說卡網頁改欄位本次不開放（§5）；JSON 欄位改另開設計書 `json_field_editor_FEAT_2026-10-20.md`，本計畫只宣告欄位名稱（D3）；圖譜以 handler 的查詢為基礎、基底只畫單點（預設顯示 nid，可選任意欄位）、點節點開啟單張卡片，單字卡以關聯圖譜保留現有功能，本次的圖譜工作以移植現有實作為主，除單字卡外不開放任何 handler 的圖譜（D12）；媒體上傳另開設計書 `media_upload_FEAT_2026-10-20.md`；web_ui_parity 階段 A2（三頁版面統一與共用元件抽取）併入本計畫（D13）。§13 只剩之後再決定、不擋本計畫的事 |
+| **狀態** | 🚧 實作完成、待部署驗收（2026-10-20：§9 第 0～8 步全部完成，各步結果見 §9；§10 的驗收要部署後在網頁、TG、本機腳本實測）。2026-10-20 已定：對照程式碼更正（§12）；本機腳本與網頁分流（D7）；清除殘骸（D8）；網頁建卡只做純手動填表（D9）；能力綁在 handler 上、以開關宣告（D2）；增刪改查都提供 `/handlers/{name}/notes/...` 版本，另保留通用的卡片查詢（D5）；`BaseHandler` 提供標準 CRUD，本次以單字卡 `TOEIC_Coach_Dark_v2` 為試點、不覆寫跑通整套流程（D10）；寫入後等同步完成（D1）；工具設定頁顯示 handler 能力（§6）；前端最後實作；口說卡網頁改欄位本次不開放（§5）；JSON 欄位改另開設計書 `json_field_editor_FEAT_2026-10-20.md`，本計畫只宣告欄位名稱（D3）；圖譜以 handler 的查詢為基礎、基底只畫單點（預設顯示 nid，可選任意欄位）、點節點開啟單張卡片，單字卡以關聯圖譜保留現有功能，本次的圖譜工作以移植現有實作為主，除單字卡外不開放任何 handler 的圖譜（D12）；媒體上傳另開設計書 `media_upload_FEAT_2026-10-20.md`；web_ui_parity 階段 A2（三頁版面統一與共用元件抽取）併入本計畫（D13）。§13 只剩之後再決定、不擋本計畫的事 |
 | **範圍** | 新增 `backend/app/services/note_service.py`（單一服務層）；`backend/app/services/task_handlers/`（能力宣告、標準 CRUD、建立參數、註冊表、`__init__.py` 統一註冊）；`backend/app/api/handlers.py`（重寫）、新增 `backend/app/api/notes.py`、`backend/app/schemas/`、`backend/app/main.py`（掛新路由、移除 example 路由）；`backend/app/core/dependencies.py`、`backend/app/bot/dependencies.py`（注入服務層）；`backend/app/services/relation_service.py`（改名稱時同步更新關聯的兩端標籤，D12）；TG 呼叫 handler 的 5 處改呼叫服務層（§7）；殘骸清除（D8）；`frontend/src/api/client.ts`、`types/api.ts`、`CardGenerator.tsx`、`CardDetailModal.tsx`、`KnowledgeGraph.tsx`、`ToolSettings.tsx`、`lib/cardFields.ts`、`components/cards/`（`DeckPanel`、`CardViewPanel`）；三頁版面統一與共用元件抽取（D13）：`pages/Cards.tsx`、`lib/cardLayout.ts`、`hooks/usePanelWidths.ts`、`components/cards/panelStyles.ts`、`ErrorNote.tsx` 移到共用位置 |
 | **不動** | 有覆寫的 handler 內部邏輯（口說卡的建卡與 JSON 動作、外語糾錯的建卡、jp 的 `execute_generate`）；TG 的對話流程與文字；`speaking_fsm.py` 自己組對話卡的做法（屬 web_ui_parity 階段 E）；`expression_fsm.py` 預覽用的 `execute_generate`（不寫 Anki）與「覆蓋舊卡」時的刪除（§7）；**本機批次腳本走的整條路**（D7）：`POST /verb-pair/generate-child-cards`、`POST /core-verb/generate-child-cards` 的路徑、請求、回應、驗證方式；`/jp/*`；直接呼叫 handler 或 AnkiConnect 的本機腳本；`GET /cards`、`GET /cards/{card_id}`、`/anki-media`、`/relations/*`、`/capability-routes` |
 | **關聯文件** | `docs/wip/web_ui_parity_FEAT_2026-10-18.md` §7（問題 H1–H11 的盤點）、§4 階段 A2（已併入本計畫 D13）、§5 決策 5（`ValueError` 改 4xx，屬階段 B）；`docs/wip/json_field_editor_FEAT_2026-10-20.md`（JSON 欄位的表單編輯）、`docs/wip/media_upload_FEAT_2026-10-20.md`（網頁上傳媒體），兩者都排在本計畫之後 |
@@ -226,7 +226,9 @@
 | 直接修改宣告為 JSON、媒體的欄位 | 400 | `FIELD_NOT_EDITABLE`（新增，D3） |
 | 寫入的欄位不存在於該筆記類型 | 400 | `FIELD_MISMATCH`（既有，`CardService` 的 `FieldMismatchError`；`update_note_fields` 與 `create_note` 都已嚴格比對，服務層不再自己檢查） |
 | 建立時首欄位重複 | 409 | `DUPLICATE_CARD`（既有） |
-| 筆記不存在 | 404 | `NOTE_NOT_FOUND`（新增；目前 `CardService.get_note` 拋 `AnkiServiceError`，回 502 `ANKI_SERVICE_ERROR`） |
+| 筆記不存在 | 404 | `NOTE_NOT_FOUND`（新增；原本 `CardService.get_note` 拋 `AnkiServiceError`、回 502，第 1 步已改拋這個） |
+| 查詢（含圖譜）的 `note_type` 不歸這個 handler、`label_field` 不是這些筆記類型的欄位、關聯圖譜帶了 `label_field` | 422 | `INVALID_NOTE_QUERY`（新增；第 1 步實作時補列，§4.6） |
+| 修改時的 `fields` 不是 `{欄位名: 值}` | 422 | `INVALID_NOTE_FIELDS`（新增；第 1 步實作時補列。REST 的請求模型會先擋，這裡防 TG 等內部呼叫傳錯） |
 
 都是服務層拋的 `FluencyTidesError` 子類；REST 由既有的全域 handler 轉成 `ErrorResponse`，TG 由各處既有的 `except FluencyTidesError` 與 `bot/handlers/errors.py` 通知使用者。`api/handlers.py` 現有的 `HTTPException` 全部移除。
 
@@ -269,13 +271,24 @@ jp 子卡（`JP_Context_Dark`、`JP_VerbPair_Cloze_Dark`、`JP_CoreVerb_Cloze_Da
 | `vocabulary_mining.supported_models` 的 `TOEIC_Coach_Dark`（舊版） | 實機 Anki 有這個筆記類型但 **0 張筆記**；800 張單字卡都在 `TOEIC_Coach_Dark_v2`（欄位不同的改版） | 單字卡只認 `_v2`，handler 的能力才能一體適用（D2） |
 | `vocabulary_mining.supported_models` 的 `Default` | 實機 Anki 沒有這個筆記類型（`Default` 通常是牌組名稱） | 不存在的類型會出現在 `/handlers` |
 | `speaking_coach.supported_models` 的 `Speaking_Coach_Light` | 2026-08-09 第 9 階段重構時寫入的預留名稱；repo 沒有定義檔，實機 Anki 也沒有這個筆記類型 | 同上 |
+| `app/schemas/llm/verb_pair.py`（2026-10-20 實作時補列） | 只有一段 docstring「目前的生成邏輯已移至 example/verb_pair.py」，沒有任何類別 | 指向已移除的 example；唯一的引用者是下一列 |
+| `app/scratch/verify_imports.py`（2026-10-20 實作時補列；原本誤記為「不受影響」） | import 了不存在的 `task_handlers.verb_pair_handler` 與 `schemas.llm.verb_pair.VerbPairGenerationResult`，執行必定失敗；沒有任何地方引用 `scratch/` | 已壞掉的一次性檢查腳本 |
 
 清除後要確認的事：
 
 - 舊版 `TOEIC_Coach_Dark` 只是從 handler 的清單拿掉；Anki 裡的筆記類型本身、repo 的定義檔（`app/anki_models/TOEIC_Coach_Dark*`）與提示詞模板不刪（§13）。
 - `verb_pair_example` 的能力路由用途鍵消失後，資料庫 `capability_routes` 裡若有它的設定列，會變成「孤兒鍵」：工具設定頁照常列出、可刪除，不會出錯（`capability_route_service` 已處理）。
-- `app/scratch/verify_imports.py` import 的是 `app.schemas.llm.verb_pair`（不是 example），不受影響。
 - `/verb-pair/generate-child-cards` 與它的 `GenerateChildCardsRequest` 留在 `api/verb_pair.py`，不動。
+
+**實作結果（2026-10-20，§9 第 0 步）**：
+
+- 確認沒有在用的證據：
+  - repo 內（程式、腳本、前端、測試）除了這些檔案彼此之間，沒有任何引用。
+  - 正式機的請求 log 涵蓋 2026-08-31 至 2026-10-20：`/example/verb-pair/create`、`POST /verb-pair/create`、`PUT /verb-pair/{id}/update` 都是 0 次；同期 `verb-pair`／`core-verb` 的 `generate-child-cards` 合計約 5,700 次（對照組，證明 log 有記錄這類請求）。
+  - 正式機資料庫的 `capability_routes` 表沒有任何設定列，移除 `verb_pair_example` 用途鍵不會留下孤兒鍵。
+  - 筆記類型的筆記數取自本機 Anki（與正式站經 AnkiWeb 同步同一份收藏）。
+- 行為上唯一的差異：TG 建單字卡用的預設筆記類型（`supported_models[0]`）從 `TOEIC_Coach_Dark` 變成 `TOEIC_Coach_Dark_v2`。兩者都缺 `Meaning`、`Context` 欄位，建卡照樣以 `FIELD_MISMATCH` 失敗，直到第 2 步改用基底的標準建立。
+- 驗證：`ruff` 通過；`pytest tests` 948 個、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常；實際載入的 app 只剩兩個 `generate-child-cards` 端點，註冊的 handler 恰為 6 個。
 
 ### D9 建卡入口：網頁只做純手動填表
 
@@ -582,8 +595,8 @@ Handler     BaseHandler 標準 CRUD ← 各 handler 覆寫；圖譜；具名動�
 ```
 
 - 三個參數都可省略。`deck` 省略時查全部牌組——後端現在就是這樣；`All Decks` 只是前端下拉的特殊值，由 `client.ts` 轉成不帶參數，改後照舊。Anki 的 `deck:"…"` 會包含子牌組。
-- `note_type` 必須是這個 handler 負責的筆記類型之一，否則 422；`label_field` 必須是這些筆記的欄位之一，否則 422。
-- `label_field` 為 null 表示用 handler 宣告的預設，沒宣告就顯示 nid。
+- `note_type` 必須是這個 handler 負責的筆記類型之一，否則 422；`label_field` 必須是這些筆記的欄位之一，否則 422（都是 `INVALID_NOTE_QUERY`）。`label_fields` 向 Anki 查這些筆記類型的欄位（依順序、不重複），所以沒有筆記時也有選項。
+- 請求不帶 `label_field` 表示用 handler 宣告的預設（`GRAPH.default_label`），沒宣告就顯示 nid。回應的 `label_field` 是**實際採用**的欄位，null 表示顯示 nid（前端下拉以它為目前值）。
 - 用 `RelationGraphMixin` 的 handler（本次只有單字卡）：節點另有 `status`、`translation`（副標，沿用現在的鍵名）、`group`、`val`，`links` 有內容，另有幽靈節點（沒有 `note_id`）；節點名稱固定為 `RELATION_LABEL_FIELD`，`label_field` 不適用（帶了回 422）。這部分的形狀與現在相同，Knowledge Graph 頁的繪圖不必改。
 - 不支援時回 400。
 
@@ -692,15 +705,240 @@ TG 呼叫 handler 寫入的地方都改成呼叫 `NoteService`，對話流程與
 
 ## 9. 實作順序
 
-0. 殘骸清除（D8）：`verb_pair_example` 一整組、`POST /verb-pair/create`、`PUT /verb-pair/{id}/update`、`supported_models` 裡的舊版 TOEIC、`Default`、`Speaking_Coach_Light`。先做，讓第 1 步的註冊表檢查不必顧慮範例 handler。
-1. 後端基底：錯誤類別（`HandlerOperationUnsupportedError`、`NoteNotFoundError`、`NoteTypeNotCreatableError`、`NoteNotOwnedByHandlerError`、`FieldNotEditableError`）；`BaseHandler` 的標準 CRUD 與標準圖譜（`query_notes`、`GraphSpec`）、`RelationGraphMixin`（由現在 `vocabulary_mining` 的圖譜邏輯抽出）、`RELATION_LABEL_FIELD`、`JSON_FIELDS`／`MEDIA_FIELDS` 名稱宣告；`RelationService.update_labels_for_note`；預設拋不支援的方法、移除的方法、`CAPABILITIES`；註冊表檢查與「筆記類型 → handler」對照；`task_handlers/__init__.py` 統一註冊。
-2. 各 handler：依 §5 宣告能力與 `title`；口說卡、外語糾錯的 `CreateParams`；刪掉空實作、各自的 `execute_delete`、`execute_read_list`、`get_input_schema`；`execute_create` 回傳改 `list[int]`；單字卡刪掉 `execute_create`、`execute_update`、`execute_read_graph` 覆寫，改掛 `RelationGraphMixin`，宣告 `GRAPH`、`RELATION_LABEL_FIELD`、`JSON_FIELDS`、`MEDIA_FIELDS`。jp 兩個只動到這些，`execute_generate` 不碰；本步結束就跑 §8 的腳本保護測試。
-3. `NoteService`（含寫入後同步的提醒邏輯、歸屬檢查）與它的測試。
-4. TG 的 5 處改呼叫 `NoteService`（§7 表格），`bot/dependencies.py` 注入；`_sync_with_warning` 改為包裝服務層；TG 既有測試全過。
-5. REST 端點：`/handlers`、`/handlers/{name}/notes/...`、`/notes/{note_id}`、`/decks`，移除舊路徑；`main.py` 掛新路由；測試。`api/verb_pair.py`、`api/core_verb.py` 的 `generate-child-cards` 不動。
-6. 前端：client 與型別；從 Cards 抽出共用元件（D13），Cards 改用後畫面與行為不變；`CardViewPanel` 與 `CardDetailModal`；工具設定頁的「Handler 能力」區塊。
-7. 前端：Knowledge Graph 改用共用版面（左側牌組樹）、新的圖譜參數與點開卡片、全螢幕（D12、D13）。
-8. 前端：Generate 頁改用共用版面，依 `channels` 與 `create_schema` 產生下拉與表單（§6、D13）。
+0. ✅ 殘骸清除（D8）：`verb_pair_example` 一整組、`POST /verb-pair/create`、`PUT /verb-pair/{id}/update`、`supported_models` 裡的舊版 TOEIC、`Default`、`Speaking_Coach_Light`。先做，讓第 1 步的註冊表檢查不必顧慮範例 handler。
+1. ✅ 後端基底：錯誤類別（`HandlerOperationUnsupportedError`、`NoteNotFoundError`、`NoteTypeNotCreatableError`、`NoteNotOwnedByHandlerError`、`FieldNotEditableError`）；`BaseHandler` 的標準 CRUD 與標準圖譜（`query_notes`、`GraphSpec`）、`RelationGraphMixin`（由現在 `vocabulary_mining` 的圖譜邏輯抽出）、`RELATION_LABEL_FIELD`、`JSON_FIELDS`／`MEDIA_FIELDS` 名稱宣告；`RelationService.update_labels_for_note`；預設拋不支援的方法、移除的方法、`CAPABILITIES`；註冊表檢查與「筆記類型 → handler」對照；`task_handlers/__init__.py` 統一註冊。
+2. ✅ 各 handler：依 §5 宣告能力（`title` 已在第 1 步加上）；口說卡、外語糾錯的 `CreateParams`；刪掉空實作與各自的 `execute_delete`（`execute_read_list`、`get_input_schema` 留到第 5 步）；`execute_create` 回傳改 `list[int]`；單字卡刪掉 `execute_create`、`execute_update`、`execute_read_graph` 覆寫，改掛 `RelationGraphMixin`，宣告 `GRAPH`、`RELATION_LABEL_FIELD`、`JSON_FIELDS`、`MEDIA_FIELDS`。jp 兩個只動到這些，`execute_generate` 不碰；本步結束就跑 §8 的腳本保護測試。
+3. ✅ `NoteService`（含寫入後同步的提醒邏輯、歸屬檢查）與它的測試。
+4. ✅ TG 的 5 處改呼叫 `NoteService`（§7 表格），`bot/dependencies.py` 注入；`_sync_with_warning` 改為包裝服務層；TG 既有測試全過。
+5. ✅ REST 端點：`/handlers`、`/handlers/{name}/notes/...`、`/notes/{note_id}`、`/decks`，移除舊路徑；從 `BaseHandler` 與各 handler 移除 `get_input_schema`、`execute_read_list`；`main.py` 掛新路由；測試。`api/verb_pair.py`、`api/core_verb.py` 的 `generate-child-cards` 不動。
+6. ✅ 前端：client 與型別；從 Cards 抽出共用元件（D13），Cards 改用後畫面與行為不變；`CardViewPanel` 與 `CardDetailModal`；工具設定頁的「Handler 能力」區塊。
+7. ✅ 前端：Knowledge Graph 改用共用版面（左側牌組樹）、新的圖譜參數與點開卡片、全螢幕（D12、D13）。
+8. ✅ 前端：Generate 頁改用共用版面，依 `channels` 與 `create_schema` 產生下拉與表單（§6、D13）。
+
+**第 1 步實作結果（2026-10-20）**：
+
+- 新增的檔案：
+  - `task_handlers/capabilities.py`：`Operation`、`CreateCapability`、`GraphCapability`、`HandlerCapabilities`、`GraphSpec`（不可變的資料類別）。不開放又沒寫 `reason` 時自動補「尚未開放」，開放時預設為 null（開放的能力不會帶著「尚未開放」回給前端）。宣告的**形狀**在建立時就檢查，寫錯在 import 時就失敗：開放建卡但 `channels` 不含 `web` 時必須寫 `reason`（說明要去哪裡建）；`channels` 只能是三種值；`channels` 含 `web` 時必須開放且 `flow` 為 `form`；開放建卡時必須有 `note_type`、`flow`、`deck`，且 `channels` 至少有 `web` 或 `tg`；`deck` 為 `fixed` 時必須有 `fixed_deck`；`links` 只能在開放圖譜時宣告。
+  - `task_handlers/model_fields.py`：讀 `app/anki_models/*.json` 的 `inOrderFields`，給註冊檢查宣告的欄位用（註冊在 import 時，還沒有 AnkiConnect）。
+  - `task_handlers/relation_graph.py`：`RelationGraphMixin`。
+  - `tests/test_handler_base.py`：55 個測試，涵蓋 §8 的註冊表、標準 CRUD、圖譜、`update_labels_for_note` 各項。
+- `BaseHandler`：類別屬性 `CAPABILITIES`（預設只開放讀取）、`GRAPH`、`RELATION_LABEL_FIELD`、`JSON_FIELDS`、`MEDIA_FIELDS`、`CREATE_TAGS`（標準建立加的標籤，預設 `HandlerGenerated`）；標準的 `execute_create`（回傳 `list[int]`）、`execute_read`、`execute_update`、`execute_delete`、`query_notes`、`execute_read_graph`；`note_types_for`（查詢範圍內的筆記類型，查詢與圖譜共用這一個檢查）；共用工具 `note_detail`（§4.3 的形狀，NoteService 的通用讀取也用它）、`clean_html`、`field_value`。
+- `CardService.update_note_fields` 新增選填的 `model_name`：標準修改已經讀過筆記比對欄位，傳入後不必再讀一次。
+- 註冊表：註冊前檢查，不過就 `RuntimeError`，而且不留下任何註冊；新增 `handler_for_note_type`、`handlers_for_note_type`、`all_handlers`。`task_handlers/__init__.py` 統一 import 6 個 handler，`api/handlers.py` 的 import 刪掉。實際註冊結果：6 個，`JP_Context_Dark` 依序對到 `jp_verb_pair`、`jp_core_verb`。
+- `CardService.get_note` 找不到筆記時改拋 `NoteNotFoundError`（404）。確認過沒有程式專門攔 `AnkiServiceError` 而依賴這個情況。
+- `RelationService.update_labels_for_note`：同一次 commit 更新起點與終點兩端；資料庫驅動沒回報筆數時回傳 None（比照 `sync_with_anki`）。`update_source_label` 已刪除，單字卡現有的 `execute_update` 改呼叫新方法，「改名後當終點的連線沒跟著改」這個問題在第 1 步就修好了。單字卡自己的 `_clean_html` 也改用基底的 `clean_html`。
+- 註冊檢查宣告的欄位時，負責的筆記類型缺定義檔會直接指出缺哪個檔，不誤報成欄位寫錯。
+- `RelationGraphMixin` 與原本 `vocabulary_mining.execute_read_graph` 的一致性：以同一份測資（含學習狀態、同義詞、搭配詞、兩端都沒有筆記的關聯）、副標與詞性指回舊的 `Meaning`、`PartOfSpeech`，兩者的 `nodes`、`links` 與查關聯的參數完全相同（一次性比對；舊實作第 2 步刪除，所以測試檔裡寫的是預期結果本身）。
+
+與上文不同、已照實作調整的地方：
+
+| # | 計畫 | 實作 | 原因 |
+|---|---|---|---|
+| 1 | `title` 在第 2 步加 | 第 1 步就加（6 個 handler） | `title` 是抽象屬性，不加的話 handler 無法實例化 |
+| 2 | `get_input_schema`、`execute_read_list` 在第 2 步移除 | 留到第 5 步，跟著舊的 `GET /handlers/`、`GET /handlers/{name}/cards` 一起移除；在那之前仍是抽象方法 | 現行的 `api/handlers.py` 還在用。第 5 步之後抽象方法才只剩 `handler_name`、`supported_models`、`title`（D7） |
+| 3 | D6 沒有查詢參數、欄位格式的錯誤 | 新增 `InvalidNoteQueryError`（422 `INVALID_NOTE_QUERY`）、`InvalidNoteFieldsError`（422 `INVALID_NOTE_FIELDS`） | §4.6 的三種 422 需要一個錯誤代碼，不限圖譜（之後依 handler 列出筆記也用）；`fields` 格式錯誤原本會變成 500。已補進 D6 表 |
+| 4 | `RelationGraphMixin` 是 mixin | 它本身繼承 `BaseHandler`，用它的 handler 改繼承它（`class X(RelationGraphMixin)`） | 型別上能直接用基底的屬性與 `query_notes`；之後與 `GroupedHandler` 多重繼承時，兩者共用同一個基底，MRO 照常運作 |
+| 5 | 註冊檢查依 D2 表格 | 另外檢查：用 `RelationGraphMixin` 必須宣告 `RELATION_LABEL_FIELD`；開放圖譜時 `links` 必須與「是否用 mixin」一致（雙向）；`RELATION_LABEL_FIELD`、`JSON_FIELDS`、`MEDIA_FIELDS`、`GRAPH` 的欄位至少存在於一個負責的筆記類型的定義檔；共用筆記類型的比對包含 `read` | D12「用了它的 handler，`graph.links` 為 true」與「欄位名在註冊時檢查」的落實 |
+| 6 | §4.6 的 `label_field` 回 null 表示用預設 | 回應的 `label_field` 是實際採用的欄位，null 表示 nid | 前端下拉要知道目前選的是哪個欄位；已改 §4.6 |
+| 7 | 標準修改「只寫有變的欄位」 | 先讀筆記比對，值相同的欄位不送；全部相同時不寫入、也不碰關聯 | 前端送整份表單時也不會多寫；`RELATION_LABEL_FIELD` 沒變就不更新關聯 |
+
+審查後修正（2026-10-20）：開放能力的預設原因、修改時重複讀筆記、`fields` 格式錯誤回 500、`rowcount` 未回報、缺定義檔的錯誤訊息、重複的欄位讀取與筆記類型檢查、單字卡仍用舊的單端標籤更新，都已照上面各點修正。
+
+驗證：`ruff` 通過；`pytest tests` 1003 個（原 948 ＋ 新 55）、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常；app 的 OpenAPI 仍有兩個 `generate-child-cards` 端點。
+
+**第 2 步實作結果（2026-10-20）**：
+
+- 6 個 handler 依 §5 宣告 `CAPABILITIES`；能力以快照測試鎖定（`tests/test_handler_declarations.py`）。`JP_Context_Dark` 兩個 jp handler 的讀取、改欄位、刪除、動作相同，註冊檢查通過。
+- **單字卡（試點）**：改繼承 `RelationGraphMixin`，`execute_create`、`execute_update`、`execute_delete`、`execute_read_graph` 全部刪掉，增刪改查都是基底。宣告 `GRAPH = GraphSpec(subtitle="Target_Translation", pos="Target_POS")`、`RELATION_LABEL_FIELD = "Expression"`、`JSON_FIELDS`（三個 JSON 欄位）、`MEDIA_FIELDS`（`Word_Audio`、`Target_Example_Audio`）、`CREATE_TAGS = ("VocabularyMining", "HandlerGenerated")`（沿用原本的標籤）。
+- **建立參數**：`BaseHandler` 新增類別屬性 `CREATE_PARAMS`。口說卡 `SpeakingCoachCreateParams`（`prompt` 必填；`target_language` 預設 `en-US`，`examples` 三個值、`pattern` 驗證，validator 與 TG 共用正規化）、三語卡 `SpeakingTrilingualCreateParams`（`prompt` 必填）、外語糾錯 `ExpressionCreateParams`（只有 `original_text` 必填；預設值與 handler 讀參數時的預設相同，例如語言預設「中文」「日文」，所以 `model_dump()` 交給 `execute_create` 結果不變）。都不含 `tg_bot`。
+- 註冊檢查新增兩條：開放建卡且覆寫了 `execute_create` → 必須宣告 `CREATE_PARAMS`；宣告了 `CREATE_PARAMS` → 必須覆寫 `execute_create`（標準建立的參數就是筆記欄位）。
+- 語言代碼的正規化從 `bot/handlers/fsm/speaking_fsm.py` 的 `_normalize_language_code` 搬到 `app/schemas/language.py` 的 `normalize_language_code`（連同 `LANG_CODE_PATTERN`），TG 與 `CreateParams` 共用；服務層不能反過來 import TG 模組。
+- 口說卡、三語卡的 `execute_create` 改回傳單元素陣列；外語糾錯的回傳型別改為 `list[int]`（本來就回陣列）；母卡牌組抽成常數 `MASTER_DECK`。口說卡兩個 handler 共用動作清單 `SPEAKING_ACTIONS`。
+- 刪掉的空實作與重複實作：口說卡、三語卡、外語糾錯的 `execute_read_graph`、`execute_delete`；jp 兩個的 `execute_create`、`execute_update`、`execute_delete`、`execute_read_graph`。`get_input_schema`、`execute_read_list` 依第 1 步的決定留到第 5 步。jp 兩個的 `execute_generate` 以 AST 比對與改前**完全相同**。
+- 舊的 `GET /handlers/{name}/graph` 回傳型別改為 `dict[str, object]`：圖譜回應多了 `label_fields`、`label_field`，舊的型別標註會讓 FastAPI 的回應驗證失敗。
+- **本機腳本保護測試**（§8）：以真實 app、設定了 `API_SECRET_KEY` 打兩個 `generate-child-cards`，不帶 `X-API-Key` 回 200；回應形狀 `{"status", "message", "data"}` 且 `data` 原樣回傳；請求欄位不變、`core-verb` 的 `target_verb_span` 可省略、少欄位回 422；`execute_generate` 的參數名不變；`channels` 含 `script` 的 handler 都有 `execute_generate`；D8 移除的三個殘骸端點回 404／405。
+
+這一步造成的行為變化（舊的 REST 端點與 TG 都還沒改，第 3～5 步才接上服務層）：
+
+| 地方 | 改前 | 改後 |
+|---|---|---|
+| 單字卡圖譜 | 節點副標、詞性永遠空白（讀不存在的 `Meaning`、`PartOfSpeech`） | 有值；回應多 `label_fields`、`label_field` |
+| 單字卡改欄位（`PUT /handlers/vocabulary_mining/cards/{id}`） | 任何欄位都寫 | JSON、媒體欄位回 400 `FIELD_NOT_EDITABLE`；值沒變的欄位不寫 |
+| 單字卡建卡（網頁 Generate、TG） | 寫 `Meaning`、`Context` → `FIELD_MISMATCH` | 傳的是 `{"word": …}` → 仍是 `FIELD_MISMATCH`。網頁第 8 步、TG 第 4 步改傳欄位後才能建 |
+| 外語糾錯、jp 的刪除（舊 `DELETE` 端點） | 只刪筆記 | 先刪筆記再刪關聯（jp 的 `execute_generate` 會建關聯，原本刪卡會留下孤兒關聯）。網頁的刪除按鈕要到第 6 步才依能力關閉 |
+| jp 的改欄位（舊 `PUT` 端點，`update_fields`） | 空實作，回 200 但什麼都沒改 | 基底的標準修改會真的寫入。網頁不顯示編輯（`FIELD_EDIT_HANDLERS` 不含 jp），只有直接呼叫 API 會碰到；第 3 步的服務層、第 5 步的新端點依能力擋下 |
+
+驗證：`ruff` 通過；`pytest tests` 1041 個（第 2 步新增 38 個）、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常；`scripts/local_anki/Expression_Correction/generate_expression_cards.py` 可正常 import；OpenAPI 仍有兩個 `generate-child-cards` 端點。
+
+**第 3 步實作結果（2026-10-20）**：
+
+- 新增 `app/services/note_service.py` 的 `NoteService`：`list_handlers`、`create`、`read`、`get`、`update_fields`、`run_action`、`delete`、`graph`、`sync_after_write`，行為依 D1、§4。`core/dependencies.py` 新增 `get_note_service`。REST 與 TG 還沒接上（第 4、5 步）。
+- **寫入後同步**：模組函式 `sync_warning(anki_client) -> str | None`，`sync(raise_errors=True, force=True)` 並等它完成；失敗時回傳純文字提醒（衝突與一般失敗兩種，文字沿用 TG 的 `_sync_with_warning`，去掉開頭換行）。做成模組函式是為了第 4 步讓 `_sync_with_warning` 直接包裝它，不必為還沒經過服務層的寫入點建立 `NoteService`。
+- **標準建立的參數驗證**：依 Anki 查到的欄位（`get_model_field_names`）動態產生 Pydantic 模型 `standard_params_model`（依參數快取）：
+  - 每個欄位是選填字串（預設空字串），第一個欄位必填、去掉前後空白後不能為空。
+  - JSON、媒體欄位不列。
+  - 欄位名以別名對應，含空白的欄位名也能用。
+  - **多餘的鍵不在這裡擋**：照原樣交給 handler 與 `CardService`，分別回 `FIELD_NOT_EDITABLE`、`FIELD_MISMATCH`（D6）。
+  - `list_handlers` 的 `create_schema` 用同一個模型的 JSON Schema，表單與驗證不會不一致。
+- **覆寫建立的參數**：`CREATE_PARAMS.model_validate(params).model_dump()`，再補上 `tg_bot`（預設 `settings.TG_BOT_USERNAME`，可由關鍵字參數覆寫）。`deck` 為 `fixed` 時改用 `fixed_deck`，回應的 `deck` 是實際建立的牌組。
+- **歸屬檢查**：
+  - 讀取：先讀再檢查（讀取沒有副作用，省一次查詢）。
+  - 修改、刪除：先查筆記再檢查，不符就不寫入。標準修改內部會再讀一次筆記做比對，所以修改總共讀兩次；修改之後還要強制同步（數秒），多這一次查詢可以接受。
+- `run_action`：依筆記類型找 handler（`handler_for_note_type`），動作不在 `actions` 內、或沒有 handler 負責時回 `HANDLER_OPERATION_UNSUPPORTED`；`update_fields` 不是動作，也會被擋。
+- `list_handlers`：Anki 連不上時，只有該 handler 的 `create_schema` 為 null、`create.reason` 改為「無法連線 Anki，暫時無法取得建卡表單」，其餘能力照常回傳（R8）。
+- `get_note_service` 在函式內 import `NoteService`：`note_service` 經註冊表載入所有 handler，而外語糾錯與 jp 的 handler 在模組層 import `core.dependencies`，放在檔案開頭會循環 import。
+- 測試 `tests/test_note_service.py` 39 個，涵蓋 §8 的 `NoteService` 各項。其中「每個 handler 宣告的每個動作都真的能執行」以 repo 的筆記類型定義檔建出筆記、逐一執行 7 個動作；另有一個測試鎖定動作清單，新增動作時要補測試。
+
+驗證：`ruff` 通過；`pytest tests` 1080 個（第 3 步新增 39 個）、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常。
+
+**第 4 步實作結果（2026-10-20）**：
+
+- TG 的 5 處寫入改經 `NoteService`，對話流程與回覆文字不變：
+
+  | 位置 | 改為 |
+  |---|---|
+  | `fsm/vocabulary_fsm.py` 建單字卡 | `note_service.create("vocabulary_mining", deck="Default", note_type=<handler 宣告的 create.note_type>, params={"Expression": 單字})`。刪掉寫入前的同步 |
+  | `fsm/expression_fsm.py` 建外語糾錯 | `note_service.create("expression_correction", …, tg_bot=bot.me() 的名稱)`；參數與原本傳給 handler 的相同（只少了 `tg_bot`，改用關鍵字參數）。不再傳 `relation_service=None` |
+  | `voice.py` 錄音 | `note_service.run_action(note_id, "add_recording", {"recording": …}（三語卡另帶 "lang"）)` |
+  | `callbacks.py` 系統頭像、跳過頭像後寫回音檔 | `note_service.run_action(note_id, "add_audio", {...})`；刪掉「依欄位名稱猜是不是三語卡」的判斷，改由服務層依筆記類型找 handler |
+  | `messages.py` 自訂頭像輸入說話者名稱後寫回音檔 | 同上。原本寫死用對話卡的 handler，三語卡的自訂頭像因此寫錯格式（web_ui_parity 階段 D 提到的 `messages.py:102`），一併修好。刪掉寫入前的同步 |
+
+- `bot/dependencies.py` 的 `ServiceInjectionMiddleware` 注入 `data["note_service"]`，與注入的 `card_service`、`relation_service` 是同一組。
+- `_sync_with_warning(anki_client)` 改為包裝服務層的 `sync_warning` 再加上開頭換行（`texts.sync_suffix`），提醒文字只剩一份；拿掉沒有人用的 `force` 參數（一律強制同步，與原本所有呼叫點相同）。仍用它的地方：`commands.py` 的刪除、`speaking_fsm.py` 建對話卡、`expression_fsm.py` 覆蓋舊卡後。
+- **同步次數**（逐處確認與服務層一致，沒有同步兩次）：
+  - 建單字卡、錄音、上傳音檔：服務層寫入後同步一次，原本各處自己的 `_sync_with_warning` 刪掉。
+  - 外語糾錯不覆蓋：服務層建卡後同步一次，不再另外同步。
+  - 外語糾錯覆蓋：服務層建卡後同步一次；刪舊卡後再同步一次（把刪除推上 AnkiWeb），提醒取這一次的。比原本多一次同步。
+- **寫入前的同步**：`AnkiClient` 每個方法呼叫前都會 `sync()`（防抖、失敗不擋），所以刪掉 `vocabulary_fsm`、`messages` 兩處多餘的 `anki_client.sync(raise_errors=False)` 行為不變；`callbacks`、`voice` 的同一行計畫沒列，留著不動。
+- 依筆記類型找 handler 與原本依欄位名稱猜的結果相同：三語卡模板的 `Prompt_Audios` 連結一律帶語言碼。唯一的差別在格式錯誤的連結：三語卡的 `Prompt_Audios` 收到非語言碼的 index 時，原本會用對話卡的 handler 寫入一筆沒有 `lang` 的項目（寫壞資料），改後三語卡 handler 拋 `ValueError`、不寫入。
+- 單字卡只輸入空白時不再嘗試建卡（Anki 不允許第一個欄位為空），回「請輸入外語單字或片語：」並停在這一步。
+- 外語糾錯的預覽（`execute_generate`，只呼叫 LLM、不寫入）照舊直接呼叫 handler。`speaking_fsm.py` 自己組對話卡、`commands.py` 的刪除不動。`voice.py` 的 `handler_name` 仍只用來選錄音評分器。
+- **測試**（`tests/test_bot_replies.py`）：
+  - 既有測試改 mock `NoteService`，斷言呼叫的是服務層：
+    - 建單字卡：傳的是 `{"Expression": 單字}` 與 `_v2`。
+    - 外語糾錯：參數與原本相同，`tg_bot` 以關鍵字傳入；不覆蓋時不再同步第二次，覆蓋時先建後刪、刪後再同步一次。
+    - 錄音、兩種頭像流程：呼叫 `run_action`。
+  - 新增：
+    - middleware 確實注入 `note_service`。
+    - **每個 TG handler 要的參數都有人提供**：掃過所有 router 的 handler 簽名，對照 middleware 注入的鍵。少注入一個依賴，平常只會在實際收到訊息時才以 `TypeError` 爆出來。這個測試在實作中途就抓到一次漏注入。
+- 部署後要照 §10 在 TG 逐項實測：建單字卡、外語糾錯（含覆蓋舊卡）、錄音評分、上傳音檔（對話卡與三語卡各一次，含自訂頭像）。
+
+驗證：`ruff` 通過；`pytest tests` 1088 個（第 4 步新增 8 個）、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常；所有 TG handler 模組與 app 可正常載入。
+
+**第 5 步實作結果（2026-10-20）**：
+
+- `app/api/handlers.py` 改寫：`GET /handlers`、`POST /handlers/{name}/notes`（201）、`GET`／`PATCH`／`DELETE /handlers/{name}/notes/{note_id}`、`GET /handlers/{name}/graph?deck=&note_type=&label_field=`，全部經 `NoteService`；原本的 `HTTPException` 全部移除，錯誤一律是服務層拋的 `FluencyTidesError`（D6）。
+- 新增 `app/api/notes.py`：`GET /notes/{note_id}`（通用讀取，附 `handler`、`permissions`）、`GET /decks`；與 `/handlers` 一樣掛 `verify_api_key`。`main.py` 掛上。
+- 新增 `app/schemas/notes.py`：請求與回應都改成 Pydantic 模型（`HandlerInfo`、`CapabilitiesOut`、`NoteDetail`、`GenericNoteDetail`、`CreateNoteRequest`／`Response`、`UpdateNoteRequest`／`Response`、`DeleteNoteResponse`、`GraphResponse`、`DeckInfo`），OpenAPI 不再是 `dict`（§1 問題 5）。`NoteDetail` 允許額外的鍵，成組卡片的 handler 讀取之後可以附上整組。圖譜的節點、連線形狀依 handler 而定，維持 `dict`。
+- 建立參數驗證失敗：攔下 `ValidationError`，把每項錯誤的 `loc` 前面接上 `("body", "params")` 後改拋 `RequestValidationError`，回應是 FastAPI 標準的 422（`detail[].loc` 為 `["body", "params", 欄位名]`）。錯誤不帶 `ctx`（validator 拋的例外物件不能轉成 JSON）。
+- 舊路徑在同一步移除，不留別名：`POST /handlers/{name}/create`、`GET /handlers/{name}/cards`、`PUT`／`DELETE /handlers/{name}/cards/{id}`、`GET /handlers/cards/{id}`、`GET /handlers/decks`。`GET /handlers/` 由 `redirect_slashes` 轉到 `/handlers`。
+- `BaseHandler` 與 6 個 handler 移除 `get_input_schema`、`execute_read_list`，註冊表移除 `list_all_handlers`；抽象方法只剩 `handler_name`、`supported_models`、`title`（D7）。順帶清掉因此沒人用的 import。
+- `/verb-pair`、`/core-verb` 的 `generate-child-cards` 不動（OpenAPI 確認仍在）。
+- **測試**：
+  - 新增 `tests/test_handlers_api.py` 40 個：用真實 app（不進 lifespan），只把 Anki 與關聯服務換成假的。涵蓋：
+    - D6 的每個狀態碼與錯誤代碼。
+    - 422 的 `loc`。
+    - 不開放、不歸屬時 Anki 與關聯都沒被動到。
+    - jp 建立回 400 且 `message` 是宣告的原因。
+    - 牌組不存在時自動建立。
+    - 新路由要 `X-API-Key`。
+    - 舊路徑回 404／405。
+  - `test_card_browse_api.py` 原本斷言舊路徑 `/handlers/cards/{id}` 的 camelCase 形狀，改為斷言 `/notes/{id}` 的新形狀與舊路徑 404。
+- **接本機 Anki 的唯讀實測**：在本機以這個分支的程式起後端（port 8001、`TG_BOT_TOKEN=""`、沿用本機 `.env`），只呼叫讀取端點，不寫入。
+  - `GET /handlers`：6 個 handler 的能力與 §5 相同；單字卡的 `create_schema` 由實際的 `_v2` 欄位產生（9 個欄位，JSON 與音檔欄位不列，`Expression` 必填）。
+  - `GET /handlers/vocabulary_mining/graph`：799 個節點，**全部都有副標（翻譯）**；改前因為讀不存在的 `Meaning`，全部是空的。本機資料庫沒有關聯資料，所以連線為 0。
+  - `GET /notes/{id}`：
+    - 單字卡：`handler` 為 `vocabulary_mining`，改、刪都允許。
+    - 對話卡：兩項都不允許，附原因。
+    - `JP_Context_Dark`：歸 `jp_verb_pair`，附刪除工具路徑。
+    - `Notion_SRS_Dark`：`handler` 為 null，原因是「沒有 handler 負責 Notion_SRS_Dark」。
+  - handler 讀取：`jp_core_verb` 讀 `JP_Context_Dark` 回 200；用單字卡的 handler 讀對話卡回 `NOTE_NOT_OWNED_BY_HANDLER`。
+  - `GET /decks` 回 83 個牌組。
+- **部署注意**：前端還在呼叫舊路徑，第 6～8 步改完之前，網頁的 Cards 詳情、Generate、Graph 都會壞。第 5～8 步要一起部署（R3）。
+
+驗證：`ruff` 通過；`pytest tests` 1128 個（第 5 步新增 40 個）、`scripts/fastapi_client/JP_CoreVerb/tests` 83 個通過；三支批次腳本 `--help` 正常。
+
+**第 6 步實作結果（2026-10-20）**：
+
+- **`types/api.ts`**：依 §4 改寫。
+  - `HandlerInfo` 改為 `name`、`title`、`note_types`、`capabilities`、`create_schema`、`json_fields`、`media_fields`，能力有完整型別（`HandlerCapabilities`、`CreateCapability`、`Operation`…）。
+  - 新增 `NoteDetail`、`GenericNoteDetail`（`handler`、`permissions`）、`CreateNoteRequest`／`Response`、`UpdateNoteResponse`、`DeleteNoteResponse`。
+  - `GraphData` 加上 `label_fields`、`label_field`；`GraphNode` 的關聯圖譜專屬鍵改為選填。
+  - 刪掉 `CardDetail`（舊的 camelCase 形狀）、`HandlerCreatePayload` 等舊型別，以及沒人用的 `AnkiModelInfo`、已棄用的 `CardGenerate*`。
+- **`api/client.ts`**：
+  - 新增 `createNote`、`getNote`、`readNote`、`updateNoteFields`、`deleteNote`。
+  - `getHandlerGraph` 改帶 `deck`、`note_type`、`label_field`。
+  - `listHandlers`、`listDecks` 改新路徑。
+  - 刪掉 `createCard`、`listCards`、`updateCard`、`deleteCard`、`getCard`。
+  - 沒有呼叫方的 `getKnowledgeGraph`（舊的 `/relations/graph`，§13）保留，回傳型別縮成 `nodes`、`links`。
+- **`lib/cardFields.ts`**：
+  - 刪掉 `FIELD_EDIT_HANDLERS`、`handlerForModel`、`fieldEditPolicy`、`orderedFields`。
+  - 改為 `noteEditPolicy`：能否改、刪看 `permissions`，唯讀欄位看 handler 宣告的 `json_fields`、`media_fields`。允許修改但還不知道唯讀欄位時先不開放，清單載入失敗時說明原因；刪除不受影響。
+  - 另有 `permissionsFromCapabilities`（從 handler 的能力算出權限，給第 7 步圖譜點節點用，規則同後端 D4）與 `fieldValues`。
+  - `isStructuredField` 只留給清單摘要用，彈窗不再用它猜。
+- **`CardDetailModal`**：
+  - 改收 `GenericNoteDetail`。
+  - 寫入送給 `note.handler`：`PATCH`／`DELETE /handlers/{handler}/notes/{id}`。
+  - 不允許時顯示後端給的原因，例如 jp 類顯示刪除工具路徑。
+  - 唯讀欄位標「JSON／媒體，僅供檢視」。
+  - 送出期間按鈕顯示「儲存並同步中…」「刪除並同步中…」；有 `sync_warning` 時另以警告提示顯示。
+  - 只有允許修改時才查 `GET /handlers`（要知道唯讀欄位）。
+- **`CardViewPanel`**：改 `GET /notes/{id}`，查詢鍵 `['note', id]`。
+- **工具設定頁「Handler 能力」區塊**：
+  - `components/settings/HandlerCapabilitiesSection.tsx`，唯讀，每個 handler 一張卡片：標題（名稱）、負責的筆記類型；建立、讀取、改欄位、刪除、圖譜、動作各一列，標示開放與否，不開放的顯示原因。
+  - 建立另列管道、流程、牌組規則與建立的筆記類型。
+  - 文字規則抽成 `lib/handlerCapabilities.ts`；第 8 步 Generate 頁要用的 `createAvailability`（`channels` → 可選／反灰／不顯示）也放在這裡，一併寫好並測試。
+- Knowledge Graph、Generate 只改到能用新 API 編譯（圖譜仍寫死單字卡、點節點用通用讀取；Generate 仍是單一輸入框，送 `{"Expression": …}`），整頁改寫在第 7、8 步。
+- **測試**：`cardFields.test.ts` 改寫（權限、唯讀欄位、載入中與失敗）；新增 `handlerCapabilities.test.ts`（可選／反灰／不顯示、各列文字）。
+- **瀏覽器實測**：以這個分支的後端（port 8000、`TG_BOT_TOKEN=""`；`.claude/launch.json` 新增 `backend-handlers-redesign-no-bot`）與前端 dev server，只檢視、不寫入。
+  - 工具設定頁「Handler 能力」區塊 6 張卡片，與 §5 一致，不開放的項目附原因。
+  - Cards 頁單字卡的筆記欄位：文字欄位可編輯，`Word_Audio`、`Target_Example_Audio` 標「媒體，僅供檢視」，刪除可按。
+  - `JP_Context_Dark`：上方列出「由本機批次腳本管理，網頁只能檢視」與刪除工具路徑，欄位全部唯讀，刪除、儲存都停用。
+  - 所有請求都打新路徑且回 200。
+  - 沒有實際按儲存、刪除（會寫入本機 Anki）。
+
+驗證：`npm run lint` 0 個錯誤（14 個 `any` 警告都是既有的）；`npm test` 188 個通過；`npm run build` 成功。
+
+**第 7 步實作結果（2026-10-20）**：
+
+- `pages/KnowledgeGraph.tsx`（版面與全螢幕在 D13 已完成，這一步改資料與操作）：
+  - **handler 選單**：只列 `capabilities.graph.supported` 的 handler（本次只有單字卡），記在 `localStorage` 的 `kg_handler`；記住的 handler 不再開放圖譜時改用第一個。
+  - **筆記類型選單**：handler 負責多種筆記類型時才出現（「全部筆記類型」或其中一種，送 `note_type`）；換 handler 時重設。
+  - **名稱欄位選單**：只有標準圖譜（`graph.links` 為 false）出現，選項來自回應的 `label_fields`，「預設」顯示回應的 `label_field`（沒有時是 Note ID）；各 handler 分開記在 `kg_label_fields`。記住的欄位已不存在而回 422 時，錯誤畫面提供「名稱欄位改回預設」。
+  - **點節點**：以 `GET /handlers/{name}/notes/{note_id}` 讀取，權限由 `permissionsFromCapabilities` 依該 handler 的能力算出（與後端 D4 同一規則），交給同一個 `CardDetailModal`；幽靈節點沒有 `note_id`，不開。
+  - **「建立連線」「Sync」（清理失效關聯）、點連線刪除**：只在 `graph.links` 為 true 時出現、生效。
+  - 節點提示：名稱與副標；關聯圖譜另加學習狀態，沒有狀態的幽靈節點標「未建卡」（原本寫 ghost，標準圖譜的節點也會被誤標）。
+  - 錯誤與空狀態照實說明：handler 清單或圖譜載入失敗顯示後端的訊息；沒有任何 handler 開放圖譜時指向工具設定頁；這個牌組沒有該 handler 的筆記時說明。
+  - 視角記憶（縮放、中心、節點位置）依 handler、筆記類型、牌組分開記；單字卡、不限筆記類型時沿用原本以牌組為鍵的紀錄，所以既有的版面不會遺失。
+- 規則抽成 `lib/graphQuery.ts`（`graphHandlers`、`pickGraphHandler`、`graphViewScope`、`nodeTooltip`）並加測試。
+- **瀏覽器實測**（只檢視）：
+  - 選單顯示「單字卡」，有「建立連線」與「Sync」。
+  - 圖譜請求為 `/handlers/vocabulary_mining/graph?deck=…`。
+  - 滑鼠移到節點顯示「refer (參考；查閱；提及) - review」，副標有內容了。
+  - 點節點以 `/handlers/vocabulary_mining/notes/{id}` 讀取並打開卡片詳情，可編輯、可刪除、音檔欄位唯讀，與 Cards 頁一致。
+  - 標準圖譜的選單（筆記類型、名稱欄位）目前沒有 handler 開放，畫面上看不到；邏輯由 `graphQuery` 的單元測試與後端圖譜測試涵蓋，之後開放某種卡片的圖譜時要實際看過。
+- 既有問題（這一步沒動）：圖的區塊用了 `dark:bg-slate-900/50`，系統為深色模式而網頁是淺色時，背景會是深灰色。
+
+驗證：`npm run lint` 0 個錯誤；`npm test` 193 個通過；`npm run build` 成功。
+
+**第 8 步實作結果（2026-10-20）**：
+
+- `pages/CardGenerator.tsx` 改寫（版面在 D13 已完成）：
+  - **卡片類型**改為單選清單，依 `createAvailability`（第 6 步）呈現：可選的能點；不能從網頁建立的反灰，名稱下方顯示 `create.reason`；`channels` 為空的不顯示。選取記在 `localStorage` 的 `generate_handler`；記住的不再可選時改用第一個可選的。
+  - **表單**由 `create_schema` 產生（`lib/createForm.ts`）：`title`、`description`、`required`（標 `*`）、`default`、`examples`（`datalist`，可輸入也可選）、`x-ui: textarea`（多行）；不認得的 `x-ui` 當一般文字欄位。只畫字串欄位，其他型別的參數列在表單下方說明網頁不提供。換卡片類型時表單重設。
+  - **牌組**：`create.deck` 為 `fixed` 時顯示固定牌組、不看牌組樹；否則用牌組樹選的，沒選或已不存在時無法送出並說明。另顯示建出的筆記類型（`create.note_type`），不再有筆記類型下拉。
+  - **送出**：必填欄位空白時按鈕停用；送出期間顯示「建立中、同步中…」並說明最久可能等一分鐘。
+  - **422 錯誤**：`detail[].loc` 為 `["body", "params", 欄位]` 的標在欄位下方；對不到欄位的列在表單下方；其他錯誤（`DUPLICATE_CARD`、`NOTE_TYPE_NOT_CREATABLE` 等）以 toast 顯示後端訊息。
+  - **成功**：toast 顯示建立的筆記數與牌組，有 `sync_warning` 時另以警告提示；表單下方留一段結果，附「到 Cards 頁查看這個牌組」（`/cards?deck=…`）。重新整理圖譜、卡片清單與牌組樹。
+  - `create_schema` 為 null（Anki 連不上，R8）時顯示 `create.reason`，不能送出。
+- `lib/createForm.ts`（`schemaFields`、`initialValues`、`missingRequired`、`formErrorsFrom`）與測試：標準建立的 schema、對話卡的 `CreateParams` schema、可為 null 的字串、略過非字串參數、422 對回欄位與對不到的錯誤、非 422 時不處理。
+- **瀏覽器實測**（只檢視，沒有送出）：
+  - 卡片類型清單：「單字卡」可選；「外語糾錯」「對話卡」「自他動詞」「核心動詞」反灰並各自顯示原因；「三語對話卡」不顯示——與 §6 的預期一致。
+  - 表單欄位就是 Anki 裡 `_v2` 的 9 個欄位（JSON、音檔欄位不列），`Expression` 標必填。
+  - 選「全部牌組」時提示先選牌組、按鈕停用；選了牌組並填 `Expression` 後按鈕可按。
+  - 沒有實際建卡（會寫入本機 Anki 並同步 AnkiWeb）；實際建卡、重複單字、422 標在欄位旁留給 §10 部署後驗收。
+
+驗證：`npm run lint` 0 個錯誤；`npm test` 200 個通過；`npm run build` 成功。
 
 每一步結束都要通過：
 

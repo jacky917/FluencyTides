@@ -27,6 +27,7 @@ from app.bot.utils import texts
 from app.core.config import settings
 from app.core.exceptions import FluencyTidesError, AudioEvaluatorUnavailableError
 from app.infrastructure.anki.client import AnkiConnectError
+from app.services.task_handlers.registry import handler_registry
 
 CHAT_ID = 7
 NASTY = "A<b>&C"  # 含 < 與 &：不轉義的話 Telegram 會拒收整則訊息
@@ -82,6 +83,16 @@ def _fsm() -> FSMContext:
 def _sent(mock_method) -> list[str]:
     """一個 AsyncMock（answer / edit_text）送出的所有文字。"""
     return [call.args[0] for call in mock_method.await_args_list]
+
+
+def _note_service(**overrides):
+    """假的 NoteService：寫入成功、同步沒有提醒；``overrides`` 換掉個別屬性。"""
+    service = mock.MagicMock()
+    service.run_action = mock.AsyncMock(return_value=None)
+    service.create = mock.AsyncMock(return_value={"note_ids": [1, 2, 3], "deck": "D", "sync_warning": None})
+    for name, value in overrides.items():
+        setattr(service, name, value)
+    return service
 
 
 def _anki(**overrides):
@@ -299,7 +310,7 @@ def test_fallback_reply_matches_the_waiting_state(action, expected):
     if action:
         manager.set_state(CHAT_ID, UserState(action=action, card_id="SC_1"))
     message, _ = _message("hello")
-    _run(messages.process_word_handler(message, mock.MagicMock(), mock.MagicMock(), mock.MagicMock(), manager, _anki()))
+    _run(messages.process_word_handler(message, _note_service(), manager, _anki()))
     assert _sent(message.reply) == [expected]
 
 
@@ -307,14 +318,17 @@ def test_speaker_name_is_escaped_in_the_confirmation():
     """說話者名稱含 < 或 & 時確認訊息仍送得出去（否則已寫入卻停在「寫入中」）。"""
     manager = UserStateManager()
     manager.set_state(CHAT_ID, UserState(action="wait_speaker_name", card_id="SC_1", extra={"field_name": "References"}))
-    registry = mock.MagicMock()
-    registry.get_handler.return_value.execute_update = mock.AsyncMock()
+    service = _note_service()
     message, status = _message(NASTY)
-    with mock.patch.object(callbacks, "_sync_with_warning", mock.AsyncMock(return_value="")):
-        _run(messages.process_word_handler(message, registry, mock.MagicMock(), mock.MagicMock(), manager, _anki()))
+    _run(messages.process_word_handler(message, service, manager, _anki()))
     [done] = _sent(status.edit_text)
     _assert_tg_html(done)
     assert "A&lt;b&gt;&amp;C" in done
+    # 經服務層的 add_audio 動作寫回（由筆記類型找 handler，三語卡不會再寫錯 handler）
+    note_id, action, params = service.run_action.await_args.args
+    assert (note_id, action) == (1, "add_audio")
+    assert params["speaker"] == NASTY and params["field_name"] == "References"
+    assert manager.get_state(CHAT_ID) is None
 
 
 def test_speaker_name_write_back_when_card_vanished():
@@ -323,8 +337,10 @@ def test_speaker_name_write_back_when_card_vanished():
     manager.set_state(CHAT_ID, UserState(action="wait_speaker_name", card_id="SC_1", extra={"field_name": "References"}))
     message, status = _message("John")
     anki = _anki(get_notes_info=mock.AsyncMock(return_value=[]))
-    _run(messages.process_word_handler(message, mock.MagicMock(), mock.MagicMock(), mock.MagicMock(), manager, anki))
+    service = _note_service()
+    _run(messages.process_word_handler(message, service, manager, anki))
     assert _sent(status.edit_text) == [texts.CARD_NOT_FOUND]
+    service.run_action.assert_not_awaited()
     assert manager.get_state(CHAT_ID) is None
 
 
@@ -332,10 +348,9 @@ def test_write_back_failure_says_how_to_retry():
     """寫回失敗（狀態已清）：附重新進入的入口，錯誤訊息轉義。"""
     manager = UserStateManager()
     manager.set_state(CHAT_ID, UserState(action="wait_speaker_name", card_id="SC_1", extra={"field_name": "References"}))
-    registry = mock.MagicMock()
-    registry.get_handler.return_value.execute_update = mock.AsyncMock(side_effect=AnkiConnectError("<bad> & worse"))
+    service = _note_service(run_action=mock.AsyncMock(side_effect=AnkiConnectError("<bad> & worse")))
     message, status = _message("John")
-    _run(messages.process_word_handler(message, registry, mock.MagicMock(), mock.MagicMock(), manager, _anki()))
+    _run(messages.process_word_handler(message, service, manager, _anki()))
     [failed] = _sent(status.edit_text)
     _assert_tg_html(failed)
     assert texts.UPLOAD_RETRY in failed
@@ -387,9 +402,7 @@ def test_avatar_choice_survives_directory_changes(tmp_path):
         (tmp_path / "avatar_1_20261018.jpg").write_bytes(b"x")  # 排在 coach.jpg 前面
         query = _callback("avatar_sel_0")
         with mock.patch.object(callbacks, "_execute_final_update", mock.AsyncMock()) as final:
-            _run(callbacks.handle_avatar_sys_select(
-                query, manager, _anki(), mock.MagicMock(), mock.MagicMock(), mock.MagicMock()
-            ))
+            _run(callbacks.handle_avatar_sys_select(query, manager, _anki(), _note_service()))
 
     filename, speaker = final.await_args.args[4], final.await_args.args[5]
     assert (filename, speaker) == ("coach.jpg", "coach")
@@ -403,7 +416,7 @@ def test_stale_system_avatar_selection_is_expired(tmp_path, data):
     manager.set_state(CHAT_ID, UserState(action="wait_avatar_selection", card_id="SC_1"))
     query = _callback(data)
     with mock.patch.object(callbacks, "AVATARS_DIR", tmp_path):
-        _run(callbacks.handle_avatar_sys_select(query, manager, _anki(), mock.MagicMock(), mock.MagicMock(), mock.MagicMock()))
+        _run(callbacks.handle_avatar_sys_select(query, manager, _anki(), _note_service()))
     query.answer.assert_awaited_once_with(texts.UPLOAD_EXPIRED_ALERT, show_alert=True)
 
 
@@ -460,16 +473,14 @@ def _evaluator_patch(evaluator):
     )
 
 
-def _voice(manager, evaluator=None, anki=None, registry=None):
+def _voice(manager, evaluator=None, anki=None, note_service=None):
     message, status = _message()
     message.voice = mock.MagicMock(file_id="f")
     message.bot = mock.MagicMock()
     message.bot.get_file = mock.AsyncMock(return_value=mock.MagicMock(file_path="p"))
     message.bot.download_file = mock.AsyncMock()
     with _evaluator_patch(evaluator):
-        _run(voice.process_voice_handler(
-            message, anki or _anki(), registry or mock.MagicMock(), manager, mock.MagicMock(), mock.MagicMock()
-        ))
+        _run(voice.process_voice_handler(message, anki or _anki(), note_service or _note_service(), manager))
     return message, status
 
 
@@ -507,7 +518,7 @@ def test_unexpected_error_while_building_the_evaluator_is_reported():
     message.bot.download_file = mock.AsyncMock()
     lookup = mock.AsyncMock(side_effect=RuntimeError("boom"))
     with mock.patch.object(voice.recording_eval, "evaluator_for_handler", lookup):
-        _run(voice.process_voice_handler(message, _anki(), mock.MagicMock(), manager, mock.MagicMock(), mock.MagicMock()))
+        _run(voice.process_voice_handler(message, _anki(), _note_service(), manager))
     assert "語音評分服務發生錯誤" in _sent(status.edit_text)[-1]
     assert manager.get_state(CHAT_ID) is not None
 
@@ -526,9 +537,7 @@ def test_voice_builds_the_evaluator_from_the_cards_handler():
         message.bot.get_file = mock.AsyncMock(return_value=mock.MagicMock(file_path="p"))
         message.bot.download_file = mock.AsyncMock()
         with mock.patch.object(voice.recording_eval, "evaluator_for_handler", lookup):
-            _run(voice.process_voice_handler(
-                message, _anki(), mock.MagicMock(), manager, mock.MagicMock(), mock.MagicMock()
-            ))
+            _run(voice.process_voice_handler(message, _anki(), _note_service(), manager))
         lookup.assert_awaited_once_with(handler)
 
 
@@ -559,14 +568,14 @@ def test_unscored_recording_is_not_written_or_reported_as_scored():
     manager = _recording_state()
     evaluator = mock.MagicMock()
     evaluator.evaluate_audio = mock.AsyncMock(side_effect=AudioNotScoredError("沒有偵測到<語音>。"))
-    registry = mock.MagicMock()
-    _, status = _voice(manager, evaluator=evaluator, registry=registry)
+    service = _note_service()
+    _, status = _voice(manager, evaluator=evaluator, note_service=service)
 
     last = _sent(status.edit_text)[-1]
     _assert_tg_html(last)
     assert last.startswith("❌ 這次沒有評分：") and "評分完成" not in last and "/ 100" not in last
     assert "請回 Anki 卡片重新點按鈕" in last
-    registry.get_handler.assert_not_called()  # 沒有寫入任何紀錄
+    service.run_action.assert_not_called()  # 沒有寫入任何紀錄
     assert manager.get_state(CHAT_ID) is None
 
 
@@ -710,8 +719,8 @@ def test_preview_escapes_llm_text_but_keeps_underline():
     assert "<u><b>去</b></u>" in preview and "&lt;script&gt;" in preview
 
 
-def _creation(decision=None, *, create=None, delete=None):
-    """跑一次 _execute_card_creation（選子卡後的寫入），回傳 (訊息, card_service, state)。"""
+def _creation(decision=None, *, create=None, delete=None, resync_text=""):
+    """跑一次 _execute_card_creation（選子卡後的寫入），回傳 (訊息, card_service, state, note_service, 再同步)。"""
     state = _fsm()
     _run(state.set_state(ExpressionStates.waiting_for_card_selection))
     _run(state.update_data(
@@ -721,41 +730,63 @@ def _creation(decision=None, *, create=None, delete=None):
     service = mock.MagicMock()
     service.find_notes = mock.AsyncMock(return_value=[78, 79])
     service.anki_client.delete_notes = delete or mock.AsyncMock()
-    handler = mock.MagicMock(execute_create=create or mock.AsyncMock(return_value=[1, 2, 3]))
+    note_service = _note_service(**({"create": create} if create else {}))
     message, _ = _message()
     message.bot = None
-    with mock.patch.object(expression_fsm.handler_registry, "get_handler", return_value=handler), \
-         mock.patch.object(callbacks, "_sync_with_warning", mock.AsyncMock(return_value="")):
-        _run(expression_fsm._execute_card_creation(message, state, service, selected_indices=None))
-    return _sent(message.answer), service, state, handler
+    with mock.patch.object(callbacks, "_sync_with_warning", mock.AsyncMock(return_value=resync_text)) as resync:
+        _run(expression_fsm._execute_card_creation(message, state, service, note_service, selected_indices=None))
+    return _sent(message.answer), service, state, note_service, resync
 
 
 def test_creation_without_overwrite_never_deletes():
     """沒有選「覆蓋」時絕不刪卡（第 6 節：殘留的舊卡 ID 不能讓新一輪刪錯卡）。"""
-    sent, service, state, _ = _creation(None)
+    sent, service, state, _, resync = _creation(None)
     service.anki_client.delete_notes.assert_not_awaited()
     assert sent[-1] == "✅ 已寫入 Anki：母卡 1 張＋子卡 2 張"
     assert _run(state.get_state()) is None
+    resync.assert_not_awaited()  # 服務層建卡後已同步，不覆蓋時不再同步第二次
+
+
+def test_creation_goes_through_the_service_layer():
+    """建卡經 NoteService.create：參數與 TG 原本傳的相同，tg_bot 以關鍵字傳入，提醒取服務層的。"""
+    warning = "⚠️ 已寫入 Anki，但同步 AnkiWeb 失敗；下次操作會再試。"
+    create = mock.AsyncMock(return_value={"note_ids": [1, 2], "deck": "D", "sync_warning": warning})
+    sent, _, _, note_service, _ = _creation(None, create=create)
+
+    kwargs = note_service.create.await_args.kwargs
+    assert note_service.create.await_args.args == ("expression_correction",)
+    assert kwargs["note_type"] == "Expression_Master_Dark"
+    assert kwargs["tg_bot"] == ""  # message.bot 為 None
+    assert kwargs["params"] == {
+        "original_text": "x", "context": "", "source_tag": "", "llm_result": {"k": 1},
+        "selected_indices": None, "allow_duplicate": False,
+    }
+    assert sent[-1] == "✅ 已寫入 Anki：母卡 1 張＋子卡 1 張\n\n" + warning
 
 
 def test_overwrite_creates_first_then_deletes_old_cards():
     """覆蓋：先建新卡（繞過重複檢查，舊卡還在），成功後才刪舊母卡與子卡。"""
     order: list[str] = []
-    create = mock.AsyncMock(side_effect=lambda **kw: order.append("create") or [1, 2])
+    created = {"note_ids": [1, 2], "deck": "D", "sync_warning": None}
+    create = mock.AsyncMock(side_effect=lambda *a, **kw: order.append("create") or created)
     delete = mock.AsyncMock(side_effect=lambda ids: order.append("delete"))
-    sent, service, _, handler = _creation("overwrite", create=create, delete=delete)
+    sent, service, _, note_service, resync = _creation(
+        "overwrite", create=create, delete=delete, resync_text="\n\n⚠️ x"
+    )
 
     assert order == ["create", "delete"]
-    assert handler.execute_create.await_args.kwargs["parameters"]["allow_duplicate"] is True
+    assert note_service.create.await_args.kwargs["params"]["allow_duplicate"] is True
+    # 刪舊卡後再同步一次，把刪除推上 AnkiWeb；提醒取這一次的
+    resync.assert_awaited_once()
     service.anki_client.delete_notes.assert_awaited_once_with([77, 78, 79])
     assert service.find_notes.await_args.args[0] == 'note:"Expression\\_Micro\\_Dark" "Master_Note_ID:77"'
-    assert sent[-1].endswith("（已刪除舊卡）")
+    assert sent[-1].endswith("（已刪除舊卡）\n\n⚠️ x")
 
 
 def test_overwrite_keeps_old_cards_when_creation_fails():
     """覆蓋時建立新卡失敗：舊卡不動（不會兩張都沒了），訊息明說舊卡未變動，並附重新開始的方法。"""
     create = mock.AsyncMock(side_effect=AnkiConnectError("<dup> & more"))
-    sent, service, state, _ = _creation("overwrite", create=create)
+    sent, service, state, _, _ = _creation("overwrite", create=create)
 
     service.anki_client.delete_notes.assert_not_awaited()
     _assert_tg_html(sent[-1])
@@ -766,7 +797,7 @@ def test_overwrite_keeps_old_cards_when_creation_fails():
 def test_overwrite_reports_failed_deletion_honestly():
     """新卡已建、但刪舊卡失敗：不寫「已刪除舊卡」，明說現在有兩張、請手動刪舊的。"""
     delete = mock.AsyncMock(side_effect=AnkiConnectError("locked"))
-    sent, _, _, _ = _creation("overwrite", delete=delete)
+    sent, _, _, _, _ = _creation("overwrite", delete=delete)
     assert "已刪除舊卡" not in sent[-1]
     assert "兩張相同原文的卡" in sent[-1] and sent[-1].startswith("✅ 已寫入 Anki")
 
@@ -931,12 +962,145 @@ def test_vocabulary_card_text_matches_what_happens():
     state = _fsm()
     _run(state.set_state(vocabulary_fsm.VocabularyStates.waiting_for_word))
     message, status = _message(NASTY)
-    handler = mock.MagicMock(supported_models=["TOEIC_Coach_Dark"], execute_create=mock.AsyncMock(return_value=5))
-    with mock.patch.object(vocabulary_fsm.handler_registry, "get_handler", return_value=handler), \
-         mock.patch.object(callbacks, "_sync_with_warning", mock.AsyncMock(return_value="")):
-        _run(vocabulary_fsm.process_word(message, state, mock.MagicMock(), mock.MagicMock(), _anki()))
+    service = _note_service(registry=handler_registry)
+    _run(vocabulary_fsm.process_word(message, state, service))
 
     assert _sent(message.reply) == ["⏳ 建立中…"]
     [done] = _sent(status.edit_text)
     _assert_tg_html(done)
     assert "釋義尚未自動產生" in done and "模型" not in done
+    # 經服務層建立：Default 牌組、_v2，只傳 Expression（handlers 計畫書 §7）
+    service.create.assert_awaited_once_with(
+        "vocabulary_mining", deck="Default", note_type="TOEIC_Coach_Dark_v2", params={"Expression": NASTY}
+    )
+    assert _run(state.get_state()) is None
+
+
+def test_vocabulary_card_shows_the_service_sync_warning():
+    state = _fsm()
+    _run(state.set_state(vocabulary_fsm.VocabularyStates.waiting_for_word))
+    message, status = _message("allocate")
+    warning = "⚠️ 已寫入 Anki，但同步 AnkiWeb 失敗；下次操作會再試。"
+    service = _note_service(
+        registry=handler_registry,
+        create=mock.AsyncMock(return_value={"note_ids": [9], "deck": "Default", "sync_warning": warning}),
+    )
+    _run(vocabulary_fsm.process_word(message, state, service))
+    [done] = _sent(status.edit_text)
+    assert done.endswith("\n\n" + warning)
+
+
+def test_vocabulary_duplicate_word():
+    from app.core.exceptions import DuplicateCardError
+
+    state = _fsm()
+    _run(state.set_state(vocabulary_fsm.VocabularyStates.waiting_for_word))
+    message, status = _message("allocate")
+    service = _note_service(registry=handler_registry, create=mock.AsyncMock(side_effect=DuplicateCardError("dup")))
+    _run(vocabulary_fsm.process_word(message, state, service))
+    assert _sent(status.edit_text) == ["🔁 已有相同單字的卡片，未建立。"]
+    assert _run(state.get_state()) is None
+
+
+def test_vocabulary_blank_word_keeps_waiting():
+    """只有空白：不建卡（Anki 不允許第一個欄位為空），維持在輸入單字這一步。"""
+    state = _fsm()
+    _run(state.set_state(vocabulary_fsm.VocabularyStates.waiting_for_word))
+    message, _ = _message("   ")
+    service = _note_service(registry=handler_registry)
+    _run(vocabulary_fsm.process_word(message, state, service))
+    service.create.assert_not_awaited()
+    assert _sent(message.reply) == ["請輸入外語單字或片語："]
+    assert _run(state.get_state()) == vocabulary_fsm.VocabularyStates.waiting_for_word.state
+
+
+def test_voice_writes_the_recording_through_the_service_layer():
+    """錄音評分後經服務層的 add_recording 動作寫回；三語卡帶語言，提醒取服務層的。"""
+    for field_name, extra in (("Recordings", {}), ("Recordings_JA", {"lang": "JA"})):
+        manager = UserStateManager()
+        manager.set_state(CHAT_ID, UserState(action="recording", card_id="SC_1", extra={"field_name": field_name}))
+        evaluator = mock.MagicMock()
+        evaluator.evaluate_audio = mock.AsyncMock(return_value=mock.MagicMock(
+            transcript="hi", feedback="ok", feedback_anki_html=None, score=95, evaluator_label="listen",
+        ))
+        service = _note_service(run_action=mock.AsyncMock(return_value="⚠️ 同步失敗"))
+        _, status = _voice(manager, evaluator=evaluator, note_service=service)
+
+        note_id, action, params = service.run_action.await_args.args
+        assert (note_id, action) == (1, "add_recording")
+        assert {k: v for k, v in params.items() if k != "recording"} == extra
+        assert params["recording"]["score"] == 95
+        last = _sent(status.edit_text)[-1]
+        _assert_tg_html(last)
+        assert last.startswith("✅ <b>錄音評分完成！</b>") and last.endswith("\n\n⚠️ 同步失敗")
+        assert manager.get_state(CHAT_ID) is None
+
+
+def test_avatar_skip_writes_audio_through_the_service_layer():
+    """系統頭像流程（跳過頭像）經服務層的 add_audio 寫回，不再自己猜三語卡。"""
+    manager = UserStateManager()
+    manager.set_state(CHAT_ID, UserState(
+        action="wait_avatar_selection", card_id="SC_1",
+        extra={"field_name": "Prompt_Audios", "index": "JA", "audio_filename": "a.mp3"},
+    ))
+    service = _note_service()
+    query = _callback("avatar_skip")
+    _run(callbacks.handle_avatar_skip(query, manager, _anki(), service))
+
+    note_id, action, params = service.run_action.await_args.args
+    assert (note_id, action) == (1, "add_audio")
+    assert params == {
+        "field_name": "Prompt_Audios", "index": "JA", "audio": "a.mp3", "avatar": "", "speaker": "User",
+    }
+    assert manager.get_state(CHAT_ID) is None
+
+
+def test_service_injection_provides_note_service():
+    """middleware 把 NoteService 注入給 TG handler，且與注入的 CardService、RelationService 是同一組。"""
+    from app.bot.dependencies import ServiceInjectionMiddleware
+    from app.services.note_service import NoteService
+
+    captured: dict = {}
+
+    async def handler(event, data):
+        captured.update(data)
+
+    app = mock.MagicMock()
+    _run(ServiceInjectionMiddleware()(handler, mock.MagicMock(), {"app": app}))
+
+    service = captured["note_service"]
+    assert isinstance(service, NoteService)
+    assert service.card_service is captured["card_service"]
+    assert service.relation_service is captured["relation_service"]
+    assert service.anki_client is app.state.anki_client
+
+
+def test_every_tg_handler_dependency_is_injected():
+    """每個 TG handler 要的參數都有人提供（middleware 注入、aiogram 的 FSM、dispatcher 的 app）。
+
+    改 handler 的參數或 middleware 時，少注入一個只會在實際收到訊息時才爆（TypeError），測試要先抓到。
+    """
+    import inspect
+
+    from app.bot.dependencies import ServiceInjectionMiddleware
+    from app.bot.handlers import models_menu, newcard_menu
+
+    captured: dict = {}
+
+    async def handler(event, data):
+        captured.update(data)
+
+    _run(ServiceInjectionMiddleware()(handler, mock.MagicMock(), {"app": mock.MagicMock()}))
+    provided = set(captured) | {"state", "bot", "event_from_user", "event_chat"}
+
+    modules = (commands, models_menu, newcard_menu, callbacks, media, voice,
+               expression_fsm, speaking_fsm, vocabulary_fsm, messages)
+    missing = {}
+    for module in modules:
+        for observer in module.router.observers.values():
+            for registered in observer.handlers:
+                wanted = list(inspect.signature(registered.callback).parameters)[1:]  # 第一個是事件本身
+                lacking = [name for name in wanted if name not in provided]
+                if lacking:
+                    missing[f"{module.__name__}.{registered.callback.__name__}"] = lacking
+    assert missing == {}

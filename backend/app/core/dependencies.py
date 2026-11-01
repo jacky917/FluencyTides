@@ -34,9 +34,11 @@ Dependencies:
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, Request
 
+from app.infrastructure.database.corpus_database import get_corpus_async_session
 from app.infrastructure.database.database import get_async_session
 
 from app.infrastructure.anki.client import AnkiClient
@@ -48,6 +50,9 @@ from app.services.relation_service import RelationService
 from app.services.storage_service import StorageService
 
 from app.core.config import settings
+
+if TYPE_CHECKING:
+    from app.services.note_service import NoteService
 
 logger = logging.getLogger(__name__)
 
@@ -162,18 +167,20 @@ def get_model_manager(
 
 
 def get_relation_service(
-    db_session=Depends(get_db_session),
+    db_session=Depends(get_corpus_async_session),
 ) -> RelationService:
     """建立 RelationService 實例。
 
     Create a RelationService instance.
 
-    注入 AsyncSession，提供卡片關聯資料庫的操作功能。
+    注入**語料庫**（MySQL）的 AsyncSession：卡片關聯存在 ``rel_links`` / ``rel_types``
+    （docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9 的 C），不再用網站的 SQLite。
 
-    Injects an AsyncSession to provide card-relation database operations.
+    Injects the corpus (MySQL) AsyncSession: card relations live in
+    ``rel_links`` / ``rel_types``, no longer in the website's SQLite.
 
     Args:
-        db_session: 注入的 AsyncSession。Injected AsyncSession.
+        db_session: 注入的語料庫 AsyncSession。Injected corpus AsyncSession.
 
     Returns:
         RelationService 實例。A RelationService instance.
@@ -231,3 +238,29 @@ def get_storage_service(
         StorageService 實例。A StorageService instance.
     """
     return StorageService(minio_client=minio_client)
+
+
+def get_note_service(
+    card_service: CardService = Depends(get_card_service),
+    relation_service: RelationService = Depends(get_relation_service),
+) -> "NoteService":
+    """建立 NoteService 實例（handlers 計畫書 D1）。
+
+    Create a NoteService instance.
+
+    在函式內 import：``note_service`` 經註冊表載入所有 handler，而有些 handler 在模組層 import 本模組的
+    ``get_template_engine``；放在檔案開頭會形成循環 import。
+
+    Imported lazily: loading ``note_service`` loads every handler, and some
+    handlers import this module at their top level.
+
+    Args:
+        card_service: 注入的 CardService。Injected CardService.
+        relation_service: 注入的 RelationService。Injected RelationService.
+
+    Returns:
+        NoteService 實例。A NoteService instance.
+    """
+    from app.services.note_service import NoteService
+
+    return NoteService(card_service=card_service, relation_service=relation_service)

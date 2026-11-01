@@ -39,9 +39,10 @@ from aiogram.types import TelegramObject, User
 from app.bot.state import user_state_manager
 from app.core.config import settings
 from app.core.dependencies import _ANKI_MODELS_DIR
-from app.infrastructure.database.database import async_session_factory
+from app.infrastructure.database.corpus_database import corpus_async_session_factory
 from app.services.anki_model_manager import AnkiModelManager
 from app.services.card_service import CardService
+from app.services.note_service import NoteService
 from app.services.relation_service import RelationService
 from app.services.task_handlers.registry import handler_registry
 
@@ -129,6 +130,7 @@ class ServiceInjectionMiddleware(BaseMiddleware):
     - handler_registry: HandlerRegistry (任務處理器註冊表)
     - model_manager: AnkiModelManager
     - relation_service: RelationService
+    - note_service: NoteService（handlers 計畫書 D1：TG 的建卡與動作經過服務層）
     - anki_client: AnkiClient
     - user_state_manager: UserStateManager (Singleton)
     """
@@ -173,7 +175,12 @@ class ServiceInjectionMiddleware(BaseMiddleware):
             model_dir=_ANKI_MODELS_DIR,
         )
 
-        async with async_session_factory() as session:
+        # 卡片關聯存在語料庫（MySQL）的 rel_links（corpus_db_rebuild D9 的 C）
+        if not corpus_async_session_factory:
+            logger.error("語料庫 (MySQL) 連線尚未設定，無法建立 RelationService！")
+            raise RuntimeError("Corpus database is not configured.")
+
+        async with corpus_async_session_factory() as session:
             relation_service = RelationService(session)
 
             # Phase 9: CardService 已退化，只需 anki_client + model_manager
@@ -188,6 +195,7 @@ class ServiceInjectionMiddleware(BaseMiddleware):
             data["handler_registry"] = handler_registry
             data["model_manager"] = model_manager
             data["relation_service"] = relation_service
+            data["note_service"] = NoteService(card_service, relation_service)
             data["anki_client"] = anki_client
 
             # 注入 UserStateManager Singleton

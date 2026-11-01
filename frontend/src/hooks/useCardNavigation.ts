@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useLocation, useNavigate, useSearchParams, type NavigateOptions } from 'react-router-dom'
+import { useLocation, useNavigate, useNavigationType, useSearchParams, type NavigateOptions } from 'react-router-dom'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../api/client'
 import { describeApiError, retryTransient } from '../lib/apiError'
@@ -12,6 +12,7 @@ import {
   searchToRemember,
   type CardSide,
 } from '../lib/cardBrowse'
+import { isBackNavigation, type BackState } from '../lib/cardFaces'
 
 /** 記住瀏覽位置的 localStorage 鍵。localStorage key of the remembered position. */
 const REMEMBERED_SEARCH_KEY = 'cards_last_search'
@@ -39,6 +40,9 @@ interface JumpState {
   jumpFrom?: number
 }
 
+/** react-router 在瀏覽器歷史裡記的位置（`history.state.idx`）。The history index react-router keeps. */
+const historyIndex = (): unknown => (window.history.state as { idx?: unknown } | null)?.idx
+
 /**
  * 卡片瀏覽頁的導覽：狀態都在網址（見 `lib/cardBrowse.ts`），這裡提供讀取與各種改變的方式。
  * Navigation of the card browsing page; all state lives in the URL.
@@ -47,6 +51,9 @@ interface JumpState {
  * - 卡面按鈕打開其他筆記（`openNotes`）：查出卡片後切換過去，記下目前這張並新增一筆瀏覽器歷史，
  *   所以「返回」與瀏覽器的上一頁都能回來。查詢期間網址若變了（使用者另選了卡片），結果作廢。
  * - 翻面：取代目前的歷史並保留跳轉狀態，翻面後「返回」仍能直接退回上一頁。
+ * - 換卡（選卡、跳轉、返回）一律從正面開始；換卡前先把目前這筆歷史改成正面，之後用上一頁
+ *   回到這張卡片時也是正面。
+ * - `arrivedBack`：目前這個位置是不是往回到達的（「返回」或瀏覽器上一頁），換卡動畫據此倒著播。
  * - 記住位置：瀏覽位置（不含跳轉紀錄）存在 localStorage；從側邊欄回到這頁（網址沒有參數）時
  *   恢復上次的牌組、搜尋、頁碼與卡片。
  *
@@ -100,6 +107,25 @@ export function useCardNavigation() {
     }, options)
 
   /**
+   * 換到另一張卡片，從正面開始。目前在背面時，先把目前這筆歷史改成正面再新增一筆：之後按上一頁
+   * 回到這張卡片也是正面。兩次導覽在同一個 tick，靠 React 18 的自動批次（含 await 之後的
+   * openNotes）合併成一次重畫；若沒有合併，卡片面板會先看到同一張卡片翻回正面，多播一次翻面動畫。
+   * Switches to another card on its front, first turning the current history
+   * entry to the front; relies on React 18 batching both navigations.
+   * @param changes - 要改的網址參數。The URL changes.
+   * @param options - 這次導覽的選項；replace 時直接取代目前這筆（本來就會變成正面），不另外先改正面。
+   *   Options of the navigation; with replace the current entry is replaced directly.
+   */
+  const switchCard = (changes: Record<string, string | null>, options?: NavigateOptions) => {
+    if (state.side === 'answer' && !options?.replace) {
+      const front = new URLSearchParams(params)
+      front.delete('side')
+      setParams(front, { replace: true, state: location.state })
+    }
+    update({ ...changes, side: null }, options)
+  }
+
+  /**
    * 卡面要打開這些筆記：找出它們的卡片，切換過去並記下目前這張。
    * Opens the notes a card face asks for, remembering the current card.
    */
@@ -120,7 +146,7 @@ export function useCardNavigation() {
         toast.error('找不到這張筆記', { description: `筆記 ${noteIds.join('、')} 不存在，可能已被刪除。` })
       } else if (target !== cardId) {
         const jump: JumpState = { jumpFrom: cardId }
-        update({ card: String(target), trail: pushTrail(trail, cardId) }, { state: jump })
+        switchCard({ card: String(target), trail: pushTrail(trail, cardId) }, { state: jump })
       }
     } catch (error) {
       if (latestParams.current === startedAt) {
@@ -143,16 +169,28 @@ export function useCardNavigation() {
     if ((location.state as JumpState | null)?.jumpFrom === previous) {
       navigate(-1)
     } else {
-      update({ card: String(previous), trail: trail.slice(0, -1).join(',') }, { replace: true })
+      const back: BackState = { back: true }
+      switchCard({ card: String(previous), trail: trail.slice(0, -1).join(',') }, { replace: true, state: back })
     }
+  }
+
+  // 目前這個位置是不是往回到達的：每到一個新位置（location.key）時判斷一次，在 render 中對齊
+  const navigationType = useNavigationType()
+  const [arrival, setArrival] = useState(() => ({ key: location.key, index: historyIndex(), back: false }))
+  if (arrival.key !== location.key) {
+    const index = historyIndex()
+    setArrival({ key: location.key, index, back: isBackNavigation(navigationType, location.state, index, arrival.index) })
   }
 
   return {
     ...state,
+    arrivedBack: arrival.key === location.key && arrival.back,
     selectDeck: (deck: string | null) => update({ deck, page: null, card: null, trail: null }),
     submitSearch: (q: string) => update({ q, page: null, card: null, trail: null }),
     setPage: (page: number) => update({ page: page > 1 ? String(page) : null }),
-    selectCard: (id: number) => update({ card: String(id), trail: null }),
+    // 點目前這張卡片不算換卡，保留正反面
+    selectCard: (id: number) =>
+      id === cardId ? update({ card: String(id), trail: null }) : switchCard({ card: String(id), trail: null }),
     clearCard: () => update({ card: null, trail: null }),
     setSide: (side: CardSide) =>
       update({ side: side === 'answer' ? side : null }, { replace: true, state: location.state }),

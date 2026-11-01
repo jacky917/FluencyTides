@@ -1,5 +1,6 @@
 /*
- * 卡面正反切換動畫的外觀（行為在 FaceTransition.tsx，目錄與時長在 lib/faceTransitions.ts）。
+ * 卡面切換（翻面、換卡）動畫的外觀（行為在 FaceTransition.tsx，目錄與時長在 lib/faceTransitions.ts）。
+ * .face-stage 之後的內容（FaceTransition 的 footer，例如卡面提示）不在這裡處理，隨外框高度的過渡移動。
  * Visuals of the card face switch; behaviour lives in FaceTransition.tsx.
  *
  * 每一面是一個 .face-layer，播放時帶：
@@ -15,6 +16,7 @@
 
 .face-stage {
   display: grid;
+  position: relative;
 }
 
 /* 會轉出卡面範圍的動畫（翻頁）不裁切；其他的橫向裁切，才不會撐出橫向捲動 */
@@ -198,15 +200,168 @@
   }
 }
 
-/* ---------- 伸縮漸變／縮放：新的一面在上面先淡入，舊的一面稍後才淡出，
-   兩面合起來始終不透明，不會在中途透出底下的頁面 ---------- */
+/* ---------- 抽卡（draw）／抽卡・疊卡（draw-stack）：上面那張往下抽走，露出壓在下面的一張 ----------
+   被抽走的那張在上面，往下移出外框（距離 --face-travel 是兩面中較高的高度，外框最後比它高時
+   也會整張離開；沒有高度時移動自己的高度），上緣帶陰影。下面那張：抽卡靜止不動；疊卡原本
+   略小、偏暗，隨之浮上來。往回時倒著播：上面那張從底下推回來，把下面那張蓋住。
+   外框上下左右都裁切並保留圓角，抽走的卡片不會蓋到外框下方的內容。 */
 
-/* 伸縮漸變：外框（高度隨動畫過渡）裁切內容並保留圓角，較高的一面隨外框伸長逐漸露出，
-   較矮的一面隨外框縮短逐漸收起，看起來是同一張卡片在變長變短 */
-.face-stage[data-face-anim='morph'] {
+.face-stage[data-face-anim='draw'],
+.face-stage[data-face-anim='draw-stack'] {
   overflow: clip;
   border-radius: var(--radius-lg, 0.5rem);
 }
+
+.face-layer[data-face-anim='draw'][data-face-part='leave'],
+.face-layer[data-face-anim='draw-stack'][data-face-part='leave'] {
+  z-index: 2;
+  box-shadow: 0 -16px 32px -14px rgb(15 23 42 / 0.5);
+  animation-name: face-draw-out;
+}
+
+.face-layer[data-face-anim='draw-stack'][data-face-part='enter'] {
+  animation-name: face-draw-under;
+}
+
+.face-layer[data-face-anim='draw-stack'][data-face-part='enter']::after {
+  background: rgb(0 0 0);
+  animation-name: face-undim;
+}
+
+@keyframes face-draw-out {
+  from {
+    translate: 0 0;
+  }
+  to {
+    translate: 0 var(--face-travel, 100%);
+  }
+}
+
+@keyframes face-draw-under {
+  from {
+    scale: 0.96;
+  }
+  to {
+    scale: 1;
+  }
+}
+
+@keyframes face-undim {
+  from {
+    opacity: 0.4;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* ---------- 伸縮漸變：外框（高度隨動畫過渡）裁切內容並保留圓角，看起來是同一張卡片在變長變短 ----------
+   兩面不一樣高時，以較矮那一面的高度（--face-split）分成兩段：
+   - 重疊的部分交叉漸變。兩面用 plus-lighter 直接相加（外框 isolation 讓它們只和彼此相加，
+     不加到頁面背景上），權重是 1 − p 與 p，任何時間點加起來都是 1，不會透出後面。
+     一般的疊法是後面那層被前面那層打折，各 0.5 時會有 25% 透出後面。
+   - 較高那一面多出來的部分始終不透明，只由外框高度露出或收起（遮罩下段固定為 1）。
+   較高那一面不能整層淡化，改用遮罩上段的不透明度（--face-overlap）跟著動畫走；
+   要平滑過渡需要 @property，不支援的瀏覽器會在中途一次切過去。
+   較矮那一面的下緣（圓角與底邊框）在動畫中會落在卡片中間的分界上：淺色的底邊框會變成一條橫跨
+   卡片的亮線，圓角外的透明處會透出頁面。所以動畫中它的內容底部改成直角、底邊框透明（底色照畫），
+   卡片真正的下緣交給外框：外框裁切出圓角，邊框由 ::after 沿著外框畫（顏色與粗細由呼叫端以
+   --face-frame 給，例如 `1px solid var(--color-border)`；不給就沒有）。 */
+
+@property --face-overlap {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 1;
+}
+
+.face-stage[data-face-anim='morph'] {
+  overflow: clip;
+  border-radius: var(--radius-lg, 0.5rem);
+  isolation: isolate;
+}
+
+.face-stage[data-face-anim='morph']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  border: var(--face-frame, none);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.face-layer[data-face-anim='morph'] {
+  mix-blend-mode: plus-lighter;
+}
+
+.face-layer[data-face-anim='morph'][data-face-span='short'] > * {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom-color: transparent;
+}
+
+.face-layer[data-face-anim='morph'][data-face-part='enter'] {
+  animation-name: face-fade-in;
+}
+
+.face-layer[data-face-anim='morph'][data-face-part='leave'] {
+  animation-name: face-fade-out;
+}
+
+.face-layer[data-face-anim='morph'][data-face-span='long'] {
+  mask-image: linear-gradient(
+    to bottom,
+    rgb(0 0 0 / var(--face-overlap)) var(--face-split),
+    rgb(0 0 0) var(--face-split)
+  );
+}
+
+.face-layer[data-face-anim='morph'][data-face-span='long'][data-face-part='enter'] {
+  animation-name: face-overlap-in;
+}
+
+.face-layer[data-face-anim='morph'][data-face-span='long'][data-face-part='leave'] {
+  animation-name: face-overlap-out;
+}
+
+@keyframes face-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes face-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes face-overlap-in {
+  from {
+    --face-overlap: 0;
+  }
+  to {
+    --face-overlap: 1;
+  }
+}
+
+@keyframes face-overlap-out {
+  from {
+    --face-overlap: 1;
+  }
+  to {
+    --face-overlap: 0;
+  }
+}
+
+/* ---------- 縮放：新的一面在上面先淡入，舊的一面稍後才淡出，
+   兩面合起來始終不透明，不會在中途透出底下的頁面 ---------- */
 
 @keyframes face-fade-in-early {
   0% {
@@ -226,15 +381,6 @@
   100% {
     opacity: 0;
   }
-}
-
-.face-layer[data-face-anim='morph'][data-face-part='enter'] {
-  z-index: 2;
-  animation-name: face-fade-in-early;
-}
-
-.face-layer[data-face-anim='morph'][data-face-part='leave'] {
-  animation-name: face-fade-out-late;
 }
 
 .face-layer[data-face-anim='zoom'][data-face-part='enter'] {

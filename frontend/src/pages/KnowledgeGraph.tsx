@@ -6,11 +6,14 @@ import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../api/client'
 import { useDeckStatus } from '../hooks/useDeckStatus'
 import { useElementSize } from '../hooks/useElementSize'
-import { useLocalStorage } from '../hooks/useLocalStorage'
+import { useLocalStorage } from '../hooks/useStoredState'
 import { usePanelWidths } from '../hooks/usePanelWidths'
 import { collectNodePositions, readGraphView, seedNodePositions, writeGraphCamera, writeGraphView } from '../lib/graphView'
 import { GRAPH_LAYOUT } from '../lib/pageLayouts'
+import { permissionsFromCapabilities } from '../lib/cardFields'
+import { graphHandlers, graphViewScope, nodeTooltip, pickGraphHandler } from '../lib/graphQuery'
 import { cn } from '../lib/utils'
+import type { GenericNoteDetail, GraphNode } from '../types/api'
 import { CardDetailModal } from '../components/CardDetailModal'
 import { ConfirmDialog, type ConfirmDialogProps } from '../components/shared/ConfirmDialog'
 import { DeckTreePanel } from '../components/shared/DeckTreePanel'
@@ -21,7 +24,7 @@ import { Skeleton } from '../components/ui/skeleton'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Toaster } from '../components/ui/sonner'
-import { describeApiError, isBackendError } from '../lib/apiError'
+import { describeApiError, isBackendError, retryTransient } from '../lib/apiError'
 
 /**
  * 節點文字標籤的可選字型樣式。
@@ -54,6 +57,9 @@ const FONT_SIZES = [
  */
 const ALL_DECKS = 'All Decks'
 
+const SELECT_CLASS =
+  'h-9 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+
 /**
  * 這個瀏覽器能不能讓元素全螢幕：iPhone 的 Safari 沒有 `Element.requestFullscreen`，內嵌視窗
  * 沒有允許時 `document.fullscreenEnabled` 為 false。
@@ -68,12 +74,18 @@ const CAN_FULLSCREEN =
 type PendingConfirm = Omit<ConfirmDialogProps, 'onCancel' | 'message'> & { message: ReactNode }
 
 /**
- * 知識圖譜頁面：牌組樹決定要看哪一層（含子牌組），另一側以力導向圖視覺化單字關聯，支援建立/刪除
- * 關聯、卡片編輯與全螢幕。全螢幕時只看得到被放大的區塊，所以這頁的提示用 toast（全螢幕時在區塊內
- * 另掛一個 Toaster）、確認用頁面內的視窗，不用 `alert`／`confirm`：瀏覽器顯示原生對話框前會退出全螢幕。
- * Knowledge graph page: the deck tree on the left picks the deck; the right
- * side visualizes word relations with a force-directed graph, supporting
- * relation create/delete, card editing and fullscreen.
+ * 知識圖譜頁面：牌組樹決定要看哪一層（含子牌組），另一側以力導向圖畫出所選 handler 的筆記
+ * （handlers 計畫書 D12）。
+ *
+ * - handler 選單只列開放圖譜的；負責多種筆記類型時可再選一種；標準圖譜（單點）可選節點名稱用的欄位。
+ * - 關聯圖譜（`capabilities.graph.links`，例如單字卡）才有建立、刪除連線與清理失效關聯。
+ * - 點節點以該 handler 讀取筆記，打開卡片詳情（權限依 handler 的能力）；幽靈節點沒有筆記，不開。
+ *
+ * 全螢幕時只看得到被放大的區塊，所以這頁的提示用 toast（全螢幕時在區塊內另掛一個 Toaster）、確認用
+ * 頁面內的視窗，不用 `alert`／`confirm`：瀏覽器顯示原生對話框前會退出全螢幕。
+ *
+ * Knowledge graph page: the deck tree picks the deck; the graph shows the
+ * selected handler's notes, with relation editing only for relation graphs.
  * @returns 知識圖譜頁面 JSX。Knowledge graph page JSX.
  */
 export default function KnowledgeGraph() {
@@ -82,6 +94,10 @@ export default function KnowledgeGraph() {
   const [deckToggled, setDeckToggled] = useLocalStorage<Record<string, boolean>>('graph_deck_toggled', {})
   const panels = usePanelWidths(GRAPH_LAYOUT)
   const [selectedNoteId, setSelectedNoteId] = useState<number | null>(null)
+  // 選的 handler、筆記類型與各 handler 的名稱欄位（空字串＝後端預設）
+  const [storedHandler, setStoredHandler] = useLocalStorage<string | null>('kg_handler', null)
+  const [noteTypeChoice, setNoteTypeChoice] = useState<string | null>(null)
+  const [labelFieldChoices, setLabelFieldChoices] = useLocalStorage<Record<string, string>>('kg_label_fields', {})
 
   const [fontStyleId, setFontStyleId] = useLocalStorage('kg_fontStyleId', 'classic');
   const [fontSizeMultiplier, setFontSizeMultiplier] = useLocalStorage('kg_fontSizeMultiplier', 1.0);
@@ -147,17 +163,55 @@ export default function KnowledgeGraph() {
   })
   const relationTypes = relationTypesData || ['synonym', 'collocation'];
 
-  const { data: graphData, isLoading, isError } = useQuery({
-    queryKey: ['graph', selectedDeck],
-    queryFn: () => FluencyTidesAPI.getHandlerGraph('vocabulary_mining', selectedDeck),
+  const {
+    data: handlers,
+    isPending: handlersPending,
+    error: handlersError,
+  } = useQuery({ queryKey: ['handlers'], queryFn: FluencyTidesAPI.listHandlers, retry: retryTransient })
+  const available = graphHandlers(handlers)
+  const currentHandler = pickGraphHandler(available, storedHandler)
+  const handlerName = currentHandler?.name ?? null
+  const relationGraph = currentHandler?.capabilities.graph.links ?? false
+  // 換 handler 後之前選的筆記類型不一定還適用
+  const noteType = noteTypeChoice !== null && currentHandler?.note_types.includes(noteTypeChoice) ? noteTypeChoice : null
+  // 關聯圖譜的節點名稱固定，不能選欄位
+  const labelField = handlerName && !relationGraph ? labelFieldChoices[handlerName] || null : null
+  const viewScope = graphViewScope(handlerName ?? '', selectedDeck, noteType)
+
+  const {
+    data: graphData,
+    isLoading,
+    error: graphError,
+  } = useQuery({
+    queryKey: ['graph', handlerName, selectedDeck, noteType, labelField],
+    queryFn: () => FluencyTidesAPI.getHandlerGraph(handlerName!, { deck: selectedDeck, noteType, labelField }),
+    enabled: handlerName !== null,
   })
 
-  // Fetch individual card details when a node is selected
-  const { data: cardDetail, isLoading: isLoadingCard } = useQuery({
-    queryKey: ['card', selectedNoteId],
-    queryFn: () => FluencyTidesAPI.getCard(selectedNoteId!),
-    enabled: selectedNoteId !== null && !isLinkMode,
+  // 點節點：以這個 handler 讀取筆記（成組卡片之後會附上整組），權限依它的能力
+  const {
+    data: noteFromHandler,
+    isLoading: isLoadingCard,
+    error: noteError,
+  } = useQuery({
+    queryKey: ['note', 'handler', handlerName, selectedNoteId],
+    queryFn: () => FluencyTidesAPI.readNote(handlerName!, selectedNoteId!),
+    enabled: selectedNoteId !== null && handlerName !== null && !isLinkMode,
   })
+  const selectedNote = useMemo<GenericNoteDetail | null>(
+    () =>
+      noteFromHandler && currentHandler
+        ? { ...noteFromHandler, handler: currentHandler.name, permissions: permissionsFromCapabilities(currentHandler) }
+        : null,
+    [noteFromHandler, currentHandler],
+  )
+
+  const chooseHandler = (name: string) => {
+    setStoredHandler(name)
+    setNoteTypeChoice(null)
+    setIsLinkMode(false)
+    setLinkSourceNode(null)
+  }
 
   const createRelationMutation = useMutation({
     mutationFn: FluencyTidesAPI.createRelation,
@@ -268,9 +322,9 @@ export default function KnowledgeGraph() {
   // 顯示不跑排版（畫面和上次一樣），之後拖動節點照常排版、鄰近節點會跟著調整。
   // 節點位置只在排版停下（已穩定）時存；縮放、平移只存視角，半途的位置不會被存下來凍住
   const restoredView = useMemo(() => {
-    const view = readGraphView(selectedDeck)
+    const view = readGraphView(viewScope)
     return { view, allSeeded: seedNodePositions(formattedGraphData.nodes, view) }
-  }, [formattedGraphData, selectedDeck])
+  }, [formattedGraphData, viewScope])
   const [thawedView, setThawedView] = useState<typeof restoredView | null>(null)
   const frozen = restoredView.allSeeded && thawedView !== restoredView
 
@@ -282,7 +336,7 @@ export default function KnowledgeGraph() {
       setThawedView(restoredView)
       return
     }
-    writeGraphView(selectedDeck, {
+    writeGraphView(viewScope, {
       zoom: graph.zoom(),
       center: graph.centerAt(),
       nodes: collectNodePositions(formattedGraphData.nodes),
@@ -291,20 +345,20 @@ export default function KnowledgeGraph() {
   const saveCamera = () => {
     const graph = fgRef.current
     if (!graph || formattedGraphData.nodes.length === 0) return
-    writeGraphCamera(selectedDeck, { zoom: graph.zoom(), center: graph.centerAt() })
+    writeGraphCamera(viewScope, { zoom: graph.zoom(), center: graph.centerAt() })
   }
 
   // 回到上次的縮放與中心點（圖掛上之後才能設定）。圖重新掛載時也再套一次，而且讀最新存下的視角
   // （縮放、平移後 saveCamera 會更新），不是載入資料當下的那一份
   useEffect(() => {
-    const view = readGraphView(selectedDeck) ?? restoredView.view
+    const view = readGraphView(viewScope) ?? restoredView.view
     if (!view || !graphArea) return
     const timer = window.setTimeout(() => {
       fgRef.current?.zoom(view.zoom, 0)
       fgRef.current?.centerAt(view.center.x, view.center.y, 0)
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [restoredView, graphArea, selectedDeck])
+  }, [restoredView, graphArea, viewScope])
 
   // Adjust Graph Physics to prevent nodes from sticking too close together
   useEffect(() => {
@@ -331,35 +385,85 @@ export default function KnowledgeGraph() {
       )}
     >
       <div className="flex flex-wrap items-center gap-2 border-b p-3">
+        {available.length > 0 && (
+          <select
+            className={SELECT_CLASS}
+            aria-label="卡片類型"
+            value={handlerName ?? ''}
+            onChange={(e) => chooseHandler(e.target.value)}
+          >
+            {available.map((handler) => (
+              <option key={handler.name} value={handler.name}>
+                {handler.title}
+              </option>
+            ))}
+          </select>
+        )}
+        {currentHandler && currentHandler.note_types.length > 1 && (
+          <select
+            className={SELECT_CLASS}
+            aria-label="筆記類型"
+            value={noteType ?? ''}
+            onChange={(e) => setNoteTypeChoice(e.target.value || null)}
+          >
+            <option value="">全部筆記類型</option>
+            {currentHandler.note_types.map((type) => (
+              <option key={type} value={type}>
+                {type}
+              </option>
+            ))}
+          </select>
+        )}
+        {handlerName && !relationGraph && graphData && (
+          <select
+            className={SELECT_CLASS}
+            aria-label="節點名稱欄位"
+            title="節點名稱用的欄位；該欄位為空的筆記顯示 Note ID"
+            value={labelField ?? ''}
+            onChange={(e) => setLabelFieldChoices((prev) => ({ ...prev, [handlerName]: e.target.value }))}
+          >
+            <option value="">名稱：預設（{graphData.label_field ?? 'Note ID'}）</option>
+            {graphData.label_fields.map((field) => (
+              <option key={field} value={field}>
+                名稱：{field}
+              </option>
+            ))}
+          </select>
+        )}
         <span className="mr-auto truncate text-sm text-muted-foreground" title={selectedDeck}>
           牌組：{selectedDeck === ALL_DECKS ? '全部牌組' : selectedDeck}
           {deckMissing && <span className="text-destructive">（已不存在，請重新選擇）</span>}
         </span>
-        <Button
-          onClick={() => {
-            if (isLinkMode) {
-              // Cancel link mode
-              setIsLinkMode(false)
-              setLinkSourceNode(null)
-            } else {
-              setIsLinkMode(true)
-            }
-          }}
-          variant={isLinkMode ? "default" : "outline"}
-          className={isLinkMode ? "bg-primary text-primary-foreground animate-pulse" : ""}
-        >
-          <LinkIcon className="mr-2 h-4 w-4" />
-          {isLinkMode ? (linkSourceNode ? 'Select Target...' : 'Select Source...') : '🔗 建立連線'}
-        </Button>
+        {relationGraph && (
+          <Button
+            onClick={() => {
+              if (isLinkMode) {
+                // Cancel link mode
+                setIsLinkMode(false)
+                setLinkSourceNode(null)
+              } else {
+                setIsLinkMode(true)
+              }
+            }}
+            variant={isLinkMode ? "default" : "outline"}
+            className={isLinkMode ? "bg-primary text-primary-foreground animate-pulse" : ""}
+          >
+            <LinkIcon className="mr-2 h-4 w-4" />
+            {isLinkMode ? (linkSourceNode ? 'Select Target...' : 'Select Source...') : '🔗 建立連線'}
+          </Button>
+        )}
 
-        <Button
-          onClick={() => syncMutation.mutate(false)}
-          disabled={syncMutation.isPending || isLinkMode}
-          variant="outline"
-        >
-          <RefreshCw className={`mr-2 h-4 w-4 ${syncMutation.isPending ? 'animate-spin' : ''}`} />
-          Sync
-        </Button>
+        {relationGraph && (
+          <Button
+            onClick={() => syncMutation.mutate(false)}
+            disabled={syncMutation.isPending || isLinkMode}
+            variant="outline"
+            title="清理指向已刪除筆記的關聯"
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${syncMutation.isPending ? 'animate-spin' : ''}`} />
+            Sync
+          </Button>
+        )}
 
         <Button
           variant="outline"
@@ -391,17 +495,36 @@ export default function KnowledgeGraph() {
 
       {/* 圖的區塊；設定選單疊在它上面、高度不超過它（Card 會裁掉超出的部分，選單過長時自己捲動） */}
       <div className="relative flex min-h-0 flex-1 flex-col">
-        {isLoading ? (
+        {handlersPending || isLoading ? (
           <div className="flex-1 p-6 flex flex-col gap-4">
             <Skeleton className="w-full h-full rounded-xl" />
           </div>
-        ) : isError ? (
-          <div className="flex-1 flex items-center justify-center text-destructive">
-            <p>Failed to load graph data. Make sure the backend is running.</p>
+        ) : handlersError || graphError ? (
+          <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-center">
+            <p className="font-semibold text-destructive">{handlersError ? '無法載入卡片類型' : '無法載入圖譜'}</p>
+            <p className="break-words text-sm text-muted-foreground">{describeApiError(handlersError ?? graphError).message}</p>
+            {/* 記住的名稱欄位可能已不存在（筆記類型改過欄位）：給一個回到預設的出口 */}
+            {graphError && labelField && handlerName && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setLabelFieldChoices((prev) => ({ ...prev, [handlerName]: '' }))}
+              >
+                名稱欄位改回預設
+              </Button>
+            )}
+          </div>
+        ) : !currentHandler ? (
+          <div className="flex-1 flex items-center justify-center p-6 text-center text-muted-foreground">
+            <p>目前沒有開放圖譜的卡片類型（可在「工具設定」的 Handler 能力查看）。</p>
           </div>
         ) : formattedGraphData.nodes.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center text-muted-foreground">
-            <p>{deckMissing ? `牌組「${selectedDeck}」已不存在，請在牌組樹重新選擇。` : 'No relational data found. Generate some cards first!'}</p>
+          <div className="flex-1 flex items-center justify-center p-6 text-center text-muted-foreground">
+            <p>
+              {deckMissing
+                ? `牌組「${selectedDeck}」已不存在，請在牌組樹重新選擇。`
+                : `這個牌組沒有「${currentHandler.title}」的筆記。`}
+            </p>
           </div>
         ) : (
           <div ref={graphAreaRef} className="flex-1 min-h-0 relative bg-slate-50/50 dark:bg-slate-900/50 rounded-xl overflow-hidden m-1">
@@ -413,17 +536,14 @@ export default function KnowledgeGraph() {
               cooldownTicks={frozen ? 0 : undefined}
               onEngineStop={saveLayout}
               onZoomEnd={saveCamera}
-              nodeLabel={(node: any) => {
-                if (node.translation) return `${node.label} (${node.translation}) - ${node.status || 'ghost'}`
-                return `${node.label} - ${node.status || 'ghost'}`
-              }}
+              nodeLabel={(node: any) => nodeTooltip(node as GraphNode, relationGraph)}
               linkDirectionalArrowLength={(link: any) => link.isBidirectional ? 0 : 3.5}
               linkDirectionalArrowRelPos={1}
               linkCurvature={(link: any) => link.curvature}
               linkLabel="label"
               nodeCanvasObjectMode={() => 'after'}
               nodeCanvasObject={(node: any, ctx, globalScale) => {
-                const label = node.label;
+                const label = node.label ?? node.id;
 
                 // 畫選擇框 (如果處於連線模式且被選中)
                 if (isLinkMode && linkSourceNode && node.id === linkSourceNode.id) {
@@ -474,6 +594,7 @@ export default function KnowledgeGraph() {
                 }
               }}
               onLinkClick={(link: any) => {
+                if (!relationGraph) return
                 const sLabel = link.source.label || link.source.id || link.source;
                 const tLabel = link.target.label || link.target.id || link.target;
                 setPendingConfirm({
@@ -628,8 +749,9 @@ export default function KnowledgeGraph() {
       <CardDetailModal
         isOpen={selectedNoteId !== null}
         onClose={() => setSelectedNoteId(null)}
-        cardDetail={cardDetail || null}
+        note={selectedNote}
         isLoading={isLoadingCard}
+        error={noteError}
       />
 
       {pendingConfirm && (
@@ -653,7 +775,7 @@ export default function KnowledgeGraph() {
       header={
         <PageHeader
           title="Knowledge Graph"
-          description="Visualize word relationships (Synonyms, Collocations) in your knowledge base."
+          description="依卡片類型畫出筆記；單字卡另有同義詞、搭配詞等關聯連線。點節點查看卡片。"
         />
       }
       panels={panels}

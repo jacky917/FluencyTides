@@ -111,6 +111,7 @@ class OpenAIAudioEvaluator(BaseAudioEvaluator):
         reference_answers: list[str],
         target_language: str | None = None,
         template_name: str = "prompts/audio_evaluator.j2",
+        reference_familiarity: list[int | None] | None = None,
     ) -> AudioEvaluationResult:
         """評估使用者語音，產出結構化評分結果。
 
@@ -123,6 +124,8 @@ class OpenAIAudioEvaluator(BaseAudioEvaluator):
             prompt_text: 卡片 Prompt。The card prompt.
             context_text: 卡片正面的 Context（文脈）。The card-front context.
             reference_answers: 參考範本列表。Reference answer list.
+            reference_familiarity: 每句參考答案的熟識度（同 base）。Familiarity of each
+                reference (see the base class).
             target_language: 目標語言。Target language.
             template_name: 評分提示詞 j2 樣板。Jinja2 template for the
                 evaluation prompt.
@@ -143,6 +146,7 @@ class OpenAIAudioEvaluator(BaseAudioEvaluator):
             prompt_text=prompt_text,
             context_text=context_text,
             reference_answers=reference_answers,
+            reference_familiarity=reference_familiarity or [],
             target_language=target_language,
             disable_markdown=False,
         )

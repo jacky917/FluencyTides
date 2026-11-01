@@ -45,6 +45,15 @@ def error_detail(error: object, limit: int = ERROR_DETAIL_LIMIT) -> str:
     return escape_tg(str(error) or type(error).__name__, limit)
 
 
+def sync_suffix(warning: str | None) -> str:
+    """把服務層的同步提醒（純文字）接在 TG 回覆後面；同步成功時為空字串。
+
+    Appends the service layer's sync warning to a reply; empty when the
+    sync succeeded.
+    """
+    return f"\n\n{warning}" if warning else ""
+
+
 def upload_done_text(field_name: str | None, speaker_name: str, sync_warning: str) -> str:
     """上傳語音寫回 Anki 後的確認訊息。The confirmation after an uploaded clip is written back.
 

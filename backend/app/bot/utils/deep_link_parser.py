@@ -17,12 +17,17 @@ from app.schemas.tg.deep_link import (
     DeepLinkAction,
     DeleteEntryAction,
     GenerateCardAction,
+    PersonLinkAction,
     RecordAudioAction,
     AddAudioAction,
     TTSAudioAction,
 )
 
 logger = logging.getLogger(__name__)
+
+#: 人脈卡深連結的動作前綴 → PersonLinkAction.verb。Person link prefixes.
+PERSON_VERBS = {"pview": "view", "padd": "add", "pdel": "del", "pdone": "done", "pphoto": "photo", "ptopic": "topic",
+                "pmask": "mask"}
 
 
 class DeepLinkParser:
@@ -38,7 +43,7 @@ class DeepLinkParser:
         Parse a deep link payload.
 
         支援的格式：{Action}-{FieldName}-{Index}-{Card_ID}
-        - Action: rec, del, addaudio, ttsaudio, gen
+        - Action: rec, del, addaudio, ttsaudio, gen；人脈卡為 pview、padd、pdel、pdone、pphoto
         - FieldName: 對應 Anki 的欄位名稱 (例如 Recordings)
         - Index: 數字或 'last'，如果不適用則為 'none'
         - Card_ID: 卡片的唯一識別碼
@@ -87,6 +92,10 @@ class DeepLinkParser:
             elif action == "ttsaudio":
                 return TTSAudioAction(
                     field_name=field_name, index=index, card_id=card_id
+                )
+            elif action in PERSON_VERBS:
+                return PersonLinkAction(
+                    verb=PERSON_VERBS[action], field_name=field_name, index=index, card_id=card_id
                 )
         except (ValueError, TypeError) as e:
             logger.warning("解析 Deep Link 失敗: payload=%s, error=%s", payload, e)

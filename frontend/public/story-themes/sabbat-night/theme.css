@@ -1,0 +1,19 @@
+/* 魔女之夜：夜色深紫底、銀月色節點、金色選取路徑。只覆寫 .sf-* 的外觀，元件程式碼不用改。 */
+.sf-root[data-theme='sabbat-night'] .sf-node--option,
+.sf-root[data-theme='sabbat-night'] .sf-node--merge {
+  border-image: linear-gradient(135deg, #b48cff, #6d5aa6) 1;
+}
+/* 只給一般狀態的節點加陰影，不蓋掉選取、路徑、搜尋命中的外框 */
+.sf-root[data-theme='sabbat-night'] .sf-node[data-state='normal']:not([data-selected]):not([data-on-path]) {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+.sf-root[data-theme='sabbat-night'] .sf-node--ending {
+  color: #f5d27a;
+}
+.sf-root[data-theme='sabbat-night'] .sf-band__label {
+  text-shadow: 0 0 12px rgba(180, 140, 255, 0.6);
+}
+.sf-root[data-theme='sabbat-night'] .sf-edge__label,
+.sf-root[data-theme='sabbat-night'] .sf-back__label {
+  stroke: #1b1530;
+}

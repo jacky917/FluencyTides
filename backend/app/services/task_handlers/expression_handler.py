@@ -16,7 +16,15 @@ import json
 import logging
 from typing import override, TYPE_CHECKING
 
+from pydantic import BaseModel, Field
+
 from app.services.task_handlers.base import BaseHandler
+from app.services.task_handlers.capabilities import (
+    CreateCapability,
+    GraphCapability,
+    HandlerCapabilities,
+    Operation,
+)
 from app.services.task_handlers.registry import register_handler
 from app.infrastructure.utils.id_generator import generate_unique_card_id
 from app.core.dependencies import get_template_engine
@@ -35,12 +43,69 @@ logger = logging.getLogger(__name__)
 # LLM 用途鍵（生效設定的解析見 app.infrastructure.llm.routing）
 CORRECTION_LLM = route("expression_correction", "外語糾錯", capabilities={"llm"})
 
+#: 母卡固定建在這個牌組（execute_create 忽略指定的牌組）。The fixed master deck.
+MASTER_DECK = "日本語::外語糾錯::母卡片"
+
+
+class ExpressionCreateParams(BaseModel):
+    """外語糾錯的建立參數（D3）。
+
+    Create parameters of an expression-correction group.
+
+    TG 只傳 ``original_text``、``context``、``source_tag``、``llm_result``、``selected_indices``、
+    ``allow_duplicate``（``expression_fsm.py`` 的 ``_execute_card_creation``），所以除原文外都是選填；
+    語言與使用者自訂修正只在沒給 ``llm_result``、要由 handler 自己呼叫 LLM 時才用。
+    預設值與 handler 讀參數時的預設相同。``tg_bot`` 由服務層傳入。
+
+    TG passes only some of these, so everything but the original text is
+    optional; defaults match the handler's own.
+    """
+
+    original_text: str = Field(
+        min_length=1, title="原文", description="自己寫的外語句子", json_schema_extra={"x-ui": "textarea"}
+    )
+    context: str = Field(
+        default="",
+        title="情境",
+        description="對話情境；多段以連續五個以上的「ー」分隔",
+        json_schema_extra={"x-ui": "textarea"},
+    )
+    source_tag: str = Field(default="", title="來源標籤", description="加在卡片上的標籤（選填）")
+    native_language: str = Field(default="中文", title="母語")
+    target_language: str = Field(default="日文", title="目標語言")
+    user_grammar_correction: str = Field(default="", title="自己的文法修正（選填）")
+    user_reorganization: str = Field(default="", title="自己的重新組織（選填）")
+    llm_result: LLMExpressionCorrectionResult | None = Field(
+        default=None, description="已預覽的 LLM 結果；沒給時由 handler 呼叫 LLM"
+    )
+    selected_indices: list[int] | None = Field(
+        default=None, description="要建立的子卡編號（1 起算）；None 表示全部"
+    )
+    allow_duplicate: bool = Field(default=False, description="是否允許與既有卡片重複")
+
 @register_handler
 class ExpressionCorrectionHandler(BaseHandler):
     """外語糾錯與原子化知識點處理器。
 
     Handler for foreign-language correction and atomic knowledge points.
     """
+
+    CAPABILITIES = HandlerCapabilities(
+        create=CreateCapability(
+            supported=True,
+            channels=("tg",),
+            flow="preview",
+            deck="fixed",
+            fixed_deck=MASTER_DECK,
+            note_type="Expression_Master_Dark",
+            reason="需要先預覽 LLM 結果再勾選子卡，目前只能在 TG 建立",
+        ),
+        update_fields=Operation(reason="目前只支援新增音檔"),
+        delete=Operation(reason="外語糾錯的母子卡刪除尚未開放"),
+        actions=("add_audio",),
+        graph=GraphCapability(reason="尚未實作"),
+    )
+    CREATE_PARAMS = ExpressionCreateParams
 
     @property
     @override
@@ -53,33 +118,18 @@ class ExpressionCorrectionHandler(BaseHandler):
 
     @property
     @override
+    def title(self) -> str:
+        """中文名稱。Display title."""
+        return "外語糾錯"
+
+    @property
+    @override
     def supported_models(self) -> list[str]:
         """支援的 Anki 模型名稱清單。
 
         Supported Anki model names.
         """
         return ["Expression_Master_Dark", "Expression_Micro_Dark"]
-
-    @override
-    def get_input_schema(self) -> dict:
-        """回傳前端需要的參數 Schema。
-
-        Return the parameter JSON schema required by the frontend.
-        """
-        return {
-            "type": "object",
-            "properties": {
-                "native_language": {"type": "string"},
-                "target_language": {"type": "string"},
-                "original_text": {"type": "string"},
-                "context": {"type": "string"},
-                "source_tag": {"type": "string"},
-                "user_grammar_correction": {"type": "string"},
-                "user_reorganization": {"type": "string"},
-                "tg_bot": {"type": "string"},
-            },
-            "required": ["native_language", "target_language", "original_text"]
-        }
 
     async def execute_generate(
         self,
@@ -155,7 +205,7 @@ class ExpressionCorrectionHandler(BaseHandler):
         deck_name: str,
         model_name: str,
         parameters: dict
-    ) -> int | list[int]:
+    ) -> list[int]:
         """建立母子卡片群組。
 
         Create the master/micro card group.
@@ -236,7 +286,7 @@ class ExpressionCorrectionHandler(BaseHandler):
             "TG_Bot": tg_bot
         }
 
-        master_deck = "日本語::外語糾錯::母卡片"
+        master_deck = MASTER_DECK
         base_tags = ["Expression_Correction"]
         if source_tag:
             base_tags.append(source_tag)
@@ -311,32 +361,6 @@ class ExpressionCorrectionHandler(BaseHandler):
             return list(tx.created_ids)
 
     @override
-    async def execute_read_list(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        deck_name: str | None = None
-    ) -> list[dict]:
-        """讀取卡片清單（目前未實作，回傳空清單）。
-
-        Read the card list (not implemented; returns an empty list).
-        """
-        return []
-
-    @override
-    async def execute_read_graph(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        deck_name: str | None = None
-    ) -> dict:
-        """讀取知識圖譜（目前未實作，回傳空結構）。
-
-        Read the knowledge graph (not implemented; returns empty struct).
-        """
-        return {"nodes": [], "links": []}
-
-    @override
     async def execute_update(
         self,
         card_service: "CardService",
@@ -381,21 +405,3 @@ class ExpressionCorrectionHandler(BaseHandler):
             return
 
         raise ValueError(f"不支援的更新操作: {action}")
-
-    @override
-    async def execute_delete(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        note_id: int
-    ) -> None:
-        """刪除卡片。
-
-        Delete the note.
-
-        Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            note_id: 目標 Note ID。Target note ID.
-        """
-        await card_service.delete_note(note_id)

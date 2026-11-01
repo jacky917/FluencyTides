@@ -217,6 +217,18 @@ class Settings(BaseSettings):
     )
 
     # ====================================================================
+    # 遊戲素材（建卡管線用；遊戲本身的設定在語料庫的 game_profiles）
+    # ====================================================================
+    GAME_ASSETS_ROOT: str = Field(
+        default="",
+        description=(
+            "遊戲素材（語音、頭像）的根目錄。各遊戲的資料夾存在語料庫 game_profiles 的 "
+            "voice_dir / avatar_dir（相對於這裡），例：<根目錄>/voice/yuzusoft/SabbatOfTheWitch。"
+            "只有在本機跑建卡管線時需要；正式機不跑管線，可以不設"
+        ),
+    )
+
+    # ====================================================================
     # JP_VerbPair 卡片專屬設定
     # ====================================================================
     JP_VERB_PAIR_CONTEXT_PREV: int = Field(
@@ -230,22 +242,6 @@ class Settings(BaseSettings):
     JP_VERB_PAIR_MAX_CARDS_PER_VERB: int = Field(
         default=20,
         description="單一動詞（自動/他動分開計算）最多生成的子卡片數量",
-    )
-    JP_VERB_PAIR_VOICE_DIR: str = Field(
-        default=r"C:\Users\forip\Desktop\WorkSpace\material\voice\yuzusoft\SabbatOfTheWitch",
-        description="音檔目錄絕對路徑",
-    )
-    JP_VERB_PAIR_AVATAR_DIR: str = Field(
-        default=r"C:\Users\forip\Desktop\WorkSpace\material\avatar\yuzusoft\SabbatOfTheWitch",
-        description="頭像目錄絕對路徑",
-    )
-    JP_VERB_PAIR_SOURCE_GAME: str = Field(
-        default="SabbatOfTheWitch",
-        description="遊戲來源前綴（用於產生 Anki 音檔標籤與尋找媒體）",
-    )
-    JP_VERB_PAIR_GAME_NAME_JP: str = Field(
-        default="サノバウィッチ",
-        description="遊戲日文原名，用於 LLM 提示詞與卡片標籤",
     )
     JP_VERB_PAIR_FILTER_MOAN_SENTENCES: bool = Field(
         default=True,
@@ -284,22 +280,6 @@ class Settings(BaseSettings):
     JP_CORE_VERB_MIN_SENTENCE_LENGTH: int = Field(
         default=8,
         description="目標句最短長度（字元數），過短的句子缺乏文脈價值",
-    )
-    JP_CORE_VERB_VOICE_DIR: str = Field(
-        default=r"C:\Users\forip\Desktop\WorkSpace\material\voice\yuzusoft\SabbatOfTheWitch",
-        description="音檔目錄絕對路徑",
-    )
-    JP_CORE_VERB_AVATAR_DIR: str = Field(
-        default=r"C:\Users\forip\Desktop\WorkSpace\material\avatar\yuzusoft\SabbatOfTheWitch",
-        description="頭像目錄絕對路徑",
-    )
-    JP_CORE_VERB_SOURCE_GAME: str = Field(
-        default="SabbatOfTheWitch",
-        description="遊戲來源前綴（用於產生 Anki 音檔標籤與尋找媒體）",
-    )
-    JP_CORE_VERB_GAME_NAME_JP: str = Field(
-        default="サノバウィッチ",
-        description="遊戲日文原名，用於 LLM 提示詞與卡片標籤",
     )
     JP_CORE_VERB_MASTER_DECK: str = Field(
         default="日本語::核心動詞::Master",

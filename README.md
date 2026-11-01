@@ -52,7 +52,7 @@ FluencyTides 是一套**個人語言學習自動化系統**，把「LLM 內容�
 
 - **卡片後端**：AnkiConnect v6 JSON-RPC（httpx 連線池，支援 Cloudflare Access header）。
 - **對象存儲**：MinIO。
-- **CI/CD**：GitHub Actions（ruff + pytest + 前端建置）→ GHCR（amd64 + arm64 多架構）→ Cloudflare Access → Portainer Git stack webhook 自動重新部署；部署失敗會讓 CI 變紅。正式站的部署與日常操作（改 `.env`、手動重新部署、回滾、換網域）見 [`docs/wip/portainer_gitops_deploy_FEAT_2026-10-20.md`](docs/wip/portainer_gitops_deploy_FEAT_2026-10-20.md)。
+- **CI/CD**：GitHub Actions（ruff + pytest + 前端建置）→ GHCR（amd64 + arm64 多架構）→ Cloudflare Access → Portainer Git stack webhook 自動重新部署；部署失敗會讓 CI 變紅。正式站的部署與日常操作（改 `.env`、手動重新部署、回滾、換網域）見 [`docs/wip/portainer_gitops_deploy_FEAT_2026-10-20.md`](docs/wip/portainer_gitops_deploy_FEAT_2026-10-20.md)。不經 CI、從開發機經 SSH 直接部署（可部署未合併的分支、有回滾點）見 [`docs/archive/ssh_manual_deploy_FEAT_2026-10-20.md`](docs/archive/ssh_manual_deploy_FEAT_2026-10-20.md)。
 - **容器**：後端 `python:3.13-slim`（非 root apiuser）；前端 `node:20-alpine` 建置 + `nginx:alpine`（SPA try_files + `/api/` 反代後端）。
 
 ---
@@ -140,7 +140,7 @@ uvicorn app.main:app --reload --port 8000
 - API 位於 `http://127.0.0.1:8000`，Swagger UI 在 `/docs`，健康檢查在 `/api/health`。
 - **API 認證**：`API_SECRET_KEY` 留空時後端**不驗證**任何請求（每次請求記一條警告）。線上目前即採此設定，存取控制交給外層：對外經 Cloudflare Tunnel（webhook 只放行 `/api/webhook`，網頁與後端的 hostname 以 Cloudflare Access 登入保護），家用區網內則視為可信。填上金鑰即啟用驗證，此時前端（nginx 代為注入 `X-API-Key`，值來自前端容器的 `API_SECRET_KEY`）與生成腳本都必須帶同一把金鑰。（舊版文件所述「`ENVIRONMENT=production` 時空金鑰拒絕啟動」並未實作，程式碼不讀取 `ENVIRONMENT`。）
 - 資料庫 schema：每次啟動都會執行 `create_all` 建立缺少的資料表（不分環境）；既有資料表的結構變更由 Alembic 管理，需要時手動執行 `alembic upgrade head`。**升級到能力路由（`capability_routes`）的版本後必須執行一次**：它把舊 `llm_routes` 的用途設定搬到新表，沒跑之前各用途都退回 `.env` 預設，啟動時會記 ERROR 提醒。
-- **容器部署的資料庫位置**：`backend/docker-compose.yml` 以 `environment` 固定 `DATABASE_URL=sqlite+aiosqlite:////app/data/fluencytides.db`（優先於主機 `.env` 的同名設定），落在掛載到主機 `/DATA/AppData/FluencyTides/backend/data` 的目錄，重建容器不會遺失。早期版本的資料庫在容器內的 `/app/fluencytides.db`，每次重建容器（當時的 `deploy_local.sh`，已移除）都會被清空；從舊版升級時，部署前先執行 `docker cp fluencytides-backend:/app/fluencytides.db /DATA/AppData/FluencyTides/backend/data/fluencytides.db` 保留資料。
+- **容器部署的資料庫位置**：`backend/docker-compose.yml` 以 `environment` 固定 `DATABASE_URL=sqlite+aiosqlite:////app/data/fluencytides.db`（優先於主機 `.env` 的同名設定），落在掛載到主機 `/DATA/AppData/FluencyTides/backend/data` 的目錄，重建容器不會遺失。早期版本的資料庫在容器內的 `/app/fluencytides.db`，每次重建容器（當時的 `deploy_local.sh`）都會被清空；從舊版升級時，部署前先執行 `docker cp fluencytides-backend:/app/fluencytides.db /DATA/AppData/FluencyTides/backend/data/fluencytides.db` 保留資料。
 
 ### 前端
 

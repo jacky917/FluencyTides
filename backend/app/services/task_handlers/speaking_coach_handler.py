@@ -10,16 +10,23 @@ Speaking_Coach_Dark, and updates of JSON fields like Recordings,
 References, and Prompt_Audios.
 """
 
-from typing import override
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from typing import TYPE_CHECKING, override
 
-from typing import override, TYPE_CHECKING
+from pydantic import BaseModel, Field, field_validator
 
-from app.infrastructure.anki.search import note_types_query
+from app.core.config import settings
+from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
+from app.schemas.language import LANG_CODE_PATTERN, TargetLanguage, normalize_language_code
 from app.services.task_handlers.base import BaseHandler
+from app.services.task_handlers.capabilities import (
+    CreateCapability,
+    GraphCapability,
+    HandlerCapabilities,
+    Operation,
+)
 from app.services.task_handlers.registry import register_handler
 
 if TYPE_CHECKING:
@@ -28,9 +35,43 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: 口說卡（對話卡、三語對話卡）共用的具名動作，TG 的錄音與上傳音檔在用。
+SPEAKING_ACTIONS = ("add_audio", "add_recording", "delete_recording")
 
-from app.core.config import settings
-from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
+
+class SpeakingCoachCreateParams(BaseModel):
+    """對話卡的建立參數（D3）。``tg_bot`` 不在這裡，由服務層的關鍵字參數傳入。
+
+    Create parameters of a speaking card; ``tg_bot`` is passed by the service
+    layer, not here.
+    """
+
+    prompt: str = Field(
+        min_length=1,
+        title="目標台詞",
+        description="口說情境對白的目標台詞",
+        json_schema_extra={"x-ui": "textarea"},
+    )
+    context: str = Field(
+        default="", title="情境", description="情境描述（選填）", json_schema_extra={"x-ui": "textarea"}
+    )
+    target_language: str = Field(
+        default=TargetLanguage.EN_US.value,
+        title="目標語言",
+        description="BCP-47 語言代碼，例如 en-US、ja-JP、zh-TW",
+        pattern=LANG_CODE_PATTERN,
+        examples=[TargetLanguage.EN_US.value, TargetLanguage.JA_JP.value, TargetLanguage.ZH_TW.value],
+    )
+
+    @field_validator("target_language")
+    @classmethod
+    def _normalize(cls, value: str) -> str:
+        """與 TG 流程相同的正規化（``ja-jp`` → ``ja-JP``）。Same normalization as the TG flow."""
+        normalized = normalize_language_code(value)
+        if normalized is None:
+            raise ValueError(f"無法辨識的語言代碼：{value}")
+        return normalized
+
 
 @register_handler
 class SpeakingCoachHandler(BaseHandler):
@@ -45,6 +86,15 @@ class SpeakingCoachHandler(BaseHandler):
     scenario creation and updates of complex JSON fields (Recordings).
     """
 
+    CAPABILITIES = HandlerCapabilities(
+        create=CreateCapability(channels=("tg",), reason="網頁建卡尚未開放；可在 TG 建立"),
+        update_fields=Operation(reason="對話卡的欄位修改尚未開放"),
+        delete=Operation(reason="對話卡的刪除尚未開放"),
+        actions=SPEAKING_ACTIONS,
+        graph=GraphCapability(reason="口說卡沒有知識圖譜"),
+    )
+    CREATE_PARAMS = SpeakingCoachCreateParams
+
     @property
     @override
     def handler_name(self) -> str:
@@ -56,30 +106,18 @@ class SpeakingCoachHandler(BaseHandler):
 
     @property
     @override
+    def title(self) -> str:
+        """中文名稱。Display title."""
+        return "對話卡"
+
+    @property
+    @override
     def supported_models(self) -> list[str]:
         """支援的 Anki 模型名稱清單。
 
         Supported Anki model names.
         """
-        # 這裡不寫死，可以是任何支援這個欄位結構的模型
-        return ["Speaking_Coach_Dark", "Speaking_Coach_Light"]
-
-    @override
-    def get_input_schema(self) -> dict:
-        """回傳前端需要的參數 Schema。
-
-        Return the parameter JSON schema required by the frontend.
-        """
-        return {
-            "type": "object",
-            "properties": {
-                "prompt": {"type": "string", "description": "口說情境對白的目標台詞"},
-                "context": {"type": "string", "description": "情境描述 (選填)"},
-                "target_language": {"type": "string", "description": "目標語言 (選填)"},
-                "tg_bot": {"type": "string", "description": "TG Bot ID (選填)"},
-            },
-            "required": ["prompt"]
-        }
+        return ["Speaking_Coach_Dark"]
 
     @override
     async def execute_create(
@@ -89,7 +127,7 @@ class SpeakingCoachHandler(BaseHandler):
         deck_name: str,
         model_name: str,
         parameters: dict
-    ) -> int:
+    ) -> list[int]:
         """建立一張空的口說卡片。
 
         Create an empty speaking card.
@@ -104,7 +142,7 @@ class SpeakingCoachHandler(BaseHandler):
                 'target_language', 'tg_bot'.
 
         Returns:
-            建立成功的 Note ID。ID of the created note.
+            建立成功的 Note ID（單元素陣列）。The created note ID, as a list.
         """
         # 口說卡片一開始建立時，錄音與參考答案通常是空的，由後續流程或前端補上
         prompt_text = parameters.get("prompt", "")
@@ -131,69 +169,13 @@ class SpeakingCoachHandler(BaseHandler):
 
         # 將透過 CardService 的嚴格欄位檢查後寫入 Anki
         logger.info("建立口說任務卡片 (Model: %s) -> Prompt: %s", model_name, prompt_text)
-        return await card_service.create_note(
+        note_id = await card_service.create_note(
             deck_name=deck_name,
             model_name=model_name,
             fields=fields,
             tags=["Speaking_Coach", "HandlerGenerated"]
         )
-
-    async def execute_read_list(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        deck_name: str | None = None
-    ) -> list[dict]:
-        """讀取口說卡片列表，過濾並清洗成前端好讀的結構。
-
-        Read speaking cards, filtered and cleaned into a frontend-friendly
-        structure.
-
-        Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            deck_name: 可選的牌組篩選。Optional deck filter.
-
-        Returns:
-            卡片摘要字典列表。List of card summary dicts.
-        """
-        query = note_types_query(self.supported_models, deck_name)
-            
-        note_ids = await card_service.find_notes(query)
-        notes_info = await card_service.get_notes_info(note_ids)
-        
-        results = []
-        for n in notes_info:
-            fields = n.get("fields", {})
-            prompt = fields.get("Prompt", {}).get("value", "")
-            context = fields.get("Context", {}).get("value", "")
-            
-            # 安全解析 JSON 欄位
-            rec_str = fields.get("Recordings", {}).get("value", "[]")
-            recordings = AnkiJsonFieldManager.parse_field_string(rec_str)
-                
-            results.append({
-                "note_id": n["noteId"],
-                "model_name": n["modelName"],
-                "prompt": prompt,
-                "context": context,
-                "recordings_count": len(recordings),
-                "recordings": recordings
-            })
-        return results
-
-    @override
-    async def execute_read_graph(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        deck_name: str | None = None
-    ) -> dict:
-        """口說任務目前不需要知識圖譜，回傳空結構。
-
-        Speaking tasks need no knowledge graph; returns an empty struct.
-        """
-        return {"nodes": [], "links": []}
+        return [note_id]
 
     @override
     async def execute_update(
@@ -299,23 +281,3 @@ class SpeakingCoachHandler(BaseHandler):
             return
 
         raise ValueError(f"不支援的更新操作: {action}")
-
-    @override
-    async def execute_delete(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        note_id: int
-    ) -> None:
-        """刪除口說卡片。
-
-        Delete a speaking card and its relations.
-
-        Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            note_id: 目標 Note ID。Target note ID.
-        """
-        await card_service.delete_note(note_id)
-        # 如果口說卡片有建立任何圖譜關係，這裡一併清除
-        await relation_service.delete_relations_for_note(note_id)

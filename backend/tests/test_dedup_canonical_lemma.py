@@ -123,7 +123,7 @@ class TestDedupManagerTextLayer:
         builder = FakeBuilder()
         mgr = _manager(repo, builder)
         result = asyncio.run(mgr.prepare_generation(
-            999, "纏まる", "ch", dialogue="話はまとまった、だったらほら早く帰りなさい！",
+            999, "纏まる", dialogue="話はまとまった、だったらほら早く帰りなさい！",
         ))
         assert result is None
         assert builder.calls == 0
@@ -132,8 +132,8 @@ class TestDedupManagerTextLayer:
         repo = FakeRepo(record=None, logged=[])
         builder = FakeBuilder()
         mgr = _manager(repo, builder)
-        first = asyncio.run(mgr.prepare_generation(1, "代わる", "ch", dialogue="仕事、代わってくれないかな"))
-        second = asyncio.run(mgr.prepare_generation(2, "代わる", "ch", dialogue="「仕事代わってくれないかな？」"))
+        first = asyncio.run(mgr.prepare_generation(1, "代わる", dialogue="仕事、代わってくれないかな"))
+        second = asyncio.run(mgr.prepare_generation(2, "代わる", dialogue="「仕事代わってくれないかな？」"))
         assert first is not None
         assert second is None
         assert builder.calls == 1
@@ -143,14 +143,14 @@ class TestDedupManagerTextLayer:
         repo = FakeRepo(record=None, logged=[])
         builder = FakeBuilder()
         mgr = _manager(repo, builder)
-        assert asyncio.run(mgr.prepare_generation(1, "出る", "ch", dialogue="出た出た")) is not None
-        assert asyncio.run(mgr.prepare_generation(1, "出す", "ch", dialogue="出た出た")) is not None
+        assert asyncio.run(mgr.prepare_generation(1, "出る", dialogue="出た出た")) is not None
+        assert asyncio.run(mgr.prepare_generation(1, "出す", dialogue="出た出た")) is not None
 
     def test_no_dialogue_keeps_legacy_behaviour(self):
         repo = FakeRepo(record=None, logged=["同じ文"])
         builder = FakeBuilder()
         mgr = _manager(repo, builder)
-        assert asyncio.run(mgr.prepare_generation(1, "v", "ch")) is not None
+        assert asyncio.run(mgr.prepare_generation(1, "v")) is not None
         assert repo.dialogue_queries == 0
 
     def test_restored_soft_deleted_record_is_not_blocked_by_its_own_text(self):
@@ -158,22 +158,32 @@ class TestDedupManagerTextLayer:
         repo = FakeRepo(record=record, logged=["この句"])
         builder = FakeBuilder()
         mgr = _manager(repo, builder)
-        assert asyncio.run(mgr.prepare_generation(1, "v", "ch", dialogue="この句")) is not None
+        assert asyncio.run(mgr.prepare_generation(1, "v", dialogue="この句")) is not None
 
 
 class TestDedupManagerRecords:
     def test_success_writes_canonical_lemma_only(self):
         repo = FakeRepo()
         mgr = _manager(repo, FakeBuilder())
-        asyncio.run(mgr.record_success(1, "纏める", "ch", 10, llm_model="m"))
+        asyncio.run(mgr.record_success(1, "纏める", 10, llm_model="m"))
         assert repo.success_calls[0]["verb_lemma"] == "纏める"
         assert "search_keyword" not in repo.success_calls[0]
 
     def test_failure_passes_positional_fields(self):
+        """遊戲與章節由 repository 依台詞查出，呼叫端不再傳（corpus_db_rebuild D9 的 B）。"""
         repo = FakeRepo()
         mgr = _manager(repo, FakeBuilder())
-        asyncio.run(mgr.record_failure(1, "纏める", "ch", 10, "m"))
-        assert repo.failure_calls == [(1, "纏める", "g", "ch", 10, "m")]
+        asyncio.run(mgr.record_failure(1, "纏める", 10, "m"))
+        assert repo.failure_calls == [(1, "纏める", 10, "m")]
+
+    def test_success_does_not_pass_game_or_chapter(self):
+        repo = FakeRepo()
+        mgr = _manager(repo, FakeBuilder())
+        asyncio.run(mgr.record_success(1, "纏める", 10, context_note_id=11, cloze_note_id=12, llm_model="m"))
+        assert repo.success_calls == [{
+            "script_id": 1, "verb_lemma": "纏める", "master_note_id": 10,
+            "context_note_id": 11, "cloze_note_id": 12, "llm_model": "m",
+        }]
 
 
 # ============================================================

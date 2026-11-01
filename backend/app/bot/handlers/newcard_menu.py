@@ -63,6 +63,11 @@ CARD_TYPES: list[dict[str, str]] = [
         "label": "📚 單字卡 (Vocabulary Mining)",
         "description": "輸入單字或片語，AI 自動生成完整結構的單字學習卡。",
     },
+    {
+        "key": "person",
+        "label": "👤 人脈卡 (Person Profile)",
+        "description": "記住一個人的名字、喜好與上次聊過的事；之後用 /p 名字 找人。",
+    },
 ]
 
 # 每頁最多顯示的卡片類型按鈕數量
@@ -223,6 +228,10 @@ async def handle_newcard_select(
     elif card_type_key == "vocab":
         from app.bot.handlers.fsm.vocabulary_fsm import start_vocabulary_fsm_flow
         await start_vocabulary_fsm_flow(callback.message, state)
+
+    elif card_type_key == "person":
+        from app.bot.handlers.person_profile import start_person_create
+        await start_person_create(callback.message, state)
 
     else:
         await callback.message.edit_text(

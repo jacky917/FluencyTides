@@ -21,6 +21,7 @@ import logging
 from app.core.exceptions import (
     AnkiServiceError,
     DuplicateCardError,
+    NoteNotFoundError,
 )
 from app.schemas.anki import AnkiNote, AnkiNoteOptions
 from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
@@ -190,11 +191,11 @@ class CardService:
             筆記資訊字典。Note info dict.
 
         Raises:
-            AnkiServiceError: 找不到指定筆記時。When the note is not found.
+            NoteNotFoundError: 找不到指定筆記時。When the note is not found.
         """
         notes_info = await self.anki_client.get_notes_info([note_id])
         if not notes_info:
-            raise AnkiServiceError(f"找不到 Note ID: {note_id}")
+            raise NoteNotFoundError(f"找不到 Note ID: {note_id}（可能已刪除或尚未同步）")
         return notes_info[0].model_dump()
 
     async def get_notes_info(self, note_ids: list[int]) -> list[dict]:
@@ -226,22 +227,27 @@ class CardService:
         """
         return await self.anki_client.find_notes(query)
 
-    async def update_note_fields(self, note_id: int, fields: dict[str, str]) -> None:
+    async def update_note_fields(
+        self, note_id: int, fields: dict[str, str], *, model_name: str | None = None
+    ) -> None:
         """更新卡片欄位。
 
         Update note fields.
 
-        會先向 Anki 查詢該 Note 的 model_name，再進行嚴格欄位預檢。
-        Queries the note's model_name from Anki first, then runs strict
+        沒給 ``model_name`` 時先向 Anki 查詢該 Note 的筆記類型，再進行嚴格欄位預檢。
+        Queries the note's model_name from Anki unless given, then runs strict
         field pre-validation before updating.
 
         Args:
             note_id: 目標筆記 ID。Target note ID.
             fields: 欲更新的欄位字典。Fields to update.
+            model_name: 呼叫方已讀過筆記時傳入，省一次查詢。The note type, when
+                the caller has already read the note.
         """
-        note_info = await self.get_note(note_id)
-        model_name = note_info["modelName"]
-        
+        if model_name is None:
+            note_info = await self.get_note(note_id)
+            model_name = str(note_info["modelName"])
+
         await self._validate_fields(model_name, fields)
         
         await self.anki_client.update_note_fields(note_id=note_id, fields=fields)

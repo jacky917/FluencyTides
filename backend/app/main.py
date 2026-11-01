@@ -44,12 +44,13 @@ from app.api.relations import router as relations_router
 from app.api.storage import router as storage_router
 from app.api.verb_pair import router as verb_pair_router
 from app.api.core_verb import router as core_verb_router
-from app.api.example.verb_pair import router as example_verb_pair_router
 from app.api.webhook import router as webhook_router
 from app.api.config import router as config_router
 from app.api.jp_tokenizer import router as jp_tokenizer_router
 from app.api.capability_routes import router as capability_routes_router
 from app.api.cards import router as cards_router
+from app.api.notes import router as notes_router
+from app.api.story import router as story_router
 from app.api.jp_verb_readings import router as jp_verb_readings_router
 from app.bot.dispatcher import create_bot, setup_dispatcher
 from app.core.config import settings
@@ -60,6 +61,7 @@ from app.infrastructure.database.database import (
     dispose_engine,
 )
 from app.infrastructure.database.corpus_database import dispose_corpus_engine
+from app.infrastructure.database.story_corpus_database import dispose_story_engine
 from app.infrastructure.llm.endpoints import log_endpoint_summary
 from app.services import capability_route_service
 from app.infrastructure.storage.minio_client import MinioClient
@@ -214,6 +216,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("✅ 資料庫引擎已釋放。")
     
     await dispose_corpus_engine()
+    # 劇情流程圖只有設定 STORY_CORPUS_DATABASE 覆寫時才有自己的引擎
+    await dispose_story_engine()
     
     logger.info("🏁 FluencyTides API 已關閉。")
 
@@ -366,12 +370,13 @@ app.include_router(storage_router, prefix="/api/v1")
 app.include_router(relations_router, prefix="/api/v1")
 app.include_router(verb_pair_router, prefix="/api/v1")
 app.include_router(core_verb_router, prefix="/api/v1")
-app.include_router(example_verb_pair_router, prefix="/api/v1/example")
 app.include_router(config_router, prefix="/api/v1")
 app.include_router(jp_verb_readings_router, prefix="/api/v1")
 app.include_router(jp_tokenizer_router, prefix="/api/v1")
 app.include_router(capability_routes_router, prefix="/api/v1")
 app.include_router(cards_router, prefix="/api/v1")
+app.include_router(notes_router, prefix="/api/v1")
+app.include_router(story_router, prefix="/api/v1")
 
 # 註冊 Webhook Router路由 (不受 prefix 限制，完全依照 TG_WEBHOOK_PATH 設定)
 app.include_router(webhook_router)

@@ -390,6 +390,63 @@ html, body {
     white-space: pre-line;
 }
 
+/* 說明：對象、語氣重點或場景補充，比句子小、較淡 */
+.ref-note {
+    margin-top: 6px;
+    padding-left: 8px;
+    border-left: 2px solid #444;
+    font-size: 13px;
+    color: #9aa5ab;
+    line-height: 1.6;
+    white-space: pre-line;
+}
+
+/* ============================
+   熟識度刻度條（0＝最正式 … 9＝最親密）：0–3 藍、4–6 紫、7–9 粉紅到火紅
+   ============================ */
+.fam-bar {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.fam-seg {
+    width: 8px;
+    height: 11px;
+    border-radius: 2px;
+    background-color: #3a3a3a;
+}
+
+.fam-seg.on {
+    background-color: var(--fam);
+}
+
+.fam-num {
+    margin-left: 6px;
+    min-width: 10px;
+    text-align: right;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--fam);
+}
+
+.fam-0 { --fam: #4a90c2; }
+.fam-1 { --fam: #5dade2; }
+.fam-2 { --fam: #6cb8e6; }
+.fam-3 { --fam: #82c4ea; }
+.fam-4 { --fam: #9b87f5; }
+.fam-5 { --fam: #a78bfa; }
+.fam-6 { --fam: #c084fc; }
+.fam-7 { --fam: #ff6b9d; }
+.fam-8 { --fam: #ff3d6e; }
+.fam-9 { --fam: #ff1f3d; }
+
+/* 9：最熱情，刻度帶一圈淡光暈 */
+.fam-9 .fam-seg.on {
+    box-shadow: 0 0 5px rgba(255, 31, 61, 0.55);
+}
+
 /* 參考範本內的語音列 */
 .ref-item .avatar-row {
     margin-top: 12px;
@@ -400,6 +457,11 @@ html, body {
    RWD 手機版調整
    ============================ */
 @media screen and (max-width: 480px) {
+    .fam-seg {
+        width: 6px;
+        height: 10px;
+    }
+
     .card {
         padding: 12px 8px;
         margin: 0;
@@ -464,6 +526,10 @@ html, body {
 
     .ref-content {
         font-size: 16px;
+    }
+
+    .ref-note {
+        font-size: 12px;
     }
 }
 

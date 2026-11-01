@@ -4,6 +4,10 @@ Batch child-card generator for intransitive/transitive verb pairs; this
 variant additionally marks normally-deduped log rows with
 ``failure_count = 9`` so they are skipped permanently on future runs.
 
+遊戲以 ``--game`` 指定（預設 SabbatOfTheWitch），名稱、語音與頭像資料夾從
+``game_profiles`` 讀（docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9 的 H）。
+The game comes from ``--game``; its settings are read from ``game_profiles``.
+
 【行為差異註記 2026-08-27】主腳本 generate_child_cards.py 已接上
 fugashi token 級驗證（lemma/讀音/複合動詞前後項/補助動詞四關，
 詳見 docs/archive/verbpair_fugashi_validation_FEAT_2026-08-27.md），
@@ -53,7 +57,12 @@ from app.infrastructure.database.corpus_database import corpus_async_session_fac
 from app.infrastructure.database.elasticsearch_client import search_dialogue_by_verb, dispose_elasticsearch_client
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.core.config import settings
-from sqlalchemy import text
+from scripts.common.database.corpus_repository import (
+    DEFAULT_GAME_ID,
+    get_game_profile,
+    get_lines,
+    require_media_dirs,
+)
 from scripts.common.database.log_repository import PROJECT_JP_VERB_PAIR
 from scripts.common.llm_label import build_llm_model_label
 from scripts.fastapi_client.JP_VerbPair.pipeline_components.dedup_manager import DedupManager
@@ -97,7 +106,8 @@ async def process_verb_group(
     dry_run: bool = False,
     verb_category: str = "",
     verb_stats: dict[str, int] = None,
-    dry_run_generated: Set[tuple[str, int]] = None
+    dry_run_generated: Set[tuple[str, int]] = None,
+    es_source: str | None = None,
 ) -> int:
     """處理自動詞或他動詞欄位中的所有同義動詞。回傳本次新增的卡片數量。
 
@@ -113,7 +123,7 @@ async def process_verb_group(
         master_note_id: 母卡 note id。Master note id.
         raw_verb_str: 動詞欄位原始字串。Raw verb field string.
         max_cards: 單一動詞欄位生成上限。Per-field generation cap.
-        game_name_jp: 遊戲來源名稱。Source game name.
+        game_name_jp: 遊戲日文標題（送給後端的 ``source_game``）。Japanese game title.
         current_count: 既有紀錄數（起算值）。Existing record count.
         global_limit: 本次執行全域上限（0 為不限）。Global cap (0 = none).
         global_total: 進入本函數前的全域生成數。Global count so far.
@@ -121,6 +131,7 @@ async def process_verb_group(
         verb_category: 統計用類別標籤（自/他動詞）。Category label for stats.
         verb_stats: 各動詞生成統計 dict。Per-verb stats accumulator.
         dry_run_generated: dry-run 模擬去重集合。Dry-run dedup set.
+        es_source: ES 文件 ``source`` 欄的過濾值；None 時用 ``game_name_jp``。ES source filter.
 
     Returns:
         int: 本次新增的卡片數。Number of cards added this call.
@@ -164,7 +175,7 @@ async def process_verb_group(
         while has_more_data and success_count < max_cards and (global_limit == 0 or global_total + new_generated < global_limit):
             es_results = await search_dialogue_by_verb(
                 target_verb=normalized_verb,
-                game_name_jp=game_name_jp,
+                game_name_jp=es_source or game_name_jp,
                 limit=limit_per_batch,
                 last_script_id=last_script_id
             )
@@ -186,10 +197,8 @@ async def process_verb_group(
                     break
                     
                 # 取得台詞的章節
-                target_query = text("SELECT chapter FROM scripts WHERE id = :script_id")
-                target_result = await session.execute(target_query, {"script_id": script_id})
-                target_row = target_result.fetchone()
-                chapter = target_row[0] if target_row else ""
+                target_line = (await get_lines(session, [script_id])).get(int(script_id))
+                chapter = (target_line.chapter or "") if target_line else ""
                 
                 # Dry-Run 模式下，模擬真實寫入的全域去重
                 if dry_run and (normalized_verb, script_id) in dry_run_generated:
@@ -198,26 +207,25 @@ async def process_verb_group(
                 # 去重檢查 + 上下文組裝
                 context_dialogue = await dedup_manager.prepare_generation(
                     script_id=script_id, 
-                    verb_lemma=normalized_verb, 
-                    chapter=chapter
+                    verb_lemma=normalized_verb,
                 )
                 
                 # 如果 context_dialogue 是 None，代表 dedup_manager 發現已經有紀錄（成功或失敗），正常跳過
                 # 依照使用者要求，將這些「正常的去重資料」標記為 failure_count = 9
+                # （card_gen_log 改版後只標本卡片類型的紀錄；舊版不分 project）
                 if context_dialogue is None:
-                    mark_query = text("""
-                        UPDATE generated_sentences_log 
-                        SET failure_count = 9
-                        WHERE script_id = :script_id AND verb_lemma = :verb_lemma
-                    """)
-                    await session.execute(mark_query, {
-                        "script_id": script_id,
-                        "verb_lemma": normalized_verb
-                    })
-                    await session.commit()
+                    marked = await dedup_manager.repo.mark_skipped(
+                        session, script_id, normalized_verb, project=PROJECT_JP_VERB_PAIR, failure_count=9,
+                    )
+                    if not marked:
+                        # 被同文去重擋下的句子沒有自己的紀錄，標記不到；說出來，不當成已標記
+                        logger.warning(
+                            f"⚠️ 沒有標到紀錄（{PROJECT_JP_VERB_PAIR} 沒有這筆 card_gen_log）: "
+                            f"script_id={script_id}, verb_lemma='{normalized_verb}'"
+                        )
                     continue
                     
-                # 如果 context_dialogue 是空陣列 []，代表 context_builder 發生異常 (找不到台詞或無法組裝)
+                # 如果 context_dialogue 是空陣列 []，代表目標台詞不在語料庫（ContextBuilder 已記 WARNING）
                 if context_dialogue == []:
                     continue
                     
@@ -259,7 +267,6 @@ async def process_verb_group(
                     await dedup_manager.record_success(
                         script_id=script_id,
                         verb_lemma=normalized_verb,
-                        chapter=chapter,
                         master_note_id=master_note_id,
                         context_note_id=data.get("context_note_id"),
                         cloze_note_id=data.get("cloze_note_id"),
@@ -282,7 +289,7 @@ async def process_verb_group(
 
                         if error_code == "CLOZE_POSITIONING_FAILED":
                             logger.warning(f"⚠️ 該句子挖空定位失敗被後端拒絕，自動跳過並嘗試下一句: {e.response.text}")
-                            await dedup_manager.record_failure(script_id, normalized_verb, chapter, master_note_id, llm_model_name)
+                            await dedup_manager.record_failure(script_id, normalized_verb, master_note_id, llm_model_name)
                             continue
                         
                         # 其他的 422 錯誤 (例如參數錯誤、未知的業務邏輯錯誤)，則當作嚴重錯誤拋出
@@ -298,13 +305,13 @@ async def process_verb_group(
                             
                         if "LLM API 在所有重試後仍回傳空內容" in e.response.text or "PROHIBITED_CONTENT" in e.response.text:
                             logger.warning("⚠️ 遭遇 LLM 安全審查攔截，自動跳過此句並繼續...")
-                            await dedup_manager.record_failure(script_id, normalized_verb, chapter, master_note_id, llm_model_name)
+                            await dedup_manager.record_failure(script_id, normalized_verb, master_note_id, llm_model_name)
                             continue
 
                         # 處理 Reverse Proxy (Nginx/Cloudflare) 導致的無回應 500/502/504 錯誤，或是其它不可控錯誤
                         if e.response.status_code >= 500:
                             logger.warning(f"⚠️ 遭遇伺服器錯誤 ({e.response.status_code})，文字內容: '{e.response.text[:100]}'。將紀錄失敗並跳過...")
-                            await dedup_manager.record_failure(script_id, normalized_verb, chapter, master_note_id, llm_model_name)
+                            await dedup_manager.record_failure(script_id, normalized_verb, master_note_id, llm_model_name)
                             import asyncio
                             await asyncio.sleep(3)  # 稍微等待一下避免連續撞擊代理伺服器
                             continue
@@ -328,6 +335,7 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="批量生成子卡片腳本")
     parser.add_argument("--limit", type=int, required=True, help="本次執行一共添加幾張卡片 (0 代表無限制全部添加)")
     parser.add_argument("--dry-run", action="store_true", help="測試執行，僅計算預計生成的卡片數量，不調用後端 API 且不寫入資料庫")
+    parser.add_argument("--game", default=DEFAULT_GAME_ID, help=f"從哪款遊戲選句（game_profiles.game_id，預設 {DEFAULT_GAME_ID}）")
     args = parser.parse_args()
     
     global_limit = args.limit
@@ -370,17 +378,19 @@ async def main() -> None:
         # 為了保證每次執行結果的一致性，強制對 ID 進行排序
         note_ids.sort()
         
-        # 準備音檔和頭像的路徑
-        voice_dir = Path(settings.JP_VERB_PAIR_VOICE_DIR)
-        avatar_dir = Path(settings.JP_VERB_PAIR_AVATAR_DIR)
-        source_game = settings.JP_VERB_PAIR_SOURCE_GAME
-        game_name_jp = settings.JP_VERB_PAIR_GAME_NAME_JP
-        
         # 從 .env 讀取每個動詞最大生成張數
         max_cards_per_verb = settings.JP_VERB_PAIR_MAX_CARDS_PER_VERB
         logger.info(f"⚙️ 每個動詞（自/他獨立計算）最大生成上限：{max_cards_per_verb} 張")
         
         async with corpus_async_session_factory() as session:
+            # 遊戲設定從 game_profiles 讀（D9 的 H）
+            game = await get_game_profile(session, args.game)
+            # 資料夾不存在時直接中止（FileNotFoundError 由外層記錄後以結束碼 1 離開），
+            # 不讓整批卡片都沒有音檔與頭像
+            voice_dir, avatar_dir = require_media_dirs(game)
+            source_game = game.game_id
+            game_name_jp = game.title_ja_jp
+
             # 初始化生成管線模組
             dedup_manager = DedupManager(
                 session=session,
@@ -447,6 +457,7 @@ async def main() -> None:
                         raw_verb_str=intransitive,
                         max_cards=max_cards_per_verb,
                         game_name_jp=game_name_jp,
+                        es_source=game.es_source,
                         current_count=intransitive_current_count,
                         global_limit=global_limit,
                         global_total=global_total,
@@ -482,6 +493,7 @@ async def main() -> None:
                         raw_verb_str=transitive,
                         max_cards=max_cards_per_verb,
                         game_name_jp=game_name_jp,
+                        es_source=game.es_source,
                         current_count=transitive_current_count,
                         global_limit=global_limit,
                         global_total=global_total,

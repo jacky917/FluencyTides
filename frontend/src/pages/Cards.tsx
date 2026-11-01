@@ -3,7 +3,8 @@
  * Card browsing page.
  *
  * 左：牌組樹；中：所選牌組（含子牌組）的卡片清單，可加 Anki 搜尋語句；右：Anki 渲染好的卡面
- * 與筆記欄位。不經過 task handler，任何筆記類型都能看。
+ * 與筆記欄位。不經過 task handler，任何筆記類型都能看。開放欄位搜尋的筆記類型（handler 宣告
+ * `capabilities.search`）另有欄位搜尋：點欄位、輸入關鍵字，由後端組成 Anki 查詢（`FieldSearchPanel`）。
  *
  * 分工：這個頁面只提供三個面板，版面交給共用的 `SplitLayout`——依內容區實際寬度排成三欄並排、
  * 牌組與清單並排而卡面在下方、或全部疊成一欄（設定見 `lib/pageLayouts.ts` 的 `CARD_LAYOUT`），並排的面板之間可以拖曳
@@ -24,9 +25,10 @@ import { DeckTreePanel } from '../components/shared/DeckTreePanel'
 import { PageHeader } from '../components/shared/PageHeader'
 import { SplitLayout } from '../components/shared/SplitLayout'
 import { useCardNavigation } from '../hooks/useCardNavigation'
-import { useLocalStorage } from '../hooks/useLocalStorage'
+import { useLocalStorage } from '../hooks/useStoredState'
 import { usePanelWidths } from '../hooks/usePanelWidths'
 import { CARD_LAYOUT } from '../lib/pageLayouts'
+import { EMPTY_FIELD_SEARCH, restoreFieldSearch, type FieldSearchState } from '../lib/fieldSearch'
 
 /**
  * 卡片瀏覽頁面。Card browsing page.
@@ -40,6 +42,9 @@ export default function Cards() {
   // 牌組樹的展開狀態也記在 localStorage，下次回來維持原樣
   const [deckToggled, setDeckToggled] = useLocalStorage<Record<string, boolean>>('cards_deck_toggled', {})
   const [searchDraft, setSearchDraft] = useState(nav.search)
+  // 欄位搜尋的類型與條件也記在 localStorage，回到頁面時還在
+  const [storedFieldSearch, setFieldSearch] = useLocalStorage<FieldSearchState>('cards_field_search', EMPTY_FIELD_SEARCH)
+  const fieldSearch = restoreFieldSearch(storedFieldSearch)
   const [fieldsOpen, setFieldsOpen] = useState(false)
   const scrolledCardRef = useRef<number | null>(null)
 
@@ -73,6 +78,8 @@ export default function Cards() {
               scrollable={sideBySide}
               draft={searchDraft}
               onDraft={setSearchDraft}
+              fieldSearch={fieldSearch}
+              onFieldSearch={setFieldSearch}
               deck={nav.deck}
               search={nav.search}
               page={nav.page}
@@ -97,6 +104,7 @@ export default function Cards() {
               deck={nav.deck}
               side={nav.side}
               trailLength={nav.trail.length}
+              arrivedBack={nav.arrivedBack}
               onSide={nav.setSide}
               onBrowse={nav.openNotes}
               onBack={nav.goBack}

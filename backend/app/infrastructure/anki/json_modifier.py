@@ -101,6 +101,15 @@ class AnkiJsonFieldManager:
         return cls.parse_field_string(field_str)
 
     @staticmethod
+    def serialize(data: Any) -> str:
+        """資料轉成要寫進 Anki 欄位的字串（JSON 再做 HTML 轉義）。The field string for the data.
+
+        HTML 轉義避免 Anki 的富文本編輯器將內含的 HTML（如 ``<u>``）錯誤解析並損毀 JSON。
+        要和其他欄位在同一次寫入時用它自己組欄位值。
+        """
+        return html.escape(json.dumps(data, ensure_ascii=False))
+
+    @staticmethod
     async def update_field(card_service: "CardService", note_id: int, field_name: str, data: Any) -> None:
         """將資料序列化為 JSON 字串並寫回 Anki 欄位。
 
@@ -113,9 +122,7 @@ class AnkiJsonFieldManager:
             field_name: 目標欄位名稱。Target field name.
             data: 欲序列化寫入的資料。Data to serialize and store.
         """
-        new_field_str = json.dumps(data, ensure_ascii=False)
-        # 對 JSON 字串進行 HTML 轉義，避免 Anki 的富文本編輯器將內含的 HTML (如 <u>) 錯誤解析並損毀 JSON
-        new_field_str = html.escape(new_field_str)
+        new_field_str = AnkiJsonFieldManager.serialize(data)
         await card_service.update_note_fields(note_id, {field_name: new_field_str})
         logger.debug("成功更新筆記 %d 的 JSON 欄位: %s", note_id, field_name)
 

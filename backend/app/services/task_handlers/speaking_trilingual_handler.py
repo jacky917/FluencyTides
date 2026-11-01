@@ -23,19 +23,33 @@ overwrites). All field I/O goes through ``CardService`` /
 ``AnkiJsonFieldManager``.
 """
 
-from typing import override, TYPE_CHECKING
 import json
 import logging
 import uuid
+from datetime import date
+from typing import TYPE_CHECKING, Literal, override
 
-from app.infrastructure.anki.search import note_types_query
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.config import settings
+from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
+from app.services import speaking_trilingual_generate as generate_service
 from app.services.task_handlers.base import BaseHandler
+from app.services.task_handlers.capabilities import (
+    CreateCapability,
+    GraphCapability,
+    HandlerCapabilities,
+    Operation,
+    SearchField,
+)
 from app.services.task_handlers.registry import register_handler
+from app.services.task_handlers.shared.trilingual_familiarity import parse_familiarity
 from app.services.task_handlers.shared.trilingual_lang import (
     LANG_CODES,
     recordings_field,
     references_field,
 )
+from app.services.task_handlers.speaking_coach_handler import SPEAKING_ACTIONS
 
 if TYPE_CHECKING:
     from app.services.card_service import CardService
@@ -43,8 +57,89 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-from app.core.config import settings
-from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
+# 建卡參數的上限：只防前端 bug 或手動呼叫 API 寫進超大內容（AnkiDroid 打開會很慢），
+# 正常使用遠遠碰不到——LLM 一次約生成二十幾句，每句幾十字
+MAX_REFERENCES_PER_LANG = 100
+MAX_TEXT_LENGTH = 2000
+
+
+class ReferenceDraft(BaseModel):
+    """建卡時的一句參考答案；``date``、``status``、``audios`` 由建卡補上。
+
+    One reference answer given at creation.
+    """
+
+    content: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH, description="句子")
+    note: str = Field(
+        default="",
+        max_length=MAX_TEXT_LENGTH,
+        description="說明：對象與場合、語氣的關鍵或場景補充（卡片背面以小字顯示）",
+    )
+    familiarity: int | None = Field(default=None, description="熟識度 0–9；省略表示未標")
+
+    @field_validator("content", "note", mode="before")
+    @classmethod
+    def _strip(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("familiarity", mode="before")
+    @classmethod
+    def _familiarity(cls, value: object) -> int | None:
+        # 規則與匯入、卡片相同（trilingual_familiarity.py）
+        return parse_familiarity(value)
+
+
+class SpeakingTrilingualCreateParams(BaseModel):
+    """三語對話卡的建立參數（D3）。語言由欄位決定，所以沒有語言參數；``tg_bot`` 由服務層傳入。
+
+    Create parameters of a trilingual speaking card. 網頁的預覽流程由草稿（:meth:`execute_draft`）
+    預先填好，使用者勾選後送回。
+    """
+
+    prompt: str = Field(
+        min_length=1,
+        max_length=MAX_TEXT_LENGTH,
+        title="情境提示",
+        description="共通口說情境提示（三語共用）",
+        json_schema_extra={"x-ui": "textarea"},
+    )
+    context: str = Field(
+        default="",
+        max_length=MAX_TEXT_LENGTH,
+        title="情境",
+        description="情境描述（選填）",
+        json_schema_extra={"x-ui": "textarea"},
+    )
+    references_zh: list[ReferenceDraft] = Field(
+        default_factory=list, max_length=MAX_REFERENCES_PER_LANG, title="中文說法"
+    )
+    references_ja: list[ReferenceDraft] = Field(
+        default_factory=list, max_length=MAX_REFERENCES_PER_LANG, title="日文說法"
+    )
+    references_en: list[ReferenceDraft] = Field(
+        default_factory=list, max_length=MAX_REFERENCES_PER_LANG, title="英文說法"
+    )
+
+
+class SpeakingTrilingualDraftParams(BaseModel):
+    """網頁預覽流程的草稿輸入：場景、想怎麼答、對象。Draft input of the web preview flow."""
+
+    background: str = Field(
+        min_length=1,
+        title="背景",
+        description="發生什麼事、自己的處境",
+        json_schema_extra={"x-ui": "textarea"},
+    )
+    intent: str = Field(
+        default="",
+        title="想怎麼答",
+        description="選填；沒填時由 LLM 想出各種正反回應的自然說法",
+        json_schema_extra={"x-ui": "textarea"},
+    )
+    audience: Literal[*generate_service.AUDIENCES] = Field(  # type: ignore[valid-type]
+        default=generate_service.ANY_AUDIENCE, title="對象", description="不指定時生成對各種對象的說法"
+    )
+    audience_note: str = Field(default="", title="對象補充", description="選填，例：房東，年紀比我大")
 
 
 @register_handler
@@ -62,6 +157,34 @@ class SpeakingTrilingualHandler(BaseHandler):
     References x3) plus Prompt_Audios (with lang keys).
     """
 
+    CAPABILITIES = HandlerCapabilities(
+        create=CreateCapability(
+            supported=True,
+            channels=("web",),
+            flow="preview",
+            deck="selected",
+            note_type="Speaking_Trilingual_Dark",
+        ),
+        update_fields=Operation(reason="三語對話卡的欄位修改尚未開放"),
+        delete=Operation(reason="三語對話卡的刪除尚未開放"),
+        actions=SPEAKING_ACTIONS,
+        search=Operation(supported=True),
+        graph=GraphCapability(reason="口說卡沒有知識圖譜"),
+    )
+    CREATE_PARAMS = SpeakingTrilingualCreateParams
+    DRAFT_PARAMS = SpeakingTrilingualDraftParams
+    CREATE_TAGS = ("Speaking_Trilingual", "HandlerGenerated")
+    #: 網頁欄位搜尋的按鈕。參考答案是 JSON，句子與說明都在裡面，「包含」比對會一起找到。
+    #: The field-search buttons; references hold both sentences and notes.
+    SEARCH_FIELDS = (
+        SearchField("prompt", "情境", ("Prompt",)),
+        SearchField("context", "補充", ("Context",)),
+        SearchField("refs", "說法（三語）", tuple(references_field(lang) for lang in LANG_CODES)),
+        SearchField("zh", "中文", (references_field("ZH"),)),
+        SearchField("ja", "日文", (references_field("JA"),)),
+        SearchField("en", "英文", (references_field("EN"),)),
+    )
+
     @property
     @override
     def handler_name(self) -> str:
@@ -73,6 +196,12 @@ class SpeakingTrilingualHandler(BaseHandler):
 
     @property
     @override
+    def title(self) -> str:
+        """中文名稱。Display title."""
+        return "三語對話卡"
+
+    @property
+    @override
     def supported_models(self) -> list[str]:
         """支援的 Anki 模型名稱清單。
 
@@ -81,20 +210,32 @@ class SpeakingTrilingualHandler(BaseHandler):
         return ["Speaking_Trilingual_Dark"]
 
     @override
-    def get_input_schema(self) -> dict:
-        """回傳前端需要的參數 Schema。
+    async def execute_draft(self, parameters: dict[str, object], existing_tags: list[str]) -> dict[str, object]:
+        """請 LLM 為場景生成三語說法與建議標籤，整理成建立參數的草稿（不寫入）。
 
-        Return the parameter JSON schema required by the frontend.
+        Ask the LLM for sayings and tags, shaped as draft create parameters.
+
+        Args:
+            parameters: ``SpeakingTrilingualDraftParams`` 驗證後的輸入。The validated input.
+            existing_tags: 三語卡用過的標籤，讓 LLM 優先沿用。Existing tags.
+
+        Returns:
+            ``SpeakingTrilingualCreateParams`` 形狀的草稿，另帶 ``tags``（建議的標籤）。The draft plus tags.
         """
-        return {
-            "type": "object",
-            "properties": {
-                "prompt": {"type": "string", "description": "共通口說情境提示（三語共用）"},
-                "context": {"type": "string", "description": "情境描述 (選填)"},
-                "tg_bot": {"type": "string", "description": "TG Bot ID (選填)"},
-            },
-            "required": ["prompt"],
+        audience = generate_service.target_audience(str(parameters["audience"]), str(parameters["audience_note"]))
+        draft = await generate_service.generate(
+            str(parameters["background"]), str(parameters["intent"]), audience, existing_tags
+        )
+        references = {
+            f"references_{lang.lower()}": [
+                saying.model_dump() for saying in getattr(draft, lang.lower()) if saying.content.strip()
+            ]
+            for lang in LANG_CODES
         }
+        params = SpeakingTrilingualCreateParams.model_validate(
+            {"prompt": draft.prompt, "context": draft.context, **references}
+        ).model_dump()
+        return {**params, "tags": draft.tags}
 
     @override
     async def execute_create(
@@ -104,22 +245,22 @@ class SpeakingTrilingualHandler(BaseHandler):
         deck_name: str,
         model_name: str,
         parameters: dict
-    ) -> int:
-        """建立一張空的三語口說卡片（七個 JSON 欄位皆為空陣列）。
+    ) -> list[int]:
+        """建立一張三語口說卡片：參考答案依參數寫入（補上今天、啟用、沒有音檔），其餘 JSON 欄位為空陣列。
 
-        Create an empty trilingual speaking card (all seven JSON fields
-        start as empty arrays).
+        Create a trilingual speaking card with the given reference answers;
+        the other JSON fields start as empty arrays.
 
         Args:
             card_service: 卡片服務。Card service.
             relation_service: 關聯服務。Relation service.
             deck_name: 目標牌組。Target deck.
             model_name: 目標模型。Target model.
-            parameters: 需含 prompt，可選 context / tg_bot。Requires
-                'prompt'; optional 'context', 'tg_bot'.
+            parameters: ``SpeakingTrilingualCreateParams`` 驗證後的參數與 tg_bot。The
+                validated parameters plus 'tg_bot'.
 
         Returns:
-            建立成功的 Note ID。ID of the created note.
+            建立成功的 Note ID（單元素陣列）。The created note ID, as a list.
         """
         prompt_text = parameters.get("prompt", "")
         context_text = parameters.get("context", "")
@@ -135,73 +276,24 @@ class SpeakingTrilingualHandler(BaseHandler):
             "Card_ID": card_id,
             "TG_Bot": tg_bot,
         }
+        today = date.today().isoformat()
         for lang in LANG_CODES:
             fields[recordings_field(lang)] = empty_json_array
-            fields[references_field(lang)] = empty_json_array
+            references = [
+                {**_without_blank_note(ref), "status": 1, "date": today, "audios": []}
+                for ref in parameters.get(f"references_{lang.lower()}") or []
+            ]
+            # 參考答案可能含 <、& 等字元：與語音流程、匯入相同，經 HTML 轉義後寫入
+            fields[references_field(lang)] = AnkiJsonFieldManager.serialize(references)
 
         logger.info("建立三語口說卡片 (Model: %s) -> Prompt: %s", model_name, prompt_text)
-        return await card_service.create_note(
+        note_id = await card_service.create_note(
             deck_name=deck_name,
             model_name=model_name,
             fields=fields,
-            tags=["Speaking_Trilingual", "HandlerGenerated"],
+            tags=list(self.CREATE_TAGS),
         )
-
-    async def execute_read_list(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        deck_name: str | None = None
-    ) -> list[dict]:
-        """讀取三語口說卡片列表（各語言錄音數統計）。
-
-        Read the trilingual speaking card list with per-language
-        recording counts.
-
-        Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            deck_name: 可選的牌組篩選。Optional deck filter.
-
-        Returns:
-            卡片摘要字典列表。List of card summary dicts.
-        """
-        query = note_types_query(self.supported_models, deck_name)
-
-        note_ids = await card_service.find_notes(query)
-        notes_info = await card_service.get_notes_info(note_ids)
-
-        results = []
-        for n in notes_info:
-            fields = n.get("fields", {})
-            recordings_count = {}
-            for lang in LANG_CODES:
-                rec_str = fields.get(recordings_field(lang), {}).get("value", "[]")
-                recordings_count[lang] = len(
-                    AnkiJsonFieldManager.parse_field_string(rec_str)
-                )
-            results.append({
-                "note_id": n["noteId"],
-                "model_name": n["modelName"],
-                "prompt": fields.get("Prompt", {}).get("value", ""),
-                "context": fields.get("Context", {}).get("value", ""),
-                "recordings_count": recordings_count,
-            })
-        return results
-
-    @override
-    async def execute_read_graph(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        deck_name: str | None = None
-    ) -> dict:
-        """三語口說卡片不需要知識圖譜，回傳空結構。
-
-        Trilingual speaking cards need no knowledge graph; returns an
-        empty struct.
-        """
-        return {"nodes": [], "links": []}
+        return [note_id]
 
     @override
     async def execute_update(
@@ -322,21 +414,7 @@ class SpeakingTrilingualHandler(BaseHandler):
 
         raise ValueError(f"不支援的更新操作: {action}")
 
-    @override
-    async def execute_delete(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        note_id: int
-    ) -> None:
-        """刪除三語口說卡片並清除關聯。
 
-        Delete a trilingual speaking card and clean up its relations.
-
-        Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            note_id: 目標 Note ID。Target note ID.
-        """
-        await card_service.delete_note(note_id)
-        await relation_service.delete_relations_for_note(note_id)
+def _without_blank_note(reference: dict[str, object]) -> dict[str, object]:
+    """參考答案省略空的說明與未標的熟識度（與匯入的資料一致）。Drop an empty note and unset familiarity."""
+    return {key: value for key, value in reference.items() if value not in ("", None)}

@@ -1,15 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import { initialFaceState, reduceFace, type FaceState } from './faceTransitionMachine'
+import type { FacePreference } from './faceTransitions'
 
-type Side = 'q' | 'a'
+// q、a 是同一張卡片的正反面，b 是另一張卡片
+type Side = 'q' | 'a' | 'b'
 const idle = initialFaceState<Side>(1, 'q', -1)
-const sync = (state: FaceState<Side>, value: Side, extra: { key?: unknown; animated?: boolean; height?: number } = {}) =>
+const page: FacePreference = { animation: 'page', speed: 'normal' }
+const off: FacePreference = { animation: 'none', speed: 'normal' }
+const sync = (
+  state: FaceState<Side>,
+  value: Side,
+  extra: { key?: unknown; preference?: FacePreference; height?: number } = {},
+) =>
   reduceFace(state, {
     type: 'sync',
     key: extra.key ?? 1,
     value,
-    direction: value === 'a' ? 1 : -1,
-    animated: extra.animated ?? true,
+    direction: value === 'q' ? -1 : 1,
+    preference: extra.preference ?? page,
     measure: () => extra.height,
   })
 
@@ -33,8 +41,51 @@ describe('reduceFace', () => {
     expect(done).toMatchObject({ stage: 'idle', current: 'a', incoming: null, fromHeight: undefined, toHeight: undefined })
   })
 
+  it('keeps the animation chosen when the switch started', () => {
+    const slide: FacePreference = { animation: 'slide', speed: 'fast' }
+    const preparing = sync(idle, 'a', { preference: slide })
+    expect(preparing.preference).toEqual(slide)
+    // 播放中外部換了設定（例如翻面接著換卡）：這一次仍播原本的動畫
+    expect(sync(preparing, 'a', { preference: page })).toBe(preparing)
+    const animating = reduceFace(preparing, { type: 'ready' })
+    expect(sync(animating, 'a', { preference: page })).toBe(animating)
+    expect(reduceFace(animating, { type: 'finished' }).preference).toBeUndefined()
+  })
+
+  it('retargets a switch that has not started yet', () => {
+    // 新卡片還在排版時又點了另一張：改準備最新的那一張，不先播已經不要的那一面
+    const slide: FacePreference = { animation: 'slide', speed: 'normal' }
+    const preparing = sync(idle, 'a', { height: 300 })
+    expect(sync(preparing, 'b', { preference: slide })).toMatchObject({
+      stage: 'preparing',
+      current: 'q',
+      incoming: 'b',
+      direction: 1,
+      preference: slide,
+      fromHeight: 300,
+    })
+  })
+
+  it('finishes a running switch before heading to a third value', () => {
+    const slide: FacePreference = { animation: 'slide', speed: 'normal' }
+    const animating = reduceFace(sync(idle, 'a'), { type: 'ready' })
+    expect(sync(animating, 'b', { preference: slide })).toBe(animating)
+    const done = reduceFace(animating, { type: 'finished' })
+    expect(sync(done, 'b', { preference: slide })).toMatchObject({
+      stage: 'preparing',
+      current: 'a',
+      incoming: 'b',
+      preference: slide,
+    })
+  })
+
+  it('jumps to a third value whose animation is off, ending the running switch', () => {
+    const animating = reduceFace(sync(idle, 'a'), { type: 'ready' })
+    expect(sync(animating, 'b', { preference: off })).toMatchObject({ stage: 'idle', current: 'b', incoming: null })
+  })
+
   it('switches immediately without animation', () => {
-    expect(sync(idle, 'a', { animated: false })).toMatchObject({ stage: 'idle', current: 'a', incoming: null })
+    expect(sync(idle, 'a', { preference: off })).toMatchObject({ stage: 'idle', current: 'a', incoming: null })
   })
 
   it('cancels when toggled back before the animation starts', () => {
@@ -52,7 +103,7 @@ describe('reduceFace', () => {
 
   it('jumps to the result when animation is turned off mid-switch', () => {
     const animating = reduceFace(sync(idle, 'a'), { type: 'ready' })
-    expect(sync(animating, 'a', { animated: false })).toMatchObject({ stage: 'idle', current: 'a', incoming: null })
+    expect(sync(animating, 'a', { preference: off })).toMatchObject({ stage: 'idle', current: 'a', incoming: null })
   })
 
   it('resets without animation when the key changes', () => {
