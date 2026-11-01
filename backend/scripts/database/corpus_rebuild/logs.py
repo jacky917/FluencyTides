@@ -110,11 +110,16 @@ def backfill_relations(cur) -> None:
                    'term', term_key, {lemma},
                    {attrs}, {status}, 'migration', created_at
             FROM card_gen_log WHERE {child} IS NOT NULL""")
-    # 母卡 → 詞：同一張母卡只寫一次；全部子卡都刪掉時才算刪除
-    # Master → term once per (master, term); deleted only if every row is deleted.
+    # 母卡 → 詞：同一張母卡只寫一次，只算真的產生過子卡的紀錄（失敗紀錄不算）；
+    # 這些紀錄全部刪掉時才算刪除。規則與執行期 log_repository._retire_record_links 相同。
+    # Master → term once per (master, term), counting only records that produced
+    # a child card; deleted only when all of them are deleted. Same rule as the
+    # runtime log_repository._retire_record_links.
     cur.execute(ins + f"""
         SELECT 'core.teaches', 'note', CAST(master_note_id AS CHAR), {lemma},
                'term', term_key, {lemma},
                JSON_OBJECT('card_type', card_type), IF(MIN(is_deleted), 'deleted', 'active'),
                'migration', MIN(created_at)
-        FROM card_gen_log GROUP BY master_note_id, term_key, card_type""")
+        FROM card_gen_log
+        WHERE context_note_id IS NOT NULL OR cloze_note_id IS NOT NULL
+        GROUP BY master_note_id, term_key, card_type""")
