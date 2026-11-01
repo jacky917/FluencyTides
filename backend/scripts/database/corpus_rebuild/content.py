@@ -202,12 +202,21 @@ def build(anchor_rows: list[dict], legacy: list[LegacyRow], calib_dir: Path,
         m = _VOICE_PREFIX.match(voice_of(k, i) or "")
         if m:
             prefixes[speaker_of(k, i)][m.group(1)] += 1
+    # F11：在繁中模式讀檔看名字欄得到的繁中名（有這個檔案才用）
+    # F11: zh-Hant names read from the in-game name box, if available.
+    tw_names: dict[str, str] = {}
+    tw_file = calib_dir / "speaker_names_tw.json"
+    if tw_file.exists():
+        for x in json.loads(tw_file.read_text(encoding="utf-8")):
+            if x.get("name_zh_hant"):
+                tw_names[x["name_ja_jp"]] = x["name_zh_hant"]
     speaker_ids: dict[str, int] = {}
     for n, (name, _cnt) in enumerate(names.most_common(), start=1):
         speaker_ids[name] = n
         pre = prefixes[name].most_common(1)
         c.speakers.append({"speaker_id": n, "game_id": GAME_ID, "name_ja_jp": name,
-                           "name_zh_hant": None, "name_zh_hant_src": None,
+                           "name_zh_hant": tw_names.get(name),
+                           "name_zh_hant_src": "game" if name in tw_names else None,
                            "voice_prefix": pre[0][0] if pre else None,
                            "avatar_file": None, "sort_order": n})
 
