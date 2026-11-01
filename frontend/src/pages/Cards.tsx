@@ -6,7 +6,7 @@
  * 與筆記欄位。不經過 task handler，任何筆記類型都能看。
  *
  * 分工：這個頁面只提供三個面板，版面交給共用的 `SplitLayout`——依內容區實際寬度排成三欄並排、
- * 牌組與清單並排而卡面在下方、或全部疊成一欄（設定見 `lib/cardLayout.ts` 的 `CARD_LAYOUT`），並排的面板之間可以拖曳
+ * 牌組與清單並排而卡面在下方、或全部疊成一欄（設定見 `lib/pageLayouts.ts` 的 `CARD_LAYOUT`），並排的面板之間可以拖曳
  * 調整寬度。
  * - 網址中的狀態與卡面跳轉、返回：`hooks/useCardNavigation.ts`
  * - 面板寬度的預設與記憶：`hooks/usePanelWidths.ts`
@@ -26,7 +26,7 @@ import { SplitLayout } from '../components/shared/SplitLayout'
 import { useCardNavigation } from '../hooks/useCardNavigation'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { usePanelWidths } from '../hooks/usePanelWidths'
-import { CARD_LAYOUT, LIST_MIN } from '../lib/cardLayout'
+import { CARD_LAYOUT } from '../lib/pageLayouts'
 
 /**
  * 卡片瀏覽頁面。Card browsing page.
@@ -68,7 +68,6 @@ export default function Cards() {
         },
         {
           id: 'list',
-          minWidth: LIST_MIN,
           render: (sideBySide) => (
             <CardListPanel
               scrollable={sideBySide}

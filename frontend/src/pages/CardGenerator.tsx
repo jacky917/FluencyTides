@@ -28,13 +28,11 @@ import { Button } from '../components/ui/button'
 import { Card, CardContent } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import { Skeleton } from '../components/ui/skeleton'
+import { useDeckStatus } from '../hooks/useDeckStatus'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { usePanelWidths } from '../hooks/usePanelWidths'
-import { GENERATE_LAYOUT } from '../lib/cardLayout'
+import { GENERATE_LAYOUT } from '../lib/pageLayouts'
 import type { HandlerInfo } from '../types/api'
-
-/** 表單區塊最窄的寬度。Narrowest form area. */
-const FORM_MIN = 320
 
 /**
  * 卡片產生器頁面：在牌組樹選牌組，再選擇 Handler 與模型後輸入單字產生卡片。
@@ -61,11 +59,10 @@ export default function CardGenerator() {
     queryKey: ['handlers'],
     queryFn: FluencyTidesAPI.listHandlers,
   })
-  // 與牌組樹共用同一份查詢：記住的牌組可能已在 Anki 被刪除或改名，後端遇到不存在的牌組會自動建立，
-  // 所以送出前要確認它還在
-  const { data: decks } = useQuery({ queryKey: ['decks'], queryFn: FluencyTidesAPI.listDecks })
-  const deckMissing = selectedDeck !== null && decks !== undefined && !decks.some((d) => d.deck_name === selectedDeck)
-  const deckReady = selectedDeck !== null && !deckMissing
+  // 後端遇到不存在的牌組會自動建立，所以要確認牌組還在才能送出；清單還沒載入或載入失敗時無法確認，
+  // 也不能送出
+  const deckStatus = useDeckStatus(selectedDeck)
+  const deckReady = deckStatus === 'ok'
 
   // 初始選中第一個 Handler
   useEffect(() => {
@@ -138,11 +135,19 @@ export default function CardGenerator() {
         {/* 牌組：由牌組樹決定 */}
         <div className="space-y-2">
           <label className="text-sm font-medium">Deck</label>
-          {selectedDeck === null ? (
+          {deckStatus === 'all' ? (
             <p id="generate-deck-hint" role="status" className="text-sm text-muted-foreground">
               請先在牌組樹選擇一個牌組（選「全部牌組」時無法產生卡片）。
             </p>
-          ) : deckMissing ? (
+          ) : deckStatus === 'loading' ? (
+            <p id="generate-deck-hint" role="status" className="text-sm text-muted-foreground break-all">
+              {selectedDeck}（正在確認牌組是否存在…）
+            </p>
+          ) : deckStatus === 'error' ? (
+            <p id="generate-deck-hint" role="status" className="text-sm text-destructive break-all">
+              無法載入牌組清單，暫時無法確認牌組「{selectedDeck}」是否存在；請在牌組樹重新整理。
+            </p>
+          ) : deckStatus === 'missing' ? (
             <p id="generate-deck-hint" role="status" className="text-sm text-destructive break-all">
               牌組「{selectedDeck}」已不存在，請在牌組樹重新選擇。
             </p>
@@ -242,7 +247,7 @@ export default function CardGenerator() {
             />
           ),
         },
-        { id: 'form', minWidth: FORM_MIN, render: formPanel },
+        { id: 'main', render: formPanel },
       ]}
     />
   )

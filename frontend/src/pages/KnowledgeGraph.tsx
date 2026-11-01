@@ -4,11 +4,12 @@ import ForceGraph2D from 'react-force-graph-2d'
 import { RefreshCw, Settings, Link as LinkIcon, Loader2, X, Maximize2, Minimize2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../api/client'
+import { useDeckStatus } from '../hooks/useDeckStatus'
 import { useElementSize } from '../hooks/useElementSize'
 import { useLocalStorage } from '../hooks/useLocalStorage'
 import { usePanelWidths } from '../hooks/usePanelWidths'
 import { collectNodePositions, readGraphView, seedNodePositions, writeGraphCamera, writeGraphView } from '../lib/graphView'
-import { GRAPH_LAYOUT } from '../lib/cardLayout'
+import { GRAPH_LAYOUT } from '../lib/pageLayouts'
 import { cn } from '../lib/utils'
 import { CardDetailModal } from '../components/CardDetailModal'
 import { ConfirmDialog, type ConfirmDialogProps } from '../components/shared/ConfirmDialog'
@@ -52,8 +53,6 @@ const FONT_SIZES = [
  * The stored value for all decks; `getHandlerGraph` treats it as no filter too.
  */
 const ALL_DECKS = 'All Decks'
-/** 圖的區塊最窄的寬度。Narrowest graph area. */
-const GRAPH_MIN = 320
 
 /**
  * 這個瀏覽器能不能讓元素全螢幕：iPhone 的 Safari 沒有 `Element.requestFullscreen`，內嵌視窗
@@ -106,11 +105,20 @@ export default function KnowledgeGraph() {
 
   // 全螢幕：放大整個圖的區塊（含工具列與彈窗）；按 Esc 或再按一次按鈕退出
   const fullscreenRef = useRef<HTMLDivElement>(null)
-  const [isFullscreen, setIsFullscreen] = useState(false)
+  // isFullscreen：被放大的就是這個區塊（決定按鈕、外觀與區塊內的 Toaster）。
+  // holdsFullscreen：被放大的是這個區塊或其中的元素（例如卡片詳情裡的影片），這段期間要鎖住版面
+  // 模式：切換模式會重新掛載這個區塊，被放大的元素一被移除，瀏覽器就會整個退出全螢幕
+  const [fullscreen, setFullscreen] = useState({ isFullscreen: false, holdsFullscreen: false })
+  const { isFullscreen, holdsFullscreen } = fullscreen
   useEffect(() => {
-    // 只認這張圖的區塊；卡面裡的影片等其他元素進入全螢幕不算
-    const onChange = () =>
-      setIsFullscreen(document.fullscreenElement !== null && document.fullscreenElement === fullscreenRef.current)
+    const onChange = () => {
+      const element = document.fullscreenElement
+      const area = fullscreenRef.current
+      setFullscreen({
+        isFullscreen: element !== null && element === area,
+        holdsFullscreen: element !== null && area !== null && area.contains(element),
+      })
+    }
     document.addEventListener('fullscreenchange', onChange)
     return () => document.removeEventListener('fullscreenchange', onChange)
   }, [])
@@ -130,10 +138,8 @@ export default function KnowledgeGraph() {
     })
   }
 
-  // 與牌組樹共用同一份查詢：記住的牌組可能已在 Anki 被刪除或改名
-  const { data: decks } = useQuery({ queryKey: ['decks'], queryFn: FluencyTidesAPI.listDecks })
-  const deckMissing =
-    selectedDeck !== ALL_DECKS && decks !== undefined && !decks.some((d) => d.deck_name === selectedDeck)
+  // 記住的牌組可能已在 Anki 被刪除或改名
+  const deckMissing = useDeckStatus(selectedDeck === ALL_DECKS ? null : selectedDeck) === 'missing'
 
   const { data: relationTypesData } = useQuery({
     queryKey: ['relationTypes'],
@@ -355,65 +361,15 @@ export default function KnowledgeGraph() {
           Sync
         </Button>
 
-        <div className="relative">
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-            aria-label="標籤樣式與字級"
-          >
-            <Settings className="w-4 h-4" />
-          </Button>
-
-          {isSettingsOpen && (
-            <div className="absolute right-0 top-full mt-2 w-48 bg-background border shadow-xl rounded-xl p-2 z-50">
-              <p className="text-xs font-semibold text-muted-foreground px-2 py-1 mb-1">Label Style</p>
-              {FONT_STYLES.map(style => (
-                <button
-                  key={style.id}
-                  onClick={() => {
-                    setFontStyleId(style.id)
-                    setIsSettingsOpen(false)
-                  }}
-                  className={`w-full text-left px-3 py-2 text-sm rounded-md transition-colors ${fontStyleId === style.id ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`}
-                >
-                  {style.name}
-                </button>
-              ))}
-              <p className="text-xs font-semibold text-muted-foreground px-2 py-1 mb-1 border-t mt-2 pt-2">Font Size</p>
-              {FONT_SIZES.map(size => (
-                <button
-                  key={size.id}
-                  onClick={() => {
-                    setFontSizeMultiplier(size.value)
-                    setIsSettingsOpen(false)
-                  }}
-                  className={`w-full text-left px-3 py-2 text-sm rounded-md transition-colors ${fontSizeMultiplier === size.value ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`}
-                >
-                  {size.name}
-                </button>
-              ))}
-              <p className="text-xs font-semibold text-muted-foreground px-2 py-1 mb-1 border-t mt-2 pt-2">Label Appears At (Zoom)</p>
-              <div className="flex items-center justify-between px-3 py-1 mb-2">
-                <button
-                  onClick={() => setTextVisibilityThreshold(prev => Math.max(0.2, Number((prev - 0.1).toFixed(1))))}
-                  className="w-6 h-6 flex items-center justify-center bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-sm font-bold"
-                >
-                  -
-                </button>
-                <span className="text-sm font-medium w-12 text-center">
-                  {Math.round(textVisibilityThreshold * 100)}%
-                </span>
-                <button
-                  onClick={() => setTextVisibilityThreshold(prev => Math.min(3.0, Number((prev + 0.1).toFixed(1))))}
-                  className="w-6 h-6 flex items-center justify-center bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-sm font-bold"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+          aria-expanded={isSettingsOpen}
+          aria-label="標籤樣式與字級"
+        >
+          <Settings className="w-4 h-4" />
+        </Button>
 
         <Button
           variant="outline"
@@ -433,107 +389,158 @@ export default function KnowledgeGraph() {
         </Button>
       </div>
 
-      {isLoading ? (
-        <div className="flex-1 p-6 flex flex-col gap-4">
-          <Skeleton className="w-full h-full rounded-xl" />
-        </div>
-      ) : isError ? (
-        <div className="flex-1 flex items-center justify-center text-destructive">
-          <p>Failed to load graph data. Make sure the backend is running.</p>
-        </div>
-      ) : formattedGraphData.nodes.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
-          <p>{deckMissing ? `牌組「${selectedDeck}」已不存在，請在牌組樹重新選擇。` : 'No relational data found. Generate some cards first!'}</p>
-        </div>
-      ) : (
-        <div ref={graphAreaRef} className="flex-1 min-h-0 relative bg-slate-50/50 dark:bg-slate-900/50 rounded-xl overflow-hidden m-1">
-          <ForceGraph2D
-            ref={fgRef}
-            width={graphSize.width || undefined}
-            height={graphSize.height || undefined}
-            graphData={formattedGraphData}
-            cooldownTicks={frozen ? 0 : undefined}
-            onEngineStop={saveLayout}
-            onZoomEnd={saveCamera}
-            nodeLabel={(node: any) => {
-              if (node.translation) return `${node.label} (${node.translation}) - ${node.status || 'ghost'}`
-              return `${node.label} - ${node.status || 'ghost'}`
-            }}
-            linkDirectionalArrowLength={(link: any) => link.isBidirectional ? 0 : 3.5}
-            linkDirectionalArrowRelPos={1}
-            linkCurvature={(link: any) => link.curvature}
-            linkLabel="label"
-            nodeCanvasObjectMode={() => 'after'}
-            nodeCanvasObject={(node: any, ctx, globalScale) => {
-              const label = node.label;
+      {/* 圖的區塊；設定選單疊在它上面、高度不超過它（Card 會裁掉超出的部分，選單過長時自己捲動） */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {isLoading ? (
+          <div className="flex-1 p-6 flex flex-col gap-4">
+            <Skeleton className="w-full h-full rounded-xl" />
+          </div>
+        ) : isError ? (
+          <div className="flex-1 flex items-center justify-center text-destructive">
+            <p>Failed to load graph data. Make sure the backend is running.</p>
+          </div>
+        ) : formattedGraphData.nodes.length === 0 ? (
+          <div className="flex-1 flex items-center justify-center text-muted-foreground">
+            <p>{deckMissing ? `牌組「${selectedDeck}」已不存在，請在牌組樹重新選擇。` : 'No relational data found. Generate some cards first!'}</p>
+          </div>
+        ) : (
+          <div ref={graphAreaRef} className="flex-1 min-h-0 relative bg-slate-50/50 dark:bg-slate-900/50 rounded-xl overflow-hidden m-1">
+            <ForceGraph2D
+              ref={fgRef}
+              width={graphSize.width || undefined}
+              height={graphSize.height || undefined}
+              graphData={formattedGraphData}
+              cooldownTicks={frozen ? 0 : undefined}
+              onEngineStop={saveLayout}
+              onZoomEnd={saveCamera}
+              nodeLabel={(node: any) => {
+                if (node.translation) return `${node.label} (${node.translation}) - ${node.status || 'ghost'}`
+                return `${node.label} - ${node.status || 'ghost'}`
+              }}
+              linkDirectionalArrowLength={(link: any) => link.isBidirectional ? 0 : 3.5}
+              linkDirectionalArrowRelPos={1}
+              linkCurvature={(link: any) => link.curvature}
+              linkLabel="label"
+              nodeCanvasObjectMode={() => 'after'}
+              nodeCanvasObject={(node: any, ctx, globalScale) => {
+                const label = node.label;
 
-              // 畫選擇框 (如果處於連線模式且被選中)
-              if (isLinkMode && linkSourceNode && node.id === linkSourceNode.id) {
-                const nodeSize = Math.sqrt(node.val || 20) * 1.5;
-                ctx.beginPath();
-                ctx.arc(node.x, node.y, nodeSize + 4, 0, 2 * Math.PI, false);
-                ctx.lineWidth = 2 / globalScale;
-                ctx.strokeStyle = '#3b82f6';
-                ctx.stroke();
-              }
-
-              // 當縮放比例超過設定的閾值時顯示文字 (100% = 1.0)
-              if (globalScale >= textVisibilityThreshold) {
-                const fontSize = (12 * fontSizeMultiplier) / globalScale;
-                // 使用加粗字體讓邊框效果更好
-                ctx.font = `bold ${fontSize}px Sans-Serif`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-
-                const activeStyle = FONT_STYLES.find(s => s.id === fontStyleId) || FONT_STYLES[0];
-
-                // 將文字繪製在節點正下方
-                const nodeSize = Math.sqrt(node.val || 20) * 1.5;
-                const textY = node.y + nodeSize + (fontSize / 2);
-
-                // 1. 畫黑色邊框 (Stroke) 讓文字在任何背景都清晰
-                ctx.lineWidth = activeStyle.strokeWidth / globalScale;
-                ctx.strokeStyle = activeStyle.stroke;
-                ctx.lineJoin = "round";
-                ctx.strokeText(label, node.x, textY);
-
-                // 2. 畫內部顏色 (Fill)
-                ctx.fillStyle = activeStyle.fill;
-                ctx.fillText(label, node.x, textY);
-              }
-            }}
-            onNodeClick={node => {
-              if (isLinkMode) {
-                if (!linkSourceNode) {
-                  setLinkSourceNode(node)
-                } else if (linkSourceNode.id !== node.id) {
-                  // Always Open Modal to create new relation (allowing bidirectional of different types)
-                  setLinkTargetNode(node)
-                  setShowRelationModal(true)
+                // 畫選擇框 (如果處於連線模式且被選中)
+                if (isLinkMode && linkSourceNode && node.id === linkSourceNode.id) {
+                  const nodeSize = Math.sqrt(node.val || 20) * 1.5;
+                  ctx.beginPath();
+                  ctx.arc(node.x, node.y, nodeSize + 4, 0, 2 * Math.PI, false);
+                  ctx.lineWidth = 2 / globalScale;
+                  ctx.strokeStyle = '#3b82f6';
+                  ctx.stroke();
                 }
-              } else if (node.note_id) {
-                setSelectedNoteId(node.note_id as number)
-              }
-            }}
-            onLinkClick={(link: any) => {
-              const sLabel = link.source.label || link.source.id || link.source;
-              const tLabel = link.target.label || link.target.id || link.target;
-              setPendingConfirm({
-                title: '刪除關聯',
-                message: `確定要刪除「${sLabel}」與「${tLabel}」之間的「${link.label}」關聯嗎？\n（若為雙向同名關係，將一併刪除）`,
-                confirmLabel: '刪除',
-                destructive: true,
-                onConfirm: () =>
-                  deleteRelationMutation.mutate({
-                    source_label: sLabel,
-                    target_label: tLabel,
-                    relation_type: (link.label || '').toLowerCase()
-                  }),
-              })
-            }}
-          />
-        </div>
-      )}
+
+                // 當縮放比例超過設定的閾值時顯示文字 (100% = 1.0)
+                if (globalScale >= textVisibilityThreshold) {
+                  const fontSize = (12 * fontSizeMultiplier) / globalScale;
+                  // 使用加粗字體讓邊框效果更好
+                  ctx.font = `bold ${fontSize}px Sans-Serif`;
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'middle';
+
+                  const activeStyle = FONT_STYLES.find(s => s.id === fontStyleId) || FONT_STYLES[0];
+
+                  // 將文字繪製在節點正下方
+                  const nodeSize = Math.sqrt(node.val || 20) * 1.5;
+                  const textY = node.y + nodeSize + (fontSize / 2);
+
+                  // 1. 畫黑色邊框 (Stroke) 讓文字在任何背景都清晰
+                  ctx.lineWidth = activeStyle.strokeWidth / globalScale;
+                  ctx.strokeStyle = activeStyle.stroke;
+                  ctx.lineJoin = "round";
+                  ctx.strokeText(label, node.x, textY);
+
+                  // 2. 畫內部顏色 (Fill)
+                  ctx.fillStyle = activeStyle.fill;
+                  ctx.fillText(label, node.x, textY);
+                }
+              }}
+              onNodeClick={node => {
+                if (isLinkMode) {
+                  if (!linkSourceNode) {
+                    setLinkSourceNode(node)
+                  } else if (linkSourceNode.id !== node.id) {
+                    // Always Open Modal to create new relation (allowing bidirectional of different types)
+                    setLinkTargetNode(node)
+                    setShowRelationModal(true)
+                  }
+                } else if (node.note_id) {
+                  setSelectedNoteId(node.note_id as number)
+                }
+              }}
+              onLinkClick={(link: any) => {
+                const sLabel = link.source.label || link.source.id || link.source;
+                const tLabel = link.target.label || link.target.id || link.target;
+                setPendingConfirm({
+                  title: '刪除關聯',
+                  message: `確定要刪除「${sLabel}」與「${tLabel}」之間的「${link.label}」關聯嗎？\n（若為雙向同名關係，將一併刪除）`,
+                  confirmLabel: '刪除',
+                  destructive: true,
+                  onConfirm: () =>
+                    deleteRelationMutation.mutate({
+                      source_label: sLabel,
+                      target_label: tLabel,
+                      relation_type: (link.label || '').toLowerCase()
+                    }),
+                })
+              }}
+            />
+          </div>
+        )}
+        {isSettingsOpen && (
+          <div className="absolute right-3 top-2 z-50 w-48 max-h-[calc(100%-1rem)] overflow-y-auto bg-background border shadow-xl rounded-xl p-2">
+            <p className="text-xs font-semibold text-muted-foreground px-2 py-1 mb-1">Label Style</p>
+            {FONT_STYLES.map(style => (
+              <button
+                key={style.id}
+                onClick={() => {
+                  setFontStyleId(style.id)
+                  setIsSettingsOpen(false)
+                }}
+                className={`w-full text-left px-3 py-2 text-sm rounded-md transition-colors ${fontStyleId === style.id ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+              >
+                {style.name}
+              </button>
+            ))}
+            <p className="text-xs font-semibold text-muted-foreground px-2 py-1 mb-1 border-t mt-2 pt-2">Font Size</p>
+            {FONT_SIZES.map(size => (
+              <button
+                key={size.id}
+                onClick={() => {
+                  setFontSizeMultiplier(size.value)
+                  setIsSettingsOpen(false)
+                }}
+                className={`w-full text-left px-3 py-2 text-sm rounded-md transition-colors ${fontSizeMultiplier === size.value ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+              >
+                {size.name}
+              </button>
+            ))}
+            <p className="text-xs font-semibold text-muted-foreground px-2 py-1 mb-1 border-t mt-2 pt-2">Label Appears At (Zoom)</p>
+            <div className="flex items-center justify-between px-3 py-1 mb-2">
+              <button
+                onClick={() => setTextVisibilityThreshold(prev => Math.max(0.2, Number((prev - 0.1).toFixed(1))))}
+                className="w-6 h-6 flex items-center justify-center bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-sm font-bold"
+              >
+                -
+              </button>
+              <span className="text-sm font-medium w-12 text-center">
+                {Math.round(textVisibilityThreshold * 100)}%
+              </span>
+              <button
+                onClick={() => setTextVisibilityThreshold(prev => Math.min(3.0, Number((prev + 0.1).toFixed(1))))}
+                className="w-6 h-6 flex items-center justify-center bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-sm font-bold"
+              >
+                +
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Relation Type Modal */}
       {showRelationModal && linkSourceNode && linkTargetNode && (
@@ -650,7 +657,7 @@ export default function KnowledgeGraph() {
         />
       }
       panels={panels}
-      lockMode={isFullscreen}
+      lockMode={holdsFullscreen}
       columns={[
         {
           id: 'deck',
@@ -665,7 +672,7 @@ export default function KnowledgeGraph() {
             />
           ),
         },
-        { id: 'graph', minWidth: GRAPH_MIN, render: graphPanel },
+        { id: 'main', render: graphPanel },
       ]}
     />
   )

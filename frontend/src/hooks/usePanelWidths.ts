@@ -18,7 +18,7 @@ import { defaultWidths, panelWidthsKey, sanitizeWidths, type SplitPageConfig } f
  */
 export function usePanelWidths<K extends string>(layout: SplitPageConfig<K>) {
   const { specs } = layout
-  const [storedRaw, setStored] = useLocalStorage<Partial<Record<K, number>>>(panelWidthsKey(layout.id), {})
+  const [storedRaw, setStored] = useLocalStorage<Partial<Record<K, number>>>(panelWidthsKey(layout), {})
   const stored = sanitizeWidths(storedRaw, specs)
   const defaults = defaultWidths(window.innerWidth, specs)
   const widths: Readonly<Record<K, number>> = { ...defaults, ...stored }

@@ -20,6 +20,8 @@ export const DECK_MIN = 180
 export const DECK_MAX = 560
 /** 清單最窄的寬度。Narrowest card list. */
 export const LIST_MIN = 240
+/** Generate 的表單、Graph 的圖最窄的寬度。Narrowest main area of Generate and Graph. */
+export const MAIN_MIN = 320
 
 /** 內容區至少這麼寬才三欄並排。Content width needed for three columns. */
 export const THREE_COLUMN_MIN = 1200
@@ -36,6 +38,8 @@ export const DECK_PANEL: Readonly<PanelSpec> = Object.freeze({
 /** 卡片瀏覽頁：牌組、清單、卡面三欄；卡面寬度依視窗而定。The card browsing page. */
 export const CARD_LAYOUT: SplitPageConfig<'deck' | 'viewer'> = Object.freeze({
   id: 'cards',
+  // 沿用改版前的鍵，使用者調過的寬度不會被重設
+  storageKey: 'cards_panel_widths_v2',
   specs: Object.freeze({
     deck: DECK_PANEL,
     viewer: Object.freeze({
@@ -44,12 +48,17 @@ export const CARD_LAYOUT: SplitPageConfig<'deck' | 'viewer'> = Object.freeze({
       defaultWidth: (windowWidth: number) => (windowWidth > WIDE_SCREEN ? VIEWER_DEFAULT_WIDE : VIEWER_DEFAULT),
     }),
   }),
+  fluidMin: Object.freeze({ list: LIST_MIN }),
   breakpoints: Object.freeze({ full: THREE_COLUMN_MIN, partial: TWO_COLUMN_MIN }),
 })
 
-/** Generate、Graph 頁共用的面板與斷點：牌組樹＋主區塊。Panels and breakpoints of the two-column pages. */
+/**
+ * Generate、Graph 頁共用的面板與斷點：牌組樹＋主區塊（欄 ID 為 `main`）。
+ * Panels and breakpoints of the two-column pages; the main column's ID is `main`.
+ */
 const SIDE_LAYOUT = {
   specs: Object.freeze({ deck: DECK_PANEL }),
+  fluidMin: Object.freeze({ main: MAIN_MIN }),
   breakpoints: Object.freeze({ full: TWO_COLUMN_MIN }),
 } as const
 
