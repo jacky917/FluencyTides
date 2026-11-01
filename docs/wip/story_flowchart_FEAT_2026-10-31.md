@@ -80,7 +80,7 @@
 **非目標**
 - 左側預覽面板：使用者明確不做。
 - 現在就接第二款遊戲：只做魔女的夜宴。通用性用一份手工的千戀＊萬花片段 fixture 驗證（P2），不做千戀＊萬花的資料擷取。
-- 網頁播放語音或 BGM：先不做，資料欄位保留。
+- 網頁播放 BGM：音檔還沒有，只預留欄位、端點與播放鍵（預設關閉，見 §12「BGM 預留」）。語音播放後來已加上（§12）。
 - 在網站上編輯劇情圖：圖由建置流程產生，網站只讀。標題只透過覆寫檔修改。
 - 修改全域存檔（例：魔女的夜宴的 `datasu.ksd`）：網站只產生欄位存檔。
 - 橫向流程圖：排版先分成「邏輯格位」與「幾何投影」兩步（D8），但第一版只做直向。
@@ -259,7 +259,7 @@ CREATE TABLE story_node_lines (
 {
   "languages": [{"code": "ja-JP", "label": "日本語"}, {"code": "zh-Hant", "label": "繁中"}],
   "default_theme": "sabbat-night",
-  "line_attrs": [{"key": "is_h", "label": "H", "kind": "flag"}, {"key": "bgm_title", "label": "BGM", "kind": "text"}],
+  "line_attrs": [{"key": "is_h", "label": "H", "kind": "flag"}],
   "annotations": {
     "cards": {"card_types": [{"card_type": "jp_core_verb", "label": "核心動詞"}, {"card_type": "jp_verb_pair", "label": "自他動詞"}]}
   },
@@ -272,6 +272,8 @@ CREATE TABLE story_node_lines (
   "route_presets": {"nene": {"nen_flag": 4}, "meguru": {"meg_flag": 4}, "tsumugi": {"tsu_flag": 2}, "touko": {"tou_flag": 3}}
 }
 ```
+
+BGM 不在 `line_attrs`：它是台詞列的正式欄位（D12 的 `bgm`）。設定另有 `bgm_audio`（預設 `false`，上面省略），表示這款遊戲有沒有提供 BGM 音檔，見 §12「BGM 預留」。
 
 設定由擷取器寫在建置包的 `manifest.json`，匯入時存進該版本的 `story_builds.config`。驗證規則屬於後端 schema，但每款遊戲各自有一份 pydantic 模型。
 
@@ -371,13 +373,17 @@ CREATE TABLE story_node_lines (
 | `GET /games/{game}/nodes/{node_key}/lines?offset=&limit=` | 台詞列（D12），可分頁 | 同 `build_id` 不變；只有註記部分會變 |
 | `GET /games/{game}/locate?note_id=` 或 `?line_id=` | `{tab, node_key, line_id, seq}` | 不快取 |
 | `POST /games/{game}/saves` | 存檔檔案（D13） | — |
-| `GET /games/{game}/thumbs/{hash}` | 302 導向 MinIO 預簽名網址 | 瀏覽器快取 |
+| `GET /games/{game}/thumbs/{hash}` | 302 導向 MinIO 預簽名網址（實作改成後端代讀，見 §12） | 瀏覽器快取 |
+| `GET /games/{game}/voices/{voice}` | 台詞語音 MP3（後端代讀，§12） | 一年 `immutable` |
+| `GET /games/{game}/bgm/{code}` | BGM 音檔（**預留**，`bgm_audio` 關閉時一律 404，§12） | 一年 `immutable` |
 
 **`capabilities`** 讓前端依遊戲決定要顯示哪些功能，而不是寫死遊戲名稱：
 
 ```json
-{"saves": true, "thumbs": true, "annotations": ["cards"], "route_presets": true, "languages": ["ja-JP", "zh-Hant"]}
+{"saves": true, "thumbs": true, "voices": true, "bgm": false, "annotations": ["cards"], "route_presets": true, "languages": ["ja-JP", "zh-Hant"]}
 ```
+
+`voices`、`thumbs` 在有素材來源（MinIO 或 `STORY_ASSETS_DIR`）時為 true；`bgm` 還要遊戲設定的 `bgm_audio` 打開才是 true（目前一律 false）。
 
 **為什麼把圖、註記、台詞拆成三個端點**：三者變動頻率不同。圖只在重建時變；註記每次建卡都會變；台詞量大，要依節點分頁讀取。拆開後，圖可以永久快取，建卡後只要重抓很小的註記。
 
@@ -389,7 +395,10 @@ CREATE TABLE story_node_lines (
   "lines": [
     {"line_id": 9021, "anchor_key": "009.共通－休日デート.ks*chapter32@12", "seq": 3,
      "speaker": "めぐる", "texts": {"ja-JP": "「……」", "zh-Hant": "「……」"},
-     "voice": "meg009_001", "thumb": "001d81975a2c91f1", "attrs": {"is_h": false, "bgm_title": "…"},
+     "voice": "meg009_001", "thumb": "001d81975a2c91f1", "attrs": {"is_h": false},
+     "bgm": [{"code": "BGM02", "ord": 0, "titles": {"ja-JP": "…", "zh-Hant": "…"}, "gallery_no": 4},
+             {"code": "BGM51", "ord": 1, "titles": {}, "gallery_no": null}],
+     "bgm_detect": "實測", "bgm_may_change": true,
      "annotations": {"cards": [{"card_type": "jp_core_verb", "label": "核心動詞", "verb": "見る",
                                 "note_ids": [1717000000001, 1717000000002]}]}}
   ]
@@ -401,6 +410,7 @@ CREATE TABLE story_node_lines (
   - `choice`：顯示成選項清單，每個選項標出它通往哪個節點。
   - `bgv`：背景語音，以較淡的樣式顯示在它播放位置那句的下方，標「背景語音」。沒有 `point`，所以不提供下載存檔；需要的話，改成下載它播放位置（`attrs.plays_at`）那句的存檔。
 - `texts` 以語言代碼（BCP 47）為鍵，由後端把資料庫的 `text_<語言>` 欄位轉過來（`ja-JP` ↔ `text_ja_jp`）；前端不需要知道欄位名。
+- **BGM 是正式欄位**（不放 `attrs`）：`bgm` 是這句播放的曲子，依 `ord` 排列（`game_line_bgm` join `game_bgm_tracks`，整頁一次查詢）；播放中切換曲子的台詞有兩首，沒有 BGM 時是空陣列。`titles` 和 `texts` 一樣以語言代碼為鍵、沒有曲名的語言省略（標題畫面的 BGM51 兩種都沒有，前端退回顯示 `code`）；`gallery_no` 是 EXTRA 音樂鑑賞的編號。`bgm_detect` 是偵測方式（`A`／`實測`／`B推定`，選項畫面為 null），`bgm_may_change` 表示這句播放中 BGM 可能切換。`code` 也是 BGM 音檔的名稱（`GET …/bgm/{code}`）。
 - 註記是通用結構：`annotations.<kind>` 是陣列，前端依 kind 找對應的徽章渲染器（D10）。
 - **跳卡片**：後端只給 note id，**不呼叫 AnkiConnect**，讓流程圖 API 不依賴 Anki 有沒有開。前端先用既有的 `GET /cards?q=nid:<ids>` 取得 card id，再導向 `/cards?q=nid:<ids>&card=<card_id>`。Anki 沒開時，這一步才顯示錯誤。
 - 句數上千的節點（例：103 有 1,542 句），用 `offset`、`limit` 分頁，前端用虛擬捲動。另外提供「下一句有卡的台詞」：`GET …/lines?annotated=cards&after=<seq>`。
@@ -637,7 +647,7 @@ python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch --d
 python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch
 ```
 
-縮圖、語音的來源資料夾不算進 `source_hash`。內容沒變、只是補上 `--voices` 的建置包重跑匯入會被略過，改用 `--assets-only`：不建新版本，只替上線版本上傳（補齊）樣板、縮圖、語音；建置包必須和上線版本的 `source_hash` 相同，已存在的檔案跳過。本機資料夾（後端以 `STORY_ASSETS_DIR` 指向它）：
+縮圖、語音、BGM 的來源資料夾不算進 `source_hash`。內容沒變、只是補上 `--voices`（或 `--bgm`）的建置包重跑匯入會被略過，改用 `--assets-only`：不建新版本，只替上線版本上傳（補齊）樣板、縮圖、語音、BGM；建置包必須和上線版本的 `source_hash` 相同，已存在的檔案跳過。本機資料夾（後端以 `STORY_ASSETS_DIR` 指向它）：
 
 ```bash
 python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch --assets-only --assets local:<資料夾>
@@ -767,6 +777,42 @@ python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch --a
 - 節點徽章改畫在節點層之後的獨立圖層 `.sf-decorations`（總覽則在節點框外）：原本畫在節點框裡，票券形節點的 `mask` 會把它裁掉，`opacity`／`filter` 也會影響它，後面才畫的相鄰節點還可能蓋住它。渲染器的 `decorations` 參數因此移除。
 - 020 的四個檔案檔號相同，節點鍵改用檔名主幹（例 `sw:020.共通－パーティ寧々`）。
 - 資料庫和其他功能一樣讀 `MYSQL_DATABASE`，共用 `corpus_database.py` 的引擎（整個分支和語料庫切換一起上線）。本機的 `MYSQL_DATABASE` 還沒切換時，可用 `STORY_CORPUS_DATABASE` 明確覆寫（只供本機測試，會另建一個連線池）；擷取器與匯入腳本則用 `--database fluencytides_corpus`。本機素材可用 `--assets local:<資料夾>` 與 `STORY_ASSETS_DIR`（兩個 `STORY_*` 都可以寫在 `backend/.env`）。
+
+**BGM 預留（2026-11-01）**
+
+BGM 音檔在遊戲的加密封包（`bgm.xp3`）裡，不解包，所以目前沒有音檔。程式先把位置留好，播放一律預設關閉：
+
+- **台詞列**：`StoryLine` 多了正式欄位 `bgm`（曲目清單：`code`、`ord`、`titles`、`gallery_no`）、`bgm_detect`、`bgm_may_change`（D12）。原本 `attrs.bgm`／`attrs.bgm_title` 的複本拿掉，SW 擷取器設定的 `line_attrs` 也拿掉 `bgm_title`（下次擷取的 `source_hash` 會變，正常匯入成新版本即可；在那之前上線版本的設定還留著這一項，但前端不依 `line_attrs` 渲染，沒有影響）。
+- **抽屜**：說話者旁顯示曲名（`♪ 曲名`，兩首時以「→」連接），跟著台詞語言：「繁」用繁中曲名、沒有時退回日文；「日」與「雙語」用日文、沒有時退回繁中；兩種都沒有顯示代號。提示框列出代號、鑑賞編號、兩種曲名、判定方式與「會切換」。規則在 `frontend/src/lib/storyBgm.ts`（有 vitest）。
+- **播放鍵**：只在 `capabilities.bgm=true` 時，每首曲名變成播放鍵；目前不顯示。BGM 用另一個 `useVoicePlayer` 實例（循環、音量 0.5），**和語音可以同時播**（遊戲裡語音本來就疊在 BGM 上；同一個播放器會讓按語音時停掉 BGM），BGM 自己一次只播一首。播放中的鍵是曲目代號，同一首 BGM 的台詞都顯示播放中。換節點、關閉抽屜時停止。
+- **端點**：`GET /story/games/{game}/bgm/{code}` 讀物件鍵 `story/{game}/bgm/{code}.<副檔名>`。安全規則和語音相同：`game_id` 白名單、代號只收 `[A-Za-z0-9_]{1,32}`（不帶副檔名；SW 的 50 個代號都符合）、不合或找不到一律 404、素材來源出錯 503、一年 `immutable`、不進記憶體快取。副檔名依序找 `.ogg`（`audio/ogg`）、`.mp3`（`audio/mpeg`），`Content-Type` 跟著找到的檔案：遊戲原檔多半是 Ogg Vorbis，要支援不能播 Ogg 的瀏覽器時改上傳 MP3。設定的 `bgm_audio` 沒打開時，即使檔案在也回 404。
+- **`capabilities.bgm`**：遊戲設定 `bgm_audio: true` **而且**有素材來源才是 true。
+- **上傳**：擷取器 `--bgm <資料夾>`（`<代號>.ogg` 或 `.mp3`）只記在 manifest，不算進 `source_hash`；匯入（含 `--assets-only`）只上傳 `game_bgm_tracks` 裡這款遊戲有的代號，同一個代號 `.ogg` 優先，目的地已有任一種副檔名就跳過，缺檔計數並警告。
+
+之後有 BGM 音檔時：
+
+1. 把音檔整理成 `<game_bgm_tracks.code>.ogg`（或 `.mp3`）放進一個資料夾。`game_bgm_tracks.archive_index` 是曲子在 `bgm.xp3` 裡的檔案序號，可以拿來對照。
+2. 先替上線版本預先上傳（不改設定，所以 `source_hash` 不變；這時還不會播放）：
+
+```bash
+python backend/scripts/story/extractors/sabbat_of_the_witch.py --out build/sabbat_of_the_witch --template "C:/Users/forip/Desktop/WorkSpace/game/SW_calib/quick_template.jpg" --thumbs "C:/Users/forip/Desktop/WorkSpace/game/SW_calib/thumbs" --voices "C:/Users/forip/Desktop/WorkSpace/material/voice/yuzusoft/SabbatOfTheWitch" --bgm <BGM資料夾>
+```
+
+```bash
+python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch --assets-only --assets local:<資料夾>
+```
+
+3. 確認上傳結果沒有缺檔後，加上 `--enable-bgm-audio` 重新擷取（設定寫入 `bgm_audio: true`，`source_hash` 會變），再正常匯入成新版本；新版本上線後 `capabilities.bgm` 變成 true，抽屜出現 BGM 播放鍵：
+
+```bash
+python backend/scripts/story/extractors/sabbat_of_the_witch.py --out build/sabbat_of_the_witch --template "C:/Users/forip/Desktop/WorkSpace/game/SW_calib/quick_template.jpg" --thumbs "C:/Users/forip/Desktop/WorkSpace/game/SW_calib/thumbs" --voices "C:/Users/forip/Desktop/WorkSpace/material/voice/yuzusoft/SabbatOfTheWitch" --bgm <BGM資料夾> --enable-bgm-audio
+```
+
+```bash
+python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch --assets local:<資料夾>
+```
+
+要關掉時回滾到前一版（`--rollback <build_id>`），或不加 `--enable-bgm-audio` 重新擷取匯入。語料庫腳本讀到的台詞也帶 BGM（`CorpusLine.bgm`，見語料庫計畫書 D9-A）。
 
 **語料庫連接資料的問題**
 - `calib_state.json` 的「下一個場景」是整個章節跑完後的位置，記在章節起點的標籤上，所以會接錯。遷移腳本已濾掉兩種：選項標籤出發的自然接續（例 019 `dummyselect1` → 015 `015_01B`）與自迴圈。

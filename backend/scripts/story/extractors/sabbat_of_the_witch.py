@@ -16,6 +16,14 @@ database and writes a build package (docs/wip/story_flowchart_FEAT_2026-10-31.md
 ``--voices`` 是語音資料夾（``<game_lines.voice_file>.mp3``，即 ``GAME_ASSETS_ROOT`` 接上
 ``game_profiles.voice_dir``）。只記在 manifest，不算進 ``source_hash``；匯入時只上傳台詞用到的檔案。
 ``--voices`` is the voice folder; only referenced files are uploaded.
+
+BGM（預留，音檔目前沒有）：``--bgm <資料夾>`` 是 BGM 音檔資料夾（``<game_bgm_tracks.code>.ogg`` 或
+``.mp3``），和語音一樣只記在 manifest、不算進 ``source_hash``，所以可以先用匯入腳本的 ``--assets-only``
+替上線版本預先上傳。``--enable-bgm-audio`` 才把設定的 ``bgm_audio`` 打開（``capabilities.bgm``、前端的
+BGM 播放鍵）；它會改變設定、也就是 ``source_hash``，要正常匯入成新版本。
+BGM (reserved): ``--bgm`` records the BGM folder (not hashed, so
+``--assets-only`` can pre-upload); ``--enable-bgm-audio`` turns on
+``config.bgm_audio`` and therefore needs a normal import (new build).
 """
 
 from __future__ import annotations
@@ -90,7 +98,9 @@ EXTRA_LINKS = [
 CONFIG = {
     "languages": [{"code": "ja-JP", "label": "日本語"}, {"code": "zh-Hant", "label": "繁中"}],
     "default_theme": "sabbat-night",
-    "line_attrs": [{"key": "is_h", "label": "H", "kind": "flag"}, {"key": "bgm_title", "label": "BGM", "kind": "text"}],
+    # BGM 不在 line_attrs：它是 StoryLine 的正式欄位（bgm、bgm_detect、bgm_may_change），抽屜直接顯示曲名。
+    # BGM is not a line attr: it is the first-class StoryLine.bgm field.
+    "line_attrs": [{"key": "is_h", "label": "H", "kind": "flag"}],
     "annotations": {"cards": {"card_types": [
         {"card_type": "jp_core_verb", "label": "核心動詞",
          "note_types": ["JP_CoreVerb_Master_Dark", "JP_Context_Dark", "JP_CoreVerb_Cloze_Dark"]},
@@ -187,11 +197,19 @@ def _json(raw):
 
 
 def extract(conn, out_dir: Path, template: Path | None, thumbs: Path | None, note: str | None = None,
-            voices: Path | None = None) -> dict:
-    """擷取並寫出建置包；回傳摘要。Extract and write the package; returns a summary."""
+            voices: Path | None = None, bgm: Path | None = None, bgm_audio: bool = False) -> dict:
+    """擷取並寫出建置包；回傳摘要。Extract and write the package; returns a summary.
+
+    ``bgm`` 是 BGM 音檔資料夾（只記在 manifest、不算進 ``source_hash``）；``bgm_audio`` 為 True 時才在
+    設定寫入 ``bgm_audio: true`` 打開 BGM 播放（預設不寫這個鍵，等同 False）。
+    ``bgm`` is the BGM folder (manifest only, not hashed); ``bgm_audio`` writes
+    ``bgm_audio: true`` into the config (the key is omitted by default).
+    """
     files, scenes, lines, links = load_rows(conn)
     result = build_story_graph(files, scenes, lines, links, rules())
     config = dict(CONFIG)
+    if bgm_audio:
+        config["bgm_audio"] = True
     config["route_presets"] = route_presets(result.graph) or {
         "nene": {"nen_flag": 4}, "meguru": {"meg_flag": 4}, "tsumugi": {"tsu_flag": 2}, "touko": {"tou_flag": 3}}
     if template is None:
@@ -201,7 +219,9 @@ def extract(conn, out_dir: Path, template: Path | None, thumbs: Path | None, not
                              assets={"thumbs_dir": str(thumbs) if thumbs else None,
                                      "thumbs_prefix": f"story/{GAME_ID}/thumbs/",
                                      "voices_dir": str(voices) if voices else None,
-                                     "voices_prefix": f"story/{GAME_ID}/voices/"},
+                                     "voices_prefix": f"story/{GAME_ID}/voices/",
+                                     "bgm_dir": str(bgm) if bgm else None,
+                                     "bgm_prefix": f"story/{GAME_ID}/bgm/"},
                              note=note)
     source_hash = write_package(out_dir, manifest, result.graph, result.rows,
                                 templates={TEMPLATE_KEY: template} if template else None,
@@ -219,6 +239,9 @@ def main() -> None:
     parser.add_argument("--template", type=Path, help="快速存檔樣板（data_quick_01.jpg）；省略時不提供存檔")
     parser.add_argument("--thumbs", type=Path, help="縮圖資料夾（<雜湊>.jpg），匯入時上傳")
     parser.add_argument("--voices", type=Path, help="語音資料夾（<voice_file>.mp3），匯入時只上傳台詞用到的檔案")
+    parser.add_argument("--bgm", type=Path, help="BGM 資料夾（<code>.ogg 或 .mp3），匯入時只上傳 game_bgm_tracks 有的代號")
+    parser.add_argument("--enable-bgm-audio", action="store_true",
+                        help="在設定打開 BGM 播放（capabilities.bgm）；會改變 source_hash，須正常匯入成新版本")
     parser.add_argument("--database", help="語料庫名稱（預設 backend/.env 的 MYSQL_DATABASE；"
                                            "語料庫切換前可指定 fluencytides_corpus）")
     parser.add_argument("--note", help="這個版本的備註")
@@ -227,7 +250,10 @@ def main() -> None:
     try:
         if args.voices and not args.voices.is_dir():
             raise SystemExit(f"語音資料夾不存在：{args.voices}")
-        summary = extract(conn, args.out, args.template, args.thumbs, args.note, voices=args.voices)
+        if args.bgm and not args.bgm.is_dir():
+            raise SystemExit(f"BGM 資料夾不存在：{args.bgm}")
+        summary = extract(conn, args.out, args.template, args.thumbs, args.note, voices=args.voices,
+                          bgm=args.bgm, bgm_audio=args.enable_bgm_audio)
     finally:
         conn.close()
     stats = summary["stats"]

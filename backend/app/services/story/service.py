@@ -1,4 +1,4 @@
-"""劇情流程圖的通用服務：manifest、劇情圖、註記、台詞、定位、存檔、縮圖、語音（D11–D13）。
+"""劇情流程圖的通用服務：manifest、劇情圖、註記、台詞、定位、存檔、縮圖、語音、BGM（D11–D13）。
 
 Game-agnostic story service behind ``/api/v1/story``.
 
@@ -25,6 +25,7 @@ from app.schemas.story import (
     StoryConfig,
     StoryGameSummary,
     StoryLine,
+    StoryLineBgm,
     StoryLinesPage,
     StoryLocation,
     StoryManifest,
@@ -45,7 +46,7 @@ from app.services.story.errors import (
 )
 from app.services.story.graph_index import GraphIndex
 from app.services.story.registry import get_story_game
-from app.services.story.repository import BuildRecord, LineRecord, StoryRepository
+from app.services.story.repository import BuildRecord, LineBgm, LineRecord, StoryRepository
 from app.services.story.saves import SaveMeta, save_writer_for
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,14 @@ _VOICE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 #: ``game_id`` 白名單：它會進物件鍵（``story/{game_id}/...``），不能帶路徑字元。
 #: Game ids go into object keys, so only these characters are accepted.
 _GAME_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+#: BGM 代號（``game_bgm_tracks.code``，例 ``BGM02``、``BGM20I``）：和語音一樣只收英數與底線，
+#: 長度上限同欄位（32）。不合的代號（例：其他遊戲的 ``#15``）不提供音檔，上傳腳本也不會上傳。
+#: BGM codes: letters, digits and underscores, up to the column width.
+_BGM_CODE = re.compile(r"^[A-Za-z0-9_]{1,32}$")
+#: BGM 音檔依序嘗試的副檔名與 Content-Type：同一個代號兩種都有時 ``.ogg`` 優先。遊戲原檔多半是
+#: Ogg Vorbis；要支援不能播 Ogg 的瀏覽器時改上傳 ``.mp3``（上傳腳本找檔案用同一個順序）。
+#: Extensions tried for a BGM code, in order, with their content types.
+BGM_FORMATS: tuple[tuple[str, str], ...] = ((".ogg", "audio/ogg"), (".mp3", "audio/mpeg"))
 #: 資料庫欄位語言 → BCP 47。Column language suffix to BCP 47.
 LANG_JA, LANG_ZH = "ja-JP", "zh-Hant"
 
@@ -117,6 +126,7 @@ class StoryService:
             saves=bool(config.saves) and save_writer_for(build.engine) is not None,
             thumbs=self.assets.available,
             voices=self.assets.available,
+            bgm=config.bgm_audio and self.assets.available,
             annotations=[kind for kind, p in PROVIDERS.items() if p.enabled(config)],
             route_presets=bool(config.route_presets),
             languages=langs,
@@ -195,10 +205,6 @@ class StoryService:
         attrs: dict[str, Any] = {"is_h": rec.is_h}
         if rec.h_label:
             attrs["h_label"] = rec.h_label
-        if rec.bgm:
-            first = rec.bgm[0]
-            attrs["bgm_title"] = first.get("title_zh") or first.get("title_ja") or first.get("code")
-            attrs["bgm"] = rec.bgm
         if rec.attrs.get("plays_at"):
             attrs["plays_at"] = rec.attrs["plays_at"]
         label = rec.label.lstrip("*")
@@ -207,7 +213,14 @@ class StoryService:
             anchor_key=f"{rec.file_name}*{label}@{rec.point}" if rec.point is not None else None,
             point=rec.point, speaker=rec.speaker_ja, speakers=speakers, texts=texts, voice=rec.voice,
             thumb=rec.thumb, chapter_label=rec.chapter_label, attrs=attrs, annotations=annotations,
-            can_save=can_save)
+            can_save=can_save, bgm=[self._to_bgm(b) for b in rec.bgm], bgm_detect=rec.bgm_detect,
+            bgm_may_change=rec.bgm_may_change)
+
+    @staticmethod
+    def _to_bgm(track: LineBgm) -> StoryLineBgm:
+        """一首 BGM 轉成 API 格式（曲名以語言代碼為鍵，沒有的語言省略）。One track for the API."""
+        titles = {k: v for k, v in ((LANG_JA, track.title_ja), (LANG_ZH, track.title_zh)) if v}
+        return StoryLineBgm(code=track.code, ord=track.ord, titles=titles, gallery_no=track.gallery_no)
 
     async def lines(self, game_id: str, node_key: str, offset: int, limit: int,
                     annotated_after: int | None = None) -> StoryLinesPage:
@@ -254,7 +267,7 @@ class StoryService:
         what = f"筆記 {note_id}" if note_id is not None else f"台詞 {line_id}"
         raise StoryLineNotFoundError(f"{what} 不在 {game_id} 的流程圖上")
 
-    # ---------- 存檔、縮圖與語音 ----------
+    # ---------- 存檔、縮圖、語音與 BGM ----------
 
     async def make_save(self, game_id: str, line_id: int, slot_id: str, route_preset: str | None) -> SaveFile:
         """產生某句台詞的欄位存檔。Generate a slot save for a line."""
@@ -329,3 +342,35 @@ class StoryService:
         if data is None:
             raise StoryAssetNotFoundError(f"語音 {voice} 不存在")
         return data
+
+    @staticmethod
+    def bgm_key(game_id: str, code: str, ext: str) -> str:
+        """BGM 音檔的物件鍵（``ext`` 含點，例 ``.ogg``）。Object key of a BGM file."""
+        return f"story/{game_id}/bgm/{code}{ext}"
+
+    async def bgm(self, game_id: str, code: str) -> tuple[bytes, str]:
+        """一首 BGM 的音檔與 Content-Type（不進記憶體快取）。A BGM file and its media type.
+
+        只有這款遊戲上線版本的設定打開 ``bgm_audio`` 時才提供（和 ``capabilities.bgm`` 同一個開關）；
+        沒打開時一律 404，即使素材資料夾裡剛好有檔案。副檔名依 :data:`BGM_FORMATS` 的順序找。
+        Served only when the active build's config enables ``bgm_audio`` (the
+        same switch as ``capabilities.bgm``); otherwise 404 even if a file
+        exists. Extensions are tried in :data:`BGM_FORMATS` order.
+
+        Raises:
+            StoryGameNotFoundError: ``game_id`` 不合白名單或沒有上線版本。Bad or unknown game.
+            StoryAssetNotFoundError: 代號格式不對、沒有提供 BGM 或檔案不存在。Bad code, BGM
+                disabled, or missing file.
+            StoryAssetUnavailableError: 素材來源出錯。The asset source failed.
+        """
+        self._check_game_id(game_id)
+        if not _BGM_CODE.match(code):
+            raise StoryAssetNotFoundError("BGM 代號格式不對")
+        build = await self._active(game_id)
+        if not self._config(build).bgm_audio:
+            raise StoryAssetNotFoundError(f"{game_id} 沒有提供 BGM 音檔")
+        for ext, media_type in BGM_FORMATS:
+            data = await self.assets.get(self.bgm_key(game_id, code, ext), cache=False)
+            if data is not None:
+                return data, media_type
+        raise StoryAssetNotFoundError(f"BGM {code} 不存在")

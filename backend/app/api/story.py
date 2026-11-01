@@ -12,6 +12,7 @@ Story flowchart API. All endpoints live under ``/api/v1/story`` and require
 - ``POST /story/games/{game}/saves``                     產生欄位存檔
 - ``GET  /story/games/{game}/thumbs/{hash}``             縮圖（後端代讀，見下）
 - ``GET  /story/games/{game}/voices/{voice}``            台詞語音 MP3（同上，``voice`` 是 ``game_lines.voice_file``）
+- ``GET  /story/games/{game}/bgm/{code}``                BGM 音檔（預留；``code`` 是 ``game_bgm_tracks.code``）
 
 ``{game}`` 只接受 ``[A-Za-z0-9_-]{1,64}``，其他一律 404（它會進素材的物件鍵）。
 ``{game}`` must match ``[A-Za-z0-9_-]{1,64}``; anything else is a 404.
@@ -25,6 +26,14 @@ MinIO host is not reachable from browsers; responses are immutable.
 所以同樣帶一年的 ``immutable`` 快取；名稱只接受 ``[A-Za-z0-9_]{1,64}``（可帶 ``.mp3``），其他一律 404。
 Voices are proxied the same way and cached as immutable; names must match
 ``[A-Za-z0-9_]{1,64}`` (optionally with ``.mp3``).
+
+BGM 是預留的端點：音檔還沒有（在遊戲的加密封包裡，不解包），所以只有上線版本的設定打開
+``bgm_audio`` 時才提供（``capabilities.bgm`` 同一個開關），否則一律 404。代號只接受
+``[A-Za-z0-9_]{1,32}``、不帶副檔名；後端依序找 ``story/{game}/bgm/{code}.ogg``、``.mp3``，
+``Content-Type`` 跟著找到的檔案。同樣不進記憶體快取、帶一年的 ``immutable`` 快取。
+The BGM endpoint is reserved: it serves files only when the active build
+enables ``bgm_audio`` (same switch as ``capabilities.bgm``). Codes match
+``[A-Za-z0-9_]{1,32}`` without an extension; ``.ogg`` then ``.mp3`` is tried.
 """
 
 from __future__ import annotations
@@ -168,3 +177,14 @@ async def read_voice(game_id: str, voice: str, service: StoryService = Depends(g
     """台詞語音 MP3（``voice`` 是 ``StoryLine.voice``，可帶 ``.mp3``）。A line's voice MP3."""
     data = await service.voice(game_id, voice.removesuffix(".mp3"))
     return Response(content=data, media_type="audio/mpeg", headers=_IMMUTABLE)
+
+
+@router.get("/games/{game_id}/bgm/{code}", summary="BGM 音檔（預留）", response_class=Response,
+            responses={200: {"content": {"audio/ogg": {}, "audio/mpeg": {}}}, **_NOT_FOUND, **_UNAVAILABLE})
+async def read_bgm(game_id: str, code: str, service: StoryService = Depends(get_story_service)) -> Response:
+    """BGM 音檔（``code`` 是 ``StoryLine.bgm[].code``，不帶副檔名）；``capabilities.bgm`` 為 false 時一律 404。
+
+    A BGM file; 404 unless ``capabilities.bgm`` is true.
+    """
+    data, media_type = await service.bgm(game_id, code)
+    return Response(content=data, media_type=media_type, headers=_IMMUTABLE)

@@ -74,4 +74,15 @@ export const StoryAPI = {
    */
   probeVoice: (gameId: string, voice: string): Promise<void> =>
     storyClient.get(`${game(gameId)}/voices/${encodeURIComponent(voice)}`, { responseType: 'blob' }).then(() => undefined),
+
+  /**
+   * BGM 網址（預留；`code` 是 `StoryLine.bgm[].code`，不帶副檔名，後端決定 Ogg 或 MP3）。
+   * 只有 `capabilities.bgm` 為 true 時才會用到，否則後端一律 404。
+   * BGM URL (reserved); only used when `capabilities.bgm` is true.
+   */
+  bgmUrl: (gameId: string, code: string): string => `/api/v1/story${game(gameId)}/bgm/${encodeURIComponent(code)}`,
+
+  /** 同 {@link StoryAPI.probeVoice}，給 BGM 播放失敗時取得後端錯誤訊息。Like `probeVoice`, for BGM. */
+  probeBgm: (gameId: string, code: string): Promise<void> =>
+    storyClient.get(`${game(gameId)}/bgm/${encodeURIComponent(code)}`, { responseType: 'blob' }).then(() => undefined),
 }

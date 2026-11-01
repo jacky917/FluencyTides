@@ -329,6 +329,12 @@ class StoryConfig(BaseModel):
     annotations: AnnotationsConfig = Field(default_factory=AnnotationsConfig)
     saves: SavesConfig | None = None
     route_presets: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    #: 這款遊戲有沒有提供 BGM 音檔（``story/<遊戲>/bgm/<代號>.ogg``／``.mp3``）。預設關閉：曲名與
+    #: 每句的 BGM 不受影響，只是 ``capabilities.bgm`` 為 false、前端不顯示 BGM 播放鍵。音檔上傳好以後
+    #: 才在擷取器打開（``--enable-bgm-audio``），見劇情流程圖計畫書 §12「BGM 預留」。
+    #: Whether BGM audio files are provided. Off by default: titles and per-line
+    #: BGM are unaffected, only ``capabilities.bgm`` stays false.
+    bgm_audio: bool = False
 
 
 class BuildManifest(BaseModel):
@@ -336,10 +342,13 @@ class BuildManifest(BaseModel):
 
     ``assets.templates``：物件鍵 → 建置包內的相對路徑；``assets.thumbs_dir``：縮圖來源資料夾
     （不算進 ``source_hash``，檔名就是雜湊，內容不會變）；``assets.voices_dir``：語音來源資料夾
-    （``<game_lines.voice_file>.mp3``，同樣不算進 ``source_hash``），物件鍵前綴是 ``voices_prefix``。
+    （``<game_lines.voice_file>.mp3``，同樣不算進 ``source_hash``），物件鍵前綴是 ``voices_prefix``；
+    ``assets.bgm_dir``：BGM 來源資料夾（``<game_bgm_tracks.code>.ogg`` 或 ``.mp3``，不算進
+    ``source_hash``），物件鍵前綴是 ``bgm_prefix``。
     ``assets.templates`` maps object keys to package-relative files;
-    ``assets.thumbs_dir`` and ``assets.voices_dir`` are source folders
-    excluded from the hash (``voices_prefix`` is the voice key prefix).
+    ``assets.thumbs_dir``, ``assets.voices_dir`` and ``assets.bgm_dir`` are
+    source folders excluded from the hash (``voices_prefix``/``bgm_prefix``
+    are the key prefixes).
     """
 
     schema_version: int = SCHEMA_VERSION
@@ -362,6 +371,9 @@ class StoryCapabilities(BaseModel):
     saves: bool = False
     thumbs: bool = False
     voices: bool = False
+    #: 可以播放 BGM（``GET .../bgm/{code}``）：設定的 ``bgm_audio`` 打開、而且有素材來源才是 true。
+    #: BGM playback: ``config.bgm_audio`` and an asset source are both required.
+    bgm: bool = False
     annotations: list[str] = Field(default_factory=list)
     route_presets: bool = False
     languages: list[str] = Field(default_factory=list)
@@ -405,8 +417,34 @@ class CardAnnotation(BaseModel):
     note_ids: list[int]
 
 
+class StoryLineBgm(BaseModel):
+    """一句台詞播放的一首 BGM（``game_line_bgm`` 一列 join ``game_bgm_tracks``）。
+
+    One BGM track played during a line.
+
+    ``titles`` 和 ``texts``／``speakers`` 一樣以 BCP 47 為鍵，沒有曲名的語言省略（例：標題畫面的
+    BGM51 兩種語言都沒有，``titles`` 是空的，前端退回顯示 ``code``）。``code`` 也是 BGM 音檔的名稱
+    （``GET .../bgm/{code}``）。
+    ``titles`` is keyed by BCP 47 like ``texts``; missing languages are
+    omitted. ``code`` doubles as the audio name for ``GET .../bgm/{code}``.
+    """
+
+    code: str
+    #: 同一句的第幾首（0 起算）；播放中切換曲子的台詞有 0 和 1 兩筆。Order within the line.
+    ord: int = 0
+    titles: dict[str, str] = Field(default_factory=dict)
+    #: EXTRA 音樂鑑賞畫面的編號；不在鑑賞畫面的是 None。Music-gallery number, if any.
+    gallery_no: int | None = None
+
+
 class StoryLine(BaseModel):
-    """抽屜的一句台詞（D12）。One line in the drawer."""
+    """抽屜的一句台詞（D12）。One line in the drawer.
+
+    BGM 是正式欄位：``bgm`` 依 ``ord`` 排列（沒有 BGM 時是空陣列），``bgm_detect`` 是偵測方式
+    （``A``／``實測``／``B推定``，選項畫面等為 None），``bgm_may_change`` 表示這句播放中 BGM 可能切換。
+    BGM fields: ``bgm`` in ``ord`` order (empty when none), ``bgm_detect``
+    (how it was detected) and ``bgm_may_change``.
+    """
 
     line_id: int
     seq: int
@@ -422,6 +460,9 @@ class StoryLine(BaseModel):
     attrs: dict[str, Any] = Field(default_factory=dict)
     annotations: dict[str, list[CardAnnotation]] = Field(default_factory=dict)
     can_save: bool = False
+    bgm: list[StoryLineBgm] = Field(default_factory=list)
+    bgm_detect: str | None = None
+    bgm_may_change: bool = False
 
 
 class StoryLinesPage(BaseModel):

@@ -719,6 +719,8 @@ WHERE l.status = 'active' AND l.in_corpus = 1 AND l.kind IN ('line', 'bgv');
 | G | 一次性的維護腳本 | `backfill_project.py`、`canonicalize_verb_lemma.py`、`migrate_child_cards.py` 等 | 已經跑過、不會再用的，標成「舊庫專用」，不改寫 |
 | H | 遊戲設定移出 `.env` | `app/core/config.py`、`.env`、`.env.example`；讀這些設定的 6 個檔案：兩種卡片類型的 `generate_child_cards.py`、`mark_skipped_es_data.py`、刪卡工具 `deletion/profiles.py`、兩支 `cleanup_script.py` | 拿掉 8 個設定（`JP_VERB_PAIR_`、`JP_CORE_VERB_` 各一組 `SOURCE_GAME`、`GAME_NAME_JP`、`VOICE_DIR`、`AVATAR_DIR`），新增 `GAME_ASSETS_ROOT`。建卡管線加 `--game` 參數（預設 `SabbatOfTheWitch`），從 `game_profiles` 讀名稱與資料夾、從 `game_speakers` 讀頭像檔名；媒體清理改成檢查 `game_profiles` 裡每款遊戲的前綴。卡片類型的參數（前後文句數、卡數上限、過濾條件、母卡牌組）留在 `.env` |
 
+**A 的補充：台詞帶 BGM（2026-11-01）**：`CorpusLine` 多了 `bgm`（`CorpusLineBgm` 的 tuple：`code`、`ord`、`title_ja_jp`、`title_zh_hant`，依 `ord` 排列，沒有 BGM 時是空 tuple）與 `bgm_codes`。`get_lines`、`get_context`、`find_line_by_text`／`find_line_by_voice` 在讀台詞之後**多一次批次查詢**（`game_line_bgm` join `game_bgm_tracks`，`WHERE line_id IN …`），不是每句一次；`iter_lines` 串流期間不能再查，所以開始串流前先用一次查詢取好整個範圍的 BGM（一款遊戲約 5 萬列，相同曲目共用同一個物件）；`get_line_metadata` 不需要 BGM，不多查。欄位有預設值，既有的呼叫端（例 `context_builder.py`）不用改。BGM 音檔目前沒有，播放的預留見劇情流程圖計畫書 §12「BGM 預留」。
+
 **C 的細節：舊的知識圖譜關聯怎麼放進 `rel_links`**
 
 | `card_relations`（SQLite） | `rel_links`（新庫） |

@@ -11,6 +11,12 @@ export interface StoryCapabilities {
   thumbs: boolean
   /** 有素材來源、可以播放台詞語音（`GET .../voices/{voice}`）。Whether voices can be played. */
   voices: boolean
+  /**
+   * 可以播放 BGM（`GET .../bgm/{code}`）：只有遊戲設定打開 `bgm_audio`、而且有素材來源時才是 true。
+   * 目前 BGM 音檔還沒有（在遊戲的加密封包裡，不解包），所以一律 false。
+   * BGM playback; only when the game config enables `bgm_audio` and an asset source exists.
+   */
+  bgm: boolean
   annotations: string[]
   route_presets: boolean
   languages: string[]
@@ -77,6 +83,22 @@ export interface StoryCardAnnotation {
   note_ids: number[]
 }
 
+/**
+ * 一句台詞播放的一首 BGM（後端 `StoryLineBgm`）。One BGM track played during a line.
+ *
+ * `titles` 以語言代碼為鍵，沒有曲名的語言省略（標題畫面的曲子兩種語言都沒有，退回顯示 `code`）；
+ * `code` 也是 BGM 音檔的名稱（`StoryAPI.bgmUrl`）。
+ * `titles` omits languages without a title; `code` doubles as the audio name.
+ */
+export interface StoryLineBgm {
+  code: string
+  /** 同一句的第幾首（0 起算；播放中切換曲子的台詞有 0 和 1）。Order within the line. */
+  ord: number
+  titles: Record<string, string>
+  /** EXTRA 音樂鑑賞畫面的編號；不在鑑賞畫面的是 null。Music-gallery number, if any. */
+  gallery_no: number | null
+}
+
 /** 抽屜的一句台詞。A line. */
 export interface StoryLine {
   line_id: number
@@ -94,6 +116,12 @@ export interface StoryLine {
   attrs: Record<string, unknown>
   annotations: { cards?: StoryCardAnnotation[] } & Record<string, unknown>
   can_save: boolean
+  /** 這句播放的 BGM，依 `ord` 排列；沒有 BGM 時是空陣列。BGM tracks in `ord` order. */
+  bgm: StoryLineBgm[]
+  /** BGM 的偵測方式（`A`／`實測`／`B推定`）；選項畫面等沒有時為 null。How the BGM was detected. */
+  bgm_detect: string | null
+  /** 這句播放中 BGM 可能切換。Whether the BGM may change during the line. */
+  bgm_may_change: boolean
 }
 
 /** 一頁台詞。A page of lines. */

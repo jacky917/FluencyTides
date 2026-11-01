@@ -3,7 +3,7 @@
 Tests for the build package and the import flow against an in-memory
 store: validation failures never create a build, atomic activation,
 rollback, duplicate-content skip, pruning, local asset upload (templates,
-thumbnails, voices), ``--assets-only`` for the active build, config
+thumbnails, voices, reserved BGM), ``--assets-only`` for the active build, config
 validation with the game adapter's model, and loud cleanup failures.
 """
 
@@ -44,10 +44,11 @@ CONFIG = {
 class MemoryStore:
     """記憶體裡的 story_builds／story_node_lines。In-memory build store."""
 
-    def __init__(self, line_ids, thumbs=(), voices=()):
+    def __init__(self, line_ids, thumbs=(), voices=(), bgm=()):
         self.lines = set(line_ids)
         self.thumbs = set(thumbs)
         self.voices = set(voices)
+        self.bgm = set(bgm)
         self.builds: dict[int, dict] = {}
         self.node_lines: dict[int, list] = {}
         self.fail_insert = False
@@ -65,6 +66,9 @@ class MemoryStore:
 
     def game_voices(self, game_id):
         return set(self.voices)
+
+    def game_bgm_codes(self, game_id):
+        return set(self.bgm)
 
     def find_by_hash(self, game_id, source_hash):
         for b in self.builds.values():
@@ -118,7 +122,7 @@ class MemoryStore:
 
 
 def _package(tmp_path: Path, name="pkg", titles=None, thumbs_dir=None, with_template=True, config=None,
-             voices_dir=None):
+             voices_dir=None, bgm_dir=None):
     result = build_story_graph(*F.rows(), F.rules(titles=titles or {}))
     template = tmp_path / "quick.jpg"
     template.write_bytes(b"\xff\xd8template\xff\xd9")
@@ -129,7 +133,9 @@ def _package(tmp_path: Path, name="pkg", titles=None, thumbs_dir=None, with_temp
                              assets={"thumbs_dir": str(thumbs_dir) if thumbs_dir else None,
                                      "thumbs_prefix": f"story/{GAME}/thumbs/",
                                      "voices_dir": str(voices_dir) if voices_dir else None,
-                                     "voices_prefix": f"story/{GAME}/voices/"})
+                                     "voices_prefix": f"story/{GAME}/voices/",
+                                     "bgm_dir": str(bgm_dir) if bgm_dir else None,
+                                     "bgm_prefix": f"story/{GAME}/bgm/"})
     write_package(tmp_path / name, manifest, result.graph, result.rows,
                   templates={CONFIG["saves"]["template"]: template} if with_template else None)
     return read_package(tmp_path / name)
@@ -307,6 +313,54 @@ def test_no_voices_dir_uploads_no_voices(tmp_path):
     stats = upload_assets(_package(tmp_path), LocalAssetSink(tmp_path / "assets"), set(), {"nen002_039"},
                           log=lambda *_: None)
     assert "voices_uploaded" not in stats and not (tmp_path / "assets" / "story" / GAME / "voices").exists()
+
+
+def _bgm(tmp_path: Path, *files: str) -> Path:
+    folder = tmp_path / "bgm"
+    folder.mkdir(exist_ok=True)
+    for name in files:
+        (folder / name).write_bytes(name.encode())
+    return folder
+
+
+def test_upload_bgm_only_known_codes_prefers_ogg_and_reports_missing(tmp_path):
+    """BGM（預留）：只上傳 game_bgm_tracks 的代號；.ogg 優先、沒有再找 .mp3；已有任一種副檔名就跳過。"""
+    bgm = _bgm(tmp_path, "BGM02.ogg", "BGM02.mp3", "BGM05.mp3", "BGM07.ogg", "BGM99.ogg")
+    pkg = _package(tmp_path, bgm_dir=bgm)
+    root = tmp_path / "assets"
+    bdir = root / "story" / GAME / "bgm"
+    bdir.mkdir(parents=True)
+    (bdir / "BGM07.mp3").write_bytes(b"already")
+    logs = []
+    stats = upload_assets(pkg, LocalAssetSink(root), set(), set(),
+                          {"BGM02", "BGM05", "BGM07", "BGM51", "#15", "../evil"}, log=logs.append)
+    assert stats["bgm_uploaded"] == 2 and stats["bgm_skipped"] == 1 and stats["bgm_missing"] == 1
+    assert stats["bgm_invalid"] == 2 and stats["bgm_bytes"] == len(b"BGM02.ogg") + len(b"BGM05.mp3")
+    # BGM99 不在 game_bgm_tracks、BGM02.mp3 有 .ogg 時不上傳、BGM07 已有 .mp3 不再傳 .ogg
+    assert sorted(p.name for p in bdir.iterdir()) == ["BGM02.ogg", "BGM05.mp3", "BGM07.mp3"]
+    assert (bdir / "BGM07.mp3").read_bytes() == b"already"
+    assert any(m.startswith("⚠") and "BGM資料夾" in m and "BGM51" in m for m in logs)
+    assert any(m.startswith("⚠") and "BGM 代號格式不對" in m for m in logs)
+
+
+def test_no_bgm_dir_uploads_no_bgm(tmp_path):
+    stats = upload_assets(_package(tmp_path), LocalAssetSink(tmp_path / "assets"), set(), set(), {"BGM02"},
+                          log=lambda *_: None)
+    assert "bgm_uploaded" not in stats and not (tmp_path / "assets" / "story" / GAME / "bgm").exists()
+
+
+def test_assets_only_uploads_bgm_of_known_tracks(tmp_path):
+    """BGM 資料夾不算進 source_hash：上線版本可用 --assets-only 預先上傳 game_bgm_tracks 的曲子。"""
+    store = MemoryStore(_all_lines(), bgm={"BGM02"})
+    sink = LocalAssetSink(tmp_path / "assets")
+    plain = _package(tmp_path, "a")
+    assert import_package(plain, store, sink, log=lambda *_: None).status == "imported"
+    with_bgm = _package(tmp_path, "b", bgm_dir=_bgm(tmp_path, "BGM02.ogg", "BGM03.ogg"))
+    assert with_bgm.source_hash == plain.source_hash
+    result = refresh_assets(with_bgm, store, sink, log=lambda *_: None)
+    bdir = tmp_path / "assets" / "story" / GAME / "bgm"
+    assert result.status == "assets" and store.status() == {1: "active"}
+    assert sorted(p.name for p in bdir.iterdir()) == ["BGM02.ogg"]
 
 
 def test_import_uploads_voices_referenced_by_game_lines(tmp_path):

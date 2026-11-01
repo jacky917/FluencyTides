@@ -24,6 +24,12 @@ column → new source:
 「前後文」依 ``story_order``（劇情順序）取，不再依 id；還原的台詞會出現，選項畫面不會。
 Context lines follow ``story_order`` rather than id.
 
+每句台詞也帶它播放的 BGM（``CorpusLine.bgm``，依 ``ord`` 排列）：讀台詞的查詢之後，再用一次批次查詢
+取 ``game_line_bgm`` join ``game_bgm_tracks``（不是每句一次）；``iter_lines`` 在串流前先查好整個範圍。
+Each line also carries its BGM tracks (``CorpusLine.bgm``), loaded with one
+extra batched query per call (``iter_lines`` prefetches its whole scope
+before streaming).
+
 遊戲設定（名稱、語音與頭像資料夾）從 ``game_profiles`` 讀，資料夾相對於 ``.env`` 的
 ``GAME_ASSETS_ROOT``（D9 的 H）。
 Game settings come from ``game_profiles``; directories are relative to
@@ -31,7 +37,7 @@ Game settings come from ``game_profiles``; directories are relative to
 """
 
 from collections.abc import AsyncIterator, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from sqlalchemy import bindparam, text
@@ -40,6 +46,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.infrastructure.database.corpus_tables import (
     CORPUS_LINE_KINDS,
+    GAME_BGM_TRACKS,
+    GAME_LINE_BGM,
     GAME_LINES,
     GAME_PROFILES,
     GAME_SPEAKERS,
@@ -59,6 +67,27 @@ _LINE_COLUMNS = (
     "l.story_order, l.kind"
 )
 _LINE_FROM = f"FROM {GAME_LINES} l LEFT JOIN {GAME_SPEAKERS} sp ON sp.speaker_id = l.speaker_id"
+_BGM_SELECT = (
+    "SELECT lb.line_id, lb.ord, t.code, t.title_ja_jp, t.title_zh_hant "
+    f"FROM {GAME_LINE_BGM} lb JOIN {GAME_BGM_TRACKS} t ON t.track_id = lb.track_id"
+)
+
+
+@dataclass(frozen=True)
+class CorpusLineBgm:
+    """一句台詞播放的一首 BGM（``game_line_bgm`` 一列 join ``game_bgm_tracks``）。One BGM track of a line.
+
+    Attributes:
+        code: 曲目代號（例 ``BGM02``）。Track code.
+        ord: 同一句的第幾首（0 起算；播放中切換曲子的台詞有 0 和 1）。Order within the line.
+        title_ja_jp: 日文曲名；不明時為 None。Japanese title.
+        title_zh_hant: 繁中曲名；不明時為 None。Traditional Chinese title.
+    """
+
+    code: str
+    ord: int
+    title_ja_jp: str | None = None
+    title_zh_hant: str | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +105,8 @@ class CorpusLine:
         avatar_file: 說話者的頭像檔名；None 時用 ``<說話者>.jpg``。Speaker avatar file.
         story_order: 全作的劇情順序。Story order within the game.
         kind: ``line`` 或 ``bgv``（背景語音）。Line kind.
+        bgm: 這句播放的 BGM，依 ``ord`` 排列；沒有 BGM 時為空 tuple。BGM tracks in ``ord``
+            order; empty when none.
     """
 
     id: int
@@ -88,6 +119,12 @@ class CorpusLine:
     avatar_file: str | None
     story_order: int
     kind: str
+    bgm: tuple[CorpusLineBgm, ...] = ()
+
+    @property
+    def bgm_codes(self) -> tuple[str, ...]:
+        """BGM 代號（依 ``ord``）。BGM codes in ``ord`` order."""
+        return tuple(track.code for track in self.bgm)
 
     @property
     def avatar_name(self) -> str | None:
@@ -116,6 +153,53 @@ def _line(row) -> CorpusLine:
     )
 
 
+def _bgm_map(rows) -> dict[int, tuple[CorpusLineBgm, ...]]:
+    """把 ``_BGM_SELECT`` 的結果（依 line_id、ord 排序）整理成 ``{line_id: (曲目, …)}``。
+
+    Group ``_BGM_SELECT`` rows by line. Identical tracks share one object, so
+    prefetching a whole game stays small.
+    """
+    shared: dict[tuple, CorpusLineBgm] = {}
+    grouped: dict[int, list[CorpusLineBgm]] = {}
+    for line_id, ord_, code, title_ja, title_zh in rows:
+        key = (code, int(ord_), title_ja, title_zh)
+        track = shared.get(key)
+        if track is None:
+            track = shared[key] = CorpusLineBgm(code, int(ord_), title_ja, title_zh)
+        grouped.setdefault(int(line_id), []).append(track)
+    return {line_id: tuple(tracks) for line_id, tracks in grouped.items()}
+
+
+async def _fetch_bgm(session: AsyncSession, ids: Iterable[int]) -> dict[int, tuple[CorpusLineBgm, ...]]:
+    """一次查出多句台詞的 BGM。Fetch the BGM of several lines in one query."""
+    id_list = sorted({int(i) for i in ids})
+    if not id_list:
+        return {}
+    query = text(f"{_BGM_SELECT} WHERE lb.line_id IN :ids ORDER BY lb.line_id, lb.ord").bindparams(
+        bindparam("ids", expanding=True)
+    )
+    return _bgm_map((await session.execute(query, {"ids": id_list})).fetchall())
+
+
+async def _with_bgm(session: AsyncSession, lines: list[CorpusLine]) -> list[CorpusLine]:
+    """替台詞補上 BGM（一次批次查詢）。Attach BGM to lines with one batched query."""
+    bgm = await _fetch_bgm(session, (line.id for line in lines))
+    return [replace(line, bgm=bgm[line.id]) if line.id in bgm else line for line in lines]
+
+
+async def _select_lines(session: AsyncSession, ids: Iterable[int], corpus_only: bool) -> list[CorpusLine]:
+    """依 ID 取台詞（不含 BGM）。Fetch lines by id, without BGM."""
+    id_list = sorted({int(i) for i in ids})
+    if not id_list:
+        return []
+    where = "l.id IN :ids" + (f" AND {CORPUS_FILTER}" if corpus_only else "")
+    query = text(f"SELECT {_LINE_COLUMNS} {_LINE_FROM} WHERE {where}").bindparams(
+        bindparam("ids", expanding=True)
+    )
+    result = await session.execute(query, {"ids": id_list})
+    return [_line(row) for row in result.fetchall()]
+
+
 async def get_lines(
     session: AsyncSession, ids: Iterable[int], *, corpus_only: bool = True,
 ) -> dict[int, CorpusLine]:
@@ -128,17 +212,11 @@ async def get_lines(
             Only corpus lines (the old ``scripts`` scope) when True.
 
     Returns:
-        dict[int, CorpusLine]: ``{id: line}``；查無的 ID 不在結果中。Missing ids are absent.
+        dict[int, CorpusLine]: ``{id: line}``（含 BGM）；查無的 ID 不在結果中。Lines with
+        their BGM; missing ids are absent.
     """
-    id_list = sorted({int(i) for i in ids})
-    if not id_list:
-        return {}
-    where = "l.id IN :ids" + (f" AND {CORPUS_FILTER}" if corpus_only else "")
-    query = text(f"SELECT {_LINE_COLUMNS} {_LINE_FROM} WHERE {where}").bindparams(
-        bindparam("ids", expanding=True)
-    )
-    result = await session.execute(query, {"ids": id_list})
-    return {line.id: line for line in map(_line, result.fetchall())}
+    lines = await _with_bgm(session, await _select_lines(session, ids, corpus_only))
+    return {line.id: line for line in lines}
 
 
 async def get_line_metadata(session: AsyncSession, ids: Iterable[int]) -> dict[int, dict]:
@@ -154,11 +232,8 @@ async def get_line_metadata(session: AsyncSession, ids: Iterable[int]) -> dict[i
         dict[int, dict]: ``{id: {"chapter": str, "speaker": str}}``，NULL 以空字串表示。
         NULLs are represented as empty strings.
     """
-    lines = await get_lines(session, ids)
-    return {
-        line_id: {"chapter": line.chapter or "", "speaker": line.speaker or ""}
-        for line_id, line in lines.items()
-    }
+    lines = await _select_lines(session, ids, corpus_only=True)  # 不需要 BGM，少一次查詢
+    return {line.id: {"chapter": line.chapter or "", "speaker": line.speaker or ""} for line in lines}
 
 
 async def get_context(
@@ -181,12 +256,14 @@ async def get_context(
         next: 往後取幾句。Lines after the target.
 
     Returns:
-        list[CorpusLine]: 依劇情順序排列、含目標句；目標句不在語料庫中時為空清單。
-        Ordered lines including the target; empty when the target is not a corpus line.
+        list[CorpusLine]: 依劇情順序排列、含目標句（都帶 BGM，整段只多一次查詢）；目標句不在
+        語料庫中時為空清單。Ordered lines including the target, with BGM loaded in
+        one extra query; empty when the target is not a corpus line.
     """
-    target = (await get_lines(session, [line_id])).get(int(line_id))
-    if target is None:
+    found = await _select_lines(session, [line_id], corpus_only=True)
+    if not found:
         return []
+    target = found[0]
     same_scope = (
         f"l.game_id = :game_id AND {CORPUS_FILTER} "
         "AND (l.chapter_label = :chapter OR (l.chapter_label IS NULL AND :chapter IS NULL))"
@@ -202,7 +279,7 @@ async def get_context(
     ), params)
     earlier = [_line(row) for row in before.fetchall()]
     earlier.reverse()
-    return earlier + [target] + [_line(row) for row in after.fetchall()]
+    return await _with_bgm(session, earlier + [target] + [_line(row) for row in after.fetchall()])
 
 
 async def iter_lines(
@@ -213,8 +290,11 @@ async def iter_lines(
     Stream a game's corpus lines in story order, optionally for one chapter.
 
     以伺服器端游標串流，不一次載入全部台詞；串流期間同一個 session 不能執行其他查詢。
+    串流期間不能再查 BGM，所以開始串流前先用一次查詢取好整個範圍的 BGM（一款遊戲約 5 萬列，
+    相同的曲目共用同一個物件）。
     Streams through a server-side cursor; do not run other statements on the
-    same session while iterating.
+    same session while iterating. The scope's BGM is prefetched in one query
+    before streaming starts.
 
     Args:
         session: 語料庫 async session。Corpus async session.
@@ -229,11 +309,15 @@ async def iter_lines(
     if chapter is not None:
         where += " AND l.chapter_label = :chapter"
         params["chapter"] = chapter
+    bgm = _bgm_map((await session.execute(text(
+        f"{_BGM_SELECT} JOIN {GAME_LINES} l ON l.id = lb.line_id WHERE {where} ORDER BY lb.line_id, lb.ord"
+    ), params)).fetchall())
     result = await session.stream(
         text(f"SELECT {_LINE_COLUMNS} {_LINE_FROM} WHERE {where} ORDER BY l.story_order"), params
     )
     async for row in result:
-        yield _line(row)
+        line = _line(row)
+        yield replace(line, bgm=bgm[line.id]) if line.id in bgm else line
 
 
 async def list_chapters(session: AsyncSession, game_id: str) -> list[str]:
@@ -286,11 +370,16 @@ async def find_line_by_text(
     if game_id:
         where += " AND l.game_id = :game_id"
         params["game_id"] = game_id
+    return await _first_line(session, where, params)
+
+
+async def _first_line(session: AsyncSession, where: str, params: dict) -> CorpusLine | None:
+    """依劇情順序取第一句符合的語料台詞（含 BGM）。The first matching line, with BGM."""
     result = await session.execute(text(
         f"SELECT {_LINE_COLUMNS} {_LINE_FROM} WHERE {where} ORDER BY l.story_order LIMIT 1"
     ), params)
     row = result.fetchone()
-    return _line(row) if row else None
+    return (await _with_bgm(session, [_line(row)]))[0] if row else None
 
 
 async def find_line_by_voice(
@@ -311,11 +400,7 @@ async def find_line_by_voice(
     if game_id:
         where += " AND l.game_id = :game_id"
         params["game_id"] = game_id
-    result = await session.execute(text(
-        f"SELECT {_LINE_COLUMNS} {_LINE_FROM} WHERE {where} ORDER BY l.story_order LIMIT 1"
-    ), params)
-    row = result.fetchone()
-    return _line(row) if row else None
+    return await _first_line(session, where, params)
 
 
 async def find_excluded_line(

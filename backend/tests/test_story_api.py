@@ -4,8 +4,9 @@ HTTP-level tests for ``/api/v1/story`` against an in-memory repository:
 manifest and capabilities, graph ETag, annotation stats and verb index,
 line pages with card annotations, locate (direct and via a master note's
 children), save generation (filename, MIME, variables along the selected
-path, route presets, background voices), thumbnails, voice playback, and
-error codes.
+path, route presets, background voices), thumbnails, voice playback, the
+first-class BGM fields of a line, the reserved BGM audio endpoint (gated by
+``config.bgm_audio``), and error codes.
 Also covers the path rule shared with the frontend, asset-key safety
 (Windows ``..\\`` traversal), MinIO error mapping, config validation and
 effect typing.
@@ -33,7 +34,7 @@ from app.schemas.story import EdgeEffect, SavesConfig, StoryEdge, StoryGraph, St
 from app.services.story.assets import StoryAssetStore, safe_key_parts  # noqa: E402
 from app.services.story.errors import StoryAssetUnavailableError  # noqa: E402
 from app.services.story.graph_index import GraphIndex  # noqa: E402
-from app.services.story.repository import BuildRecord, CardLink, LineRecord  # noqa: E402
+from app.services.story.repository import BuildRecord, CardLink, LineBgm, LineRecord  # noqa: E402
 from app.services.story.service import StoryService  # noqa: E402
 from scripts.story.common.scene_graph import build_story_graph  # noqa: E402
 
@@ -42,6 +43,10 @@ TEMPLATE_KEY = f"story/{GAME}/templates/quick.jpg"
 THUMB = "0123456789abcdef"
 VOICE = "meg009_001"
 MP3 = b"ID3\x03\x00fake-mp3"
+OGG = b"OggS\x00fake-ogg"
+#: 2700 播放中從 BGM02 切到 BGM51（標題畫面的曲子，兩種語言的曲名都不明）。Line 2700 switches tracks.
+BGM_2700 = [LineBgm("BGM02", 0, "気の合う仲間たち", "意氣相投的朋友們", gallery_no=4, archive_index=3),
+            LineBgm("BGM51", 1, None, None, gallery_no=None, archive_index=85)]
 
 CONFIG = {
     "languages": [{"code": "ja-JP", "label": "日本語"}, {"code": "zh-Hant", "label": "繁中"}],
@@ -91,7 +96,9 @@ class FakeRepo:
                 point=point, file_name=file_by_id[scene.file_id].file_name, label=scene.label,
                 speaker_ja="めぐる", speaker_zh=None, text_ja=f"台詞{row.line_id}\n続き", text_zh=f"繁中{row.line_id}",
                 voice=VOICE if row.line_id == 2700 else None, thumb=THUMB, is_h=False, h_label=None, chapter_label=line.chapter_label,
-                attrs={"plays_at": {"scene": "001.共通－始まり.ks*chapter11", "point": 9}} if row.line_id == 1001 else {}))
+                attrs={"plays_at": {"scene": "001.共通－始まり.ks*chapter11", "point": 9}} if row.line_id == 1001 else {},
+                bgm=list(BGM_2700) if row.line_id == 2700 else [],
+                bgm_detect="實測" if row.line_id == 2700 else None, bgm_may_change=row.line_id == 2700))
         # 2700（009_02B 的第 1 句）有兩張核心動詞卡；筆記 900 是母卡，經由子卡 901 找到 2700
         self.cards = [CardLink(2700, 901, "jp_core_verb", "見る"), CardLink(2700, 902, "jp_core_verb", "見る"),
                       CardLink(1000, 903, "jp_verb_pair", "開く"), CardLink(1000, 904, "other_type", "x")]
@@ -182,8 +189,9 @@ def test_games_and_manifest(setup):
     client, _, _ = setup
     games = client.get("/api/v1/story/games").json()
     assert games[0]["game_id"] == GAME and games[0]["title"] == "魔女的夜宴"
-    assert games[0]["capabilities"] == {"saves": True, "thumbs": True, "voices": True, "annotations": ["cards"],
-                                        "route_presets": True, "languages": ["ja-JP", "zh-Hant"]}
+    assert games[0]["capabilities"] == {"saves": True, "thumbs": True, "voices": True, "bgm": False,
+                                        "annotations": ["cards"], "route_presets": True,
+                                        "languages": ["ja-JP", "zh-Hant"]}
     assert games[0]["card_types"][0]["note_types"] == ["JP_Context_Dark"]
     manifest = client.get(BASE).json()
     assert manifest["build_id"] == 7
@@ -229,6 +237,79 @@ def test_lines_page_with_annotations(setup):
     assert line["can_save"] is True and line["anchor_key"].startswith("009.共通－休日デート.ks*009_02B@")
     assert body["next_annotated_seq"] == 0
     assert client.get(f"{BASE}/nodes/sw:nope/lines").json()["error_code"] == "STORY_NODE_NOT_FOUND"
+
+
+def test_line_bgm_is_a_first_class_field(setup):
+    """BGM 是 StoryLine 的正式欄位：依 ord 排列、曲名以語言代碼為鍵且省略不明的語言；attrs 不再有 BGM。"""
+    client, _, _ = setup
+    lines = client.get(f"{BASE}/nodes/sw:009_02B/lines").json()["lines"]
+    two_tracks = next(line for line in lines if line["line_id"] == 2700)
+    assert two_tracks["bgm"] == [
+        {"code": "BGM02", "ord": 0, "titles": {"ja-JP": "気の合う仲間たち", "zh-Hant": "意氣相投的朋友們"}, "gallery_no": 4},
+        {"code": "BGM51", "ord": 1, "titles": {}, "gallery_no": None}]
+    assert two_tracks["bgm_detect"] == "實測" and two_tracks["bgm_may_change"] is True
+    no_bgm = next(line for line in lines if line["line_id"] != 2700)
+    assert no_bgm["bgm"] == [] and no_bgm["bgm_detect"] is None and no_bgm["bgm_may_change"] is False
+    for line in lines:
+        assert "bgm" not in line["attrs"] and "bgm_title" not in line["attrs"]
+
+
+def _bgm_files(service, *names: tuple[str, bytes]) -> Path:
+    root = service.assets.local_root / "story" / GAME / "bgm"
+    root.mkdir(parents=True, exist_ok=True)
+    for name, data in names:
+        (root / name).write_bytes(data)
+    return root
+
+
+def test_bgm_audio_is_off_by_default(setup):
+    """設定沒打開 bgm_audio：capabilities.bgm 為 false，端點即使檔案在也回 404。"""
+    client, _, service = setup
+    _bgm_files(service, ("BGM02.ogg", OGG))
+    assert client.get(BASE).json()["capabilities"]["bgm"] is False
+    r = client.get(f"{BASE}/bgm/BGM02")
+    assert r.status_code == 404 and r.json()["error_code"] == "STORY_ASSET_NOT_FOUND" and OGG not in r.content
+
+
+def test_bgm_audio_enabled(setup):
+    """打開 bgm_audio：.ogg 優先、沒有再找 .mp3，Content-Type 跟著檔案；不進記憶體快取。"""
+    client, repo, service = setup
+    repo.config = {**CONFIG, "bgm_audio": True}
+    _bgm_files(service, ("BGM02.ogg", OGG), ("BGM02.mp3", MP3), ("BGM05.mp3", MP3))
+    assert client.get(BASE).json()["capabilities"]["bgm"] is True
+    assert client.get("/api/v1/story/games").json()[0]["capabilities"]["bgm"] is True
+    r = client.get(f"{BASE}/bgm/BGM02")
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/ogg" and r.content == OGG
+    assert "immutable" in r.headers["cache-control"] and r.headers["x-content-type-options"] == "nosniff"
+    r = client.get(f"{BASE}/bgm/BGM05")
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/mpeg" and r.content == MP3
+    assert service.assets._cache.get(StoryService.bgm_key(GAME, "BGM02", ".ogg")) is None
+    r = client.get(f"{BASE}/bgm/BGM99")
+    assert r.status_code == 404 and r.json()["error_code"] == "STORY_ASSET_NOT_FOUND"
+    for bad in ("BGM02.ogg", "a-b", "%2315", "%E6%9B%B2", "x" * 33, "a%20b"):
+        r = client.get(f"{BASE}/bgm/{bad}")
+        assert r.status_code == 404 and r.json()["error_code"] == "STORY_ASSET_NOT_FOUND", bad
+    assert client.get("/api/v1/story/games/Nope/bgm/BGM02").status_code == 404
+
+
+def test_bgm_traversal_is_rejected(setup, tmp_path):
+    client, repo, _ = setup
+    repo.config = {**CONFIG, "bgm_audio": True}
+    (tmp_path / "evil.ogg").write_bytes(b"SECRET")  # 素材根目錄（tmp_path/assets）之外
+    for path in (f"{BASE}/bgm/..%5C..%5C..%5C..%5Cevil", f"{BASE}/bgm/..%2F..%2F..%2F..%2Fevil",
+                 "/api/v1/story/games/..%5C..%5C..%5C/bgm/evil"):
+        r = client.get(path)
+        assert r.status_code == 404 and b"SECRET" not in r.content, path
+
+
+def test_bgm_needs_an_asset_store_and_maps_store_errors_to_503():
+    repo = FakeRepo()
+    repo.config = {**CONFIG, "bgm_audio": True}
+    caps = _app(StoryService(repo, StoryAssetStore(local_dir=""))).get(BASE).json()["capabilities"]
+    assert caps["bgm"] is False  # 設定打開了，但沒有素材來源
+    broken = StoryAssetStore(minio_client=_FakeMinio(ConnectionError("refused")), bucket="b", local_dir="")
+    r = _app(StoryService(repo, broken)).get(f"{BASE}/bgm/BGM02")
+    assert r.status_code == 503 and r.json()["error_code"] == "STORY_ASSET_UNAVAILABLE"
 
 
 def test_locate_line_and_note(setup):

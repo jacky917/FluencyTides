@@ -8,9 +8,13 @@
  * - `kind=bgv`：背景語音，較淡的樣式；存檔改用它的播放位置（後端處理）。
  * - 語音：存檔鍵左邊的播放鍵；同一時間只播一句，換節點、關閉抽屜時停止。沒有語音（旁白）
  *   或後端沒有素材來源（`capabilities.voices=false`）時改成停用的靜音喇叭圖示（不顯示文字或提示框）。選項列不放。
+ * - BGM：說話者旁顯示這句的曲名（`StoryLine.bgm`，跟著台詞語言，規則見 `lib/storyBgm`），播放中切換曲子的
+ *   台詞以「→」連接兩首。BGM 播放鍵只在 `capabilities.bgm=true` 時出現（目前 BGM 音檔還沒有，不顯示）；
+ *   它是另一個播放器：循環播放、音量較低，和語音可以同時播（就像遊戲裡語音疊在 BGM 上），BGM 自己一次只播
+ *   一首。播放中的鍵是曲目代號，所以同一首 BGM 的所有台詞都顯示播放中。換節點、關閉抽屜時停止。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ChevronDown, Download, Loader2, Play, Square, VolumeX, X } from 'lucide-react'
@@ -20,6 +24,7 @@ import { useStoryLines } from '../../hooks/useStoryLines'
 import { useLocalStorage } from '../../hooks/useStoredState'
 import { useVoicePlayer } from '../../hooks/useVoicePlayer'
 import { describeApiError } from '../../lib/apiError'
+import { bgmTooltip, bgmTrackTitle, bgmTracks, canPlayBgm } from '../../lib/storyBgm'
 import { cardPageUrl } from '../../lib/storyParams'
 import { cn } from '../../lib/utils'
 import { describeVoiceFailure } from '../../lib/voicePlayer'
@@ -34,6 +39,9 @@ type TextMode = 'both' | 'ja-JP' | 'zh-Hant'
 const TYPE_LABEL: Record<string, string> = {
   scene: '場景', choice: '選項場景', option: '選項', merge: '合流', condition: '條件分歧', ending: '結局', route_exit: '路線出口',
 }
+
+/** BGM 播放器的音訊設定：循環、音量壓低，和語音同時播時聽得到台詞。BGM audio: looping, quieter than voices. */
+const BGM_AUDIO = { loop: true, volume: 0.5 }
 
 /** {@link StoryLineDrawer} 的 props。Props of {@link StoryLineDrawer}. */
 export interface StoryLineDrawerProps {
@@ -81,6 +89,14 @@ export function StoryLineDrawer({
   }, [gameId])
   const voice = useVoicePlayer<number>(onVoiceError)
   const { stop: stopVoice } = voice
+  // BGM（預留）：播放鍵是曲目代號；只有 capabilities.bgm 為 true 時才會呼叫
+  const canPlayMusic = canPlayBgm(manifest.capabilities)
+  const onBgmError = useCallback((code: string, _url: string, cause: unknown) => {
+    void describeVoiceFailure(cause, () => StoryAPI.probeBgm(gameId, code), (e) => describeApiError(e).message)
+      .then((message) => toast.error(`BGM 播放失敗：${message}`, { description: code }))
+  }, [gameId])
+  const bgm = useVoicePlayer<string>(onBgmError, BGM_AUDIO)
+  const { stop: stopBgm } = bgm
   const tabTitles = useMemo(() => Object.fromEntries(graph.tabs.map((t) => [t.key, localizedTitle(t, 'zh-Hant')])), [graph.tabs])
   const byKey = useMemo(() => new Map(graph.nodes.map((n) => [n.key, n])), [graph])
   const pathVars = useMemo(() => pathVariables(pathTo(graph, node.key)), [graph, node.key])
@@ -89,13 +105,14 @@ export function StoryLineDrawer({
     [graph.edges, node.key],
   )
 
-  // 換節點時重設（語音也停掉；關閉抽屜時元件卸載，由 useVoicePlayer 停止）
+  // 換節點時重設（語音與 BGM 也停掉；關閉抽屜時元件卸載，由 useVoicePlayer 停止）
   useEffect(() => {
     setMinSeq(0)
     setPendingSeq(null)
     listRef.current?.scrollTo({ top: 0 })
     stopVoice()
-  }, [node.key, gameId, stopVoice])
+    stopBgm()
+  }, [node.key, gameId, stopVoice, stopBgm])
 
   const playVoice = (line: StoryLine) => {
     if (!line.voice) return
@@ -215,6 +232,38 @@ export function StoryLineDrawer({
     }
   }
 
+  /** 說話者旁的 BGM 曲名（沒有 BGM 時不顯示）；有播放能力時每首曲名是播放鍵。BGM titles beside the speaker. */
+  const bgmChip = (line: StoryLine): ReactNode => {
+    const tracks = bgmTracks(line)
+    if (!tracks.length) return null
+    return (
+      <span className="flex min-w-0 items-center gap-0.5" title={bgmTooltip(line)}>
+        <span aria-hidden="true">♪</span>
+        {tracks.map((t, i) => {
+          const title = bgmTrackTitle(t, textMode)
+          const playingThis = bgm.playing === t.code
+          return (
+            <Fragment key={`${t.ord}:${t.code}`}>
+              {i > 0 && <span aria-hidden="true">→</span>}
+              {canPlayMusic ? (
+                <button type="button" aria-pressed={playingThis}
+                  aria-label={playingThis ? `停止播放 BGM：${title}` : `播放 BGM：${title}`}
+                  className={cn('inline-flex min-w-0 items-center gap-0.5 rounded px-1 hover:bg-accent',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring', playingThis && 'bg-accent text-foreground')}
+                  onClick={(ev) => { ev.stopPropagation(); bgm.toggle(t.code, StoryAPI.bgmUrl(gameId, t.code)) }}>
+                  {playingThis ? <Square className="h-2.5 w-2.5 shrink-0 fill-current" /> : <Play className="h-2.5 w-2.5 shrink-0" />}
+                  <span className="truncate">{title}</span>
+                </button>
+              ) : (
+                <span className="truncate">{title}</span>
+              )}
+            </Fragment>
+          )
+        })}
+      </span>
+    )
+  }
+
   const text = (line: StoryLine) => {
     const ja = line.texts['ja-JP']
     const zh = line.texts['zh-Hant']
@@ -324,7 +373,7 @@ export function StoryLineDrawer({
                         {line.speaker && <span className="font-medium text-foreground">{line.speakers['zh-Hant'] && textMode === 'zh-Hant' ? line.speakers['zh-Hant'] : line.speaker}</span>}
                         {line.kind === 'bgv' && <span className="rounded bg-muted px-1">背景語音</span>}
                         {line.attrs.is_h === true && <span className="rounded bg-pink-100 px-1 text-pink-700 dark:bg-pink-950 dark:text-pink-300">H</span>}
-                        {typeof line.attrs.bgm_title === 'string' && <span className="truncate" title="BGM">♪ {line.attrs.bgm_title}</span>}
+                        {bgmChip(line)}
                       </div>
                       {line.kind === 'choice' ? (
                         <div className="space-y-1">

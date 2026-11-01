@@ -18,7 +18,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import scripts.common.env  # noqa: F401  # 載入 .env，供 app.core.config 使用
@@ -44,7 +44,16 @@ _DDL = (
     """CREATE TABLE game_lines (id INTEGER PRIMARY KEY, game_id TEXT, scene_id INTEGER, story_order INTEGER,
        kind TEXT, chapter_label TEXT, speaker_id INTEGER, text_ja_jp TEXT, ruby_ja_jp TEXT, voice_file TEXT,
        status TEXT, in_corpus INTEGER)""",
+    """CREATE TABLE game_bgm_tracks (track_id INTEGER PRIMARY KEY, game_id TEXT, code TEXT, archive_index INTEGER,
+       gallery_no INTEGER, title_ja_jp TEXT, title_zh_hant TEXT)""",
+    "CREATE TABLE game_line_bgm (line_id INTEGER, ord INTEGER, track_id INTEGER, PRIMARY KEY (line_id, ord))",
 )
+
+# (track_id, code, title_ja, title_zh)：BGM51 是標題畫面的曲子，兩種語言的曲名都不明
+_TRACKS = [(1, "BGM02", "気の合う仲間たち", "意氣相投的朋友們"), (2, "BGM05", "朝の陽気", "清晨的陽光"),
+           (3, "BGM51", None, None)]
+# (line_id, ord, track_id)：53197 播放中切換曲子（兩筆，故意倒序插入）；11、15 沒有 BGM；12 是選項畫面
+_LINE_BGM = [(10, 0, 1), (53197, 1, 2), (53197, 0, 1), (13, 0, 1), (12, 0, 1), (20, 0, 3)]
 
 # (id, story_order, kind, chapter, speaker_id, text, ruby, voice, status, in_corpus)
 _LINES = [
@@ -83,6 +92,13 @@ def session_factory():
                     "voice_file, status, in_corpus, game_id, scene_id) VALUES (:id, :o, :k, :c, :sp, :t, :r, :v, :st, :ic, "
                     "'SabbatOfTheWitch', 1)"
                 ), dict(zip(("id", "o", "k", "c", "sp", "t", "r", "v", "st", "ic"), row)))
+            for track_id, code, title_ja, title_zh in _TRACKS:
+                await conn.execute(text(
+                    "INSERT INTO game_bgm_tracks VALUES (:id, 'SabbatOfTheWitch', :code, NULL, NULL, :ja, :zh)"
+                ), {"id": track_id, "code": code, "ja": title_ja, "zh": title_zh})
+            for line_id, ord_, track_id in _LINE_BGM:
+                await conn.execute(text("INSERT INTO game_line_bgm VALUES (:l, :o, :t)"),
+                                   {"l": line_id, "o": ord_, "t": track_id})
 
     _run(setup())
     yield async_sessionmaker(engine, expire_on_commit=False)
@@ -138,6 +154,55 @@ class TestReadLayer:
         assert _call(session_factory, cr.find_line_by_text, "「見て」", "SabbatOfTheWitch").id == 53197
         assert _call(session_factory, cr.find_line_by_text, "「見て」", "NewGame") is None
         assert _call(session_factory, cr.find_line_by_voice, "nen001").id == 10
+
+
+_BGM02 = cr.CorpusLineBgm("BGM02", 0, "気の合う仲間たち", "意氣相投的朋友們")
+
+
+def _count_statements(session_factory) -> list[str]:
+    """記下 session 執行的每一句 SQL（檢查 BGM 是一次批次查詢，不是每句一次）。Record executed SQL."""
+    statements: list[str] = []
+    engine = session_factory.kw["bind"].sync_engine
+    event.listen(engine, "before_cursor_execute", lambda conn, cursor, sql, *rest: statements.append(sql))
+    return statements
+
+
+class TestLineBgm:
+    def test_get_lines_carries_bgm_in_ord_order_with_one_extra_query(self, session_factory):
+        """兩首的台詞依 ord 排列；沒有 BGM 的是空 tuple；曲名不明的照樣有代號。整批只多一次查詢。"""
+        statements = _count_statements(session_factory)
+        lines = _call(session_factory, cr.get_lines, [10, 11, 53197, 20])
+        assert len(statements) == 2 and "game_line_bgm" in statements[1]
+        assert lines[53197].bgm == (_BGM02, cr.CorpusLineBgm("BGM05", 1, "朝の陽気", "清晨的陽光"))
+        assert lines[53197].bgm_codes == ("BGM02", "BGM05")
+        assert lines[10].bgm == (_BGM02,)
+        assert lines[11].bgm == () and lines[11].bgm_codes == ()
+        assert lines[20].bgm == (cr.CorpusLineBgm("BGM51", 0, None, None),)
+
+    def test_context_carries_bgm(self, session_factory):
+        statements = _count_statements(session_factory)
+        ctx = _call(session_factory, cr.get_context, 53197, 5, 5)
+        assert len(statements) == 4  # 目標句、前文、後文、BGM
+        assert [(line.id, line.bgm_codes) for line in ctx] == [
+            (10, ("BGM02",)), (11, ()), (53197, ("BGM02", "BGM05")), (13, ("BGM02",)), (15, ())]
+
+    def test_iter_lines_prefetches_the_scope(self, session_factory):
+        async def collect(session, chapter=None):
+            return [(line.id, line.bgm_codes) async for line in cr.iter_lines(session, "SabbatOfTheWitch", chapter)]
+
+        assert _call(session_factory, collect) == [
+            (10, ("BGM02",)), (11, ()), (53197, ("BGM02", "BGM05")), (13, ("BGM02",)), (15, ()), (20, ("BGM51",))]
+        assert _call(session_factory, collect, "ch2") == [(20, ("BGM51",))]
+
+    def test_finders_carry_bgm_and_metadata_is_unchanged(self, session_factory):
+        assert _call(session_factory, cr.find_line_by_text, "「見て」").bgm_codes == ("BGM02", "BGM05")
+        assert _call(session_factory, cr.find_line_by_voice, "nen001").bgm == (_BGM02,)
+        assert _call(session_factory, cr.get_line_metadata, [10]) == {10: {"chapter": "ch1", "speaker": "寧々"}}
+
+    def test_lines_built_without_bgm_default_to_empty(self):
+        """既有的建構方式（不給 bgm）照樣能用。Existing constructors keep working."""
+        line = cr.CorpusLine(1, "G", None, None, "", "", None, None, 0, "line")
+        assert line.bgm == () and line.bgm_codes == ()
 
 
 class TestGameProfiles:

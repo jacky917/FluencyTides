@@ -53,6 +53,24 @@ class BuildRecord:
     languages: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class LineBgm:
+    """一句台詞播放的一首 BGM（``game_line_bgm`` join ``game_bgm_tracks``）。One track of a line.
+
+    ``archive_index`` 是曲子在遊戲封包（``bgm.xp3``）裡的檔案序號，API 不回傳；留著是為了之後
+    整理 BGM 音檔時對照。
+    ``archive_index`` (file index inside the game archive) is not exposed by
+    the API; it is kept for matching audio files later.
+    """
+
+    code: str
+    ord: int
+    title_ja: str | None = None
+    title_zh: str | None = None
+    gallery_no: int | None = None
+    archive_index: int | None = None
+
+
 @dataclass
 class LineRecord:
     """一句台詞（抽屜與存檔用）。One line for the drawer and saves."""
@@ -73,7 +91,12 @@ class LineRecord:
     h_label: str | None
     chapter_label: str | None
     attrs: dict[str, Any]
-    bgm: list[dict[str, Any]] = field(default_factory=list)
+    #: 依 ``ord`` 排列；沒有 BGM 時是空清單。In ``ord`` order; empty when none.
+    bgm: list[LineBgm] = field(default_factory=list)
+    #: ``game_lines.bgm_detect``（``A``／``實測``／``B推定``／None）。How the BGM was detected.
+    bgm_detect: str | None = None
+    #: ``game_lines.bgm_may_change``。Whether the BGM may change during the line.
+    bgm_may_change: bool = False
 
 
 @dataclass
@@ -128,7 +151,7 @@ def _verb(term: str | None) -> str | None:
 
 _LINE_COLUMNS = """
     n.seq, l.id AS line_id, l.kind, l.point, l.text_ja_jp, l.text_zh_hant, l.voice_file, l.thumb,
-    l.is_h, l.h_label, l.chapter_label, l.attrs, s.label, f.file_name,
+    l.is_h, l.h_label, l.chapter_label, l.attrs, l.bgm_detect, l.bgm_may_change, s.label, f.file_name,
     sp.name_ja_jp AS speaker_ja, sp.name_zh_hant AS speaker_zh
 """
 _LINE_JOINS = """
@@ -145,7 +168,8 @@ def _line_record(r: Any) -> LineRecord:
         line_id=int(r.line_id), seq=int(r.seq), kind=r.kind, point=r.point, file_name=r.file_name,
         label=r.label, speaker_ja=r.speaker_ja, speaker_zh=r.speaker_zh, text_ja=r.text_ja_jp,
         text_zh=r.text_zh_hant, voice=r.voice_file, thumb=r.thumb, is_h=bool(r.is_h), h_label=r.h_label,
-        chapter_label=r.chapter_label, attrs=_json(r.attrs) or {})
+        chapter_label=r.chapter_label, attrs=_json(r.attrs) or {}, bgm_detect=r.bgm_detect,
+        bgm_may_change=bool(r.bgm_may_change))
 
 
 class MySQLStoryRepository:
@@ -214,17 +238,19 @@ class MySQLStoryRepository:
         return row.node_key, record
 
     async def _attach_bgm(self, session, records: list[LineRecord]) -> None:
+        """一次查出這些台詞的 BGM（依 ``ord``）並填進 ``record.bgm``。Batch-load the lines' BGM."""
         if not records:
             return
         sql = text("""
-            SELECT lb.line_id, lb.ord, t.code, t.title_ja_jp, t.title_zh_hant
+            SELECT lb.line_id, lb.ord, t.code, t.title_ja_jp, t.title_zh_hant, t.gallery_no, t.archive_index
             FROM game_line_bgm lb JOIN game_bgm_tracks t ON t.track_id = lb.track_id
             WHERE lb.line_id IN :ids ORDER BY lb.line_id, lb.ord""").bindparams(bindparam("ids", expanding=True))
         rows = (await session.execute(sql, {"ids": [r.line_id for r in records]})).all()
-        by_line: dict[int, list[dict[str, Any]]] = {}
+        by_line: dict[int, list[LineBgm]] = {}
         for r in rows:
-            by_line.setdefault(int(r.line_id), []).append(
-                {"code": r.code, "title_ja": r.title_ja_jp, "title_zh": r.title_zh_hant})
+            by_line.setdefault(int(r.line_id), []).append(LineBgm(
+                code=r.code, ord=int(r.ord), title_ja=r.title_ja_jp, title_zh=r.title_zh_hant,
+                gallery_no=r.gallery_no, archive_index=r.archive_index))
         for rec in records:
             rec.bgm = by_line.get(rec.line_id, [])
 
