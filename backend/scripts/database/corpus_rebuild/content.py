@@ -208,7 +208,9 @@ def build(anchor_rows: list[dict], legacy: list[LegacyRow], calib_dir: Path,
     tw_file = calib_dir / "speaker_names_tw.json"
     if tw_file.exists():
         for x in json.loads(tw_file.read_text(encoding="utf-8")):
-            if x.get("name_zh_hant"):
+            # 低信心的是場景裡的暫時稱呼（例「電影」「男生」），不當成名字
+            # Low-confidence entries are situational labels, not names.
+            if x.get("name_zh_hant") and x.get("confidence") == "high":
                 tw_names[x["name_ja_jp"]] = x["name_zh_hant"]
     speaker_ids: dict[str, int] = {}
     for n, (name, _cnt) in enumerate(names.most_common(), start=1):
