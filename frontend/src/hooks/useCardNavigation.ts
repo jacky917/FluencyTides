@@ -53,7 +53,7 @@ const historyIndex = (): unknown => (window.history.state as { idx?: unknown } |
  * Navigation of the card browsing page; all state lives in the URL.
  *
  * - 選牌組、搜尋、換頁、從清單選卡：清空跳轉紀錄；選牌組、搜尋、選卡也退出建卡畫面（`new`）。
- * - 建卡畫面（`openCreate`、`closeCreate`）：打開時新增一筆歷史，上一頁就退出。建卡成功後表單留在
+ * - 建卡畫面（`toggleCreate`、`closeCreate`）：打開時新增一筆歷史，上一頁就退出。建卡成功後表單留在
  *   原地；按成功提示上的「查看新卡片」才由 `showCreated` 切過去（新增一筆歷史，上一頁回到表單）。
  * - 卡面按鈕打開其他筆記（`openNotes`）：查出卡片後切換過去，記下目前這張並新增一筆瀏覽器歷史，
  *   所以「返回」與瀏覽器的上一頁都能回來。查詢期間網址若變了（使用者另選了卡片），結果作廢。
@@ -133,35 +133,67 @@ export function useCardNavigation() {
   }
 
   /**
-   * 卡面要打開這些筆記：找出它們的卡片，切換過去並記下目前這張。
-   * Opens the notes a card face asks for, remembering the current card.
+   * 查出這些筆記要顯示的卡片（第一則筆記 ord 最小的那張），交給 `onFound`；查不到或查詢失敗時以 toast
+   * 說明。`openNotes` 與 `showCreated` 共用：跳轉中不再接受新的；查詢期間網址若變了（使用者另選了
+   * 卡片），結果作廢。
+   * Finds the card to show for these notes and hands it to `onFound`; shared by
+   * openNotes and showCreated.
+   * @param noteIds - 筆記 ID。The note IDs.
+   * @param messages - 查不到、查詢失敗時的 toast。The toasts for not found and failure.
+   * @param onFound - 找到卡片時。Called with the card ID.
+   * @param staleTime - 查詢結果可沿用多久（毫秒）。How long a cached lookup stays fresh.
    */
-  const openNotes = async (noteIds: number[]) => {
-    if (cardId === null || jumping.current) return
+  const findNoteCard = async (
+    noteIds: number[],
+    messages: { notFound: { title: string; description: string }; failed: { title: string; hint?: string } },
+    onFound: (target: number) => void,
+    staleTime = 0,
+  ) => {
+    if (noteIds.length === 0 || jumping.current) return
     jumping.current = true
     const startedAt = latestParams.current
     try {
       const result = await queryClient.fetchQuery({
         queryKey: ['note-cards', noteIds.join(',')],
         queryFn: () => FluencyTidesAPI.browseCards({ q: `nid:${noteIds.join(',')}`, pageSize: BROWSE_PAGE_SIZE }),
-        staleTime: 30_000,
+        staleTime,
         retry: retryTransient,
       })
       if (latestParams.current !== startedAt) return
       const target = pickNoteCard(result.cards, noteIds)
-      if (target === null) {
-        toast.error('找不到這張筆記', { description: `筆記 ${noteIds.join('、')} 不存在，可能已被刪除。` })
-      } else if (target !== cardId) {
-        const jump: JumpState = { jumpFrom: cardId }
-        switchCard({ card: String(target), trail: pushTrail(trail, cardId) }, { state: jump })
-      }
+      if (target === null) toast.error(messages.notFound.title, { description: messages.notFound.description })
+      else onFound(target)
     } catch (error) {
       if (latestParams.current === startedAt) {
-        toast.error('無法打開這張筆記', { description: describeApiError(error).message })
+        const message = describeApiError(error).message
+        toast.error(messages.failed.title, {
+          description: messages.failed.hint ? `${message}。${messages.failed.hint}` : message,
+        })
       }
     } finally {
       jumping.current = false
     }
+  }
+
+  /**
+   * 卡面要打開這些筆記：找出它們的卡片，切換過去並記下目前這張。
+   * Opens the notes a card face asks for, remembering the current card.
+   */
+  const openNotes = async (noteIds: number[]) => {
+    if (cardId === null) return
+    await findNoteCard(
+      noteIds,
+      {
+        notFound: { title: '找不到這張筆記', description: `筆記 ${noteIds.join('、')} 不存在，可能已被刪除。` },
+        failed: { title: '無法打開這張筆記' },
+      },
+      (target) => {
+        if (target === cardId) return
+        const jump: JumpState = { jumpFrom: cardId }
+        switchCard({ card: String(target), trail: pushTrail(trail, cardId) }, { state: jump })
+      },
+      30_000,
+    )
   }
 
   /**
@@ -188,6 +220,9 @@ export function useCardNavigation() {
     else update({ new: null }, { replace: true })
   }
 
+  /** 清單標題的「＋」：打開或關閉建卡表單。Toggles the create form. */
+  const toggleCreate = () => (state.creating ? closeCreate() : openCreate())
+
   /**
    * 打開剛建立的筆記的卡片（建卡畫面成功提示上的「查看新卡片」）：退出建卡畫面並新增一筆瀏覽器歷史，
    * 上一頁回到建卡畫面。多張筆記時打開第一則筆記 ord 最小的那張。查詢期間網址若變了，結果作廢。
@@ -196,30 +231,15 @@ export function useCardNavigation() {
    * @param noteIds - 建立的筆記 ID。The created note IDs.
    */
   const showCreated = async (noteIds: number[]) => {
-    if (noteIds.length === 0 || jumping.current) return
-    jumping.current = true
-    const startedAt = latestParams.current
     const search = `nid:${noteIds.join(',')}`
-    try {
-      const result = await queryClient.fetchQuery({
-        queryKey: ['note-cards', noteIds.join(',')],
-        queryFn: () => FluencyTidesAPI.browseCards({ q: search, pageSize: BROWSE_PAGE_SIZE }),
-        retry: retryTransient,
-      })
-      if (latestParams.current !== startedAt) return
-      const target = pickNoteCard(result.cards, noteIds)
-      if (target === null) {
-        toast.error('找不到新卡片', { description: `可在清單搜尋 ${search} 確認。` })
-      } else {
-        switchCard({ new: null, card: String(target), trail: null })
-      }
-    } catch (error) {
-      if (latestParams.current === startedAt) {
-        toast.error('無法打開新卡片', { description: `${describeApiError(error).message}。可在清單搜尋 ${search} 找到它。` })
-      }
-    } finally {
-      jumping.current = false
-    }
+    await findNoteCard(
+      noteIds,
+      {
+        notFound: { title: '找不到新卡片', description: `可在清單搜尋 ${search} 確認。` },
+        failed: { title: '無法打開新卡片', hint: `可在清單搜尋 ${search} 找到它。` },
+      },
+      (target) => switchCard({ new: null, card: String(target), trail: null }),
+    )
   }
 
   /**
@@ -264,7 +284,7 @@ export function useCardNavigation() {
       update({ side: side === 'answer' ? side : null }, { replace: true, state: location.state }),
     openNotes,
     goBack,
-    openCreate,
+    toggleCreate,
     closeCreate,
     showCreated,
   }

@@ -19,7 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../ui/card'
 import { Skeleton } from '../ui/skeleton'
 import { ErrorNote } from '../shared/ErrorNote'
 import { ShowInStoryButton } from '../story/ShowInStoryButton'
-import { STICKY_HEADER, panelScrollClass } from '../shared/panelStyles'
+import { STACKED_VIEWER_MAX_WIDTH, STICKY_HEADER, panelScrollClass } from '../shared/panelStyles'
 
 /** {@link CardViewPanel} 的 props。Props of {@link CardViewPanel}. */
 interface CardViewPanelProps {
@@ -183,7 +183,7 @@ export function CardViewPanel({
   // 不並排時最寬 768px（與並排時的預設寬度相同）
   if (cardId === null) {
     return (
-      <Card className={cn(panelScrollClass(sideBySide), !sideBySide && 'max-w-[48rem]', className)}>
+      <Card className={cn(panelScrollClass(sideBySide), !sideBySide && STACKED_VIEWER_MAX_WIDTH, className)}>
         <CardContent className="pt-6 text-sm text-muted-foreground">從清單選一張卡片查看。</CardContent>
       </Card>
     )
@@ -248,7 +248,7 @@ export function CardViewPanel({
 
   return (
     // 並排時卡片只負責外框，捲動與彈性回饋交給 ElasticScrollArea
-    <Card ref={panelRef} className={cn(sideBySide ? 'flex h-full flex-col overflow-hidden' : 'max-w-[48rem]', className)}>
+    <Card ref={panelRef} className={cn(sideBySide ? 'flex h-full flex-col overflow-hidden' : STACKED_VIEWER_MAX_WIDTH, className)}>
       <ElasticScrollArea
         ref={scrollRef}
         enabled={sideBySide && !reducedMotion}

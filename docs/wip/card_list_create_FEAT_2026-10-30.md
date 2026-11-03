@@ -47,7 +47,7 @@
 
 - `BrowseParams` 加 `creating: boolean`，只有 `new=1` 時為 true。
 - `useCardNavigation` 加：
-  - `openCreate()`：設 `new=1`，**新增**一筆瀏覽器歷史，按上一頁就回到原本的卡片。
+  - `toggleCreate()`（清單標題的「＋」）：不在建卡畫面時設 `new=1`，**新增**一筆瀏覽器歷史，按上一頁就回到原本的卡片；已在建卡畫面時同 `closeCreate()`。
   - `closeCreate()`：移除 `new`（取代目前這筆歷史）。
   - `showCreated(noteIds)`：成功提示上按「查看新卡片」時，查出新筆記的卡片後選取它、移除 `new`、清掉跳轉紀錄，**新增**一筆歷史（上一頁回到建卡畫面），見 D5。
 - `card`、`trail` 在建卡畫面中保留，退出時回到原本看的卡片。
@@ -77,6 +77,7 @@
 
 - 建卡成功後**留在建卡畫面**：表單清空、恢復預設值（schema 的 `default`，標籤清空；預覽流程回到輸入畫面），下方顯示成功提示，可以直接建下一張。這是表單元件原本的行為，卡片瀏覽頁不另外處理。
 - 成功提示（`CreatedNotice`）在卡片瀏覽頁把「到 Cards 頁查看這個牌組」的連結換成「查看新卡片」按鈕（`onViewCreated`）；Card Generator 不傳，照舊是連結。
+- 卡片瀏覽頁的成功提示存在 sessionStorage（`generate_created:{handler}`，`hooks/useCreatedNotice.ts`）：切換版面而重新掛載、或請求在面板卸載後才完成，提示與「查看新卡片」都還在；清除、再次建立或建立失敗時換掉。Card Generator 照舊只是元件狀態。
 - 按「查看新卡片」才切換：`showCreated(noteIds)` 以 `browseCards({ q: 'nid:…' })` 查卡片、`pickNoteCard` 選第一則筆記 ord 最小的那張（一次建多則筆記時按鈕寫「查看新卡片（第一張）」），退出建卡畫面並**新增**一筆歷史，上一頁回到建卡畫面（做法同 `openNotes`）。查詢期間網址若變了，結果作廢。
 - 新卡片不在目前的清單裡（固定牌組的卡片、或有搜尋條件時）也照樣在右欄顯示；查不到卡片時以 toast 說明可搜尋 `nid:…` 找到它。
 - 重新整理查詢沿用表單元件既有的 `['graph']`、`['cards']`、`['decks']`、`['tags']`：新卡片出現在左邊的清單裡，也可以直接從清單點。
@@ -85,7 +86,7 @@
 ### D6 「＋」的位置與狀態
 
 - `CardListPanel` 的標題列改成 `flex items-start justify-between gap-2`：標題維持 `break-all` 並加 `min-w-0`，「＋」`shrink-0` 固定在右上角。
-- `aria-pressed` 表示是否在建卡畫面，再按一次退出；`aria-label`：「在這個牌組建立卡片」。
+- `aria-pressed` 表示是否在建卡畫面，再按一次退出；`aria-label` 固定為「在這個牌組建立卡片」（不隨狀態改，避免和面板的「關閉建卡表單」同名），`title` 在建卡畫面中加註「再按一次關閉」。
 
 ## 4. 改動清單
 
@@ -94,10 +95,11 @@
 | 檔案 | 改動 |
 |---|---|
 | `src/lib/cardBrowse.ts` | `BrowseParams` 加 `creating`；`parseBrowseParams` 解析 `new=1`；`searchToRemember` 不變 |
-| `src/hooks/useCardNavigation.ts` | 加 `openCreate`、`closeCreate`、`showCreated`；`selectDeck`、`submitSearch`、`selectCard` 一併移除 `new` |
+| `src/hooks/useCardNavigation.ts` | 加 `toggleCreate`、`closeCreate`、`showCreated`（與 `openNotes` 共用查卡片的 `findNoteCard`）；`selectDeck`、`submitSearch`、`selectCard` 一併移除 `new` |
 | `src/components/generate/CreatePanelBody.tsx`（新） | 自 `CardGenerator.tsx` 搬來的卡片類型選單、填表流程與流程切換 |
 | `src/components/generate/PreviewCreate.tsx` | 加選填的 `onViewCreated` |
 | `src/components/generate/formParts.tsx` | `CreatedNotice` 加選填的 `onView`：有傳時顯示「查看新卡片」按鈕，否則照舊是連結 |
+| `src/hooks/useCreatedNotice.ts`（新） | 成功提示的內容：卡片瀏覽頁存在 sessionStorage、Card Generator 是元件狀態 |
 | `src/pages/CardGenerator.tsx` | 改用 `CreatePanelBody`，行為不變 |
 | `src/components/cards/CardCreatePanel.tsx`（新） | 右欄的建卡面板：外框、關閉按鈕、捲動；內容是 `CreatePanelBody`；成功提示的「查看新卡片」接 `showCreated`（D5） |
 | `src/components/cards/CardListPanel.tsx` | 標題列加「＋」（D6）；新增 `creating`、`onToggleCreate` props |
@@ -131,7 +133,7 @@
 - [x] 再按一次「＋」、按面板的關閉、或按瀏覽器上一頁，退出建卡畫面並回到原本看的卡片
 - [x] 建卡畫面中切換版面（收合側邊欄、縮放視窗），表單內容還在（以縮放視窗驗證，收合側邊欄未個別測）
 - [ ] 建卡成功後清單重新整理，右欄留在建卡表單（清空回預設值）；成功提示的「查看新卡片」切到新卡片；送出後改點別張卡，完成時右欄不被拉走
-  - 已驗證（假資料）：建卡後留在建卡畫面、欄位清空且預設值恢復、可連續建第二張；「查看新卡片」切到新卡片，上一頁回到建卡畫面、再上一頁回到原本的卡片；送出後改點別張卡，完成時不被拉走、toast 出現；Card Generator 的提示仍是到 Cards 頁的連結
+  - 已驗證（假資料）：建卡後留在建卡畫面、欄位清空且預設值恢復、可連續建第二張；切換版面後成功提示與「查看新卡片」還在；「查看新卡片」切到新卡片，上一頁回到建卡畫面、再上一頁回到原本的卡片；送出後改點別張卡，完成時不被拉走、toast 出現；Card Generator 的提示仍是到 Cards 頁的連結
   - 未驗證：清單重新整理後出現新卡（假資料的清單不會變；重新整理沿用表單元件既有的查詢失效）、真實後端與同步 AnkiWeb
 - [x] 重新整理後仍在建卡畫面；從側邊欄回到卡片瀏覽頁，回到上次看的卡片而不是建卡畫面
 - [x] Card Generator 頁照常可用，選的卡片類型與草稿和卡片瀏覽頁共用

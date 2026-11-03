@@ -5,6 +5,9 @@
 /** 自己捲動的面板，標題列固定在上方。Sticky header of a self-scrolling panel. */
 export const STICKY_HEADER = 'sticky top-0 z-10 bg-card rounded-t-lg'
 
+/** 卡片瀏覽頁右欄（卡面、建卡表單）不並排時的最大寬度。Max width of the viewer column when stacked. */
+export const STACKED_VIEWER_MAX_WIDTH = 'max-w-[48rem]'
+
 /**
  * 面板自己捲動（並排時填滿高度、自己捲動）時的 class。
  * The class of a panel that scrolls itself.

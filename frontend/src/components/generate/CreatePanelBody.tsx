@@ -20,6 +20,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Eraser, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../../api/client'
+import { useCreatedNotice } from '../../hooks/useCreatedNotice'
 import { removeStored, useLocalStorage, useSessionStorage } from '../../hooks/useStoredState'
 import type { DeckStatus } from '../../hooks/useDeckStatus'
 import { describeApiError, failureTitle, isBackendError, retryTransient } from '../../lib/apiError'
@@ -48,9 +49,11 @@ export interface CreatePanelBodyProps {
   deckStatus: DeckStatus
   /**
    * 建立成功的提示上「查看新卡片」按下時；省略時提示改顯示到 Cards 頁的連結。建卡成功後表單一律留在
-   * 原地、清空回預設值，方便接著建下一張。
+   * 原地、清空回預設值，方便接著建下一張。有傳時提示存在 sessionStorage（見 `useCreatedNotice`），
+   * 面板重新掛載也還在。
    * Views a created note from the success notice; without it the notice links
-   * to the Cards page. The form always stays, reset, after creating.
+   * to the Cards page. The form always stays, reset, after creating. When given,
+   * the notice survives remounts.
    */
   onViewCreated?: (result: CreateNoteResponse) => void
 }
@@ -216,7 +219,7 @@ function CreateForm({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const values = useMemo(() => ({ ...initialValues(fields), ...storedValues }), [storedValues])
   const [errors, setErrors] = useState<FormErrors | null>(null)
-  const [result, setResult] = useState<CreateNoteResponse | null>(null)
+  const [result, setResult] = useCreatedNotice(handler.name, onViewCreated !== undefined)
 
   // 牌組固定的卡片不看牌組樹
   const fixedDeck = create.deck === 'fixed' ? create.fixed_deck : null

@@ -97,7 +97,7 @@ export default function Cards() {
               onPage={nav.setPage}
               onSelect={nav.selectCard}
               creating={nav.creating}
-              onToggleCreate={nav.creating ? nav.closeCreate : nav.openCreate}
+              onToggleCreate={nav.toggleCreate}
             />
           ),
         },

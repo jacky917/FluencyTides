@@ -95,8 +95,9 @@ export function CardListPanel({
             variant={creating ? 'default' : 'outline'}
             className="h-8 w-8 shrink-0"
             aria-pressed={creating}
-            aria-label={creating ? '關閉建卡表單' : '在這個牌組建立卡片'}
-            title={creating ? '關閉建卡表單' : '在這個牌組建立卡片'}
+            // 名稱固定，開關狀態由 aria-pressed 表達；提示文字說明再按一次會關閉
+            aria-label="在這個牌組建立卡片"
+            title={creating ? '在這個牌組建立卡片（再按一次關閉）' : '在這個牌組建立卡片'}
             onClick={onToggleCreate}
           >
             <Plus className="h-4 w-4" />

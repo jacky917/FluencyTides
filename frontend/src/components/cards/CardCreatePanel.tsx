@@ -4,6 +4,7 @@ import { useDeckStatus } from '../../hooks/useDeckStatus'
 import { cn } from '../../lib/utils'
 import { CreatePanelBody } from '../generate/CreatePanelBody'
 import { Panel } from '../shared/Panel'
+import { STACKED_VIEWER_MAX_WIDTH } from '../shared/panelStyles'
 import { Button } from '../ui/button'
 
 /** {@link CardCreatePanel} 的 props。Props of {@link CardCreatePanel}. */
@@ -55,7 +56,7 @@ export function CardCreatePanel({ sideBySide, className, scrolledRef, deck, onCl
     <Panel
       ref={panelRef}
       scrollable={sideBySide}
-      className={cn(!sideBySide && 'max-w-[48rem]', className)}
+      className={cn(!sideBySide && STACKED_VIEWER_MAX_WIDTH, className)}
       title={
         <>
           <PlusCircle className="h-4 w-4" />
