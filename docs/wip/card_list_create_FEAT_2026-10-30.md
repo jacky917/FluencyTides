@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-10-30（2026-11-03 依 `main` `863c495` 重寫） |
 | **性質** | 新增機能設計 + 實作工作項 |
-| **狀態** | 📝 未實作 |
+| **狀態** | 🚧 實作完成，待在有 Anki 的環境驗收（2026-11-03） |
 | **範圍** | `frontend/src/pages/Cards.tsx`、`frontend/src/components/cards/`（清單標題列的「＋」、新的建卡面板）、`frontend/src/hooks/useCardNavigation.ts`、`frontend/src/lib/cardBrowse.ts`、`frontend/src/pages/CardGenerator.tsx`（把建卡表單與卡片類型選單抽成共用元件）、`frontend/src/components/generate/`（表單與預覽流程加「建立後」的回呼） |
 | **不動** | 後端（handler、端點、`create_schema` 都不改）；Card Generator 頁的行為與畫面；各卡片類型的建卡能力；卡片的刪除（見 §8） |
-| **PR / 進度** | 尚未開始 |
+| **PR / 進度** | 分支 `feat/card-list-create`；P1～P4 完成，瀏覽器實測以攔截 API 的假資料進行（見 §7） |
 | **關聯文件** | `docs/archive/handlers_api_redesign_FEAT_2026-10-20.md`（`create_schema`、建卡能力宣告、Card Generator 頁 §6）；`docs/archive/trilingual_web_create_FEAT_2026-10-30.md`（預覽流程）；`docs/wip/deck_create_FEAT_2026-10-30.md`（牌組樹新增牌組，與本計畫各自獨立） |
 
 > **重寫說明（2026-11-03）**：第一版寫在 2026-10-20 的舊基底（`f00fc09`）上，當時建卡表單一律送 `{ word }`、有筆記類型下拉。之後 PR #32 改成依 handler 宣告產生表單（`create_schema`）、建卡走 `POST /handlers/{name}/notes`、牌組不能是「全部牌組」，還多了三語卡的預覽流程。舊分支 `feat/cards-create-panel` 照搬舊表單，與現在的 `main` 衝突；本計畫改為重用 Card Generator 現有的表單元件，不再另寫一份。
@@ -49,7 +49,7 @@
 - `useCardNavigation` 加：
   - `openCreate()`：設 `new=1`，**新增**一筆瀏覽器歷史，按上一頁就回到原本的卡片。
   - `closeCreate()`：移除 `new`（取代目前這筆歷史）。
-  - `showCreated(cardId)`：選取新卡片、移除 `new`、清掉跳轉紀錄，取代目前這筆歷史（上一頁不會回到已經送出的表單）。
+  - `showCreated(noteIds, deck)`：查出新筆記的卡片後選取它、移除 `new`、清掉跳轉紀錄，取代目前這筆歷史（上一頁不會回到已經送出的表單）；`deck` 是這一輪建卡畫面的牌組，見 D5。
 - `card`、`trail` 在建卡畫面中保留，退出時回到原本看的卡片。
 - 選牌組、送出搜尋、從清單選卡時一併移除 `new`；換頁、翻面不移除。
 - **不寫進記住的位置**：`searchToRemember` 只記 `deck`、`q`、`page`、`card`、`side`。重新整理會留在建卡畫面（網址還在），從側邊欄回來則回到上次看的卡片。
@@ -76,7 +76,7 @@
 ### D5 建卡成功後顯示新卡片
 
 - `onCreated` 拿到 `note_ids`：`browseCards({ q: 'nid:…' })` 查卡片、`pickNoteCard` 選第一則筆記 ord 最小的那張，再 `showCreated`（做法同 `openNotes`）。
-- 只在使用者**還停在這一輪建卡畫面**時切換：查詢完成時比對網址，已經離開建卡畫面或換了牌組就不切換，只留表單元件原本的 toast。舊計畫是「一律切換」，改掉是為了不把使用者從正在看的卡片拉走。
+- 只在使用者**還停在這一輪建卡畫面**時切換：查詢完成時比對網址，已經離開建卡畫面或換了牌組就不切換，只留表單元件原本的 toast。「這一輪」以送出時的牌組判斷：`CardCreatePanel` 把自己的 `deck` prop 一起交給 `showCreated`，網址的 `deck` 不同（例如送出後選了別的牌組再按「＋」）就不切換；請求在面板卸載後才完成時，拿到的是送出那一輪的牌組。舊計畫是「一律切換」，改掉是為了不把使用者從正在看的卡片拉走。
 - 新卡片不在目前的清單裡（固定牌組的卡片、或有搜尋條件時）也照樣在右欄顯示。
 - 查不到卡片時以 toast 說明可搜尋 `nid:…` 找到它。
 - 重新整理查詢沿用表單元件既有的 `['graph']`、`['cards']`、`['decks']`、`['tags']`。
@@ -98,7 +98,7 @@
 | `src/components/generate/PreviewCreate.tsx` | 加選填的 `onCreated` |
 | `src/pages/CardGenerator.tsx` | 改用 `CreatePanelBody`，行為不變 |
 | `src/components/cards/CardCreatePanel.tsx`（新） | 右欄的建卡面板：外框、關閉按鈕、捲動；內容是 `CreatePanelBody`；建好後依 D5 切換到新卡片 |
-| `src/components/cards/CardListPanel.tsx` | 標題列加「＋」（D6）；新增 `creating`、`onCreate` props |
+| `src/components/cards/CardListPanel.tsx` | 標題列加「＋」（D6）；新增 `creating`、`onToggleCreate` props |
 | `src/pages/Cards.tsx` | 依 `nav.creating` 切換右欄元件；接上導覽函式 |
 
 ### 測試
@@ -122,14 +122,18 @@
 
 ## 7. 驗收標準
 
-- [ ] 三欄、兩欄、一欄版面下，「＋」都在清單標題右側；長牌組名換行時不被擠掉
-- [ ] 按「＋」後右欄顯示建卡表單；卡片類型、欄位與 Card Generator 相同；牌組是左欄選的牌組，選「全部牌組」時說明原因、不能送出
-- [ ] 再按一次「＋」、按面板的關閉、或按瀏覽器上一頁，退出建卡畫面並回到原本看的卡片
-- [ ] 建卡畫面中切換版面（收合側邊欄、縮放視窗），表單內容還在
+> 2026-11-03 驗收方式：本機沒有後端與 Anki，以 Playwright 開 Vite 開發伺服器、攔截 `/api/*` 回傳假資料（一個填表流程的卡片類型、兩個牌組含超長牌組名、建卡回應可延遲），在 1600／1000／500 px 寬（三欄／兩欄／一欄）實際操作。勾選的是這樣驗證過的項目；連真實後端、預覽流程（三語卡）的完整建卡尚未驗證。
+
+- [x] 三欄、兩欄、一欄版面下，「＋」都在清單標題右側；長牌組名換行時不被擠掉
+- [x] 按「＋」後右欄顯示建卡表單；卡片類型、欄位與 Card Generator 相同；牌組是左欄選的牌組，選「全部牌組」時說明原因、不能送出（假資料只有填表流程，預覽流程未實測）
+- [x] 再按一次「＋」、按面板的關閉、或按瀏覽器上一頁，退出建卡畫面並回到原本看的卡片
+- [x] 建卡畫面中切換版面（收合側邊欄、縮放視窗），表單內容還在（以縮放視窗驗證，收合側邊欄未個別測）
 - [ ] 建卡成功後清單重新整理，右欄顯示新卡片；送出後改點別張卡，完成時右欄不被拉走
-- [ ] 重新整理後仍在建卡畫面；從側邊欄回到卡片瀏覽頁，回到上次看的卡片而不是建卡畫面
-- [ ] Card Generator 頁照常可用，選的卡片類型與草稿和卡片瀏覽頁共用
-- [ ] 前端測試、lint、build 通過：
+  - 已驗證（假資料）：右欄切到新卡片並退出建卡畫面，上一頁回到原本的卡片；送出後改點別張卡，完成時不被拉走、toast 出現；送出後換牌組再按「＋」，新的建卡畫面不被切走
+  - 未驗證：清單重新整理後出現新卡（假資料的清單不會變；重新整理沿用表單元件既有的查詢失效）、真實後端與同步 AnkiWeb
+- [x] 重新整理後仍在建卡畫面；從側邊欄回到卡片瀏覽頁，回到上次看的卡片而不是建卡畫面
+- [x] Card Generator 頁照常可用，選的卡片類型與草稿和卡片瀏覽頁共用
+- [x] 前端測試、lint、build 通過：
 
 ```bash
 cd frontend

@@ -197,16 +197,20 @@ export function useCardNavigation() {
   }
 
   /**
-   * 建卡成功後顯示新筆記的卡片：只在使用者還停在同一個建卡畫面（網址沒變）時切換，已經離開或改看
-   * 別的卡片就不打擾。取代目前這筆歷史，上一頁不會回到已經送出的表單。
+   * 建卡成功後顯示新筆記的卡片：只在使用者還停在同一個建卡畫面（網址仍是建卡畫面、牌組沒換，查詢
+   * 期間網址也沒變）時切換，已經離開或改看別的卡片就不打擾。取代目前這筆歷史，上一頁不會回到已經
+   * 送出的表單。
    * Shows the new note's card after creating, only if the user is still on the
-   * same create form; replaces the history entry.
+   * same create form (same deck, URL unchanged); replaces the history entry.
    * @param noteIds - 建立的筆記 ID。The created note IDs.
+   * @param deck - 送出時建卡畫面所在的牌組（左欄選的，不是實際建立的牌組）；與網址不同代表使用者
+   *   已經換了牌組。The deck the create form was opened in.
    */
-  const showCreated = async (noteIds: number[]) => {
+  const showCreated = async (noteIds: number[], deck: string | null) => {
     if (noteIds.length === 0 || !mounted.current) return
     const startedAt = latestParams.current
-    if (new URLSearchParams(startedAt).get('new') !== '1') return
+    const startedParams = new URLSearchParams(startedAt)
+    if (startedParams.get('new') !== '1' || (startedParams.get('deck') || null) !== deck) return
     const search = `nid:${noteIds.join(',')}`
     try {
       const result = await queryClient.fetchQuery({

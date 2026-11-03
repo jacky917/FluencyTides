@@ -3,7 +3,8 @@
  * Card browsing page.
  *
  * 左：牌組樹；中：所選牌組（含子牌組）的卡片清單，可加 Anki 搜尋語句；右：Anki 渲染好的卡面
- * 與筆記欄位。不經過 task handler，任何筆記類型都能看。開放欄位搜尋的筆記類型（handler 宣告
+ * 與筆記欄位。清單標題的「＋」把右欄換成建卡表單（與 Card Generator 共用，建在左欄選的牌組），
+ * 建好後右欄切到新卡片（`docs/wip/card_list_create_FEAT_2026-10-30.md`）。不經過 task handler，任何筆記類型都能看。開放欄位搜尋的筆記類型（handler 宣告
  * `capabilities.search`）另有欄位搜尋：點欄位、輸入關鍵字，由後端組成 Anki 查詢（`FieldSearchPanel`）。
  *
  * 分工：這個頁面只提供三個面板，版面交給共用的 `SplitLayout`——依內容區實際寬度排成三欄並排、
@@ -11,14 +12,16 @@
  * 調整寬度。
  * - 網址中的狀態與卡面跳轉、返回：`hooks/useCardNavigation.ts`
  * - 面板寬度的預設與記憶：`hooks/usePanelWidths.ts`
- * - 牌組樹：`components/shared/DeckTreePanel.tsx`；清單與卡面：`components/cards/`
- * 切換版面模式會重新掛載面板，所以面板的狀態（牌組展開、搜尋草稿、筆記欄位視窗）放在這一層。
+ * - 牌組樹：`components/shared/DeckTreePanel.tsx`；清單、卡面與建卡面板：`components/cards/`
+ * 切換版面模式會重新掛載面板，所以面板的狀態（牌組展開、搜尋草稿、筆記欄位視窗）放在這一層；
+ * 建卡表單的草稿本來就存在 sessionStorage，重新掛載也還在。
  *
  * This page only provides the panels; the shared SplitLayout arranges them,
  * and navigation and panel widths live in their own hooks.
  */
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { CardCreatePanel } from '../components/cards/CardCreatePanel'
 import { CardListPanel } from '../components/cards/CardListPanel'
 import { CardViewPanel } from '../components/cards/CardViewPanel'
 import { DeckTreePanel } from '../components/shared/DeckTreePanel'
@@ -47,6 +50,11 @@ export default function Cards() {
   const fieldSearch = restoreFieldSearch(storedFieldSearch)
   const [fieldsOpen, setFieldsOpen] = useState(false)
   const scrolledCardRef = useRef<number | null>(null)
+  // 這一輪建卡畫面是否已經捲到面板；退出建卡畫面後重設，下次打開再捲
+  const scrolledCreateRef = useRef(false)
+  useEffect(() => {
+    if (!nav.creating) scrolledCreateRef.current = false
+  }, [nav.creating])
 
   return (
     <SplitLayout
@@ -87,30 +95,42 @@ export default function Cards() {
               onSearch={nav.submitSearch}
               onPage={nav.setPage}
               onSelect={nav.selectCard}
+              creating={nav.creating}
+              onToggleCreate={nav.creating ? nav.closeCreate : nav.openCreate}
             />
           ),
         },
         {
           id: 'viewer',
           resizable: 'viewer',
-          render: (sideBySide, className) => (
-            <CardViewPanel
-              sideBySide={sideBySide}
-              className={className}
-              fieldsOpen={fieldsOpen}
-              onFieldsOpen={setFieldsOpen}
-              scrolledCardRef={scrolledCardRef}
-              cardId={nav.cardId}
-              deck={nav.deck}
-              side={nav.side}
-              trailLength={nav.trail.length}
-              arrivedBack={nav.arrivedBack}
-              onSide={nav.setSide}
-              onBrowse={nav.openNotes}
-              onBack={nav.goBack}
-              onDeleted={nav.clearCard}
-            />
-          ),
+          render: (sideBySide, className) =>
+            nav.creating ? (
+              <CardCreatePanel
+                sideBySide={sideBySide}
+                className={className}
+                scrolledRef={scrolledCreateRef}
+                deck={nav.deck}
+                onClose={nav.closeCreate}
+                onCreated={nav.showCreated}
+              />
+            ) : (
+              <CardViewPanel
+                sideBySide={sideBySide}
+                className={className}
+                fieldsOpen={fieldsOpen}
+                onFieldsOpen={setFieldsOpen}
+                scrolledCardRef={scrolledCardRef}
+                cardId={nav.cardId}
+                deck={nav.deck}
+                side={nav.side}
+                trailLength={nav.trail.length}
+                arrivedBack={nav.arrivedBack}
+                onSide={nav.setSide}
+                onBrowse={nav.openNotes}
+                onBack={nav.goBack}
+                onDeleted={nav.clearCard}
+              />
+            ),
         },
       ]}
     />
