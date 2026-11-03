@@ -1,5 +1,5 @@
 """標籤：規則、建卡加標籤、標籤清單、草稿的標籤建議、欄位搜尋的標籤條件與三語卡的搜尋按鈕
-（計畫書 ``docs/wip/trilingual_search_tags_FEAT_2026-10-30.md`` §7）。
+（計畫書 ``docs/archive/trilingual_search_tags_FEAT_2026-10-30.md`` §7）。
 
 Tests for tags: rules, tags at creation, the tag list, draft tag
 suggestions, the tag search condition and the trilingual search buttons.

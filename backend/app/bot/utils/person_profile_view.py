@@ -8,7 +8,7 @@ functions, independent of aiogram.
 - 顯示：摘要（見面前必看）、全部資料、清單的每一筆。
 - 輸入：新增一筆時各清單要問的步驟、日期的寫法、文字欄位轉成 Anki 的 HTML。
 
-計畫書 ``docs/wip/person_profile_card_FEAT_2026-10-23.md`` §3.13。
+計畫書 ``docs/archive/person_profile_card_FEAT_2026-10-23.md`` §3.13。
 """
 
 from __future__ import annotations

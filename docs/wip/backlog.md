@@ -14,11 +14,11 @@
 
 | # | 優先 | 項目 | 內容 |
 |---|---|---|---|
-| T1 | 高 | `/sync` 在 Anki 回 0 張卡時拒絕清理 | 現在 Anki 連線異常、回傳 0 張時，`/sync` 會把資料庫裡所有卡片關聯（知識圖譜）全部刪除（已實測確認；文件記載的 F002 修復實際不存在）。**✅ 已實作：`docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md`（分支 `fix/relation-sync-and-search-escape`），合併後刪除本項** |
-| T2 | 中 | 外語糾錯重複檢查的查詢跳脫 | `expression_fsm.py` 把 `"` 寫成 `""`（Anki 的寫法是 `\"`），查詢靜默地找不到；`_`、`*` 沒跳脫，被當成萬用字元而比對到別張卡（已在正式 Anki 實測）。另有 12 處組查詢的地方同樣沒跳脫。**✅ 已實作：同上，合併後刪除本項** |
 | T3 | 中 | 以檔案形式傳送的音檔、圖片 | 只收 `F.voice`、`F.photo`，用「檔案」傳的音檔與圖片被靜默忽略；至少回覆「請改用語音訊息／照片傳送」（審查書 §6） |
 | T4 | 低 | 回覆文字的精簡改寫 | 審查書 §4 的逐則改寫（指令與 Deep Link、語音與上傳、`/newcard` 三條建卡流程）；§4.4 的 `/setconfig`、`/models` 已隨能力路由改寫，不必再做 |
 | T5 | 低 | 用語統一 | 審查書 §5：同一件事全 bot 用同一個說法（用語規則見審查書 §2，共用文字在 `app/bot/utils/texts.py`） |
+
+（原 T1 `/sync` 防誤刪、T2 外語糾錯查詢跳脫已隨 PR #27 合併，2026-11-03 刪除；部署後的確認項見 §5 R1、R2。）
 
 ## 2. LLM 客戶端與生成腳本（來源：`docs/archive/llm_provider_hierarchy_FEAT_2026-09-06.md` §7、§8）
 
@@ -47,3 +47,63 @@
 | E5 | 低 | 關鍵字的單一 token 啟動檢查 | 載入時以 `_analyze` 驗證每個關鍵字在 Sudachi 下是單一 token，多 token 記 WARNING 並忽略 |
 | E6 | 低 | 驗證器的三個既有弱點 | `〜がって＋補助動詞`、`〜ないといけない／〜ちゃいけない`、UniDic 誤切（そかそか）；細節見原文件 §6 第 5 點 |
 | E7 | 低 | `どく` 的 2 張損失 | 等 `judge_verb_readings.py` 跑過 退く 三讀母卡後，整組重審是否補回 |
+
+## 4. Handlers 與網頁卡片編輯（來源：`docs/archive/handlers_api_redesign_FEAT_2026-10-20.md` §13、`docs/archive/json_field_editor_FEAT_2026-10-20.md` §6、§8）
+
+2026-11-03 歸檔時逐項確認過，在 main 上都還存在。
+
+| # | 優先 | 項目 | 內容 |
+|---|---|---|---|
+| H1 | 中 | `import_cards_with_llm.py` 必定失敗 | `backend/scripts/local_anki/import_cards_with_llm.py` 呼叫已不存在的 `CardService.generate_card`；修好或刪掉 |
+| H2 | 中 | 沒有 handler 的筆記類型 | Notion_SRS（712 張）、Shadowing_Breakdown（206）、AI_QA（42）、Conversation_Coach（31）、Voice_Shadowing（17）、Contrast_Coach（1）目前只有 `scripts/local_anki/import_cards_from_json.py` 能建；要在網頁開放就先為它們建 handler（基底的標準 CRUD 與圖譜可直接用）。數量為 2026-10-20 的統計 |
+| H3 | 中 | JSON 欄位表單編輯開放給更多筆記類型 | 目前只有人脈卡開放 `update_json`。依序：單字卡 `_v2` 的 `Word_Family_JSON`、`Synonyms_JSON`、`Collocations_JSON`（原設計的試點，資料平坦、沒有媒體；開放前先對全部 `_v2` 跑一次「讀出→驗證」）；對話卡 `Recordings`（含媒體，TG 會背景追加）；`References`（巢狀 `audios`）；三語卡 `_ZH/_JA/_EN` 各欄。另待決：改同義詞、搭配詞後要不要同步知識圖譜的關聯 |
+| H4 | 低 | `verb-pair`、`core-verb`、`config`、`jp` 路由沒有 `X-API-Key` 驗證 | 若要補，本機腳本要同時改成送 `X-API-Key` |
+| H5 | 低 | 舊版 `TOEIC_Coach_Dark` | Anki 裡 0 張筆記，已從 handler 清單拿掉；定義檔 `backend/app/anki_models/TOEIC_Coach_Dark.json`（repo 內沒有它的 HTML、CSS 模板）與提示詞模板 `backend/app/templates/prompts/anki/TOEIC_Coach_Dark.j2` 要不要刪由使用者決定（Anki 裡的要自己操作）。H7 的通用 LLM 建卡殘骸以它當註解範例，一起處理 |
+| H6 | 低 | 沒有呼叫方的關聯 API | `GET /relations/graph`、前端 `getKnowledgeGraph`、`RelationService.get_graph_data` 與 handler 的標準圖譜重複；`DELETE /relations/by-note/{note_id}` 沒有呼叫方，`delete_relations_by_note_id` 與 `delete_relations_for_note` 是兩個一樣的方法 |
+| H7 | 低 | 通用 LLM 建卡的殘骸 | `AnkiModelManager` 的 `get_model_schema`、`create_note_from_llm_response`、`list_available_models`、`get_model_detail`、`can_add_note`、`sync_to_ankiweb`；`schemas/card.py` 的 `CardGenerateRequest`。沒有呼叫方；網頁不做自動化，本機腳本可能重用，先保留 |
+| H8 | 低 | `/storage/*`（MinIO） | 上傳、列出、預簽、刪除，repo 內沒有呼叫方；網頁的媒體上傳不走這裡（見 `docs/wip/media_upload_FEAT_2026-10-20.md`） |
+
+## 5. 已合併計畫的未實測驗收與後續（2026-11-03 歸檔時整理）
+
+來源：`docs/archive/` 下的 `person_profile_card_FEAT_2026-10-23.md`、`trilingual_familiarity_FEAT_2026-10-30.md`、`trilingual_web_create_FEAT_2026-10-30.md`、`trilingual_search_tags_FEAT_2026-10-30.md`、`handler_field_search_FEAT_2026-10-25.md`、`relation_sync_and_search_escape_FIX_2026-10-19.md`。程式都已合併（PR #27、#32），以下是沒有實機確認過的驗收，以及各計畫明確留到之後的事。實機驗收做完、沒問題就刪掉該項；有問題另開 FIX。
+
+### 5.1 實機驗收
+
+| # | 優先 | 項目 | 內容 |
+|---|---|---|---|
+| V1 | 中 | 人脈卡：Anki 桌面版與網頁的卡面 | 人脈卡計畫書 §7 前 11 項：兩種卡片的產生條件、「認人」正面不露姓名、無照片時的線索與首字頭像、背面頭部、「見面前必看」、空區段不顯示、`<details>` 收合、敏感話題模糊、JSON 格式錯誤提示、「查看介紹人」、網頁點收合不翻面。用計畫書 §8 的範例資料檢查 |
+| V2 | 中 | 人脈卡：網頁 CRUD | 建立（表單不含 JSON 與媒體欄位）、修改、刪除；建立後 `Card_ID` 有值、JSON 欄位為 `[]` |
+| V3 | 中 | 人脈卡：TG 流程 | `/p 名字`（同名列按鈕）、`/newcard`、記一筆互動與待追蹤、改欄位（取代、接在後面、刪除一筆）、傳照片、卡面「記一筆互動」深連結、P5 一段話整理、P6 AI 分析（提示裡沒有本人與家人的名字） |
+| V4 | 低 | 人脈卡：手機實機 | AnkiDroid 或 AnkiMobile：版面正常、`<details>` 可用（計畫書 R5） |
+| V5 | 低 | 三語卡熟識度：卡面與錄音評分 | 刻度條、顏色、依熟識度排序；排序後加音檔、切換狀態動到的仍是同一句；錄音評分（stt_llm、listen）的提示詞帶出熟識度，stt_diff 註明比對對象。匯入檢查已有單元測試 |
+| R1 | 低 | 外語糾錯的查詢跳脫（原 T2） | 部署後在 TG 走一次外語糾錯，原文含 `_` 或 `"`，確認重複檢查正確 |
+| R2 | 低 | TG 實機錄音評分 | `relation_sync_and_search_escape_FIX` §5.2 的三步確認：對話卡、三語卡各錄一則，後端 log 出現「錄音評分器已建立」 |
+
+### 5.2 後續功能
+
+| # | 優先 | 項目 | 內容 |
+|---|---|---|---|
+| F1 | 低 | 欄位搜尋 S2 | 短值欄位（關係、公司）列出出現過的值，點一下就選（`handler_field_search` §4） |
+| F2 | 低 | 欄位搜尋 S3 | 後端讀資料再篩選：指定互動的地點、很久沒聯絡等 Anki 語法做不到的條件 |
+| F3 | 低 | 欄位搜尋開放給更多卡片 | 目前開放人脈卡、三語卡；其他 handler 逐一確認欄位按鈕後開放 |
+| F4 | 低 | 網頁修改既有卡片的標籤；標籤改名、合併；TG 建卡加標籤 | `trilingual_search_tags` §8 的範圍外項目 |
+| F5 | 低 | 三語卡網頁建卡的延伸 | TG 入口；預覽中重新生成或修改單句；建卡前檢查重複場景；把 `note` 交給錄音評分的提示詞（`trilingual_web_create` §8） |
+| F6 | 低 | 人脈卡網頁上傳照片 | 等 `docs/wip/media_upload_FEAT_2026-10-20.md` |
+
+### 5.3 待決策
+
+| # | 項目 | 內容 |
+|---|---|---|
+| D1 | `docs/bk/` 修復紀錄全面核對 | 抽查發現多項「已修復」實際不存在；2026-11-03 再查：F004（`API_SECRET_KEY` 為空時直接放行，`core/auth.py`）、F010（`frontend/vite.config.js`、`.d.ts` 仍在版本控制）、F019（CORS 仍寫死 `localhost:5173`，`main.py`）都還是這樣。建議逐條核對 `docs/bk/06` 的 141 條（`relation_sync_and_search_escape_FIX` §6.1、§9 第 3 點） |
+| D2 | 正式機要不要設定 `API_SECRET_KEY` | 後端 8000 埠綁在 NAS 的 `0.0.0.0`，區網內可以直接呼叫刪除端點；目前是刻意交給外層（Cloudflare Access）控管的部署決定（同上 §6.2、§9 第 4 點） |
+| D3 | `/relations/sync` 強制清理的上限 | 帶 `force=true` 重送時服務層會重算、不再比對比例；可改為重送時帶 `expected=N`，超過就再拒絕。風險低（同上 §9 第 5 點） |
+
+## 6. 網頁補齊 TG 能力（來源：`docs/archive/web_ui_parity_FEAT_2026-10-18.md` §8）
+
+| # | 優先 | 項目 | 內容 |
+|---|---|---|---|
+| W1 | 中 | 對話卡（單語）網頁建卡 | `speaking_coach` 的 `CreateCapability` 開放 `web`；`bot/handlers/fsm/speaking_fsm.py` 改經 `NoteService` 建卡，不再自己組 note。要先決定 Card_ID 格式：TG 用 `SC_%Y%m%d_%H%M%S`，handler 用 uuid4（原計畫建議統一 uuid4，同一秒建兩張不會撞） |
+| W2 | 中 | 外語糾錯網頁建卡 | 沿用三語卡的預覽流程（`DRAFT_PARAMS` 與 `/draft`），網頁做「輸入 → 預覽 → 勾選子卡 → 寫入」；重複檢查與覆蓋舊卡（先建新卡，成功後才刪舊母卡與子卡）從 `expression_fsm.py` 移進 handler，TG 改呼叫同一份 |
+| W3 | 低 | 網頁開放具名動作前，動作參數錯誤改回 4xx | handler 的 `execute_update` 參數錯誤拋 `ValueError`，會變成 500 並發 TG 當機警報；目前動作只從 TG 呼叫。網頁要開放動作（例如 media_upload 的 `add_audio`）時一併改成 `FluencyTidesError` 子類 |
+| W4 | 低 | 能力路由的 503 拆成兩個錯誤代碼 | 寫入前讀不到 DB（確定沒寫入）與寫入時異常（結果未知）共用 `ROUTE_STORE_UNAVAILABLE`，網頁只能用不斷言的措辭 |
+

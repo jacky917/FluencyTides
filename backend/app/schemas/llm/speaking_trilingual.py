@@ -1,4 +1,4 @@
-"""三語對話卡「網頁建卡」的 LLM 輸出格式（計畫書 ``docs/wip/trilingual_web_create_FEAT_2026-10-30.md`` §4.1）。
+"""三語對話卡「網頁建卡」的 LLM 輸出格式（計畫書 ``docs/archive/trilingual_web_create_FEAT_2026-10-30.md`` §4.1）。
 
 LLM output schema of the trilingual speaking card web-create draft.
 

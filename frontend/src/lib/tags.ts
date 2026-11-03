@@ -1,5 +1,5 @@
 /**
- * 建卡時加的標籤（計畫書 `docs/wip/trilingual_search_tags_FEAT_2026-10-30.md` §6.3）：加入、去重、格式提示。
+ * 建卡時加的標籤（計畫書 `docs/archive/trilingual_search_tags_FEAT_2026-10-30.md` §6.3）：加入、去重、格式提示。
  * 系統標籤等完整的規則由後端檢查（`app/services/tag_rules.py`），這裡只先擋明顯不合格的。
  *
  * Tags given at creation: add, de-duplicate, format hints; the backend has the full rules.

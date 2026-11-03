@@ -1,5 +1,5 @@
 """三語對話卡的網頁建卡：請 LLM 為一個場景生成中、日、英的自然說法（計畫書
-``docs/wip/trilingual_web_create_FEAT_2026-10-30.md``）。
+``docs/archive/trilingual_web_create_FEAT_2026-10-30.md``）。
 
 Generate natural ZH/JA/EN sayings for a scene (trilingual speaking card web create).
 

@@ -1,5 +1,5 @@
 /**
- * 三語對話卡網頁建卡的預覽（計畫書 `docs/wip/trilingual_web_create_FEAT_2026-10-30.md` §3）：草稿的形狀、
+ * 三語對話卡網頁建卡的預覽（計畫書 `docs/archive/trilingual_web_create_FEAT_2026-10-30.md` §3）：草稿的形狀、
  * 勾選、排序與熟識度配色。畫面在 `components/generate/TrilingualDraftPreview.tsx`。
  *
  * The trilingual web-create preview: draft shape, selection, ordering and
