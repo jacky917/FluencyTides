@@ -21,10 +21,10 @@ interface CardCreatePanelProps {
   /** 關閉建卡畫面。Closes the create screen. */
   onClose: () => void
   /**
-   * 建卡成功後切到新卡片（見 `useCardNavigation` 的 `showCreated`）。
-   * Shows the created card.
+   * 成功提示上的「查看新卡片」：切到新筆記的卡片（見 `useCardNavigation` 的 `showCreated`）。
+   * Opens the created note's card.
    */
-  onCreated: (noteIds: number[], deck: string | null) => void
+  onViewCreated: (noteIds: number[]) => void
 }
 
 /**
@@ -32,14 +32,13 @@ interface CardCreatePanelProps {
  * 與捲動，內容是與 Card Generator 共用的 `CreatePanelBody`。卡片類型與草稿存在瀏覽器儲存空間，
  * 切換版面而重新掛載時都還在。
  *
- * 建卡成功後把這一輪的牌組交給 `onCreated`：請求可能在面板卸載後才完成，這時拿到的是送出時那一輪
- * 的牌組，使用者已經換了牌組就不切換。
+ * 建卡成功後留在這裡、表單清空回預設值，可以接著建下一張；要看新卡片時按成功提示上的「查看新卡片」。
  *
  * The create panel in the viewer column of the card browsing page; its body
  * is shared with the Card Generator page.
  * @returns 面板 JSX。Panel JSX.
  */
-export function CardCreatePanel({ sideBySide, className, scrolledRef, deck, onClose, onCreated }: CardCreatePanelProps) {
+export function CardCreatePanel({ sideBySide, className, scrolledRef, deck, onClose, onViewCreated }: CardCreatePanelProps) {
   const panelRef = useRef<HTMLDivElement>(null)
   const deckStatus = useDeckStatus(deck)
 
@@ -81,7 +80,7 @@ export function CardCreatePanel({ sideBySide, className, scrolledRef, deck, onCl
       <CreatePanelBody
         selectedDeck={deck}
         deckStatus={deckStatus}
-        onCreated={(result) => onCreated(result.note_ids, deck)}
+        onViewCreated={(result) => onViewCreated(result.note_ids)}
       />
     </Panel>
   )

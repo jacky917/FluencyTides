@@ -53,8 +53,8 @@ const historyIndex = (): unknown => (window.history.state as { idx?: unknown } |
  * Navigation of the card browsing page; all state lives in the URL.
  *
  * - 選牌組、搜尋、換頁、從清單選卡：清空跳轉紀錄；選牌組、搜尋、選卡也退出建卡畫面（`new`）。
- * - 建卡畫面（`openCreate`、`closeCreate`）：打開時新增一筆歷史，上一頁就退出；建卡成功後
- *   `showCreated` 切到新卡片（使用者已經離開建卡畫面時不切）。
+ * - 建卡畫面（`openCreate`、`closeCreate`）：打開時新增一筆歷史，上一頁就退出。建卡成功後表單留在
+ *   原地；按成功提示上的「查看新卡片」才由 `showCreated` 切過去（新增一筆歷史，上一頁回到表單）。
  * - 卡面按鈕打開其他筆記（`openNotes`）：查出卡片後切換過去，記下目前這張並新增一筆瀏覽器歷史，
  *   所以「返回」與瀏覽器的上一頁都能回來。查詢期間網址若變了（使用者另選了卡片），結果作廢。
  * - 翻面：取代目前的歷史並保留跳轉狀態，翻面後「返回」仍能直接退回上一頁。
@@ -77,17 +77,9 @@ export function useCardNavigation() {
   const latestParams = useRef(params.toString())
   const jumping = useRef(false)
   const backFrom = useRef<string | null>(null)
-  // 建卡在背景完成時，使用者可能已經離開這頁：卸載後不再導覽
-  const mounted = useRef(true)
   useEffect(() => {
     latestParams.current = params.toString()
   })
-  useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-    }
-  }, [])
 
   // 記住瀏覽位置。進來時網址沒有參數就恢復上次的位置；恢復完成（網址變成記下的那一串）之前
   // 不覆寫記錄，否則第一次渲染的空網址會先把記錄清掉。只在這個分頁的位置改變時寫入、不跟著
@@ -197,20 +189,16 @@ export function useCardNavigation() {
   }
 
   /**
-   * 建卡成功後顯示新筆記的卡片：只在使用者還停在同一個建卡畫面（網址仍是建卡畫面、牌組沒換，查詢
-   * 期間網址也沒變）時切換，已經離開或改看別的卡片就不打擾。取代目前這筆歷史，上一頁不會回到已經
-   * 送出的表單。
-   * Shows the new note's card after creating, only if the user is still on the
-   * same create form (same deck, URL unchanged); replaces the history entry.
+   * 打開剛建立的筆記的卡片（建卡畫面成功提示上的「查看新卡片」）：退出建卡畫面並新增一筆瀏覽器歷史，
+   * 上一頁回到建卡畫面。多張筆記時打開第一則筆記 ord 最小的那張。查詢期間網址若變了，結果作廢。
+   * Opens the card of a just-created note from the create screen, in a new
+   * history entry so going back returns to the form.
    * @param noteIds - 建立的筆記 ID。The created note IDs.
-   * @param deck - 送出時建卡畫面所在的牌組（左欄選的，不是實際建立的牌組）；與網址不同代表使用者
-   *   已經換了牌組。The deck the create form was opened in.
    */
-  const showCreated = async (noteIds: number[], deck: string | null) => {
-    if (noteIds.length === 0 || !mounted.current) return
+  const showCreated = async (noteIds: number[]) => {
+    if (noteIds.length === 0 || jumping.current) return
+    jumping.current = true
     const startedAt = latestParams.current
-    const startedParams = new URLSearchParams(startedAt)
-    if (startedParams.get('new') !== '1' || (startedParams.get('deck') || null) !== deck) return
     const search = `nid:${noteIds.join(',')}`
     try {
       const result = await queryClient.fetchQuery({
@@ -218,17 +206,19 @@ export function useCardNavigation() {
         queryFn: () => FluencyTidesAPI.browseCards({ q: search, pageSize: BROWSE_PAGE_SIZE }),
         retry: retryTransient,
       })
-      if (!mounted.current || latestParams.current !== startedAt) return
+      if (latestParams.current !== startedAt) return
       const target = pickNoteCard(result.cards, noteIds)
       if (target === null) {
         toast.error('找不到新卡片', { description: `可在清單搜尋 ${search} 確認。` })
-        return
+      } else {
+        switchCard({ new: null, card: String(target), trail: null })
       }
-      update({ new: null, card: String(target), trail: null, side: null }, { replace: true })
     } catch (error) {
-      if (mounted.current && latestParams.current === startedAt) {
-        toast.error('卡片已建立，但無法打開', { description: `${describeApiError(error).message}。可在清單搜尋 ${search} 找到它。` })
+      if (latestParams.current === startedAt) {
+        toast.error('無法打開新卡片', { description: `${describeApiError(error).message}。可在清單搜尋 ${search} 找到它。` })
       }
+    } finally {
+      jumping.current = false
     }
   }
 

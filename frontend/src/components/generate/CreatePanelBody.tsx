@@ -47,17 +47,19 @@ export interface CreatePanelBodyProps {
   /** 所選牌組的狀態（見 `useDeckStatus`）。The selected deck's status. */
   deckStatus: DeckStatus
   /**
-   * 建卡成功、通知與重新整理都做完後呼叫；元件卸載後仍可能被呼叫（請求在背景完成）。
-   * Called after a successful create, possibly after unmounting.
+   * 建立成功的提示上「查看新卡片」按下時；省略時提示改顯示到 Cards 頁的連結。建卡成功後表單一律留在
+   * 原地、清空回預設值，方便接著建下一張。
+   * Views a created note from the success notice; without it the notice links
+   * to the Cards page. The form always stays, reset, after creating.
    */
-  onCreated?: (result: CreateNoteResponse) => void
+  onViewCreated?: (result: CreateNoteResponse) => void
 }
 
 /**
  * 卡片類型選單與建卡表單。The card type picker and the create form.
  * @returns 面板內容 JSX。The panel body JSX.
  */
-export function CreatePanelBody({ selectedDeck, deckStatus, onCreated }: CreatePanelBodyProps) {
+export function CreatePanelBody({ selectedDeck, deckStatus, onViewCreated }: CreatePanelBodyProps) {
   const [storedHandler, setStoredHandler] = useLocalStorage<string | null>('generate_handler', null)
   // 卡片類型選單是否展開；選好類型後自動收起，標題列仍看得到選了哪一種
   const [pickerOpen, setPickerOpen] = useLocalStorage<boolean>('generate_picker_open', true)
@@ -111,7 +113,7 @@ export function CreatePanelBody({ selectedDeck, deckStatus, onCreated }: CreateP
             handler={current}
             selectedDeck={selectedDeck}
             deckStatus={deckStatus}
-            onCreated={onCreated}
+            onViewCreated={onViewCreated}
           />
         ) : (
           <CreateForm
@@ -119,7 +121,7 @@ export function CreatePanelBody({ selectedDeck, deckStatus, onCreated }: CreateP
             handler={current}
             selectedDeck={selectedDeck}
             deckStatus={deckStatus}
-            onCreated={onCreated}
+            onViewCreated={onViewCreated}
           />
         )
       ) : (
@@ -188,19 +190,19 @@ function HandlerPicker({
  * @param props.handler - 可從網頁建立的 handler。The handler.
  * @param props.selectedDeck - 牌組樹選的牌組。The deck picked in the tree.
  * @param props.deckStatus - 牌組樹所選牌組的狀態（見 `useDeckStatus`）。The selected deck's status.
- * @param props.onCreated - 建卡成功後（見 {@link CreatePanelBodyProps}）。Called after creating.
+ * @param props.onViewCreated - 提示上的「查看新卡片」（見 {@link CreatePanelBodyProps}）。Views the created note.
  * @returns 表單 JSX。Form JSX.
  */
 function CreateForm({
   handler,
   selectedDeck,
   deckStatus,
-  onCreated,
+  onViewCreated,
 }: {
   handler: HandlerInfo
   selectedDeck: string | null
   deckStatus: DeckStatus
-  onCreated?: (result: CreateNoteResponse) => void
+  onViewCreated?: (result: CreateNoteResponse) => void
 }) {
   const formId = useId()
   const queryClient = useQueryClient()
@@ -232,7 +234,6 @@ function CreateForm({
       toast.success(`已建立 ${data.note_ids.length} 張筆記`, { description: `牌組：${data.deck}` })
       if (data.sync_warning) toast.warning('同步 AnkiWeb 失敗', { description: data.sync_warning })
       for (const queryKey of [['graph'], ['cards'], ['decks'], ['tags']]) queryClient.invalidateQueries({ queryKey })
-      onCreated?.(data)
     },
     onError: (err) => {
       setResult(null)
@@ -323,7 +324,7 @@ function CreateForm({
         </p>
       )}
 
-      {result && <CreatedNotice result={result} />}
+      {result && <CreatedNotice result={result} onView={onViewCreated && (() => onViewCreated(result))} />}
     </form>
   )
 }

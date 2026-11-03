@@ -51,19 +51,20 @@ interface DraftState {
  * @param props.handler - 預覽流程的 handler。The handler.
  * @param props.selectedDeck - 牌組樹選的牌組。The deck picked in the tree.
  * @param props.deckStatus - 牌組樹所選牌組的狀態（見 `useDeckStatus`）。The selected deck's status.
- * @param props.onCreated - 建卡成功、通知與重新整理都做完後；元件卸載後仍可能被呼叫。Called after creating.
+ * @param props.onViewCreated - 建立成功的提示上「查看新卡片」按下時；省略時提示改顯示到 Cards 頁的連結。
+ *   Views a created note from the success notice.
  * @returns 建卡畫面 JSX。The create screen JSX.
  */
 export function PreviewCreate({
   handler,
   selectedDeck,
   deckStatus,
-  onCreated,
+  onViewCreated,
 }: {
   handler: HandlerInfo
   selectedDeck: string | null
   deckStatus: DeckStatus
-  onCreated?: (result: CreateNoteResponse) => void
+  onViewCreated?: (result: CreateNoteResponse) => void
 }) {
   const formId = useId()
   const queryClient = useQueryClient()
@@ -136,7 +137,6 @@ export function PreviewCreate({
       toast.success(`已建立 ${data.note_ids.length} 張筆記`, { description: `牌組：${data.deck}` })
       if (data.sync_warning) toast.warning('同步 AnkiWeb 失敗', { description: data.sync_warning })
       for (const queryKey of [['graph'], ['cards'], ['decks'], ['tags']]) queryClient.invalidateQueries({ queryKey })
-      onCreated?.(data)
     },
     onError: (err) => {
       const mapped = formErrorsFrom(err, [])
@@ -287,7 +287,7 @@ export function PreviewCreate({
           LLM 正在寫三種語言的說法，通常要半分鐘到一分鐘。可以先去別頁，生成好會通知，回來就看得到。
         </p>
       )}
-      {result && <CreatedNotice result={result} />}
+      {result && <CreatedNotice result={result} onView={onViewCreated && (() => onViewCreated(result))} />}
     </form>
   )
 }

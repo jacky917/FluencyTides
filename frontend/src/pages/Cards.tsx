@@ -4,8 +4,9 @@
  *
  * 左：牌組樹；中：所選牌組（含子牌組）的卡片清單，可加 Anki 搜尋語句；右：Anki 渲染好的卡面
  * 與筆記欄位。清單標題的「＋」把右欄換成建卡表單（與 Card Generator 共用，建在左欄選的牌組），
- * 建好後右欄切到新卡片（`docs/wip/card_list_create_FEAT_2026-10-30.md`）。不經過 task handler，任何筆記類型都能看。開放欄位搜尋的筆記類型（handler 宣告
- * `capabilities.search`）另有欄位搜尋：點欄位、輸入關鍵字，由後端組成 Anki 查詢（`FieldSearchPanel`）。
+ * 建好後留在表單（清空）可接著建，成功提示上可打開新卡片（`docs/wip/card_list_create_FEAT_2026-10-30.md`）。
+ * 不經過 task handler，任何筆記類型都能看。開放欄位搜尋的筆記類型（handler 宣告 `capabilities.search`）
+ * 另有欄位搜尋：點欄位、輸入關鍵字，由後端組成 Anki 查詢（`FieldSearchPanel`）。
  *
  * 分工：這個頁面只提供三個面板，版面交給共用的 `SplitLayout`——依內容區實際寬度排成三欄並排、
  * 牌組與清單並排而卡面在下方、或全部疊成一欄（設定見 `lib/pageLayouts.ts` 的 `CARD_LAYOUT`），並排的面板之間可以拖曳
@@ -111,7 +112,7 @@ export default function Cards() {
                 scrolledRef={scrolledCreateRef}
                 deck={nav.deck}
                 onClose={nav.closeCreate}
-                onCreated={nav.showCreated}
+                onViewCreated={nav.showCreated}
               />
             ) : (
               <CardViewPanel
