@@ -24,7 +24,14 @@ import { useCreatedNotice } from '../../hooks/useCreatedNotice'
 import { removeStored, useLocalStorage, useSessionStorage } from '../../hooks/useStoredState'
 import type { DeckStatus } from '../../hooks/useDeckStatus'
 import { describeApiError, failureTitle, isBackendError, retryTransient } from '../../lib/apiError'
-import { formErrorsFrom, initialValues, missingRequired, schemaFields, type FormErrors } from '../../lib/createForm'
+import {
+  deckBlockedReason,
+  formErrorsFrom,
+  initialValues,
+  missingRequired,
+  schemaFields,
+  type FormErrors,
+} from '../../lib/createForm'
 import { createAvailability, type CreateAvailability } from '../../lib/handlerCapabilities'
 import { cn } from '../../lib/utils'
 import type { CreateNoteResponse, HandlerInfo } from '../../types/api'
@@ -254,6 +261,13 @@ function CreateForm({
 
   const formReady = handler.create_schema !== null && create.note_type !== null
   const canSubmit = formReady && deck !== null && missing.length === 0 && !mutation.isPending
+  // 不能送出的原因寫在按鈕旁：牌組說明在表單最上方，欄位多時看不到
+  const blockedReason = !formReady
+    ? null
+    : (deckBlockedReason(fixedDeck, selectedDeck, deckStatus) ??
+      (missing.length > 0
+        ? `還沒填：${missing.map((name) => fields.find((field) => field.name === name)?.title ?? name).join('、')}。`
+        : null))
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -295,11 +309,16 @@ function CreateForm({
         <ErrorNote title="建立失敗" error={{ error_code: 'VALIDATION', message: errors.other.join('；') }} />
       )}
 
+      {!mutation.isPending && blockedReason && (
+        <p id={`${formId}-blocked`} role="status" className="text-xs text-muted-foreground">
+          {blockedReason}
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <Button
           type="submit"
           disabled={!canSubmit}
-          aria-describedby={deck === null && !fixedDeck ? `${formId}-deck` : undefined}
+          aria-describedby={!mutation.isPending && blockedReason ? `${formId}-blocked` : undefined}
         >
           {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {mutation.isPending ? '建立中、同步中…' : '建立'}

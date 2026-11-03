@@ -10,6 +10,8 @@
  * 只畫字串欄位：其他型別的參數（例如外語糾錯預覽流程的 LLM 結果）不會出現在網頁表單。
  */
 
+import type { DeckStatus } from '../hooks/useDeckStatus'
+
 /** 表單的一個欄位。One form field. */
 export interface FormField {
   /** 參數名（送出時的鍵）。The parameter name. */
@@ -95,6 +97,23 @@ export function initialValues(fields: FormField[]): Record<string, string> {
  */
 export function missingRequired(fields: FormField[], values: Record<string, string>): string[] {
   return fields.filter((field) => field.required && !(values[field.name] ?? '').trim()).map((field) => field.name)
+}
+
+/**
+ * 為什麼還不能建立（牌組的部分）；可以建立時為 null。按鈕旁顯示這句，使用者不必捲回最上方看牌組說明。
+ * Why the deck blocks creating, or null when it does not.
+ * @param fixedDeck - 卡片固定建在的牌組；有值時牌組不會擋。The fixed deck.
+ * @param selectedDeck - 牌組樹選的牌組。The selected deck.
+ * @param deckStatus - 所選牌組的狀態（見 `useDeckStatus`）。The selected deck's status.
+ * @returns 原因，或 null。The reason, or null.
+ */
+export function deckBlockedReason(fixedDeck: string | null, selectedDeck: string | null, deckStatus: DeckStatus): string | null {
+  if (fixedDeck) return null
+  if (deckStatus === 'all' || selectedDeck === null) return '還沒選牌組：請先在牌組樹選一個牌組（「全部牌組」不能建立）。'
+  if (deckStatus === 'loading') return '正在確認牌組是否存在…'
+  if (deckStatus === 'error') return `無法載入牌組清單，暫時無法確認「${selectedDeck}」是否存在；請在牌組樹重新整理。`
+  if (deckStatus === 'missing') return `牌組「${selectedDeck}」已不存在，請在牌組樹重新選擇。`
+  return null
 }
 
 /** 422 錯誤對回表單的結果。A 422 error mapped onto the form. */

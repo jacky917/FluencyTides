@@ -18,7 +18,14 @@ import { FluencyTidesAPI } from '../../api/client'
 import { useCreatedNotice } from '../../hooks/useCreatedNotice'
 import { removeStored, useSessionStorage, writeStored } from '../../hooks/useStoredState'
 import { describeApiError, failureTitle, isBackendError } from '../../lib/apiError'
-import { formErrorsFrom, initialValues, missingRequired, schemaFields, type FormErrors } from '../../lib/createForm'
+import {
+  deckBlockedReason,
+  formErrorsFrom,
+  initialValues,
+  missingRequired,
+  schemaFields,
+  type FormErrors,
+} from '../../lib/createForm'
 import {
   readDraft,
   selectAll,
@@ -157,6 +164,10 @@ export function PreviewCreate({
   const canGenerate = Boolean(ready) && missing.length === 0 && !busy
   const chosen = state ? selectedCount(state.selection) : 0
   const canCreate = state !== null && deck !== null && chosen > 0 && state.prompt.trim() !== '' && !busy
+  // 不能建立的原因寫在按鈕旁：牌組說明在最上方，草稿很長時看不到
+  const blockedReason =
+    deckBlockedReason(fixedDeck, selectedDeck, deckStatus) ??
+    (chosen === 0 ? '至少勾選一句才能建立。' : state && !state.prompt.trim() ? '卡面情境不能空白（在上方填寫）。' : null)
 
   const handleGenerate = (e: React.FormEvent) => {
     e.preventDefault()
@@ -234,12 +245,17 @@ export function PreviewCreate({
           disabled={createMutation.isPending}
         />
         {createError && <ErrorNote title="建立失敗" error={{ error_code: 'VALIDATION', message: createError }} />}
+        {!busy && blockedReason && (
+          <p id={`${formId}-blocked`} role="status" className="text-xs text-destructive">
+            {blockedReason}
+          </p>
+        )}
         <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
             disabled={!canCreate}
             onClick={handleCreate}
-            aria-describedby={deck === null && !fixedDeck ? `${formId}-deck` : undefined}
+            aria-describedby={!busy && blockedReason ? `${formId}-blocked` : undefined}
           >
             {createMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {createMutation.isPending ? '建立中、同步中…' : `建立（${chosen} 句）`}
@@ -254,7 +270,6 @@ export function PreviewCreate({
             寫入 Anki 後會同步 AnkiWeb，最久可能要等一分鐘。
           </p>
         )}
-        {chosen === 0 && <p className="text-xs text-muted-foreground">至少勾選一句才能建立。</p>}
       </div>
     )
   }
