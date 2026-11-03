@@ -632,8 +632,14 @@ class AnkiModelManager:
 
         Ask the Anki desktop client to sync with AnkiWeb.
 
-        Raises:
-            AnkiConnectError: 同步失敗時。When the sync fails.
+        沿用 ``AnkiClient.sync()`` 的預設：10 秒內同步過就跳過（防抖），失敗只記 warning、
+        **不會拋錯**，所以呼叫端無法得知同步是否成功。需要知道結果時（例如使用者手動同步）
+        改呼叫 ``AnkiClient.sync(raise_errors=True, force=True)``，如 ``POST /anki/sync``。
+
+        Uses ``AnkiClient.sync()`` defaults: debounced to once per 10 seconds,
+        and failures are only logged, never raised. Call
+        ``AnkiClient.sync(raise_errors=True, force=True)`` when the caller
+        needs to know the outcome.
         """
         logger.info("正在請求 Anki 執行同步作業 (Sync)...")
         await self._anki_client.sync()

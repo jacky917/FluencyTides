@@ -1,5 +1,10 @@
 # Stage 1: 建置階段 (Build Stage)
-FROM node:20-alpine AS builder
+# 固定在建置機本身的平台執行（$BUILDPLATFORM 由 BuildKit 提供）：產出的 dist 是靜態檔、與
+# 平台無關，CI 建 arm64 映像時不必在 QEMU 模擬下跑 npm ci（曾卡住 6 小時直到 job 逾時）。
+# 只有 Stage 2 的 nginx 依目標平台各建一份。
+# Runs on the build host's own platform: dist is platform-independent, so the
+# arm64 image no longer runs npm ci under QEMU emulation.
+FROM --platform=$BUILDPLATFORM node:20-alpine AS builder
 
 # 1. 建立並切換工作目錄
 WORKDIR /app
