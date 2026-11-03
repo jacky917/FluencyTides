@@ -267,7 +267,14 @@ class CardService:
 
         Manually trigger a sync between Anki and AnkiWeb.
 
+        失敗時只記 warning、不拋錯（``AnkiClient.sync()`` 的預設 ``raise_errors=False``），
+        呼叫端無法得知同步是否成功；需要結果時改呼叫
+        ``AnkiClient.sync(raise_errors=True, force=True)``，如 ``POST /anki/sync``。
+
+        Failures are only logged, never raised; call
+        ``AnkiClient.sync(raise_errors=True, force=True)`` when the outcome matters.
+
         Args:
-            force: 是否強制同步。Whether to force the sync.
+            force: 略過 10 秒防抖、一定送出同步。Bypass the 10-second debounce.
         """
         await self.anki_client.sync(force=force)
