@@ -3,10 +3,11 @@
 | 欄位 | 內容 |
 |---|---|
 | **創建日期** | 2026-10-19 |
-| **狀態** | ✅ 實作完成（分支 `fix/relation-sync-and-search-escape`，2026-10-19）；§8 尚待部署後確認的項目見該節。§9 的待決策 1、2 採建議值（超過一半且超過 20 列；TG 不提供強制），3、4、5 不在本次範圍 |
+| **狀態** | ✅ 完成（2026-10-20 隨 PR #27 合併；2026-11-03 歸檔）。§9 的待決策 1、2 採建議值（超過一半且超過 20 列；TG 不提供強制）。§8 未勾選的兩項部署後確認，以及 §9 的 3、4、5（不在本次範圍），移到 `docs/wip/backlog.md` §5 |
+| **PR / 進度** | [#27](https://github.com/jacky917/FluencyTides/pull/27)（`fix/relation-sync-and-search-escape`，2026-10-20 合併，merge `95003e8`）；commit `b60689d`（修正本體）、`9cacadf`（審查修正：bot 全域錯誤處理、`/sync` 回應改 Pydantic） |
 | **性質** | 調查結果 + 修正設計；2026-10-19 經一輪審查，修正了查證不足的敘述並補上並發情況（見各節「審查後補充」） |
 | **範圍** | `backend/app/services/relation_service.py`、`backend/app/api/relations.py`、`backend/app/bot/handlers/commands.py`（`/sync`）；`backend/app/infrastructure/anki/`（新的搜尋跳脫模組）與所有組 Anki 查詢的地方；`backend/tests/test_jp_verb_reading_judgments.py`；`docs/bk/` 中與事實不符的 F002 紀錄（01、02、04、06、09、11、12、README） |
-| **來源** | `docs/wip/backlog.md` 的 T1、T2（原出自 `docs/archive/tg_bot_copy_review_2026-10-18.md` §6）；`docs/wip/web_ui_parity_FEAT_2026-10-18.md` §6 第 1 點；`docs/archive/capability_routing_FEAT_2026-10-19.md` §11.3 |
+| **來源** | `docs/wip/backlog.md` 的 T1、T2（原出自 `docs/archive/tg_bot_copy_review_2026-10-18.md` §6）；`docs/archive/web_ui_parity_FEAT_2026-10-18.md` §6 第 1 點；`docs/archive/capability_routing_FEAT_2026-10-19.md` §11.3 |
 | **不動** | 關聯資料表的結構；`card_browse_service` 的對外行為；Anki 筆記類型與欄位 |
 
 ---

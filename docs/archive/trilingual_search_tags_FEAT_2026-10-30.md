@@ -1,6 +1,6 @@
 # 三語對話卡的查詢與建卡標籤（含標籤推薦）
 
-日期：2026-10-30　分支：`feat/person-profile`　狀態：設計中（未實作）
+日期：2026-10-30　分支：`feat/person-profile`　狀態：✅ 完成（計畫書 `10a164c`；實作 `1a5472c`；審查修正 `b9af6e4`），2026-10-31 隨 [PR #32](https://github.com/jacky917/FluencyTides/pull/32) 合併（merge `a1f6ea0`），2026-11-03 歸檔。§6.2 已記錄真實 LLM 的實測結果；§8 範圍外的項目移到 `docs/wip/backlog.md` §5
 
 ## 1. 目的
 
@@ -10,7 +10,7 @@
 
 ## 2. 現況
 
-- 欄位搜尋（`docs/wip/handler_field_search_FEAT_2026-10-25.md`）目前只開放人脈卡，只能比對欄位內容，不能用標籤當條件。
+- 欄位搜尋（`docs/archive/handler_field_search_FEAT_2026-10-25.md`）當時只開放人脈卡，只能比對欄位內容，不能用標籤當條件。
 - 三語卡 34 張，有主題意義的標籤：`BusinessJapanese`（26）、`Interview`（26）、`最終面接`（14）、`逆質問`（10）、
   `FlowerShop`（6）、`志望動機`（5）、`実績`（4）等；排序用的 `Step1`～`Step4`、`つなぎ1`、`締め`；系統加的
   `TelegramBot`、`Sample`、`HandlerGenerated`、`Speaking_Trilingual`。

@@ -1,4 +1,4 @@
-"""人脈卡 handler 的測試（計畫書 docs/wip/person_profile_card_FEAT_2026-10-23.md §3.11）。
+"""人脈卡 handler 的測試（計畫書 docs/archive/person_profile_card_FEAT_2026-10-23.md §3.11）。
 
 Tests for the person profile handler.
 """

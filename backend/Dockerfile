@@ -41,7 +41,7 @@ USER apiuser
 #   預設 latest。
 # - 認證：容器內無法互動登入，需在 .env 設 LLM_CLAUDE_CODE_OAUTH_TOKEN
 #   （由已登入機器執行 `claude setup-token` 產生），詳見
-#   docs/wip/claude_cli_in_container_FEAT_2026-08-29.md §5。
+#   docs/archive/claude_cli_in_container_FEAT_2026-08-29.md §5。
 # - 對非 claude-code 模式零影響：CLI 只是靜態檔案，google/openai 路徑不會載入它。
 ARG CLAUDE_CODE_VERSION=latest
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${CLAUDE_CODE_VERSION}

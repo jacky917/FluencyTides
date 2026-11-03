@@ -1,4 +1,4 @@
-"""三語對話卡網頁建卡的測試（計畫書 ``docs/wip/trilingual_web_create_FEAT_2026-10-30.md`` §7）。
+"""三語對話卡網頁建卡的測試（計畫書 ``docs/archive/trilingual_web_create_FEAT_2026-10-30.md`` §7）。
 
 Tests for the trilingual speaking card web create: the preview-flow
 declaration checks, the draft endpoint, the LLM draft service, the prompt

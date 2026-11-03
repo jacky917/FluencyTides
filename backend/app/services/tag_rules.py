@@ -1,4 +1,4 @@
-"""標籤規則：哪些是系統標籤、使用者加的標籤要符合什麼格式（計畫書 ``docs/wip/trilingual_search_tags_FEAT_2026-10-30.md`` §5.1）。
+"""標籤規則：哪些是系統標籤、使用者加的標籤要符合什麼格式（計畫書 ``docs/archive/trilingual_search_tags_FEAT_2026-10-30.md`` §5.1）。
 
 Tag rules: which tags are system tags and what a user-added tag must look like.
 

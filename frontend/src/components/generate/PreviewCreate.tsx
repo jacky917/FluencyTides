@@ -1,6 +1,6 @@
 /**
  * Card Generator 的預覽流程（`create.flow="preview"`）：以 `draft_schema` 的表單請 LLM 生成草稿 → 預覽、
- * 勾選 → 建立或廢棄（計畫書 `docs/wip/trilingual_web_create_FEAT_2026-10-30.md` §3）。
+ * 勾選 → 建立或廢棄（計畫書 `docs/archive/trilingual_web_create_FEAT_2026-10-30.md` §3）。
  *
  * 草稿不存在後端：輸入與草稿（含勾選、修改過的情境）存在這個分頁的 sessionStorage（`useSessionStorage`），
  * 切換頁面、重新整理都還在；生成中離開頁面，結果回來時照樣存下。建立時把勾選的內容送到一般的建卡端點，

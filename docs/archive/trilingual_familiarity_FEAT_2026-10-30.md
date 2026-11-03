@@ -1,6 +1,7 @@
 # 三語對話卡：參考答案的熟識度（0–9）
 
 日期：2026-10-30　分支：`feat/person-profile`　卡片：`Speaking_Trilingual_Dark`
+狀態：✅ 完成（實作 `da40bfd`），2026-10-31 隨 [PR #32](https://github.com/jacky917/FluencyTides/pull/32) 合併（merge `a1f6ea0`），2026-11-03 歸檔。後端與卡片 JS 的判斷規則由 `backend/tests/test_trilingual_familiarity.py` 驗證；§4 的實機驗收沒有逐項勾選，移到 `docs/wip/backlog.md` §5
 
 ## 1. 目的
 

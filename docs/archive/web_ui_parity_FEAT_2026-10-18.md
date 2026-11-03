@@ -4,9 +4,10 @@
 |---|---|
 | **創建日期** | 2026-10-18 |
 | **性質** | 盤點 + 分階段計畫書 |
-| **狀態** | 🚧 階段 A（卡片瀏覽）完成（df224ed，之後 765f913～9c2b85e 持續改進）；階段 B 的 `/setconfig` 部分改由能力路由完成（PR #25）；階段 B 其餘、C、D、E 尚未開始。2026-10-19 依能力路由 R2 更新階段 B、C 的內容 |
+| **狀態** | 📦 結案歸檔（2026-11-03）。完成的部分：階段 A（卡片瀏覽，df224ed，之後 765f913～9c2b85e 持續改進）；階段 A2（併入 `docs/archive/handlers_api_redesign_FEAT_2026-10-20.md` D13，隨 PR #32 完成）；階段 B 的 `/setconfig`（能力路由，PR #25）。**階段 C（錄音評分）不做**（2026-10-20 決定）。其餘項目寫在 handlers 重新設計之前，做法已不適用，逐項對照 main `863c495` 的結果見 §8；還要做的移到 `docs/wip/backlog.md` §6 |
 | **範圍** | `frontend/`；為了讓 TG 與網頁共用，需要調整 `backend/app/services/`、`backend/app/api/`、`backend/app/bot/handlers/` |
 | **基準** | 分支 `claude/beautiful-lamarr-96c769`（PR #25）。它接在 `feat/llm-model-routing`（859031f，PR #24 已合併）之上，已含網頁版工具設定頁（f3e3f22、db8be22，能力路由 R1／R2 擴充） |
+| **網頁定位** | 2026-10-20 決定：網頁只負責**查看與編輯卡片**；複習與口說練習（錄音評分）留在 Anki 與 TG，不搬進網頁 |
 | **原則** | 邏輯只寫一份：抽到 service 層，TG handler 與 REST 端點呼叫同一個函式；網頁的流程是無狀態的請求，所需參數一次帶齊 |
 
 ---
@@ -19,7 +20,8 @@
   - 網頁上只看得到 `vocabulary_mining` 的卡，而且只在知識圖譜中以節點出現。沒有任何卡片清單。
 - **就算修好欄位，大多數筆記類型仍需要模板的 JavaScript 才看得懂。** JSON 欄位（錄音、參考答案、對話）、ruby、音檔都要靠模板。最省工、也最不會漏的做法，是直接用 Anki 已經渲染好的卡面（`cardsInfo` 的 `question`/`answer`），放進 sandbox iframe 顯示，再補一個 Anki 媒體代理端點。
 - **TG 能力中，後端已有 REST 的只有 `/sync` 與 `/models`（現為 `/setconfig`，對應 `/api/v1/capability-routes`）。** 錄音評分、上傳音檔、刪除 JSON 條目、`/setconfig` 寫入、外語糾錯的預覽與重複處理、對話卡的建立細節都寫在 TG handler 裡，要先抽成 service。
-- **建議順序：** 卡片瀏覽 → 小型管理功能 → 錄音評分 → 上傳音檔 → 建卡流程。前兩項不碰 TG handler，風險最低；錄音評分與上傳音檔是口說練習的核心，接著做。
+- **建議順序：** 卡片瀏覽 → 小型管理功能 → ~~錄音評分~~ → 上傳音檔 → 建卡流程。前兩項不碰 TG handler，風險最低。
+  > 2026-10-20：錄音評分不做——網頁只負責查看與編輯卡片，練習留在 TG（見 §4 階段 C）。
 
 ---
 
@@ -30,7 +32,7 @@
 | 1a | 外語糾錯（6 步輸入 → LLM 預覽 → 選子卡寫入） | LLM 呼叫與寫入在 `expression_handler.py`（`execute_generate` :84、`execute_create` :151）。**重複查詢、覆蓋時刪舊卡、子卡編號解析只在 `fsm/expression_fsm.py`** | `POST /handlers/expression_correction/create`（可帶 `llm_result`、`selected_indices`、`allow_duplicate`） | 預覽端點（只呼叫 LLM、不寫入，並回傳重複資訊）、create 支援「覆蓋」（先建新卡，成功後才刪舊母卡與子卡） |
 | 1b | 對話卡（牌組、語言、提示句、情境、參考回答） | **只在 `fsm/speaking_fsm.py`**：自己組 note、直接 `add_note`。`SpeakingCoachHandler.execute_create` 的行為不同（Card_ID 格式、References、tags 都不一樣） | `POST /handlers/speaking_coach/create`（行為與 TG 不同） | handler 補上 `references[]` 與語言正規化，FSM 改呼叫它 |
 | 1c | 單字卡 | `vocabulary_mining_handler.py:81`（沒有 LLM，Meaning 是佔位字） | 已有，CardGenerator 在用 | 功能上不缺。另見 §6 的既有 bug |
-| 2 | 錄音評分（提交錄音 → STT + AI 評分 → 寫回 Recordings） | **流程只在 `bot/handlers/voice.py:63`**：下載、同步、讀 Prompt/Context/References、三語分支、存媒體、評分、錯誤對應。評分器與寫回是共用的 | 只有 `PUT .../cards/{id}` 的 `add_recording`（只接受已評好分的紀錄） | `RecordingService.evaluate_and_save()`，以及 multipart `POST /cards/{note_id}/recordings`；瀏覽器錄音格式要轉檔（見 §4.3） |
+| 2 | 錄音評分（提交錄音 → STT + AI 評分 → 寫回 Recordings） | **流程只在 `bot/handlers/voice.py:63`**：下載、同步、讀 Prompt/Context/References、三語分支、存媒體、評分、錯誤對應。評分器與寫回是共用的 | 只有 `PUT .../cards/{id}` 的 `add_recording`（只接受已評好分的紀錄） ~~`RecordingService.evaluate_and_save()`，以及 multipart `POST /cards/{note_id}/recordings`；瀏覽器錄音格式要轉檔~~ **不做**（2026-10-20，見 §4 階段 C）；網頁只需顯示與刪除既有錄音紀錄（階段 B） |
 | 3 | 上傳音檔到 References / Prompt_Audios（頭像、說話者） | 寫入欄位的部分共用（`execute_update(action=add_audio)`）；**頭像清單、自訂頭像、選 handler 只在 TG**（`callbacks.py`、`messages.py`、`media.py`） | 只有 `add_audio`，而且檔案要已經在 Anki 媒體庫 | `GET /avatars`、`POST /avatars`、multipart `POST /cards/{note_id}/audio` |
 | 4 | 刪除 JSON 欄位條目（含三語 `_ZH/_JA/_EN`） | **只在 `commands.py:241 _handle_delete_entry`** | 只有 Recordings 的 `delete_recording` | `DELETE /cards/{note_id}/fields/{field}/{index}`，背後是新的 service 函式 |
 | 5a | `/sync`（清理失效關聯） | `relation_service.sync_with_anki` | `POST /relations/sync`；前端已有 `syncRelations` | 只缺網頁上的按鈕 |
@@ -103,15 +105,22 @@ cd backend && python -m pytest tests -q
 - 測試：牌組樹組裝與牌組名跳脫的單元測試；後端端點測試（mock AnkiConnect）。
 - **不碰 TG handler。**
 
+### 階段 A2：三頁版面統一（2026-10-20 併入 handlers 計畫書）
+
+本階段（Generate、Graph 改成與 Cards 相同的版面、從 Cards 抽出共用元件、Graph 全螢幕、Generate 依 schema 產生表單）已併入 `docs/archive/handlers_api_redesign_FEAT_2026-10-20.md`：版面與共用元件見其 D13，Generate 表單見其 §6，圖譜見其 D12。以該文件為準。
+
 ### 階段 B：小型管理功能
 
 - 網頁加「同步關聯」按鈕（用既有的 `POST /relations/sync`）。
 - ~~`/setconfig`~~：✅ 已由能力路由完成（`docs/archive/capability_routing_FEAT_2026-10-19.md`，PR #25）：評分策略與模型搬進能力路由的資料表，舊的暫時設定移除，TG `/models` 改名為 `/setconfig`，網頁的 LLM 模型設定頁擴充成工具設定頁。
 - 刪除 JSON 條目：抽出 service 函式（含三語欄位白名單、`last` 索引、`AnkiJsonFieldManager`、寫入前後同步）；新增 `DELETE /cards/{note_id}/fields/{field}/{index}`，TG 的 `_handle_delete_entry` 改呼叫它。
 - 前端：卡片頁對 Recordings、References、Prompt_Audios 每一筆提供刪除。（原本的「設定頁（MODIFY_* 清單與修改）」已由工具設定頁取代。）
-- `execute_update` 的 `ValueError` 改成 `FluencyTidesError` 子類、回 4xx（§5 決策 5）。
+- `execute_update` 的 `ValueError` 改成 `FluencyTidesError` 子類、回 4xx（§5 決策 5）；`jp_verb_pair`、`jp_core_verb` 的空實作改回 400，不再假成功（§7 H5）。
 
-### 階段 C：錄音評分（口說核心）
+### 階段 C：錄音評分（口說核心）—— ❌ 不做
+
+> **2026-10-20 決定不做**：網頁的定位是查看與編輯卡片，複習與口說練習不搬進網頁，錄音評分繼續只在 TG 進行。以下保留原規劃供日後參考；Recordings 的顯示與逐筆刪除仍屬階段 B。
+
 
 - 抽出 `RecordingService.evaluate_and_save(note_id, field, audio_bytes, filename)`，把 `voice.py` 的步驟 2～4 移進去（同步、讀取、三語分支、**取得評分器**、存媒體、評分、寫回、錯誤對應）。TG 的 `process_voice_handler` 改呼叫它。
 - **評分器已改由能力路由提供**（R2）：依卡片的 handler 呼叫 `services/recording_eval.py` 的 `evaluator_for_handler()`，建不出來時拋 `AudioEvaluatorUnavailableError`（503）；不再有 `app.state.audio_evaluator`，也不需要 `get_audio_evaluator`。評分器要在存媒體之前取得（TG 目前就是這個順序），設定有問題時不留下沒有紀錄引用的音檔。
@@ -145,8 +154,54 @@ cd backend && python -m pytest tests -q
 
 ## 6. 盤點時發現的既有問題（不在本計畫範圍）
 
-- （✅ 已修：`docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md` §5.1）`backend/tests/test_jp_verb_reading_judgments.py:231` 的斷言寫在 `with mock.patch…` 區塊之外，比對的是開發者 `.env` 的 `LLM_MODEL_NAME`。在沒有 `backend/.env` 的環境（CI、worktree）會失敗：本 worktree 是 809 passed、1 failed。把斷言移進 `with` 區塊即可。
+- （✅ 已修：`docs/archive/relation_sync_and_search_escape_FIX_2026-10-19.md` §5.1）`backend/tests/test_jp_verb_reading_judgments.py:231` 的斷言寫在 `with mock.patch…` 區塊之外，比對的是開發者 `.env` 的 `LLM_MODEL_NAME`。在沒有 `backend/.env` 的環境（CI、worktree）會失敗：本 worktree 是 809 passed、1 failed。把斷言移進 `with` 區塊即可。
 - `vocabulary_mining_handler.py:108-112` 寫入的 `Meaning`/`Context` 在 TOEIC_Coach_Dark 上不存在。
-- 各 handler 的 Anki 查詢沒有跳脫牌組名。（✅ 已修：`docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md` §4，共用 `app/infrastructure/anki/search.py`）
+- 各 handler 的 Anki 查詢沒有跳脫牌組名。（✅ 已修：`docs/archive/relation_sync_and_search_escape_FIX_2026-10-19.md` §4，共用 `app/infrastructure/anki/search.py`）
 - `npm run build` 的 `tsc -b` 會改寫已追蹤的 `vite.config.js`、`vite.config.d.ts`。建議把它們從版本控制移除，或在 tsconfig 設定不輸出。
 - LLM 模型設定頁的 503 有兩種情況共用同一個 `error_code`：寫入前讀不到 DB（確定沒寫入），以及寫入時異常（結果未知）。網頁只能用不斷言的措辭。若後端拆成兩個 code，網頁就能說得更準確。
+
+---
+
+## 7. Handlers API 盤點（2026-10-20）
+
+對照 `backend/app/api/handlers.py` 與 `services/task_handlers/` 的現行程式碼。「本次」原指隨階段 A2 一起修（A2 已併入 handlers 計畫書），其餘列為後續。
+
+> **解法**：H1–H4、H6–H9 與以下兩點，統一由 `docs/archive/handlers_api_redesign_FEAT_2026-10-20.md` 重新設計處理（能力欄位、建立參數模型、`/notes` 資源、路徑重整）。下表「修正」欄是個別修補的寫法，實作以該文件為準。
+> - `/handlers/decks`、`/handlers/cards/{note_id}` 與 handler 無關，只是放在 `/handlers` 底下。
+> - `GET /handlers/{name}/cards` 沒有呼叫方（Cards 頁改用 `GET /cards`），3 個 handler 只回 `[]`。
+
+| # | 問題 | 位置 | 影響 | 修正 | 時機 |
+|---|---|---|---|---|---|
+| H1 | `jp_verb_pair`、`jp_core_verb` 的 `execute_create` 未實作，直接回 `[]`；`POST /handlers/{它們}/create` 照樣回 200「建立成功」，什麼都沒建。實際的子卡生成是 `execute_generate`，走另外的 `/verb-pair/generate-child-cards`、`/core-verb/generate-child-cards`（批次腳本 `generate_child_cards.py` 使用） | `jp_verb_pair_handler.py:83`、`jp_core_verb_handler.py:104` | 假成功；網頁若列出它們，使用者會以為建好了 | `/handlers/` 回傳新增 `can_create`；不支援建立的 handler 改拋 `NotImplementedError`，create 端點比照 graph 回 400「此 Handler 不支援建立」 | 本次 |
+| H2 | `parameters` 不依 `input_schema` 驗證。缺必填欄位時：`speaking_coach` 以空字串 `prompt` 建出空卡；`vocabulary_mining` 的空 `word` 交給 Anki 才失敗 | `api/handlers.py:97-115` | 建出壞卡，或錯誤訊息來自 Anki、看不懂 | create 端點依 schema 檢查必填與型別，不符回 422 並指出欄位 | 本次 |
+| H3 | `model_name` 不檢查是否在該 handler 的 `supported_models` | 同上 | 可以用 A handler 的欄位去建 B 筆記類型，Anki 回欄位錯誤 | 不在清單內回 422 | 本次 |
+| H4 | `expression` 的 `execute_create` 忽略 `deck_name` 與 `model_name`：母卡寫死 `日本語::外語糾錯::母卡片`、子卡寫死 `…::子卡片`；回傳 `list[int]`，但端點文件寫 `note_id` 為單一 ID | `expression_handler.py:239`、`:272` | 與「左側選哪層就建在哪層」衝突；回應形狀不一致 | 回應改為 `note_ids: list[int]`（保留 `note_id` 相容）；牌組行為留待階段 E 決定，A2 期間 `can_create` 先設 false | 回應本次；牌組階段 E |
+| H5 | `execute_update` 的 `ValueError` 變成 500 並發 TG 當機警報（§5 決策 5）；`jp_verb_pair`、`jp_core_verb` 的 `execute_update` 是 `pass`，回 200「更新成功」卻沒改任何東西 | 各 handler 的 `execute_update` | 假成功；網頁誤觸發警報 | `ValueError` 改 `FluencyTidesError` 子類回 4xx；空實作改拋 `NotImplementedError` → 400 | 階段 B |
+| H6 | 不支援圖譜的 5 個 handler 回空圖而不是 `NotImplementedError`，端點的 400 分支永遠走不到；`execute_read_list` 有 3 個回 `[]` | 各 handler 的 `execute_read_graph`、`execute_read_list` | 前端分不出「不支援」與「沒有資料」 | `/handlers/` 回傳新增 `can_graph`；不支援的改拋 `NotImplementedError` | 本次（`can_graph`） |
+| H7 | `input_schema` 資訊不足以產生表單：沒有 `title`；`expression` 的欄位沒有 `description`；語言欄位沒有 `enum`（`speaking_coach` 的 `target_language` 是自由文字，`expression` 預設值是「中文」「日文」，兩者格式不同）；內部用的 `tg_bot`、`source_tag` 也列在裡面 | 各 handler 的 `get_input_schema` | 前端只能顯示英文欄位名，使用者不知道要填什麼 | 補 `title`、`description`、`enum`、`default`、`x-ui`、`x-internal` | 本次 |
+| H8 | `jp_verb_pair` 的 schema 是 `intransitive`／`transitive`，`jp_core_verb` 是 `word`，與兩者實際讀的參數（`master_note_id`、`target_verb`、`context_dialogue`）都對不上 | `jp_verb_pair_handler.py:67`、`jp_core_verb_handler.py:86` | 照 schema 呼叫一定不對 | 隨 H1 設 `can_create: false`；schema 改為描述 `generate-child-cards` 的實際參數，或清空並註明 | 本次 |
+| H9 | 請求與回應都是 `dict`，沒有 Pydantic 模型；`HTTPException` 的錯誤形狀（`detail`）和 `FluencyTidesError` 的 `ErrorResponse` 不同 | `api/handlers.py` 全檔 | OpenAPI 看不到欄位；前端要處理兩種錯誤形狀 | create 的請求／回應改 Pydantic；400 改丟 `FluencyTidesError` 子類 | 本次（create）；其餘後續 |
+| H10 | `vocabulary_mining` 寫入的 `Meaning`／`Context` 在 TOEIC_Coach_Dark 上不存在，`Meaning` 是佔位文字（§6 已列） | `vocabulary_mining_handler.py:108-112` | 建出的卡欄位不對 | 依實際筆記類型的欄位調整（需確認 TOEIC 卡的欄位） | 後續 |
+| H11 | handler 註冊靠 import 的副作用，分散在三處：`api/handlers.py` import 兩個、`task_handlers/__init__.py` import 四個、jp 兩個由 `api/verb_pair.py`／`core_verb.py` import | 同左 | 新增 handler 忘了 import 就不會出現在清單 | `__init__.py` 統一 import 全部 handler | 後續 |
+
+---
+
+## 8. 結案：剩餘項目對照現況（2026-11-03）
+
+本計畫寫在 2026-10-18 的基底上，當時 REST 直接呼叫 handler、建卡端點是 `/handlers/{name}/create`。之後 handlers 重新設計（PR #32）改成單一服務層 `NoteService`、由 handler 宣告能力（`CAPABILITIES`）、端點改為 `/handlers/{name}/notes/...`，本計畫剩下的設計多半已被取代。逐項對照 main `863c495`：
+
+| 項目 | 現況 | 去向 |
+|---|---|---|
+| B：網頁「同步關聯」按鈕 | ✅ 已有，在 Knowledge Graph 頁（`KnowledgeGraph.tsx` 呼叫 `syncRelations`） | — |
+| B：刪除 JSON 條目（`DELETE /cards/{note_id}/fields/{field}/{index}`） | 已由 JSON 欄位表單編輯取代：整欄送出、附版本檢查（`PUT /handlers/{name}/notes/{note_id}/json/{field}`，`docs/archive/json_field_editor_FEAT_2026-10-20.md`）；目前只開放人脈卡。TG 的 `_handle_delete_entry`（`bot/handlers/commands.py`）仍是自己的邏輯 | backlog H3 |
+| B：`execute_update` 的 `ValueError` 改 4xx | 具名動作目前只有 TG 經 `NoteService.run_action` 呼叫，網頁沒有動作端點，暫時不會觸發；jp 兩個的假成功已改回 400（`HANDLER_OPERATION_UNSUPPORTED`） | backlog W3 |
+| D：上傳音檔與頭像 | 由 `docs/wip/media_upload_FEAT_2026-10-20.md` 取代。三語卡自訂頭像寫錯 handler 的 bug 已修（`messages.py` 改經 `run_action`，依筆記類型找 handler） | media_upload 設計書 |
+| E：單字卡 | ✅ Card Generator 依 `create_schema` 產生表單 | — |
+| E：對話卡（單語）網頁建卡 | 未做。`speaking_coach` 只開放 TG 建卡；`speaking_fsm.py` 仍自己組 note、`add_note`，Card_ID 用 `SC_%Y%m%d_%H%M%S`，handler 用 uuid4 | backlog W1 |
+| E：外語糾錯網頁建卡 | 未做（`flow="preview"`、只開放 TG）。三語卡網頁建卡已做出通用的預覽流程（`DRAFT_PARAMS` 加 `/draft`），原本規劃的專用預覽端點不必再做 | backlog W2 |
+| §5 決策 1～3 | 1 由能力路由取代；2 照建議以 iframe 顯示卡面；3 已由 `/notes` 新 API 取代 | — |
+| §5 決策 4（Card_ID 格式） | 隨 W1 決定 | backlog W1 |
+| §6：`tsc -b` 改寫 `vite.config.js`、`.d.ts` | 仍存在 | backlog D1（F010） |
+| §6：能力路由 503 共用一個 `error_code` | 仍只有 `ROUTE_STORE_UNAVAILABLE` | backlog W4 |
+| §7 H1～H11 | 由 handlers 重新設計處理 | — |
+

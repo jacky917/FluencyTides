@@ -16,7 +16,7 @@ services:
     # 【claude-code 模式】該 .env 需設：LLM_PROVIDER=claude-code、
     # LLM_MODEL_NAME、LLM_CLAUDE_CODE_EFFORT、LLM_CLAUDE_CODE_OAUTH_TOKEN
     # （token 等同訂閱憑證，該檔請 chmod 600 並勿外流），
-    # 詳見 docs/wip/claude_cli_in_container_FEAT_2026-08-29.md §5。
+    # 詳見 docs/archive/claude_cli_in_container_FEAT_2026-08-29.md §5。
     env_file:
       - /DATA/AppData/FluencyTides/backend/.env
       

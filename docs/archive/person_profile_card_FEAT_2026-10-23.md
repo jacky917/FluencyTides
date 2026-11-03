@@ -4,13 +4,15 @@
 |---|---|
 | **創建日期** | 2026-10-23 |
 | **性質** | 新增機能設計 + 實作工作項（新筆記類型、卡片模板、handler、TG 流程）；含三個管道（Anki app、網頁、TG）欄位 CRUD 的盤點 |
-| **狀態** | 📝 未實作 |
+| **狀態** | ✅ 完成（P0～P6 全部實作，2026-10-31 隨 PR #32 合併；2026-11-03 歸檔）。§7 的驗收沒有逐項勾選（要在 Anki 桌面版、手機、TG 實際操作），之後的三語卡網頁建卡、欄位搜尋都建在本計畫的 handler 與 JSON 欄位編輯上，並已部署使用。未實測的項目與「網頁上傳照片」移到 `docs/wip/backlog.md` §5 |
 | **範圍** | 新筆記類型 `Person_Profile_Dark` 的模型定義與模板（`backend/app/anki_models/`）；新 handler `person_profile`（建立、修改、刪除、具名動作）與註冊；TG 的人脈卡流程（找人、看摘要、建立、記一筆互動與待追蹤、改欄位、傳照片、LLM 整理）與深連結；handler 與 TG 的單元測試 |
 | **不動** | 網頁前端（建卡表單、編輯彈窗、卡面顯示都走現有的通用流程）；網頁上的 JSON 欄位表單編輯（屬 `json_field_editor` 計畫，人脈卡是它的使用者之一）；網頁的媒體上傳（屬 `media_upload` 計畫）；其他筆記類型與現有 TG 流程的行為 |
-| **PR / 進度** | 尚未開始 |
-| **關聯文件** | `docs/wip/handlers_api_redesign_FEAT_2026-10-20.md`（handler 能力、`JSON_FIELDS`、`MEDIA_FIELDS`、標準建立；在 `feat/handlers-api-redesign` 分支）；`docs/wip/json_field_editor_FEAT_2026-10-20.md`（JSON 欄位的表單編輯；尚未 commit，在 `feat/handlers-api-redesign` 的 worktree）；`docs/wip/media_upload_FEAT_2026-10-20.md`（媒體上傳；同上）；參考模板 `backend/app/anki_models/JP_CoreVerb_Cloze_Dark_*`、`Speaking_Coach_Dark_back.html` |
+| **PR / 進度** | [#32](https://github.com/jacky917/FluencyTides/pull/32)（`feat/person-profile`，2026-10-31 合併，merge `a1f6ea0`）。各階段的 commit 見 §9 |
+| **關聯文件** | `docs/archive/handlers_api_redesign_FEAT_2026-10-20.md`（handler 能力、`JSON_FIELDS`、`MEDIA_FIELDS`、標準建立；已歸檔）；`docs/archive/json_field_editor_FEAT_2026-10-20.md`（JSON 欄位的表單編輯；本計畫 P4 實作，已歸檔）；`docs/wip/media_upload_FEAT_2026-10-20.md`（媒體上傳；未實作）；參考模板 `backend/app/anki_models/JP_CoreVerb_Cloze_Dark_*`、`Speaking_Coach_Dark_back.html` |
 
 > **分支**：handler 架構（`CAPABILITIES`、`JSON_FIELDS`、`MEDIA_FIELDS`、標準建立表單）目前只在 `feat/handlers-api-redesign`（以及從它分出的 `feat/card-transitions`），`main` 還沒有。實作要從含有 handler 架構的分支開新分支。
+>
+> 2026-11-03 註：handler 架構與本計畫都已隨 PR #32 進 `main`，上面這段只是當時的狀況。
 
 ---
 
@@ -632,3 +634,25 @@
 - **有照片**：同上，再在 `Photo` 貼一張圖，檢查「認人」正面照片在上、文字線索照樣列出，背面頭像換成照片。
 - **只有姓名**：只填 `Display_Name` 與 `Name_JA`，檢查只產生「見面前複習」、空區段全部不顯示。
 - **JSON 格式錯誤**：`Followups_JSON` 填 `[{"item": "少了右括號"`，檢查錯誤提示。
+
+## 9. GitHub 紀錄（2026-11-03 歸檔時補）
+
+> **已合併**：[PR #32](https://github.com/jacky917/FluencyTides/pull/32) · merge `a1f6ea0` · 2026-10-31
+
+PR #32 從 `feat/person-profile` 合併，同時帶進 handlers 重新設計（`docs/archive/handlers_api_redesign_FEAT_2026-10-20.md`）、卡片動畫、欄位搜尋與三語卡的幾份計畫。下表只列本計畫的 commit：
+
+| 階段 | commit | 內容 |
+|---|---|---|
+| 計畫書 | `3ae4e80` | 本文件 |
+| P0 | `ca4b9f9` | 筆記類型 `Person_Profile_Dark` 的模板 |
+| P1 | `e5ca1af` | handler：網頁與 TG 建立、修改、刪除 |
+| — | `b60d723` | 卡面的「+」與長按 3 秒刪除（連到 TG） |
+| P2、P3 | `075f2a3` | TG 流程與具名動作 |
+| P4 | `107ef75` | JSON 欄位的表單編輯，先開放給人脈卡（與 `json_field_editor` 的差異見 §5 P4） |
+| P5 | `04c81aa`、`5d7c026` | 「用一段話記錄」與它的錯誤處理 |
+| 審查 | `a6d7bd9`、`75e5fda` | 兩種正面共用版面、code review 的 7 項修正 |
+| P6 | `0809d3d`、`5ba90f2`、`0b107b8`、`2fdf5c6` | AI 分析與話題、遮名字、「內文不遮名字」開關 |
+
+commit 沒有壓成一個：各階段可以單獨回溯，P5、P6 的修正也保留了審查時發現的問題。
+
+§7 的驗收沒有逐項勾選，未實測的項目移到 `docs/wip/backlog.md` §5。
