@@ -116,6 +116,20 @@ export function deckBlockedReason(fixedDeck: string | null, selectedDeck: string
   return null
 }
 
+/**
+ * 牌組不能用（沒選、已不存在、清單載入失敗）而且卡片要建在所選牌組：表單整個不顯示，改顯示原因，
+ * 免得填完、生成完才發現不能建立。清單載入中是一瞬間的事，不擋（按鈕旁會寫「正在確認」）。
+ * Whether the deck rules out creating at all, so the form is replaced by a notice.
+ * @param fixedDeck - 卡片固定建在的牌組。The fixed deck.
+ * @param selectedDeck - 牌組樹選的牌組。The selected deck.
+ * @param deckStatus - 所選牌組的狀態。The selected deck's status.
+ * @returns 是否擋住。Whether it blocks the form.
+ */
+export function deckBlocksForm(fixedDeck: string | null, selectedDeck: string | null, deckStatus: DeckStatus): boolean {
+  if (fixedDeck) return false
+  return selectedDeck === null || deckStatus === 'all' || deckStatus === 'missing' || deckStatus === 'error'
+}
+
 /** 422 錯誤對回表單的結果。A 422 error mapped onto the form. */
 export interface FormErrors {
   /** 參數名 → 錯誤訊息。Name to message. */

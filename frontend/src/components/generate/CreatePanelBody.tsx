@@ -26,6 +26,7 @@ import type { DeckStatus } from '../../hooks/useDeckStatus'
 import { describeApiError, failureTitle, isBackendError, retryTransient } from '../../lib/apiError'
 import {
   deckBlockedReason,
+  deckBlocksForm,
   formErrorsFrom,
   initialValues,
   missingRequired,
@@ -38,7 +39,7 @@ import type { CreateNoteResponse, HandlerInfo } from '../../types/api'
 import { ErrorNote } from '../shared/ErrorNote'
 import { Button } from '../ui/button'
 import { Skeleton } from '../ui/skeleton'
-import { CollapsibleSection, CreatedNotice, DeckSummary, SchemaFieldInput } from './formParts'
+import { CollapsibleSection, CreatedNotice, DeckRequiredNotice, DeckSummary, SchemaFieldInput } from './formParts'
 import { PreviewCreate } from './PreviewCreate'
 import { TagInput } from './TagInput'
 
@@ -272,6 +273,17 @@ function CreateForm({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (canSubmit) mutation.mutate()
+  }
+
+  // 牌組不能用：一開始就不顯示表單（建立進行中照常顯示）。填到一半的內容還在 sessionStorage
+  if (formReady && !mutation.isPending && deckBlocksForm(fixedDeck, selectedDeck, deckStatus)) {
+    const hasInput = Object.values(storedValues).some((value) => value.trim() !== '') || tags.length > 0
+    return (
+      <DeckRequiredNotice
+        reason={deckBlockedReason(fixedDeck, selectedDeck, deckStatus) ?? ''}
+        kept={hasInput ? '填到一半的內容還在，選好牌組就會出現。' : null}
+      />
+    )
   }
 
   return (

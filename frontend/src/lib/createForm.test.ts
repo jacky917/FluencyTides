@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deckBlockedReason, formErrorsFrom, initialValues, missingRequired, schemaFields } from './createForm'
+import { deckBlockedReason, deckBlocksForm, formErrorsFrom, initialValues, missingRequired, schemaFields } from './createForm'
 
 /** 後端標準建立產生的 schema（向 Anki 查欄位，第一個欄位必填）。 */
 const standardSchema = {
@@ -114,5 +114,16 @@ describe('deckBlockedReason', () => {
     expect(deckBlockedReason(null, 'Default', 'loading')).toContain('正在確認')
     expect(deckBlockedReason(null, 'Default', 'error')).toContain('無法載入牌組清單')
     expect(deckBlockedReason(null, 'Old', 'missing')).toContain('「Old」已不存在')
+  })
+})
+
+describe('deckBlocksForm', () => {
+  it('沒選、已不存在、清單載入失敗時擋住；載入中與固定牌組不擋', () => {
+    expect(deckBlocksForm(null, null, 'all')).toBe(true)
+    expect(deckBlocksForm(null, 'Old', 'missing')).toBe(true)
+    expect(deckBlocksForm(null, 'Default', 'error')).toBe(true)
+    expect(deckBlocksForm(null, 'Default', 'loading')).toBe(false)
+    expect(deckBlocksForm(null, 'Default', 'ok')).toBe(false)
+    expect(deckBlocksForm('固定', null, 'all')).toBe(false)
   })
 })

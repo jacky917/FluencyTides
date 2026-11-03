@@ -20,6 +20,7 @@ import { removeStored, useSessionStorage, writeStored } from '../../hooks/useSto
 import { describeApiError, failureTitle, isBackendError } from '../../lib/apiError'
 import {
   deckBlockedReason,
+  deckBlocksForm,
   formErrorsFrom,
   initialValues,
   missingRequired,
@@ -36,7 +37,7 @@ import {
 import type { CreateNoteResponse, HandlerInfo, TrilingualCreateParams } from '../../types/api'
 import { ErrorNote } from '../shared/ErrorNote'
 import { Button } from '../ui/button'
-import { CreatedNotice, DeckSummary, SchemaFieldInput } from './formParts'
+import { CreatedNotice, DeckRequiredNotice, DeckSummary, SchemaFieldInput } from './formParts'
 import { TagInput } from './TagInput'
 import { TrilingualDraftPreview } from './TrilingualDraftPreview'
 import type { DeckStatus } from '../../hooks/useDeckStatus'
@@ -218,6 +219,22 @@ export function PreviewCreate({
           error={{ error_code: 'UNAVAILABLE', message: create.reason ?? '網頁還沒有這種卡片的預覽畫面' }}
         />
       </div>
+    )
+  }
+
+  // 牌組不能用：一開始就不給生成（生成、建立進行中則照常顯示，不打斷）。輸入與草稿都還在 sessionStorage
+  if (!busy && deckBlocksForm(fixedDeck, selectedDeck, deckStatus)) {
+    return (
+      <DeckRequiredNotice
+        reason={deckBlockedReason(fixedDeck, selectedDeck, deckStatus) ?? ''}
+        kept={
+          state
+            ? '已生成的草稿還在，選好牌組就會出現。'
+            : hasInput
+              ? '填到一半的內容還在，選好牌組就會出現。'
+              : null
+        }
+      />
     )
   }
 
