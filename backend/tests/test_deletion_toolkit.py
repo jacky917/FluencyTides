@@ -10,6 +10,11 @@ Unit tests for the child-card deletion toolkit (common/deletion).
    DB 紀錄、Context 卡與媒體（原 1.3 連鎖誤刪情境）。
 5. child_deleter 的步驟順序與回滾：deleteNotes 失敗時
    MySQL 不 commit、母卡 JSON 還原。
+
+DB 改成語料庫 fluencytides_corpus（docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9）：紀錄表是
+card_gen_log（card_type、line_id、term_key），媒體前綴來自 game_profiles。
+The DB is now fluencytides_corpus: card_gen_log, with media prefixes from
+game_profiles.
 """
 
 import asyncio
@@ -69,9 +74,10 @@ class FakeSession:
     Fake async DB session dispatching on SQL content.
     """
 
-    def __init__(self, log_rows):
-        # log_rows: list of dict(id, source, master, context, cloze, project)
+    def __init__(self, log_rows, game_ids=("SabbatOfTheWitch",)):
+        # log_rows: list of dict(id, game_id, master, context, cloze, project)
         self.log_rows = log_rows
+        self.game_ids = list(game_ids)
         self.executed: list[tuple[str, dict]] = []
         self.committed = 0
         self.rolled_back = 0
@@ -84,26 +90,31 @@ class FakeSession:
         if "SELECT 1 FROM" in sql:
             return FakeResult(rows=[(1,)])
 
-        if "SELECT id, source, master_note_id" in sql:
-            # 完整性檢查的主查詢必須帶 project 過濾——
-            # 若未過濾（params 無 project），回傳全部列以模擬舊版錯誤行為。
-            project = params.get("project")
+        if "SELECT game_id FROM game_profiles" in sql:
+            return FakeResult(rows=[(g,) for g in self.game_ids])
+
+        if "SELECT id, game_id, master_note_id" in sql:
+            # 完整性檢查的主查詢必須帶 card_type 過濾——
+            # 若未過濾（params 無 card_type），回傳全部列以模擬舊版錯誤行為。
+            card_type = params.get("card_type")
             rows = [
-                (r["id"], r["source"], r["master"], r["context"], r["cloze"])
+                (r["id"], r["game_id"], r["master"], r["context"], r["cloze"])
                 for r in self.log_rows
-                if project is None or r["project"] == project
+                if card_type is None or r["project"] == card_type
             ]
             return FakeResult(rows=rows)
 
-        if sql.strip().startswith("UPDATE generated_sentences_log"):
+        if sql.strip().startswith("UPDATE card_gen_log"):
             return FakeResult(rowcount=1)
-        if sql.strip().startswith("DELETE FROM generated_sentences_log"):
+        if sql.strip().startswith("DELETE FROM card_gen_log"):
             return FakeResult(rowcount=1)
-        if "FROM scripts" in sql:
+        if "FROM game_lines" in sql:
             return FakeResult(rows=[])
         return FakeResult()
 
     async def commit(self):
+        if getattr(self, "commit_error", None) is not None:
+            raise self.commit_error
         self.committed += 1
 
     async def rollback(self):
@@ -342,9 +353,9 @@ def _build_cross_project_world():
     )
 
     log_rows = [
-        {"id": 1, "source": "SabbatOfTheWitch", "master": 100,
+        {"id": 1, "game_id": "SabbatOfTheWitch", "master": 100,
          "context": 200, "cloze": 300, "project": PROJECT_JP_VERB_PAIR},
-        {"id": 2, "source": "SabbatOfTheWitch", "master": 110,
+        {"id": 2, "game_id": "SabbatOfTheWitch", "master": 110,
          "context": 210, "cloze": 310, "project": PROJECT_JP_CORE_VERB},
     ]
     return vp, cv, client, log_rows
@@ -380,13 +391,13 @@ class TestIntegrityCrossProject:
             if "SET is_deleted = TRUE" in sql
         ]
         assert soft_deletes == []
-        # 主查詢必須帶 project 參數（跨專案過濾的回歸防線）
+        # 主查詢必須帶 card_type 參數（跨專案過濾的回歸防線）
         main_queries = [
             (sql, p) for sql, p in session.executed
-            if "SELECT id, source, master_note_id" in sql
+            if "SELECT id, game_id, master_note_id" in sql
         ]
         assert main_queries and all(
-            p.get("project") == PROJECT_JP_VERB_PAIR for _, p in main_queries
+            p.get("card_type") == PROJECT_JP_VERB_PAIR for _, p in main_queries
         )
         # 僅有的問題應是：1 個孤兒媒體 + 1 張無法歸屬的 Context（回報）
         # + 1 個被全集合交叉驗證攔下的媒體（回報）
@@ -422,6 +433,9 @@ class FakeRepo:
 
     async def count_record_by_note_ids(self, session, m, c, x, *, project):
         return 1
+
+    async def get_record_ids_by_note_ids(self, session, m, c, x, *, project):
+        return [5]
 
     async def delete_record_by_note_ids(self, session, m, c, x, *, project, hard, commit):
         self.delete_calls.append({
@@ -460,7 +474,7 @@ class DeleterFakeAnkiClient(FakeAnkiClient):
         await super().delete_notes(notes)
 
 
-def _run_deleter(monkeypatch, *, fail_delete, allow_regen=False, dry_run=False):
+def _run_deleter(monkeypatch, *, fail_delete, allow_regen=False, dry_run=False, commit_error=None):
     """組裝 fakes 並執行一次單母卡刪除流程。
 
     Assemble the fakes and run one master-scoped deletion.
@@ -481,6 +495,7 @@ def _run_deleter(monkeypatch, *, fail_delete, allow_regen=False, dry_run=False):
         fail_delete=fail_delete,
     )
     session = FakeSession([])
+    session.commit_error = commit_error
     repo = FakeRepo()
     removed_json_calls: list[tuple] = []
     integrity_calls: list[dict] = []
@@ -566,6 +581,24 @@ class TestChildDeleter:
         assert client.deleted_notes == []
         # 完整性檢查仍會執行（協助確認殘留狀態）
         assert integrity_calls == [{"is_execute": True}]
+
+    def test_commit_failure_after_note_deletion_keeps_master_json(self, monkeypatch, caplog):
+        """子卡已從 Anki 刪除後 commit 才失敗：不還原母卡 JSON（否則指回已刪的子卡），記 CRITICAL。
+
+        Once the children are deleted, a failed commit must not restore the
+        master JSON; it logs CRITICAL with the ids and the repair command.
+        """
+        with caplog.at_level("CRITICAL", logger=child_deleter_mod.logger.name):
+            client, session, repo, removed, integrity_calls = _run_deleter(
+                monkeypatch, fail_delete=False, commit_error=RuntimeError("commit 失敗（測試注入）"),
+            )
+        assert client.deleted_notes == [300, 200]
+        assert session.rolled_back == 1
+        assert client.updated_fields == {}  # 母卡 JSON 沒有被「還原」
+        (record,) = [r for r in caplog.records if r.levelname == "CRITICAL"]
+        message = record.getMessage()
+        assert "[5]" in message and "cloze=300" in message and "context=200" in message
+        assert "check_integrity.py --execute" in message
 
     def test_wrong_project_triple_is_rejected(self, monkeypatch, tmp_path):
         """把 CoreVerb 的卡片誤填進 VerbPair 的精確三元組清單 → 類型驗證拒絕。
@@ -658,22 +691,29 @@ class IdLookupFakeSession:
     """
 
     def __init__(self, rows):
-        # rows: (id, project, verb_lemma, is_deleted, master, context, cloze)
-        self.rows = rows
+        # rows: (id, card_type, term_key, is_deleted, master, context, cloze)；term_key 帶語言前綴（ja-JP:），line_id 由 fake 補上
+        self.rows = [(*row, 50000 + row[0]) for row in rows]
         self.hard_delete_sqls: list[str] = []
+        self.hard_delete_ids: list[list[int]] = []
         self.auto_increment_resets = 0
         self.committed = 0
 
     async def execute(self, clause, params=None):
         sql = str(clause)
+        params = params or {}
         if "AUTO_INCREMENT" in sql:
             self.auto_increment_resets += 1
             return FakeResult()
-        if "DELETE FROM generated_sentences_log" in sql:
+        if "DELETE FROM card_gen_log" in sql:
             self.hard_delete_sqls.append(sql)
-            return FakeResult(rowcount=sql.count(",") + 1)
-        assert "FROM generated_sentences_log WHERE id IN" in sql
-        return FakeResult(rows=self.rows)
+            self.hard_delete_ids.append(list(params["ids"]))
+            return FakeResult(rowcount=len(params["ids"]))
+        if "SELECT id, card_type, term_key" in sql:
+            assert "FROM card_gen_log WHERE id IN" in sql
+            wanted = set(params["ids"])
+            return FakeResult(rows=[row for row in self.rows if row[0] in wanted])
+        # 撤銷 rel_links 前讀即將刪除的紀錄、以及 rel_links 的 UPDATE：不影響本測試的斷言
+        return FakeResult()
 
     async def commit(self):
         self.committed += 1
@@ -730,8 +770,8 @@ class TestRunDeletionByLogIds:
         correctly and dispatched per project.
         """
         rows = [
-            (1, PROJECT_JP_VERB_PAIR, "開く", 0, 100, 200, 300),
-            (2, PROJECT_JP_CORE_VERB, "見る", 0, 110, 210, 310),
+            (1, PROJECT_JP_VERB_PAIR, "ja-JP:開く", 0, 100, 200, 300),
+            (2, PROJECT_JP_CORE_VERB, "ja-JP:見る", 0, 110, 210, 310),
         ]
         session, dispatched = _run_id_deleter(
             monkeypatch, rows, [1, 2, 999],
@@ -758,8 +798,8 @@ class TestRunDeletionByLogIds:
         cards are gone are skipped; the DB is untouched.
         """
         rows = [
-            (3, PROJECT_JP_VERB_PAIR, "強まる", 0, 100, None, None),   # 純失敗紀錄
-            (5, PROJECT_JP_VERB_PAIR, "空く", 1, 100, 200, 300),      # 子卡已消失
+            (3, PROJECT_JP_VERB_PAIR, "ja-JP:強まる", 0, 100, None, None),   # 純失敗紀錄
+            (5, PROJECT_JP_VERB_PAIR, "ja-JP:空く", 1, 100, 200, 300),      # 子卡已消失
         ]
         session, dispatched = _run_id_deleter(
             monkeypatch, rows, [3, 5, 999],
@@ -776,9 +816,9 @@ class TestRunDeletionByLogIds:
         With --allow-regen, cardless rows are hard-deleted from the DB.
         """
         rows = [
-            (3, PROJECT_JP_VERB_PAIR, "強まる", 0, 100, None, None),   # 純失敗紀錄
-            (5, PROJECT_JP_VERB_PAIR, "空く", 1, 100, 200, 300),      # 子卡已消失
-            (6, PROJECT_JP_CORE_VERB, "見る", 0, 110, 210, 310),      # 完整卡片組
+            (3, PROJECT_JP_VERB_PAIR, "ja-JP:強まる", 0, 100, None, None),   # 純失敗紀錄
+            (5, PROJECT_JP_VERB_PAIR, "ja-JP:空く", 1, 100, 200, 300),      # 子卡已消失
+            (6, PROJECT_JP_CORE_VERB, "ja-JP:見る", 0, 110, 210, 310),      # 完整卡片組
         ]
         session, dispatched = _run_id_deleter(
             monkeypatch, rows, [3, 5, 6],
@@ -787,7 +827,7 @@ class TestRunDeletionByLogIds:
         )
         # 3 與 5 走 DB 硬刪；6 照常派給 CoreVerb 核心
         assert len(session.hard_delete_sqls) == 1
-        assert "IN (3, 5)" in session.hard_delete_sqls[0]
+        assert session.hard_delete_ids == [[3, 5]]
         # 硬刪後收斂 AUTO_INCREMENT（DELETE commit + ALTER 的 commit）
         assert session.auto_increment_resets == 1
         assert session.committed == 2
@@ -798,7 +838,7 @@ class TestRunDeletionByLogIds:
 
         Dry run with --allow-regen only previews the hard-delete list.
         """
-        rows = [(3, PROJECT_JP_VERB_PAIR, "強まる", 0, 100, None, None)]
+        rows = [(3, PROJECT_JP_VERB_PAIR, "ja-JP:強まる", 0, 100, None, None)]
         session, dispatched = _run_id_deleter(
             monkeypatch, rows, [3],
             dry_run=True, allow_regen=True,

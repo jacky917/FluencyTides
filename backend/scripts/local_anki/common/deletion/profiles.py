@@ -4,12 +4,17 @@ Project profiles for the deletion / integrity / cleanup toolkit.
 
 JP_VerbPair 與 JP_CoreVerb 的刪除工具共用同一套核心邏輯
 （child_deleter / integrity / cleanup），兩專案的差異全部收斂在此檔的
-ProjectProfile 欄位：模型名、母卡 JSON 欄位清單、牌組、媒體前綴與
-verb_lemma 的抽取方式。
+ProjectProfile 欄位：模型名、母卡 JSON 欄位清單、牌組與 verb_lemma 的抽取方式。
 
 All differences between the JP_VerbPair and JP_CoreVerb deletion tools are
 captured by the ProjectProfile fields here: model names, master JSON
-fields, decks, media prefix and the verb-lemma extraction strategy.
+fields, decks and the verb-lemma extraction strategy.
+
+遊戲不屬於卡片類型（docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9 的 H）：媒體檔名前綴是
+``game_profiles.game_id``（``SabbatOfTheWitch_<檔名>``），清理與完整性檢查會檢查
+``game_profiles`` 裡**每一款**遊戲的前綴，不再從 ``.env`` 讀 ``JP_*_SOURCE_GAME``。
+Games are not part of a card type: the media prefix is each
+``game_profiles.game_id``, and cleanup checks every game's prefix.
 
 注意：REGISTRY 是媒體保護的依據——`media_scan.collect_required_media`
 以「所有已註冊專案」的引用聯集決定哪些媒體不可刪。新增卡片專案時
@@ -127,7 +132,7 @@ class ProjectProfile:
     Every project-specific knob used by the deletion toolkit.
 
     Attributes:
-        project_key: generated_sentences_log.project 的值。DB project value.
+        project_key: card_gen_log.card_type 的值。DB card type.
         display_name: 報告輸出用的專案名稱。Human-readable project name.
         master_model: 母卡模型名。Master note model name.
         cloze_model: Cloze 子卡模型名。Cloze child note model name.
@@ -137,10 +142,6 @@ class ProjectProfile:
             JSON fields holding child-card records.
         root_deck: 根牌組（其下有 ::Master / ::Cloze / ::Context）。Root
             deck containing the Master/Cloze/Context subdecks.
-        source_game: 媒體檔名前綴用的遊戲代號。Game id used as the media
-            filename prefix.
-        game_name_jp: scripts 表 source 欄的遊戲日文名（孤兒修復反查用）。
-            Japanese game name in scripts.source, used by orphan repair.
         extract_verb_lemma: ``(cloze_fields, master_fields|None) -> lemma``
             的抽取函式。Lemma extraction hook.
     """
@@ -151,8 +152,6 @@ class ProjectProfile:
     context_model: str
     master_json_fields: tuple[str, ...]
     root_deck: str
-    source_game: str
-    game_name_jp: str
     extract_verb_lemma: Callable[[dict, dict | None], str] = field(compare=False)
     # 母卡上承載動詞表記（含標音）的欄位；供同表層多讀表建構
     # （scripts/common/jp_homograph_table.py）。Master fields holding the
@@ -196,8 +195,6 @@ def build_registry() -> dict[str, ProjectProfile]:
         context_model="JP_Context_Dark",
         master_json_fields=("Intransitive_Data_JSON", "Transitive_Data_JSON"),
         root_deck="日本語::自他動詞",
-        source_game=settings.JP_VERB_PAIR_SOURCE_GAME,
-        game_name_jp=settings.JP_VERB_PAIR_GAME_NAME_JP,
         extract_verb_lemma=_verb_pair_lemma,
         master_verb_fields=("Intransitive_Word", "Transitive_Word"),
     )
@@ -209,12 +206,6 @@ def build_registry() -> dict[str, ProjectProfile]:
         context_model="JP_Context_Dark",
         master_json_fields=("Word_Data_JSON",),
         root_deck=_core_verb_root_deck(),
-        source_game=getattr(
-            settings, "JP_CORE_VERB_SOURCE_GAME", settings.JP_VERB_PAIR_SOURCE_GAME
-        ),
-        game_name_jp=getattr(
-            settings, "JP_CORE_VERB_GAME_NAME_JP", settings.JP_VERB_PAIR_GAME_NAME_JP
-        ),
         extract_verb_lemma=_core_verb_lemma,
         master_verb_fields=("Word",),
     )

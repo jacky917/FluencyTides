@@ -1,0 +1,50 @@
+{
+  "id": "sabbat-night",
+  "label": "魔女之夜",
+  "extends": "default",
+  "colors": {
+    "canvas": "#1b1530",
+    "canvas-text": "#e9e4f5",
+    "node-bg": "#ecebf3",
+    "node-text": "#3b2a63",
+    "node-border": "#b9b2d1",
+    "node-border-strong": "#6d5aa6",
+    "node-hover": "#ffffff",
+    "node-selected": "#f5d27a",
+    "node-dim-bg": "#5b5375",
+    "node-dim-text": "#a49cbd",
+    "node-highlight": "#f5d27a",
+    "ending-bg": "#3b2a63",
+    "ending-border": "#f5d27a",
+    "condition-bg": "#ecebf3",
+    "condition-line": "#9d92c4",
+    "edge": "#8a80ad",
+    "edge-path": "#f5d27a",
+    "edge-branch-path": "#ff9ccf",
+    "edge-casing": "#120d22",
+    "edge-label": "#c9c1e3",
+    "band-text": "#d7d0ec",
+    "band-line": "#4a3f70",
+    "band-accent": "#b48cff",
+    "tab-bg": "#2c2348",
+    "tab-text": "#e9e4f5",
+    "tab-active-bg": "#b48cff",
+    "tab-active-text": "#1b1530",
+    "badge-bg": "#f5d27a",
+    "badge-text": "#2c2348",
+    "minimap-bg": "rgba(18,13,34,0.65)",
+    "minimap-node": "#cfc7ea",
+    "minimap-edge": "#6c6290",
+    "minimap-view": "rgba(245,210,122,0.22)",
+    "scroll-button-bg": "#2c2348",
+    "scroll-button-text": "#f5d27a"
+  },
+  "fonts": {
+    "band": "\"Cormorant Garamond\", \"Times New Roman\", \"Noto Serif JP\", serif"
+  },
+  "assets": {
+    "background": "background.svg",
+    "chapterIcon": "moon.svg"
+  },
+  "css": "theme.css"
+}

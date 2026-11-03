@@ -5,9 +5,10 @@ scripts.local_anki.common.deletion.cleanup): delete all child cards, blank
 the master-card Word_Data_JSON field, purge project media and clear the
 project's rows in the MySQL dedup log.
 
-媒體前綴取自 settings（JP_CORE_VERB_SOURCE_GAME，預設沿用
-JP_VERB_PAIR_SOURCE_GAME），且只刪「所有已註冊專案皆未引用」的檔案——
+媒體前綴是 ``game_profiles`` 裡每一款遊戲的 ``game_id``（``SabbatOfTheWitch_*``），清理會
+檢查全部遊戲的前綴，所以沒有 ``--game`` 參數；只刪「所有已註冊專案皆未引用」的檔案——
 JP_VerbPair 仍在使用的媒體不受影響。
+Media prefixes are every game in game_profiles.
 
 Usage:
     # Dry Run

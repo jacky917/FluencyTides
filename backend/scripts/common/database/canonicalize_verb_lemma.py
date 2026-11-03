@@ -1,5 +1,10 @@
 """存量修復（歷史工具）：把 generated_sentences_log.verb_lemma 收斂為正規表記。
 
+**舊庫專用（2026-11-01）**：本腳本只適用於舊庫 ``yuzusoft`` 的``generated_sentences_log``，已經跑過、不會再用；
+語料庫改到 ``fluencytides_corpus`` 後不改寫（docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9 的 G）。
+Legacy-DB only: written for the old ``yuzusoft`` tables and already run; not
+ported to ``fluencytides_corpus``.
+
 Data repair (historical tool): canonicalize generated_sentences_log.verb_lemma.
 
 **已於 2026-09-03 執行完畢並逐筆驗證**（docs/archive/verb_lemma_backfill_FIX_2026-09-02.md）。

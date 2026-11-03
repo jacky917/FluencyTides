@@ -16,9 +16,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlmodel import SQLModel
 
 from app.core.exceptions import (
     FieldNotEditableError,
@@ -28,7 +27,7 @@ from app.core.exceptions import (
     NoteNotFoundError,
 )
 from app.infrastructure.anki.search import note_types_query
-from app.infrastructure.database.models import CardRelation
+from app.infrastructure.database.corpus_tables import corpus_metadata, rel_links_table
 from app.schemas.anki import AnkiNoteInfo
 from app.services.card_service import CardService, FieldMismatchError
 from app.services.relation_service import RelationService
@@ -635,7 +634,7 @@ def session_factory():
 
     async def setup():
         async with engine.begin() as conn:
-            await conn.run_sync(SQLModel.metadata.create_all)
+            await conn.run_sync(corpus_metadata.create_all)
 
     _run(setup())
     yield async_sessionmaker(engine, expire_on_commit=False)
@@ -645,10 +644,13 @@ def session_factory():
 def _seed_relations(session_factory, rows):
     async def seed():
         async with session_factory() as session:
+            # 關聯存在語料庫的 rel_links（筆記 ID 存字串）
             for source_id, source, target_id, target in rows:
-                session.add(CardRelation(
-                    source_note_id=source_id, target_note_id=target_id, relation_type="synonym",
-                    source_label=source, target_label=target,
+                await session.execute(insert(rel_links_table).values(
+                    relation_type="user.synonym", src_type="note",
+                    src_id=None if source_id is None else str(source_id), src_label=source,
+                    dst_type="note", dst_id=None if target_id is None else str(target_id), dst_label=target,
+                    created_by="user",
                 ))
             await session.commit()
 
@@ -658,8 +660,10 @@ def _seed_relations(session_factory, rows):
 def _labels(session_factory):
     async def read():
         async with session_factory() as session:
-            rows = (await session.execute(select(CardRelation).order_by(CardRelation.id))).scalars().all()
-            return [(r.source_label, r.target_label) for r in rows]
+            rows = (await session.execute(
+                select(rel_links_table.c.src_label, rel_links_table.c.dst_label).order_by(rel_links_table.c.relation_id)
+            )).all()
+            return [(source, target) for source, target in rows]
 
     return _run(read())
 

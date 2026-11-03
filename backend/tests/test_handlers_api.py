@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from app.core.dependencies import get_anki_client, get_relation_service
+from app.infrastructure.anki.client import AnkiConnectError
 from tests.test_handler_base import V2, _note, _relations
 from tests.test_note_service import SyncingAnki, _model_note
 
@@ -285,6 +286,26 @@ def test_generic_read_permissions(client):
 def test_decks(client):
     response = client.get("/api/v1/decks")
     assert response.json() == [{"deck_name": "Default", "deck_id": 1}, {"deck_name": "English::TOEIC", "deck_id": 2}]
+
+
+def test_anki_sync(client, anki):
+    response = client.post("/api/v1/anki/sync")
+    assert response.status_code == 204
+    # 使用者按下才同步：略過防抖，失敗要回報而不是吞掉
+    assert anki.syncs == [{"raise_errors": True, "force": True}]
+
+
+def test_anki_sync_failure_is_502(client, anki):
+    anki.sync_error = AnkiConnectError("Anki 正在進行背景同步或發生衝突")
+    response = client.post("/api/v1/anki/sync")
+    assert _error(response) == (502, "ANKI_SERVICE_ERROR")
+    assert "衝突" in response.json()["message"]
+
+
+def test_anki_sync_requires_api_key(client):
+    with mock.patch.object(settings, "API_SECRET_KEY", "s3cret"):
+        assert client.post("/api/v1/anki/sync").status_code == 401
+        assert client.post("/api/v1/anki/sync", headers={"X-API-Key": "s3cret"}).status_code == 204
 
 
 def test_new_routes_require_api_key(client):

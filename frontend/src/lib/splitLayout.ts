@@ -32,25 +32,36 @@ export interface PanelSpec {
 export type PanelSpecs<K extends string> = Readonly<Record<K, Readonly<PanelSpec>>>
 
 /**
- * 一個分欄頁面的版面設定：頁面 ID（決定寬度存在哪個 localStorage 鍵）、可拖曳面板的規格與切換斷點。
- * 三者一起傳，`usePanelWidths` 與 `SplitLayout` 才不會拿到不一致的設定。
- * A split page's layout: its ID (which picks the storage key), the resizable
- * panels and the breakpoints, passed together so they cannot disagree.
+ * 一個分欄頁面的版面設定：頁面 ID、存寬度的鍵、可拖曳面板的規格、其他欄的最窄寬度與切換斷點。
+ * 全部一起傳，`usePanelWidths` 與 `SplitLayout` 才不會拿到不一致的設定，斷點也能和各欄的最窄寬度
+ * 一起檢查（見 `pageLayouts.test.ts`）。
+ * A split page's layout: its ID, storage key, resizable panels, the minimum
+ * widths of the other columns and the breakpoints, passed together so they
+ * cannot disagree and the breakpoints can be checked against the minimums.
  */
 export interface SplitPageConfig<K extends string> {
   readonly id: string
+  /**
+   * 存面板寬度的 localStorage 鍵；沒給時用 `${id}_panel_widths`。
+   * The localStorage key of the widths; defaults to `${id}_panel_widths`.
+   */
+  readonly storageKey?: string
   readonly specs: PanelSpecs<K>
+  /**
+   * 吃剩下寬度的欄（沒有 `resizable` 的欄）最窄多少（px），鍵為欄 ID。
+   * Minimum widths of the flexible columns, keyed by column ID.
+   */
+  readonly fluidMin: Readonly<Record<string, number>>
   readonly breakpoints: Readonly<SplitBreakpoints>
 }
 
 /**
- * 某頁存面板寬度的 localStorage 鍵。卡片瀏覽頁沿用原本的鍵，使用者調過的寬度不會因改版而重設。
- * The localStorage key of a page's panel widths; the card page keeps its old key.
- * @param pageId - 頁面 ID。The page ID.
+ * 某頁存面板寬度的 localStorage 鍵。The localStorage key of a page's panel widths.
+ * @param layout - 頁面的版面設定。The page's layout config.
  * @returns 儲存鍵。The key.
  */
-export function panelWidthsKey(pageId: string): string {
-  return pageId === 'cards' ? 'cards_panel_widths_v2' : `${pageId}_panel_widths`
+export function panelWidthsKey(layout: Pick<SplitPageConfig<string>, 'id' | 'storageKey'>): string {
+  return layout.storageKey ?? `${layout.id}_panel_widths`
 }
 
 /** 把寬度四捨五入並拉回面板的範圍內。Rounds a width and clamps it to the panel's range. */

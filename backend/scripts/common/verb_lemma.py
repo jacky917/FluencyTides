@@ -1,7 +1,8 @@
-"""動詞原型的正規表記（generated_sentences_log.verb_lemma 的單一規則）。
+"""動詞原型的正規表記（card_gen_log.term_key 中原形部分的單一規則；原 generated_sentences_log.verb_lemma）。
 
-Canonical verb-lemma spelling: the single rule behind
-generated_sentences_log.verb_lemma.
+Canonical verb-lemma spelling: the single rule behind the lemma part of
+card_gen_log.term_key (``ja-JP:<lemma>``, formerly
+generated_sentences_log.verb_lemma).
 
 ``verb_lemma`` 的語意是「母卡標準表層去標音」（``纏[まと]める`` →
 ``纏める``），**不是**命中的搜尋關鍵字（假名擴展 ``まとめる`` 等只用於

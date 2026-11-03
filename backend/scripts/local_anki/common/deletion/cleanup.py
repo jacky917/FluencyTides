@@ -2,12 +2,14 @@
 
 Project-parameterized full-cleanup core: delete all child cards, blank the
 master-card JSON fields, purge project media and clear the project's rows
-in the MySQL dedup log.
+in the MySQL dedup log (``card_gen_log``, with its ``rel_links`` retired).
 
 刪除子卡片、清空母卡片 JSON、清理資料庫與媒體；媒體刪除受跨專案保護——
-只刪「本專案前綴、且**所有已註冊專案**皆未引用」的檔案。
-Media deletion is cross-project safe: only files carrying this project's
-prefix AND unreferenced by every registered project are removed.
+只刪「帶遊戲前綴、且**所有已註冊專案**皆未引用」的檔案。遊戲前綴是 ``game_profiles``
+裡每一款遊戲的 ``game_id``（``SabbatOfTheWitch_*``），不再從 ``.env`` 讀。
+Media deletion is cross-project safe: only files carrying a game prefix
+(every ``game_profiles.game_id``) AND unreferenced by every registered
+project are removed.
 """
 
 import asyncio
@@ -18,6 +20,7 @@ from app.infrastructure.database.corpus_database import (
     corpus_async_session_factory,
     dispose_corpus_engine,
 )
+from scripts.common.database.corpus_repository import list_game_ids
 from scripts.common.database.log_repository import GeneratedLogRepository
 from scripts.local_anki.common.deletion.media_scan import (
     collect_required_media,
@@ -77,12 +80,25 @@ async def run_cleanup(
         else:
             print(f"   {master_deck} 中沒有找到筆記。")
 
-        # 3. 蒐集需要刪除的媒體資源（跨專案保護）
+        # 3. 確認資料庫連線：媒體前綴（步驟 4）與最後的 card_gen_log 清理都需要它
+        has_db = bool(corpus_async_session_factory)
+
+        # 4. 蒐集需要刪除的媒體資源（跨專案保護）
         # 「他專案」= 註冊表中的其他專案；它們仍引用中的檔案一律不可刪。
         # 本專案的子卡與母卡 JSON 即將被清空，其引用不再計入保護。
-        prefix = f"{profile.source_game}_"
-        print(f"\n🔍 尋找前綴為 '{prefix}' 的媒體資源...")
-        media_files = await client.get_media_files_names(f"{prefix}*")
+        # 媒體前綴＝game_profiles 裡每一款遊戲的 game_id；沒有 DB 連線就不知道前綴，不刪媒體。
+        # Media prefixes are every game_profiles.game_id.
+        game_ids: list[str] = []
+        if has_db:
+            async with corpus_async_session_factory() as session:
+                game_ids = await list_game_ids(session)
+        prefixes = [f"{game_id}_" for game_id in game_ids]
+        prefix = ", ".join(f"{p}*" for p in prefixes) or "（無：沒有 DB 連線，不刪媒體）"
+        media_files: list[str] = []
+        for game_prefix in prefixes:
+            print(f"\n🔍 尋找前綴為 '{game_prefix}' 的媒體資源...")
+            media_files.extend(await client.get_media_files_names(f"{game_prefix}*"))
+        media_files = sorted(set(media_files))
 
         registry = build_registry()
         other_profiles = [
@@ -96,18 +112,15 @@ async def run_cleanup(
             print(f"   找到 {len(media_files)} 個媒體資源，其中 {protected_count} 個仍被其他專案引用（受保護）。")
             print(f"   預計刪除 {len(deletable_media)} 個。")
         else:
-            print(f"   沒有找到前綴為 '{prefix}' 的媒體資源。")
-
-        # 4. 資料庫清理 (若有 DB)
-        has_db = bool(corpus_async_session_factory)
+            print(f"   沒有找到前綴為 {prefix} 的媒體資源。")
 
         # 提示確認
         print("\n========================================")
         print("⚠️  即將執行的清理內容總結：")
         print(f"   - 刪除子卡片 (Context/Cloze): {len(notes_to_delete)} 條")
         print(f"   - 清空母卡片 JSON 欄位 {list(profile.master_json_fields)}: {len(master_notes)} 條")
-        print(f"   - 刪除媒體資源 ({prefix}*，排除他專案引用): {len(deletable_media)} 個")
-        print(f"   - 清空 MySQL generated_sentences_log (project={profile.project_key}): {'是' if has_db else '否 (無 DB 連線)'}")
+        print(f"   - 刪除媒體資源 ({prefix}，排除他專案引用): {len(deletable_media)} 個")
+        print(f"   - 清空 MySQL card_gen_log (card_type={profile.project_key}) 並撤銷 rel_links: {'是' if has_db else '否 (無 DB 連線)'}")
         print("========================================\n")
 
         if not dry_run:
@@ -145,7 +158,7 @@ async def run_cleanup(
                     await client.delete_media_file(media_file)
 
             if has_db:
-                print(f"🧹 正在清理 MySQL generated_sentences_log (project={profile.project_key})...")
+                print(f"🧹 正在清理 MySQL card_gen_log (card_type={profile.project_key})...")
                 async with corpus_async_session_factory() as session:
                     log_repo = GeneratedLogRepository()
                     await log_repo.clear_all_records(

@@ -1,5 +1,10 @@
 """以 Fugashi (UniDic) 斷詞建置動詞倒排索引 (dialogue_verbs_index)。
 
+**舊庫專用（2026-11-01）**：本腳本只適用於舊庫 ``yuzusoft`` 的``scripts`` 與 ``dialogue_verbs_index``（新庫沒有這張表，詞彙索引改用 ``build_llm_index*.py`` 寫的 ``nlp_line_terms``），已經跑過、不會再用；
+語料庫改到 ``fluencytides_corpus`` 後不改寫（docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9 的 G）。
+Legacy-DB only: written for the old ``yuzusoft`` tables and already run; not
+ported to ``fluencytides_corpus``.
+
 Build the verb inverted index (dialogue_verbs_index) by tokenizing
 dialogue with Fugashi (UniDic) and extracting verb lemmas.
 """

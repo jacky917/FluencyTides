@@ -29,6 +29,7 @@ from app.infrastructure.database.corpus_database import (
     corpus_async_session_factory,
     dispose_corpus_engine,
 )
+from app.infrastructure.database.corpus_tables import CARD_GEN_LOG
 from app.services.anki_model_manager import AnkiModelManager
 from app.services.card_service import CardService
 from scripts.common.database.log_repository import GeneratedLogRepository
@@ -252,6 +253,10 @@ async def run_child_deletion(
 
                 original_master_fields: dict | None = None
                 master_json_modified = False
+                # 子卡片是否已從 Anki 刪除（不可逆）：之後的失敗不能再「還原」母卡 JSON
+                # Whether the child notes are already gone from Anki (irreversible).
+                notes_deleted = False
+                log_ids: list[int] = []
 
                 try:
                     # ── 步驟 0: 驗證所有卡片存在且筆記類型正確 + 備份母卡欄位 ──
@@ -314,6 +319,11 @@ async def run_child_deletion(
                             logger.info(f"      ✅ 該筆任務預計精準{action} MySQL 紀錄 {count} 筆 (目前為 Dry Run，未實際執行)")
                         rowcount = count
                     else:
+                        # 先記下紀錄 id，commit 失敗時才說得出是哪幾筆
+                        log_ids = await repo.get_record_ids_by_note_ids(
+                            corpus_session, t_master, t_cloze, t_context,
+                            project=profile.project_key,
+                        )
                         rowcount = await repo.delete_record_by_note_ids(
                             corpus_session, t_master, t_cloze, t_context,
                             project=profile.project_key,
@@ -329,6 +339,7 @@ async def run_child_deletion(
                     logger.info("   🗑️ 正在刪除子卡片...")
                     if not dry_run:
                         await anki_client.delete_notes([t_cloze, t_context])
+                        notes_deleted = True
                     logger.info(
                         f"      ✅ 子卡片刪除完成 (cloze={t_cloze}, context={t_context})"
                     )
@@ -349,13 +360,28 @@ async def run_child_deletion(
 
                     if not dry_run:
                         # 1. MySQL 回滾（步驟 2 尚未 commit，直接退回）
-                        await corpus_session.rollback()
-                        logger.info("      🔄 MySQL 交易已回滾")
+                        try:
+                            await corpus_session.rollback()
+                            logger.info("      🔄 MySQL 交易已回滾")
+                        except Exception:
+                            logger.exception("      ⚠️ MySQL 交易回滾失敗")
 
                         # 2. Anki 回滾（還原母卡片 JSON 欄位）
-                        # 子卡片刪除是原子性操作：要嘛刪成功（此時不會再拋錯），
-                        # 要嘛 AnkiConnect 報錯（卡片仍在），因此只需還原母卡。
-                        if master_json_modified and original_master_fields:
+                        # deleteNotes 本身要嘛整批成功、要嘛報錯（卡片仍在）；但它成功之後的
+                        # MySQL commit 仍可能失敗。子卡已刪就不能還原母卡 JSON（會指回不存在的
+                        # 子卡），只能留下 DB 紀錄給完整性檢查修。
+                        # deleteNotes is all-or-nothing, but the commit after it can
+                        # still fail; once the children are gone the master JSON
+                        # must not be restored to point at them.
+                        if notes_deleted:
+                            logger.critical(
+                                f"      🚨 子卡片已從 Anki 刪除（cloze={t_cloze}, context={t_context}，"
+                                f"母卡 {t_master}），但 MySQL commit 失敗：{CARD_GEN_LOG} 紀錄 "
+                                f"{log_ids or '（未知）'} 與 rel_links 已回滾，仍指向已刪除的子卡片。"
+                                "母卡 JSON 不還原（已不含這兩張子卡）。請執行 "
+                                f"{profile.display_name} 的 check_integrity.py --execute 修復。"
+                            )
+                        elif master_json_modified and original_master_fields:
                             logger.info("      🔄 正在還原母卡片 JSON 欄位...")
                             try:
                                 await anki_client.update_note_fields(

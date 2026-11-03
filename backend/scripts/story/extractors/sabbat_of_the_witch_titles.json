@@ -1,0 +1,4 @@
+{
+  "_comment": "節點標題覆寫：node_key → 標題（字串，或 {\"ja-JP\": …, \"zh-Hant\": …}）。重建後鍵不變（D6）。",
+  "sw:019_normal_end": {"ja-JP": "ノーマルエンド", "zh-Hant": "普通結局"}
+}

@@ -16,12 +16,12 @@ export interface SplitColumn<K extends string> {
    */
   render: (sideBySide: boolean, className?: string) => ReactNode
   /**
-   * 面板規格（`panels.layout.specs`）的鍵；有給時這一欄固定像素寬、可拖曳，沒給就吃剩下的寬度。
-   * A key of the layout's panel specs: the column is fixed-width and resizable.
+   * 面板規格（`panels.layout.specs`）的鍵；有給時這一欄固定像素寬、可拖曳，沒給就吃剩下的寬度，
+   * 最窄寬度取版面設定的 `fluidMin[id]`。
+   * A key of the layout's panel specs: the column is fixed-width and
+   * resizable. Otherwise it takes the remaining width, at least `fluidMin[id]`.
    */
   resizable?: K
-  /** 吃剩下寬度的欄最窄多少（px）。Narrowest width of a flexible column. */
-  minWidth?: number
 }
 
 /** {@link SplitLayout} 的 props。Props of {@link SplitLayout}. */
@@ -58,7 +58,7 @@ export function SplitLayout<K extends string>({
   panels,
   lockMode = false,
 }: SplitLayoutProps<K>) {
-  const { specs, breakpoints } = panels.layout
+  const { specs, fluidMin, breakpoints } = panels.layout
   const layoutRef = useRef<HTMLDivElement>(null)
   const measured = splitMode(useElementWidth(layoutRef), breakpoints)
   const lockedMode = useRef<SplitMode>(measured)
@@ -92,7 +92,7 @@ export function SplitLayout<K extends string>({
         {column.render(true)}
       </ResizablePanel>
     ) : (
-      <ResizablePanel id={column.id} minSize={column.minWidth}>
+      <ResizablePanel id={column.id} minSize={fluidMin[column.id]}>
         {column.render(true)}
       </ResizablePanel>
     )

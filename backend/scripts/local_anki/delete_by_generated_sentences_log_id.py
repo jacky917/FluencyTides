@@ -1,18 +1,22 @@
-"""以資料表 `generated_sentences_log` 的主鍵 id 刪除整組卡片（兩種卡片類型通用）。
+"""以資料表 `card_gen_log`（原 `generated_sentences_log`）的主鍵 id 刪除整組卡片（兩種卡片類型通用）。
 
 Delete complete card sets keyed by the primary-key ``id`` of the MySQL
-table ``generated_sentences_log``, working across both card projects
-(JP_VerbPair 自他動詞 / JP_CoreVerb 核心動詞).
+table ``card_gen_log`` (formerly ``generated_sentences_log``), working
+across both card projects (JP_VerbPair 自他動詞 / JP_CoreVerb 核心動詞).
+
+檔名沿用舊表名以免改動使用習慣；紀錄的 id 在遷移時原樣帶到 `card_gen_log`，舊 id 照樣可用。
+刪除紀錄時，卡片關聯（`rel_links`）一併標成 deleted。
+The file keeps the old table name; record ids were carried over unchanged.
 
 ============================================================
 這個腳本在做什麼
 ============================================================
-`generated_sentences_log`（yuzusoft 資料庫）是兩個卡片專案共用的
+`card_gen_log`（fluencytides_corpus 資料庫）是兩個卡片專案共用的
 「生成紀錄／去重」表，每筆紀錄對應一組已生成的卡片：
 
     id               ← 你在本腳本輸入的就是這個主鍵
-    project          ← 'jp_verb_pair' 或 'jp_core_verb'（自動辨識的依據）
-    verb_lemma       ← 動詞原型（報告顯示用）
+    card_type        ← 'jp_verb_pair' 或 'jp_core_verb'（自動辨識的依據）
+    term_key         ← 'ja-JP:<動詞原型>'（報告顯示原型）
     master_note_id   ← Anki 母卡
     cloze_note_id    ← Anki 克漏字子卡
     context_note_id  ← Anki 上下文子卡
@@ -20,8 +24,8 @@ table ``generated_sentences_log``, working across both card projects
 
 你只要給 id，腳本會：
 
-1. 到 `generated_sentences_log` 撈出每筆 id 的 project 與三個 note id。
-2. 依 `project` 欄**自動**選擇對應的專案設定（筆記類型、母卡 JSON 欄位），
+1. 到 `card_gen_log` 撈出每筆 id 的 card_type 與三個 note id。
+2. 依 `card_type` 欄**自動**選擇對應的專案設定（筆記類型、母卡 JSON 欄位），
    不需要、也不能手動指定卡片類型——不存在填錯類型的空間。
 3. 按專案分組後調用共用刪除核心，對每組卡片依序執行：
    a. 驗證三張卡存在且筆記類型與該專案相符（類型不符整筆拒絕）
@@ -98,14 +102,14 @@ async def main() -> None:
     """
     parser = argparse.ArgumentParser(
         description=(
-            "以 generated_sentences_log 的主鍵 id 刪除整組卡片"
+            "以 card_gen_log 的主鍵 id 刪除整組卡片"
             "（母卡 JSON 紀錄 + cloze/context 子卡 + DB 紀錄；"
-            "卡片類型由每筆紀錄的 project 欄自動辨識）"
+            "卡片類型由每筆紀錄的 card_type 欄自動辨識）"
         )
     )
     parser.add_argument(
         "ids", nargs="+",
-        help="generated_sentences_log 的紀錄 id，支援 555 / 555,600 / 439-450 三種寫法混用"
+        help="card_gen_log 的紀錄 id，支援 555 / 555,600 / 439-450 三種寫法混用"
     )
     parser.add_argument(
         "--execute", action="store_true",

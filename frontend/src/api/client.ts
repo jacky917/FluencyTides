@@ -287,6 +287,13 @@ export const FluencyTidesAPI = {
   listDecks: (): Promise<AnkiDeckInfo[]> =>
     apiClient.get('/decks'),
 
+  /**
+   * 讓 Anki 立即與 AnkiWeb 同步並等它完成（最久約 60 秒）；失敗時後端回 502（含同步衝突的說明）。
+   * Syncs Anki with AnkiWeb now and waits for it; a failure is a 502.
+   */
+  syncAnki: (): Promise<void> =>
+    apiClient.post('/anki/sync'),
+
   // ======================================================================
   // 卡片瀏覽 (Card Browse)：不經過 handler，任何筆記類型都能看
   // ======================================================================

@@ -22,7 +22,7 @@ prints four diagnostic reports, with zero writes to Anki, DB, or LLM.
 
 零寫入：不碰 Anki / 不寫 DB / 不呼叫 LLM，可對真實 ES 反覆執行。
 預設 ``occupied`` 傳空（純看當前語料分佈）；加 ``--with-occupied``
-可選擇性讀取 ``generated_sentences_log`` 模擬增量平衡後的選取結果（唯讀）。
+可選擇性讀取 ``card_gen_log`` 模擬增量平衡後的選取結果（唯讀）。
 
 Example:
     $ python backend/scripts/fastapi_client/JP_CoreVerb/test_search_verb.py
@@ -41,8 +41,6 @@ if str(_backend_dir) not in sys.path:
     sys.path.insert(0, str(_backend_dir))
 import scripts.common.env  # noqa
 
-from sqlalchemy import bindparam, text
-
 from app.infrastructure.database.corpus_database import (
     corpus_async_session_factory,
     dispose_corpus_engine,
@@ -52,6 +50,7 @@ from app.infrastructure.database.elasticsearch_client import (
     dispose_elasticsearch_client,
     search_dialogue_by_verb,
 )
+from scripts.common.database.corpus_repository import get_line_metadata, get_lines
 from scripts.common.verb_lemma import canonical_verb_lemma
 from scripts.fastapi_client.JP_CoreVerb.pipeline_components.candidate_validator import (
     derive_target_lemmas,
@@ -172,16 +171,7 @@ def _make_metadata_fetcher(session):
     """
 
     async def metadata_fetcher(script_ids: list[int]) -> dict[int, dict]:
-        if not script_ids:
-            return {}
-        query = text(
-            "SELECT id, chapter, role_name FROM scripts WHERE id IN :ids"
-        ).bindparams(bindparam("ids", expanding=True))
-        result = await session.execute(query, {"ids": list(script_ids)})
-        return {
-            int(row[0]): {"chapter": row[1] or "", "speaker": row[2] or ""}
-            for row in result.fetchall()
-        }
+        return await get_line_metadata(session, script_ids)
 
     return metadata_fetcher
 
@@ -210,18 +200,15 @@ async def _fetch_occupied(session, verb_lemma: str) -> list[dict]:
     )
     if not script_ids:
         return []
-    query = text(
-        "SELECT id, dialogue, chapter, role_name FROM scripts WHERE id IN :ids"
-    ).bindparams(bindparam("ids", expanding=True))
-    result = await session.execute(query, {"ids": list(script_ids)})
+    lines = await get_lines(session, script_ids)
     return [
         {
-            "script_id": int(row[0]),
-            "sentence": row[1] or "",
-            "chapter": row[2] or "",
-            "speaker": row[3] or "",
+            "script_id": line.id,
+            "sentence": line.dialogue,
+            "chapter": line.chapter or "",
+            "speaker": line.speaker or "",
         }
-        for row in result.fetchall()
+        for line in sorted(lines.values(), key=lambda item: item.id)
     ]
 
 
@@ -235,7 +222,7 @@ async def main() -> None:
     parser.add_argument(
         "--with-occupied",
         action="store_true",
-        help="讀取 generated_sentences_log（唯讀）計入桶佔用，模擬增量平衡後的選取",
+        help="讀取 card_gen_log（唯讀）計入桶佔用，模擬增量平衡後的選取",
     )
     args = parser.parse_args()
 

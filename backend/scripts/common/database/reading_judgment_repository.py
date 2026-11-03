@@ -1,11 +1,15 @@
-"""jp_verb_reading_judgments 資料表的存取層（讀音判斷快取）。
+"""``nlp_line_readings`` 資料表的存取層（讀音判斷快取，原 ``jp_verb_reading_judgments``）。
 
-Data-access layer for jp_verb_reading_judgments, the reading-judgment cache.
+Data-access layer for ``nlp_line_readings`` (formerly
+``jp_verb_reading_judgments``), the reading-judgment cache.
 
-表的語意：「這句台詞（script_id）裡的這個表層（verb_surface）讀什麼」。
+表的語意：「這句台詞（``line_id``，舊 ``script_id``）裡的這個表層（verb_surface）讀什麼」。
 它是台詞本身的屬性，與母卡無關；不進任何去重鍵、``prepare_generation``
 不讀它。判斷永久有效——固定台詞的讀音不會變，會變的只有「判對沒」，
 所以重判必須是明確動作（計畫 §3.1）。
+
+``ReadingJudgmentRow.script_id`` 沿用舊名，對應新表的 ``line_id``（值相同，``game_lines.id``
+沿用舊 ``scripts.id``）。The row's ``script_id`` maps to the ``line_id`` column.
 """
 
 from dataclasses import dataclass
@@ -13,7 +17,9 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-TABLE = "jp_verb_reading_judgments"
+from app.infrastructure.database.corpus_tables import NLP_LINE_READINGS
+
+TABLE = NLP_LINE_READINGS
 
 
 @dataclass(frozen=True)
@@ -42,7 +48,7 @@ class ReadingJudgmentRepository:
             dict[int, ReadingJudgmentRow]: ``{script_id: row}``。
         """
         result = await session.execute(text(
-            f"SELECT script_id, verb_surface, reading, llm_model FROM {TABLE} WHERE verb_surface = :s"
+            f"SELECT line_id, verb_surface, reading, llm_model FROM {TABLE} WHERE verb_surface = :s"
         ), {"s": surface})
         return {
             int(r[0]): ReadingJudgmentRow(int(r[0]), r[1], r[2] or "", r[3])
@@ -67,7 +73,7 @@ class ReadingJudgmentRepository:
         """
         if not empty_only and model is None:
             return set()
-        sql = f"SELECT script_id FROM {TABLE} WHERE verb_surface = :s"
+        sql = f"SELECT line_id FROM {TABLE} WHERE verb_surface = :s"
         params: dict = {"s": surface}
         if empty_only:
             sql += " AND reading = ''"
@@ -92,7 +98,7 @@ class ReadingJudgmentRepository:
         if not rows:
             return 0
         query = text(f"""
-            INSERT INTO {TABLE} (script_id, verb_surface, reading, llm_model)
+            INSERT INTO {TABLE} (line_id, verb_surface, reading, llm_model)
             VALUES (:script_id, :verb_surface, :reading, :llm_model)
             ON DUPLICATE KEY UPDATE
                 reading = VALUES(reading),

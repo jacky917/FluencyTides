@@ -1,7 +1,7 @@
 """
 LLM 模型標籤的唯一組裝點（計畫 D6），以及 provider 值的唯一正規化函式。
 
-標籤寫入 Anki tag 與 ``generated_sentences_log``，格式 ``(provider)model@effort``：
+標籤寫入 Anki tag 與 ``card_gen_log.llm_model``（原 ``generated_sentences_log``），格式 ``(provider)model@effort``：
 
 - ``provider`` 為 ``google`` / ``openai`` / 空 時不加前綴（沿用歷史資料的裸模型名）
 - 其餘 provider 冠 ``(provider)``

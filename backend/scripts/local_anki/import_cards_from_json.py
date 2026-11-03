@@ -10,7 +10,7 @@ relation creation.
 腳本會自動驗證欄位是否與模型定義相符，並支援自動安裝缺失的模型，
 以及自動序列化巢狀 JSON 資料 (如 list, dict) 為字串。
 同時，若 JSON 中帶有关聯資訊 (Synonyms_JSON, Collocations_JSON)，
-也會自動寫入知識圖譜資料庫中。
+也會自動寫入知識圖譜資料庫中（語料庫的 rel_links）。
 
 用法：
     cd backend
@@ -119,7 +119,7 @@ async def main() -> None:
         "--db-url",
         type=str,
         default=None,
-        help="自訂的資料庫連線字串 (如 sqlite+aiosqlite:///./my_db.db)。若未提供，預設使用環境變數的 DATABASE_URL。",
+        help="自訂的語料庫連線字串（寫入卡片關聯 rel_links，如 sqlite+aiosqlite:///./my_db.db）。若未提供，使用 .env 的 MYSQL_* 語料庫。",
     )
     args = parser.parse_args()
 
@@ -142,23 +142,23 @@ async def main() -> None:
 
     logger.info("正在初始化基礎設施與資料庫連線...")
     
-    # 根據是否傳入 --db-url 決定要使用的 Session Factory
+    # 卡片關聯存在語料庫（MySQL）的 rel_links（corpus_db_rebuild D9 的 C）；--db-url 改成指定這個語料庫
     if args.db_url:
-        logger.info(f"使用自訂的資料庫連線: {args.db_url}")
+        logger.info(f"使用自訂的語料庫連線: {args.db_url}")
         from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-        from sqlmodel import SQLModel
-        import app.infrastructure.database.conventions  # noqa: F401
-        import app.infrastructure.database.models  # noqa: F401
-        
+        from app.infrastructure.database.corpus_tables import corpus_metadata
+
         custom_engine = create_async_engine(args.db_url)
         async with custom_engine.begin() as conn:
-            await conn.run_sync(SQLModel.metadata.create_all)
+            # 只有測試用的空資料庫才需要；正式的語料庫由 schema.sql 建表
+            await conn.run_sync(corpus_metadata.create_all)
         session_factory = async_sessionmaker(custom_engine, class_=AsyncSession, expire_on_commit=False)
     else:
-        logger.info(f"使用預設資料庫連線 (DATABASE_URL): {settings.DATABASE_URL}")
-        from app.infrastructure.database.database import async_session_factory as session_factory, create_db_and_tables
-        # 確保資料表存在
-        await create_db_and_tables()
+        logger.info(f"使用語料庫連線 (MYSQL_*): {settings.MYSQL_HOST}:{settings.MYSQL_PORT}/{settings.MYSQL_DATABASE}")
+        from app.infrastructure.database.corpus_database import corpus_async_session_factory as session_factory
+        if session_factory is None:
+            logger.error("語料庫 (MySQL) 連線尚未設定，請檢查 .env 的 MYSQL_* 設定。")
+            sys.exit(1)
 
     anki_client = AnkiClient()
     model_manager = AnkiModelManager(

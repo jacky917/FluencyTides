@@ -2,15 +2,17 @@
 
 Project-parameterized integrity check and auto-repair core.
 
-以 ProjectProfile 驅動，交叉比對 MySQL (generated_sentences_log 中
-**該專案**的紀錄) 與 Anki 牌組的四個維度：
+以 ProjectProfile 驅動，交叉比對 MySQL (card_gen_log 中
+**該卡片類型**的紀錄) 與 Anki 牌組的四個維度：
 1. DB → Anki 斷鏈：資料庫紀錄指向已不存在的卡片
 2. Anki → DB 孤兒：Anki 中存在的子卡片沒有對應的資料庫紀錄
 3. 母卡片 JSON 失效連結：JSON 中指向已刪除子卡片的殘留 ID
 4. 媒體資源孤兒：Anki Media 中存在但**任何專案**皆未引用的檔案
 
 跨專案安全（docs/archive/child_card_deletion_toolkit_FEAT_2026-08-27.md）：
-- DB 讀寫一律以 project 欄過濾，他專案紀錄不會被判為斷鏈。
+- DB 讀寫一律以 card_type 欄過濾，他專案紀錄不會被判為斷鏈；DB 的寫入一律經
+  GeneratedLogRepository，卡片關聯（rel_links）跟著紀錄一起改。
+- 媒體前綴是 game_profiles 裡每一款遊戲的 game_id，不再從 .env 讀。
 - Context 模型共用，先以卡上的 Master_Note_ID 反查母卡歸屬分流；
   無法歸屬的 Context 只回報、不刪除。
 - 孤兒媒體以「所有已註冊專案」的引用聯集判定，不會誤刪他專案媒體。
@@ -30,6 +32,14 @@ from sqlalchemy import text
 from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.database.corpus_database import corpus_async_session_factory
+from app.infrastructure.database.corpus_tables import CARD_GEN_LOG, GAME_LINES
+from scripts.common.database.corpus_repository import (
+    find_excluded_line,
+    find_line_by_text,
+    find_line_by_voice,
+    list_game_ids,
+)
+from scripts.common.database.log_repository import GeneratedLogRepository
 from scripts.local_anki.common.deletion.media_scan import (
     collect_required_media,
     get_all_notes,
@@ -59,28 +69,30 @@ class Colors:
     BOLD = '\033[1m'
 
 
-def _extract_audio_file_key(audio_field_value: str, source_game: str) -> str:
-    """從 Cloze 卡片的 Audio 欄位值中萃取出對應 scripts 表的 audio_file 鍵值。
+def _extract_audio_file_key(audio_field_value: str, game_ids: list[str]) -> tuple[str | None, str]:
+    """從 Cloze 卡片的 Audio 欄位值中萃取出遊戲與 ``game_lines.voice_file`` 的鍵值。
 
-    Extract the scripts-table audio_file key from a cloze card's Audio field.
+    Extract the game and the ``game_lines.voice_file`` key from a cloze
+    card's Audio field.
 
     Cloze 卡片 Audio 欄位格式範例: 'SabbatOfTheWitch_hid002_040.mp3'
-    scripts 表 audio_file 欄位格式: 'hid002_040' (不含前綴與副檔名)
+    game_lines.voice_file 欄位格式: 'hid002_040' (不含前綴與副檔名)
 
     Args:
         audio_field_value: Cloze 卡片 Audio 欄位值。The cloze Audio field value.
-        source_game: 遊戲來源前綴。Game source prefix.
+        game_ids: game_profiles 裡全部遊戲的代號（媒體前綴）。Every game id.
 
     Returns:
-        str: 可查詢 scripts.audio_file 的鍵值；解析失敗回傳空字串。
-        A key usable against scripts.audio_file, or "" on failure.
+        tuple[str | None, str]: ``(遊戲代號, 鍵值)``；沒有已知前綴時遊戲為 None，
+        解析失敗時鍵值為空字串。The game (None without a known prefix) and the key.
     """
     if not audio_field_value:
-        return ""
-    key = audio_field_value.replace(f"{source_game}_", "", 1)
+        return None, ""
+    game_id = next((g for g in game_ids if audio_field_value.startswith(f"{g}_")), None)
+    key = audio_field_value[len(game_id) + 1:] if game_id else audio_field_value
     if key.endswith(".mp3"):
         key = key[:-4]
-    return key
+    return game_id, key
 
 
 def _parse_note_id(fields: dict, name: str) -> int | None:
@@ -133,9 +145,8 @@ async def run_integrity_check(
     issues: dict[str, list[str]] = defaultdict(list)
     fix_actions: list[dict] = []
 
-    source_game = profile.source_game
-    game_name_jp = profile.game_name_jp
     project = profile.project_key
+    repo = GeneratedLogRepository()
 
     logger.info(f"{Colors.HEADER}=================================================={Colors.ENDC}")
     logger.info(f"{Colors.BOLD}🔍 {profile.display_name} 資料完整性診斷 ({mode_label}){Colors.ENDC}")
@@ -155,10 +166,12 @@ async def run_integrity_check(
 
         async with corpus_async_session_factory() as session:
             try:
-                await session.execute(text("SELECT 1 FROM scripts LIMIT 1"))
-                logger.info("   => ✅ MySQL `scripts` 表存在且可查詢")
-                await session.execute(text("SELECT 1 FROM generated_sentences_log LIMIT 1"))
-                logger.info("   => ✅ MySQL `generated_sentences_log` 表存在且可查詢")
+                await session.execute(text(f"SELECT 1 FROM {GAME_LINES} LIMIT 1"))
+                logger.info(f"   => ✅ MySQL `{GAME_LINES}` 表存在且可查詢")
+                await session.execute(text(f"SELECT 1 FROM {CARD_GEN_LOG} LIMIT 1"))
+                logger.info(f"   => ✅ MySQL `{CARD_GEN_LOG}` 表存在且可查詢")
+                game_ids = await list_game_ids(session)
+                logger.info(f"   => ✅ 遊戲（媒體前綴）: {game_ids}")
             except Exception as e:
                 logger.error(f"   => ❌ MySQL 資料庫查詢失敗: {e}")
                 raise RuntimeError("環境預檢查失敗: MySQL 連線異常或資料表遺失")
@@ -166,25 +179,16 @@ async def run_integrity_check(
         # ==========================================
         # 2. 取得 MySQL 資料庫紀錄（僅限本專案）
         # ==========================================
-        logger.info(f"{Colors.OKCYAN}[2/7] 正在讀取 generated_sentences_log (project={project})...{Colors.ENDC}")
+        logger.info(f"{Colors.OKCYAN}[2/7] 正在讀取 {CARD_GEN_LOG} (card_type={project})...{Colors.ENDC}")
         db_contexts: set[int] = set()
         db_clozes: set[int] = set()
         db_rows: list[dict] = []
 
         async with corpus_async_session_factory() as session:
-            result = await session.execute(text(
-                "SELECT id, source, master_note_id, context_note_id, cloze_note_id "
-                "FROM generated_sentences_log "
-                "WHERE is_deleted = FALSE AND project = :project"
-            ), {"project": project})
-            for row in result.fetchall():
-                r_id, r_source, r_master, r_context, r_cloze = row
-                if r_context: db_contexts.add(r_context)
-                if r_cloze: db_clozes.add(r_cloze)
-                db_rows.append({
-                    "id": r_id, "source": r_source,
-                    "master": r_master, "context": r_context, "cloze": r_cloze
-                })
+            for row in await repo.get_active_records(session, project=project):
+                if row["context"]: db_contexts.add(row["context"])
+                if row["cloze"]: db_clozes.add(row["cloze"])
+                db_rows.append(row)
         logger.info(f"   => 取得 {len(db_rows)} 筆活躍紀錄。")
 
         # ==========================================
@@ -260,19 +264,13 @@ async def run_integrity_check(
         if db_broken_row_ids:
             if is_execute:
                 async with corpus_async_session_factory() as session:
-                    for row_id in db_broken_row_ids:
-                        await session.execute(text(
-                            "UPDATE generated_sentences_log "
-                            "SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP "
-                            "WHERE id = :row_id AND project = :project"
-                        ), {"row_id": row_id, "project": project})
-                    await session.commit()
+                    await repo.soft_delete_by_ids(session, db_broken_row_ids, project=project)
                 logger.info(f"   ✅ 已軟刪除 {len(db_broken_row_ids)} 筆斷鏈的 DB 紀錄。")
             else:
                 for row_id in db_broken_row_ids:
                     fix_actions.append({
                         "type": "db_soft_delete",
-                        "msg": f"預計執行：UPDATE generated_sentences_log SET is_deleted=TRUE WHERE id={row_id}"
+                        "msg": f"預計執行：UPDATE {CARD_GEN_LOG} SET is_deleted=TRUE WHERE id={row_id}（並撤銷 rel_links）"
                     })
 
         # ==========================================
@@ -349,14 +347,13 @@ async def run_integrity_check(
                             unpaired_reasons[ctx_nid] = "修復失敗：對應的 Cloze 卡片缺少 verb_lemma"
                         continue
 
-                    # 萃取 Audio 欄位，反查 scripts 表
+                    # 萃取 Audio 欄位（前綴決定遊戲），反查 game_lines
                     audio_value = _field_value(cloze_fields, "Audio")
-                    audio_key = _extract_audio_file_key(audio_value, source_game)
+                    audio_game, audio_key = _extract_audio_file_key(audio_value, game_ids)
 
                     script_id = None
-                    script_chapter = ""
 
-                    # 1. 優先以台詞 (dialogue) 查詢
+                    # 1. 優先以台詞查詢（比對遊戲顯示的文字，去掉空白與換行）
                     target_dialogue = ""
                     context_fields = anki_contexts[ctx_nid].get("fields", {})
                     dialog_json_str = _field_value(context_fields, "Dialog_JSON")
@@ -373,77 +370,71 @@ async def run_integrity_check(
                     clean_dialogue = target_dialogue.replace(" ", "").replace("　", "").replace("\n", "").replace("\r", "")
 
                     if target_dialogue:
-                        r = await session.execute(text(
-                            "SELECT id, source, chapter FROM scripts "
-                            "WHERE source = :game_name_jp "
-                            "AND REPLACE(REPLACE(REPLACE(REPLACE(dialogue, '\r', ''), '\n', ''), ' ', ''), '　', '') = :dialogue "
-                            "LIMIT 1"
-                        ), {"game_name_jp": game_name_jp, "dialogue": clean_dialogue})
-                        script_row = r.fetchone()
-                        if script_row:
-                            script_id = int(script_row[0])
-                            script_chapter = str(script_row[2])
+                        line = await find_line_by_text(session, clean_dialogue, audio_game)
+                        if line:
+                            script_id = line.id
 
-                    # 2. 若 dialogue 查不到，嘗試以 audio_file 作為備案查詢 (因為旁白必定沒有語音)
+                    # 2. 若台詞查不到，嘗試以語音檔名作為備案查詢 (因為旁白必定沒有語音)
                     if script_id is None and audio_key:
-                        r = await session.execute(text(
-                            "SELECT id, source, chapter FROM scripts "
-                            "WHERE audio_file = :audio_key LIMIT 1"
-                        ), {"audio_key": audio_key})
-                        script_row = r.fetchone()
-                        if script_row:
-                            script_id = int(script_row[0])
-                            script_chapter = str(script_row[2])
+                        line = await find_line_by_voice(session, audio_key, audio_game)
+                        if line:
+                            script_id = line.id
 
                     if script_id is None:
+                        # 區分「game_lines 根本沒有」與「有，但不進語料庫（in_corpus=0 等）」
+                        excluded = await find_excluded_line(
+                            session, normalized_text=clean_dialogue or None, voice_file=audio_key or None,
+                            game_id=audio_game,
+                        )
+                        if excluded:
+                            line_id, line_status, in_corpus, kind = excluded
+                            why = (
+                                f"{GAME_LINES} 有這句（id={line_id}），但不在語料庫"
+                                f"（status={line_status}, in_corpus={in_corpus}, kind={kind}）"
+                            )
+                        else:
+                            why = f"台詞與 Audio 皆無法在 {GAME_LINES} 查到"
                         issues["orphan_repair_fail"].append(
-                            f"Cloze {cloze_nid}: 台詞='{target_dialogue}' 與 Audio='{audio_value}' 皆無法在 scripts 表中找到對應紀錄，略過修復"
+                            f"Cloze {cloze_nid}: 台詞='{target_dialogue}' Audio='{audio_value}'：{why}，略過修復"
                         )
                         repaired_cloze_ids.discard(cloze_nid)
                         repaired_context_ids.discard(ctx_nid)
                         unpaired_orphans.append(cloze_nid)
-                        unpaired_reasons[cloze_nid] = "修復失敗：台詞與 Audio 皆無法在 scripts 查到"
+                        unpaired_reasons[cloze_nid] = f"修復失敗：{why}"
                         if ctx_nid not in db_contexts:
                             unpaired_orphans.append(ctx_nid)
                             unpaired_reasons[ctx_nid] = "修復失敗：對應的 Cloze 卡片找不到對應台詞"
                         continue
 
-                    # 檢查 generated_sentences_log 是否已有紀錄 (可能是軟刪除的)
-                    r2 = await session.execute(text(
-                        "SELECT id, is_deleted FROM generated_sentences_log "
-                        "WHERE script_id = :script_id AND verb_lemma = :verb_lemma "
-                        "AND project = :project"
-                    ), {"script_id": script_id, "verb_lemma": verb_lemma, "project": project})
-                    existing_row = r2.fetchone()
+                    # 檢查 card_gen_log 是否已有紀錄 (可能是軟刪除的)
+                    existing = await repo.get_record(session, script_id, verb_lemma, project=project)
 
-                    if existing_row:
-                        existing_id = existing_row[0]
-                        existing_deleted = bool(existing_row[1])
+                    if existing:
+                        existing_id = existing["id"]
+                        existing_deleted = existing["is_deleted"]
                         if existing_deleted:
                             # 情況 A：軟刪除復原
                             action_msg = (
                                 f"Cloze {cloze_nid} + Context {ctx_nid} → "
-                                f"UPDATE generated_sentences_log SET is_deleted=FALSE, "
+                                f"UPDATE {CARD_GEN_LOG} SET is_deleted=FALSE, "
                                 f"context_note_id={ctx_nid}, cloze_note_id={cloze_nid} "
-                                f"WHERE id={existing_id} (軟刪除復原)"
+                                f"WHERE id={existing_id} (軟刪除復原，rel_links 一併改寫)"
                             )
                             if is_execute:
-                                await session.execute(text(
-                                    "UPDATE generated_sentences_log "
-                                    "SET is_deleted = FALSE, "
-                                    "    context_note_id = :ctx_nid, "
-                                    "    cloze_note_id = :cloze_nid, "
-                                    "    master_note_id = :master_nid, "
-                                    "    updated_at = CURRENT_TIMESTAMP "
-                                    "WHERE id = :row_id"
-                                ), {
-                                    "ctx_nid": ctx_nid,
-                                    "cloze_nid": cloze_nid,
-                                    "master_nid": master_nid,
-                                    "row_id": existing_id,
-                                })
-                                await session.commit()
-                                logger.info(f"   ✅ 已復原軟刪除紀錄: Log ID={existing_id}")
+                                updated = await repo.repair_record(
+                                    session, existing_id, master_note_id=master_nid,
+                                    context_note_id=ctx_nid, cloze_note_id=cloze_nid,
+                                    restore=True, project=project,
+                                )
+                                if updated:
+                                    logger.info(f"   ✅ 已復原軟刪除紀錄: Log ID={existing_id}")
+                                else:
+                                    logger.warning(
+                                        f"   ⚠️ 沒有更新到紀錄: Log ID={existing_id}（{project} 已沒有這筆，可能被同時刪除）"
+                                    )
+                                    issues["orphan_repair_fail"].append(
+                                        f"Cloze {cloze_nid}: Log ID={existing_id} 更新 0 筆，修復未生效"
+                                    )
                             else:
                                 fix_actions.append({"type": "db_restore", "msg": f"預計執行：{action_msg}"})
                                 issues["orphan_context"].append(f"Context 卡片 {ctx_nid} 在資料庫中沒有對應的紀錄 (可修復)")
@@ -452,56 +443,42 @@ async def run_integrity_check(
                             # 紀錄存在且非軟刪除 → 只需更新 note ID 以防漂移
                             action_msg = (
                                 f"Cloze {cloze_nid} + Context {ctx_nid} → "
-                                f"UPDATE generated_sentences_log SET "
+                                f"UPDATE {CARD_GEN_LOG} SET "
                                 f"context_note_id={ctx_nid}, cloze_note_id={cloze_nid} "
-                                f"WHERE id={existing_id} (ID 同步)"
+                                f"WHERE id={existing_id} (ID 同步，rel_links 一併改寫)"
                             )
                             if is_execute:
-                                await session.execute(text(
-                                    "UPDATE generated_sentences_log "
-                                    "SET context_note_id = :ctx_nid, "
-                                    "    cloze_note_id = :cloze_nid, "
-                                    "    master_note_id = :master_nid, "
-                                    "    updated_at = CURRENT_TIMESTAMP "
-                                    "WHERE id = :row_id"
-                                ), {
-                                    "ctx_nid": ctx_nid,
-                                    "cloze_nid": cloze_nid,
-                                    "master_nid": master_nid,
-                                    "row_id": existing_id,
-                                })
-                                await session.commit()
-                                logger.info(f"   ✅ 已同步 Note ID: Log ID={existing_id}")
+                                updated = await repo.repair_record(
+                                    session, existing_id, master_note_id=master_nid,
+                                    context_note_id=ctx_nid, cloze_note_id=cloze_nid,
+                                    restore=False, project=project,
+                                )
+                                if updated:
+                                    logger.info(f"   ✅ 已同步 Note ID: Log ID={existing_id}")
+                                else:
+                                    logger.warning(
+                                        f"   ⚠️ 沒有更新到紀錄: Log ID={existing_id}（{project} 已沒有這筆，可能被同時刪除）"
+                                    )
+                                    issues["orphan_repair_fail"].append(
+                                        f"Cloze {cloze_nid}: Log ID={existing_id} 更新 0 筆，修復未生效"
+                                    )
                             else:
                                 fix_actions.append({"type": "db_sync", "msg": f"預計執行：{action_msg}"})
                     else:
                         # 情況 B：全新插入
                         action_msg = (
                             f"Cloze {cloze_nid} + Context {ctx_nid} → "
-                            f"INSERT INTO generated_sentences_log "
-                            f"(script_id={script_id}, verb_lemma='{verb_lemma}', "
-                            f"project='{project}', source='{source_game}', chapter='{script_chapter}')"
+                            f"INSERT INTO {CARD_GEN_LOG} "
+                            f"(line_id={script_id}, term_key='ja-JP:{verb_lemma}', "
+                            f"card_type='{project}')，並寫入 rel_links"
                         )
                         if is_execute:
-                            result = await session.execute(text(
-                                "INSERT INTO generated_sentences_log "
-                                "(script_id, verb_lemma, project, source, chapter, "
-                                " master_note_id, context_note_id, cloze_note_id) "
-                                "VALUES (:script_id, :verb_lemma, :project, :source, :chapter, "
-                                "        :master_nid, :ctx_nid, :cloze_nid)"
-                            ), {
-                                "script_id": script_id,
-                                "verb_lemma": verb_lemma,
-                                "project": project,
-                                "source": source_game,
-                                "chapter": script_chapter,
-                                "master_nid": master_nid,
-                                "ctx_nid": ctx_nid,
-                                "cloze_nid": cloze_nid,
-                            })
-                            new_id = result.lastrowid
-                            await session.commit()
-                            logger.info(f"   ✅ 已插入新紀錄 (ID={new_id}): script_id={script_id}, verb={verb_lemma}, 台詞={clean_dialogue}")
+                            new_id = await repo.insert_repaired_record(
+                                session, script_id=script_id, verb_lemma=verb_lemma,
+                                master_note_id=master_nid, context_note_id=ctx_nid,
+                                cloze_note_id=cloze_nid, project=project,
+                            )
+                            logger.info(f"   ✅ 已插入新紀錄 (ID={new_id}): line_id={script_id}, verb={verb_lemma}, 台詞={clean_dialogue}")
                         else:
                             fix_actions.append({"type": "db_insert", "msg": f"預計執行：{action_msg}"})
                             issues["orphan_context"].append(f"Context 卡片 {ctx_nid} 在資料庫中沒有對應的紀錄 (可修復)")
@@ -605,12 +582,22 @@ async def run_integrity_check(
             if m not in all_anki_media:
                 issues["missing_media"].append(f"遺失媒體檔案: {m}")
 
-        prefix = f"{source_game}_"
-        project_media_in_anki = {f for f in all_anki_media if f.startswith(prefix)}
+        # 帶任何一款遊戲前綴（game_profiles 的 game_id）的檔案才在檢查範圍內
+        prefixes = tuple(f"{game_id}_" for game_id in game_ids)
+        if not prefixes:
+            # 沒有前綴時檢查範圍是空的，看起來會像「沒有多餘媒體」；明確報錯並略過這項檢查
+            logger.error(
+                "   => ❌ game_profiles 沒有任何遊戲（媒體前綴），略過多餘媒體檢查；"
+                "請確認 MYSQL_DATABASE 指向語料庫"
+            )
+            issues["media_check_skipped"].append("game_profiles 沒有任何遊戲，無法判斷哪些媒體屬於本工具，未檢查多餘媒體")
+            extra_candidates: set[str] = set()
+        else:
+            project_media_in_anki = {f for f in all_anki_media if f.startswith(prefixes)}
+            extra_candidates = project_media_in_anki - required_all
 
         # 最後防線：孤兒候選逐檔對整個集合（不限筆記類型）全文搜尋，
         # 任何卡片仍引用就攔下——防範未註冊筆記類型引用同前綴檔案。
-        extra_candidates = project_media_in_anki - required_all
         extra_media, guard_blocked = await guard_unreferenced(client, sorted(extra_candidates))
         for fname, ref_count in guard_blocked.items():
             issues["media_guard_blocked"].append(
@@ -654,7 +641,8 @@ async def run_integrity_check(
                 ("json_missing_cloze", "📃 母卡片 JSON 指向不存在的 Cloze 卡片"),
                 ("missing_media", "⚠️ 遺失的媒體檔案 (卡片有參照但 Anki Media 不存在)"),
                 ("extra_media", "🗑️ 多餘的媒體檔案 (存在 Anki Media 中但沒有任何專案使用)"),
-                ("media_guard_blocked", "🛡️ 全集合交叉驗證攔下的媒體 (未註冊筆記類型仍在引用，不刪除)")
+                ("media_guard_blocked", "🛡️ 全集合交叉驗證攔下的媒體 (未註冊筆記類型仍在引用，不刪除)"),
+                ("media_check_skipped", "❌ 未執行的多餘媒體檢查"),
             ]
 
             for key, title in error_groups:

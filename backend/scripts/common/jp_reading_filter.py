@@ -1,7 +1,7 @@
-"""生卡腳本的讀音查表過濾（只讀 jp_verb_reading_judgments，不呼叫 LLM）。
+"""生卡腳本的讀音查表過濾（只讀 nlp_line_readings，原 jp_verb_reading_judgments，不呼叫 LLM）。
 
 Judgment-table filter for the generation pipelines: read-only lookups into
-jp_verb_reading_judgments, no LLM calls.
+nlp_line_readings (formerly jp_verb_reading_judgments), no LLM calls.
 
 規則（docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.3）：
 - 表層不在多讀表 → 完全不查，零成本。

@@ -3,12 +3,16 @@
 
 Async MySQL engine and session management dedicated to the corpus database.
 
-提供專門連接語料庫 (MySQL) 的 SQLAlchemy 2.0 AsyncEngine 與 AsyncSession 工廠，
-用於 NLP 檢索與例句擷取。
+提供專門連接語料庫 (MySQL ``fluencytides_corpus``) 的 SQLAlchemy 2.0 AsyncEngine 與
+AsyncSession 工廠，用於 NLP 檢索、例句擷取，以及網站的卡片關聯（``rel_links`` / ``rel_types``，
+``RelationService``）與劇情流程圖。因為卡片關聯存在這裡，網站本身也需要這個連線，不只是建卡腳本。
 
 Provides a SQLAlchemy 2.0 AsyncEngine and AsyncSession factory that connect
-to the corpus database (MySQL) for NLP retrieval and example-sentence
-extraction.
+to the corpus database (MySQL ``fluencytides_corpus``) for NLP retrieval,
+example-sentence extraction, and the website's card relations
+(``rel_links`` / ``rel_types`` via ``RelationService``) and story
+flowchart. Because card relations live here, the website itself requires
+this connection, not just the card scripts.
 
 與主應用程式的 database.py (SQLite) 分開，確保兩者的連線池與資源互不干擾。
 

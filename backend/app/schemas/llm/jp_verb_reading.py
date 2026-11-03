@@ -18,7 +18,7 @@ MAX_ITEMS_PER_REQUEST = 40
 class JudgeReadingItem(BaseModel):
     """一句待判的台詞。One line to judge."""
 
-    script_id: int = Field(..., description="台詞 ID（scripts.id）")
+    script_id: int = Field(..., description="台詞 ID（game_lines.id，沿用舊 scripts.id）")
     surface: str = Field(..., min_length=1, max_length=32, description="同表層多讀的表層，如 汚す")
     candidates: list[str] = Field(..., min_length=2, description="候選讀音（平假名），至少兩個")
     line: str = Field(..., min_length=1, description="目標台詞原文")

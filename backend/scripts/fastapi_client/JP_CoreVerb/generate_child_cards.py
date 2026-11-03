@@ -31,6 +31,11 @@ Example:
     測試模式（跑到選句為止，列印四段報告，不呼叫 API、零寫入）::
 
         $ python backend/scripts/fastapi_client/JP_CoreVerb/generate_child_cards.py --limit 0 --dry-run
+
+    指定遊戲（預設 SabbatOfTheWitch；名稱、語音與頭像資料夾從 ``game_profiles`` 讀，
+    資料夾相對於 ``.env`` 的 ``GAME_ASSETS_ROOT``）::
+
+        $ python backend/scripts/fastapi_client/JP_CoreVerb/generate_child_cards.py --limit 0 --game SabbatOfTheWitch
 """
 
 import argparse
@@ -49,8 +54,6 @@ if str(_backend_dir) not in sys.path:
     sys.path.insert(0, str(_backend_dir))
 import scripts.common.env  # noqa
 
-from sqlalchemy import bindparam, text
-
 from app.core.config import settings
 from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.database.corpus_database import (
@@ -62,6 +65,13 @@ from app.infrastructure.database.elasticsearch_client import (
     search_dialogue_by_verb,
 )
 from app.infrastructure.utils.jp_tokenizer import create_tagger
+from scripts.common.database.corpus_repository import (
+    DEFAULT_GAME_ID,
+    get_game_profile,
+    get_line_metadata,
+    get_lines,
+    require_media_dirs,
+)
 from scripts.common.database.log_repository import (
     PROJECT_JP_CORE_VERB,
     GeneratedLogRepository,
@@ -217,7 +227,7 @@ async def _fetch_occupied(
 
     以 **Anki 實際存在的子卡為準**（而非僅信任 DB log）：
 
-        1. ``generated_sentences_log`` 撈已生成紀錄（含子卡 note id）。
+        1. ``card_gen_log`` 撈已生成紀錄（含子卡 note id）。
         2. ``find_notes`` 按 ``Master_Note_ID`` 欄位查 Anki 實存的
            context / cloze 子卡 note id 集合。
         3. 只有子卡仍存在於 Anki 的 log 紀錄才計入桶佔用——
@@ -289,20 +299,16 @@ async def _fetch_occupied(
     script_ids = [rec["script_id"] for rec in alive_records]
     if not script_ids:
         return placeholders
-    query = text(
-        "SELECT id, dialogue, chapter, role_name FROM scripts WHERE id IN :ids"
-    ).bindparams(bindparam("ids", expanding=True))
-    result = await session.execute(query, {"ids": list(script_ids)})
-    occupied = []
-    for row in result.fetchall():
-        occupied.append(
-            {
-                "script_id": int(row[0]),
-                "sentence": row[1] or "",
-                "chapter": row[2] or "",
-                "speaker": row[3] or "",
-            }
-        )
+    lines = await get_lines(session, script_ids)
+    occupied = [
+        {
+            "script_id": line.id,
+            "sentence": line.dialogue,
+            "chapter": line.chapter or "",
+            "speaker": line.speaker or "",
+        }
+        for line in sorted(lines.values(), key=lambda item: item.id)
+    ]
     return occupied + placeholders
 
 
@@ -320,16 +326,7 @@ def _make_metadata_fetcher(session):
     """
 
     async def metadata_fetcher(script_ids: list[int]) -> dict[int, dict]:
-        if not script_ids:
-            return {}
-        query = text(
-            "SELECT id, chapter, role_name FROM scripts WHERE id IN :ids"
-        ).bindparams(bindparam("ids", expanding=True))
-        result = await session.execute(query, {"ids": list(script_ids)})
-        return {
-            int(row[0]): {"chapter": row[1] or "", "speaker": row[2] or ""}
-            for row in result.fetchall()
-        }
+        return await get_line_metadata(session, script_ids)
 
     return metadata_fetcher
 
@@ -340,7 +337,8 @@ def _make_es_fetcher(game_name_jp: str):
     Build the ES cursor-pagination fetcher injected into the funnel.
 
     Args:
-        game_name_jp: 過濾的遊戲來源名稱。Source game name used as filter.
+        game_name_jp: ES 文件 ``source`` 欄的過濾值（``GameProfile.es_source``）。
+            ES ``source`` filter value.
 
     Returns:
         Callable: ``(keyword, last_script_id, page_size) -> list[dict]``。
@@ -406,14 +404,12 @@ async def _generate_from_report(
 
         candidate = item.candidate
         script_id = candidate.script_id
-        chapter = candidate.chapter
 
         # 傳入候選句原文以啟用文字層去重（同一句台詞、不同 script_id 的
         # 分身跳過），詳見 docs/archive/dedup_canonical_lemma_FIX_2026-09-02.md §3.2
         context_dialogue = await dedup_manager.prepare_generation(
             script_id=script_id,
             verb_lemma=report.verb_lemma,
-            chapter=chapter,
             dialogue=candidate.sentence,
         )
         if not context_dialogue:
@@ -445,7 +441,6 @@ async def _generate_from_report(
             await dedup_manager.record_success(
                 script_id=script_id,
                 verb_lemma=report.verb_lemma,
-                chapter=chapter,
                 master_note_id=master_note_id,
                 context_note_id=data.get("context_note_id"),
                 cloze_note_id=data.get("cloze_note_id"),
@@ -467,7 +462,7 @@ async def _generate_from_report(
                         f"⚠️ 該句挖空定位失敗被後端拒絕，自動跳過: {e.response.text}"
                     )
                     await dedup_manager.record_failure(
-                        script_id, report.verb_lemma, chapter, master_note_id, llm_model_name
+                        script_id, report.verb_lemma, master_note_id, llm_model_name
                     )
                     continue
                 logger.error(f"❌ 發生預期外的業務邏輯錯誤 (HTTP 422): {e.response.text}")
@@ -485,7 +480,7 @@ async def _generate_from_report(
             ):
                 logger.warning("⚠️ 遭遇 LLM 安全審查攔截，自動跳過此句並繼續...")
                 await dedup_manager.record_failure(
-                    script_id, report.verb_lemma, chapter, master_note_id, llm_model_name
+                    script_id, report.verb_lemma, master_note_id, llm_model_name
                 )
                 continue
             if e.response.status_code >= 500:
@@ -493,7 +488,7 @@ async def _generate_from_report(
                     f"⚠️ 遭遇伺服器錯誤 ({e.response.status_code})，紀錄失敗並跳過..."
                 )
                 await dedup_manager.record_failure(
-                    script_id, report.verb_lemma, chapter, master_note_id, llm_model_name
+                    script_id, report.verb_lemma, master_note_id, llm_model_name
                 )
                 await asyncio.sleep(3)
                 continue
@@ -531,6 +526,11 @@ async def main() -> None:
         action="store_true",
         help="跳過所有旁白/無角色台詞（全域，覆蓋 per-verb 的 exclude_narration）",
     )
+    parser.add_argument(
+        "--game",
+        default=DEFAULT_GAME_ID,
+        help=f"從哪款遊戲選句（game_profiles.game_id，預設 {DEFAULT_GAME_ID}）",
+    )
     args = parser.parse_args()
 
     global_limit = args.limit
@@ -552,19 +552,6 @@ async def main() -> None:
 
     master_deck = getattr(settings, "JP_CORE_VERB_MASTER_DECK", "日本語::核心動詞::Master")
     deck_name = re.sub(r"::Master$", "", master_deck)
-    voice_dir = Path(
-        getattr(settings, "JP_CORE_VERB_VOICE_DIR", settings.JP_VERB_PAIR_VOICE_DIR)
-    )
-    avatar_dir = Path(
-        getattr(settings, "JP_CORE_VERB_AVATAR_DIR", settings.JP_VERB_PAIR_AVATAR_DIR)
-    )
-    source_game = getattr(
-        settings, "JP_CORE_VERB_SOURCE_GAME", settings.JP_VERB_PAIR_SOURCE_GAME
-    )
-    game_name_jp = getattr(
-        settings, "JP_CORE_VERB_GAME_NAME_JP", settings.JP_VERB_PAIR_GAME_NAME_JP
-    )
-
     base_url = getattr(settings, "SCRIPTS_API_BASE_URL", "http://127.0.0.1:8000")
     api_url = f"{base_url.rstrip('/')}/api/v1/core-verb/generate-child-cards"
 
@@ -619,6 +606,16 @@ async def main() -> None:
         logger.info(f"🔤 表記兄弟集合: {len(sibling_surfaces)} 個母卡表層")
 
         async with corpus_async_session_factory() as session:
+            # 遊戲設定從 game_profiles 讀（D9 的 H）：source_game 是 game_id（媒體前綴），
+            # game_name_jp 是卡片與提示詞上的日文標題，es_source 是 ES 文件的 source 欄。
+            game = await get_game_profile(session, args.game)
+            # 資料夾不存在時直接中止（FileNotFoundError 由外層記錄後以結束碼 1 離開），
+            # 不讓整批卡片都沒有音檔與頭像
+            voice_dir, avatar_dir = require_media_dirs(game)
+            source_game = game.game_id
+            game_name_jp = game.title_ja_jp
+            logger.info(f"🎮 遊戲: {game.game_id}（{game_name_jp}），語音 {voice_dir}，頭像 {avatar_dir}")
+
             log_repo = GeneratedLogRepository()
             dedup_manager = DedupManager(
                 session=session,
@@ -631,7 +628,7 @@ async def main() -> None:
             )
             api_client = BackendAPIClient(api_url, headers)
             uploader = AnkiMediaUploader(anki_client, voice_dir, avatar_dir, source_game)
-            es_fetcher = _make_es_fetcher(game_name_jp)
+            es_fetcher = _make_es_fetcher(game.es_source)
             metadata_fetcher = _make_metadata_fetcher(session)
 
             for idx, master_note_id in enumerate(note_ids, 1):
@@ -684,7 +681,7 @@ async def main() -> None:
 
                 # 已有生成紀錄（含軟刪除/失敗）的句子在過濾層直接篩掉
                 exclude_generated = await log_repo.get_logged_keys(
-                    session, verb_lemma, source_game, project=PROJECT_JP_CORE_VERB
+                    session, verb_lemma, game_id=source_game, project=PROJECT_JP_CORE_VERB
                 )
 
                 # 同表層多讀（開く＝あく/ひらく）：把「已知讀作其他音」的 script_id

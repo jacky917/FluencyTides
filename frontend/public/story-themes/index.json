@@ -1,0 +1,6 @@
+{
+  "themes": [
+    { "id": "default", "label": "預設（灰階）" },
+    { "id": "sabbat-night", "label": "魔女之夜" }
+  ]
+}

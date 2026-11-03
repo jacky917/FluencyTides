@@ -34,16 +34,14 @@ import { SplitLayout } from '../components/shared/SplitLayout'
 import { Button } from '../components/ui/button'
 import { Skeleton } from '../components/ui/skeleton'
 import { removeStored, useLocalStorage, useSessionStorage } from '../hooks/useStoredState'
+import { useDeckStatus, type DeckStatus } from '../hooks/useDeckStatus'
 import { usePanelWidths } from '../hooks/usePanelWidths'
 import { describeApiError, failureTitle, isBackendError, retryTransient } from '../lib/apiError'
-import { GENERATE_LAYOUT } from '../lib/cardLayout'
+import { GENERATE_LAYOUT } from '../lib/pageLayouts'
 import { formErrorsFrom, initialValues, missingRequired, schemaFields, type FormErrors } from '../lib/createForm'
 import { createAvailability, type CreateAvailability } from '../lib/handlerCapabilities'
 import { cn } from '../lib/utils'
 import type { CreateNoteResponse, HandlerInfo } from '../types/api'
-
-/** 表單區塊最窄的寬度。Narrowest form area. */
-const FORM_MIN = 320
 
 /** 選單上的一種卡片。A handler on the picker. */
 interface PickerEntry {
@@ -72,10 +70,9 @@ export default function CardGenerator() {
     isPending: handlersPending,
     error: handlersError,
   } = useQuery({ queryKey: ['handlers'], queryFn: FluencyTidesAPI.listHandlers, retry: retryTransient })
-  // 與牌組樹共用同一份查詢：記住的牌組可能已在 Anki 被刪除或改名，後端遇到不存在的牌組會自動建立，
-  // 所以送出前要確認它還在
-  const { data: decks } = useQuery({ queryKey: ['decks'], queryFn: FluencyTidesAPI.listDecks })
-  const deckMissing = selectedDeck !== null && decks !== undefined && !decks.some((d) => d.deck_name === selectedDeck)
+  // 記住的牌組可能已在 Anki 被刪除或改名，後端遇到不存在的牌組會自動建立，所以要確認牌組還在才能
+  // 建立；清單還沒載入或載入失敗時無法確認，也不能建立
+  const deckStatus = useDeckStatus(selectedDeck)
 
   const entries: PickerEntry[] = (handlers ?? []).flatMap((handler) => {
     const availability = createAvailability(handler.capabilities.create)
@@ -127,14 +124,14 @@ export default function CardGenerator() {
                 key={current.name}
                 handler={current}
                 selectedDeck={selectedDeck}
-                deckMissing={deckMissing}
+                deckStatus={deckStatus}
               />
             ) : (
               <CreateForm
                 key={current.name}
                 handler={current}
                 selectedDeck={selectedDeck}
-                deckMissing={deckMissing}
+                deckStatus={deckStatus}
               />
             )
           ) : (
@@ -168,7 +165,7 @@ export default function CardGenerator() {
             />
           ),
         },
-        { id: 'form', minWidth: FORM_MIN, render: formPanel },
+        { id: 'main', render: formPanel },
       ]}
     />
   )
@@ -232,17 +229,17 @@ function HandlerPicker({
  * The create form of one handler, generated from its schema.
  * @param props.handler - 可從網頁建立的 handler。The handler.
  * @param props.selectedDeck - 牌組樹選的牌組。The deck picked in the tree.
- * @param props.deckMissing - 選的牌組是否已不存在。Whether that deck is gone.
+ * @param props.deckStatus - 牌組樹所選牌組的狀態（見 `useDeckStatus`）。The selected deck's status.
  * @returns 表單 JSX。Form JSX.
  */
 function CreateForm({
   handler,
   selectedDeck,
-  deckMissing,
+  deckStatus,
 }: {
   handler: HandlerInfo
   selectedDeck: string | null
-  deckMissing: boolean
+  deckStatus: DeckStatus
 }) {
   const formId = useId()
   const queryClient = useQueryClient()
@@ -260,7 +257,7 @@ function CreateForm({
 
   // 牌組固定的卡片不看牌組樹
   const fixedDeck = create.deck === 'fixed' ? create.fixed_deck : null
-  const deck = fixedDeck ?? (deckMissing ? null : selectedDeck)
+  const deck = fixedDeck ?? (deckStatus === 'ok' ? selectedDeck : null)
   const missing = missingRequired(fields, values)
 
   const mutation = useMutation({
@@ -303,7 +300,7 @@ function CreateForm({
         id={`${formId}-deck`}
         fixedDeck={fixedDeck}
         selectedDeck={selectedDeck}
-        deckMissing={deckMissing}
+        deckStatus={deckStatus}
         noteType={create.note_type}
       />
 

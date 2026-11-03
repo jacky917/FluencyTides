@@ -199,6 +199,16 @@ class InvalidAnkiSearchError(ServiceBaseError):
     status_code = 400
 
 
+class InvalidRelationTypeError(ServiceBaseError):
+    """使用者給的關係類型名稱不合法（空白、用了系統命名空間、或含不允許的字元）。
+
+    The user-supplied relation type name is invalid: blank, uses a system
+    namespace (``core.``), or contains characters outside the allowed set.
+    """
+    error_code = "INVALID_RELATION_TYPE"
+    status_code = 400
+
+
 class RelationSyncRefusedError(ServiceBaseError):
     """同步清理孤兒關聯時，Anki 的回應看起來不完整，為避免誤刪而拒絕清理。
 

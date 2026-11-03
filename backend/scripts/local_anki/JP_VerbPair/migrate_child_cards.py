@@ -1,5 +1,10 @@
 """批量子卡片搬移工具：將子卡片從舊母卡片搬移至新母卡片。
 
+**舊庫專用（2026-11-01）**：本腳本只適用於舊庫 ``yuzusoft`` 的``generated_sentences_log`` 與網站 SQLite 的 ``card_relations``，已經跑過、不會再用；
+語料庫改到 ``fluencytides_corpus`` 後不改寫（docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9 的 G）。
+Legacy-DB only: written for the old ``yuzusoft`` tables and already run; not
+ported to ``fluencytides_corpus``.
+
 Batch child-card migration tool that moves cloze/context child cards from an
 old master card to a new one, updating Anki JSON fields, MySQL dedup records
 and the SQLite relation graph, with rollback on failure.

@@ -4,6 +4,10 @@ Build the vocabulary index with an LLM (lightweight, no chapter
 context), with grammar extraction strictly constrained by an Enum
 whitelist loaded from the N1-N5 grammar templates.
 
+寫入 ``nlp_line_terms``（原 ``dialogue_terms_index``）；台詞依劇情順序從 ``game_lines`` 讀
+（``--game`` 指定遊戲，預設 SabbatOfTheWitch），讀寫集中在 ``terms_index_store.py``。
+Writes ``nlp_line_terms``; lines come from ``game_lines`` in story order.
+
 模型：在本機以本機 ``.env`` 的 ``LLM_PROVIDER`` / ``LLM_MODEL_NAME`` 建立客戶端，後端 TG ``/setconfig``
 （DB）的用途設定對這支腳本無效（模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D9）。
 Model: built locally from this machine's ``.env``; the backend's ``/setconfig``
@@ -25,12 +29,15 @@ if str(_backend_dir) not in sys.path:
     sys.path.insert(0, str(_backend_dir))
 import scripts.common.env  # noqa
 
-import aiomysql
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.infrastructure.llm.base import BaseLLMClient
+from app.infrastructure.database.corpus_database import corpus_async_session_factory, dispose_corpus_engine
 from app.infrastructure.llm.factory import create_llm_client
+from scripts.common.database.corpus_repository import DEFAULT_GAME_ID, get_game_profile, list_chapters
+from scripts.database.MySQL.JP_VerbPair import terms_index_store
 
 
 logger = logging.getLogger(__name__)
@@ -167,23 +174,7 @@ class BatchExtractionResponse(BaseModel):
 # 3. 核心處理邏輯
 # ==========================================
 
-async def get_db_pool():
-    """建立 aiomysql 連線池。Create the aiomysql connection pool.
-
-    Returns:
-        aiomysql.Pool: 已設定的連線池。Configured connection pool.
-    """
-    return await aiomysql.create_pool(
-        host=settings.MYSQL_HOST,
-        port=settings.MYSQL_PORT,
-        user=settings.MYSQL_USER,
-        password=settings.MYSQL_PASSWORD,
-        db=settings.MYSQL_DATABASE,
-        charset='utf8mb4',
-        autocommit=True
-    )
-
-async def process_chapter(chapter_name: str, pool, llm_client: BaseLLMClient, limit: int, state: dict) -> bool:
+async def process_chapter(chapter_name: str, game_id: str, llm_client: BaseLLMClient, limit: int, state: dict) -> bool:
     """處理單一章節：讀取台詞、跳過已索引句、分批解析並寫入索引。
 
     Process one chapter: fetch dialogue lines, skip already-indexed
@@ -191,7 +182,7 @@ async def process_chapter(chapter_name: str, pool, llm_client: BaseLLMClient, li
 
     Args:
         chapter_name: 章節名稱。Chapter name.
-        pool: aiomysql 連線池。aiomysql connection pool.
+        game_id: 遊戲代號。Game id.
         llm_client: LLM 客戶端。LLM client instance.
         limit: API 呼叫上限（0 為不限）。API call limit (0 = unlimited).
         state: 跨章節共享的呼叫次數狀態。Shared call-count state.
@@ -203,32 +194,24 @@ async def process_chapter(chapter_name: str, pool, llm_client: BaseLLMClient, li
     print(f"\n📚 開始處理章節: {chapter_name}")
     
     # 1. 取得該章節的所有台詞
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT id, dialogue FROM scripts WHERE source = 'サノバウィッチ' AND chapter = %s AND status = '1' ORDER BY id ASC",
-                (chapter_name,)
-            )
-            rows = await cur.fetchall()
+    async with corpus_async_session_factory() as session:
+        rows = await terms_index_store.chapter_lines(session, game_id, chapter_name)
             
     if not rows:
         print(f"  ⏭️ 章節 {chapter_name} 沒有有效台詞，跳過。")
         return False
     
-    # 1.5 查詢已建索引的最大 script_id，直接從下一個 ID 開始（支援斷點續跑）
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT MAX(script_id) FROM dialogue_terms_index WHERE source = 'サノバウィッチ'"
-            )
-            result = await cur.fetchone()
-            max_indexed_id = result[0] if result and result[0] else 0
+    # 1.5 跳過已有索引列的台詞（支援斷點續跑）。原本以「已索引的最大 script_id」為起點，
+    # 台詞改依劇情順序後 id 不再單調，所以改成逐句看有沒有索引列。
+    # Skip lines that already have index rows (story order is not id order).
+    async with corpus_async_session_factory() as session:
+        indexed = await terms_index_store.indexed_line_ids(session, game_id)
     
-    if max_indexed_id > 0:
+    if indexed:
         original_count = len(rows)
-        rows = [row for row in rows if row[0] > max_indexed_id]
+        rows = [row for row in rows if row[0] not in indexed]
         skipped = original_count - len(rows)
-        print(f"  📝 該章節共有 {original_count} 句，已索引至 ID {max_indexed_id}，跳過 {skipped} 句，剩餘 {len(rows)} 句待處理。")
+        print(f"  📝 該章節共有 {original_count} 句，已有索引 {skipped} 句（跳過），剩餘 {len(rows)} 句待處理。")
     else:
         print(f"  📝 該章節共有 {len(rows)} 句有效台詞。")
     
@@ -326,41 +309,45 @@ async def process_chapter(chapter_name: str, pool, llm_client: BaseLLMClient, li
                     if term.term not in ALLOWED_GRAMMAR_SET:
                         print(f"    ⚠️ 丟棄自創文法 (幻覺): {term.term} (ID: {s_id})")
                         continue
-                    insert_data.append((s_id, 'サノバウィッチ', term.term, 'grammar', term.score, model_name))
+                    insert_data.append((s_id, term.term, 'grammar', term.score, model_name))
                     
                 # 動詞等一般單字則是 WordDetail，term 直接是字串
                 for term in item.extraction.verbs:
-                    insert_data.append((s_id, 'サノバウィッチ', term.term, 'verb', term.score, model_name))
+                    insert_data.append((s_id, term.term, 'verb', term.score, model_name))
                 for term in item.extraction.nouns:
-                    insert_data.append((s_id, 'サノバウィッチ', term.term, 'noun', term.score, model_name))
+                    insert_data.append((s_id, term.term, 'noun', term.score, model_name))
                 for term in item.extraction.adjectives_i:
-                    insert_data.append((s_id, 'サノバウィッチ', term.term, 'adjective_i', term.score, model_name))
+                    insert_data.append((s_id, term.term, 'adjective_i', term.score, model_name))
                 for term in item.extraction.adjectives_na:
-                    insert_data.append((s_id, 'サノバウィッチ', term.term, 'adjective_na', term.score, model_name))
+                    insert_data.append((s_id, term.term, 'adjective_na', term.score, model_name))
                 for term in item.extraction.adverbs:
-                    insert_data.append((s_id, 'サノバウィッチ', term.term, 'adverb', term.score, model_name))
+                    insert_data.append((s_id, term.term, 'adverb', term.score, model_name))
             
             if insert_data:
-                async with pool.acquire() as conn:
-                    async with conn.cursor() as cur:
-                        await cur.executemany(
-                            "INSERT INTO dialogue_terms_index (script_id, source, term_lemma, term_type, frequency_score, model_name) VALUES (%s, %s, %s, %s, %s, %s)",
-                            insert_data
-                        )
+                async with corpus_async_session_factory() as session:
+                    await terms_index_store.insert_terms(session, game_id, insert_data)
                 total_terms_inserted += len(insert_data)
                 
             total_processed += len(chunk)
             state["api_calls"] += 1
             
+        except SQLAlchemyError:
+            # 資料庫寫不進去時繼續跑只會白花 LLM 呼叫：記錄後中止整個腳本
+            # A DB failure would waste every further LLM call: stop.
+            print(" ❌ 寫入索引失敗，中止")
+            logger.exception("寫入 nlp_line_terms 失敗（台詞 %s），中止建置", target_ids)
+            raise
         except Exception as e:
+            # LLM 呼叫或回應解析失敗：記錄這一批的台詞後跳過，下次重跑會補上（已索引的句子會跳過）
+            # LLM or parse failure: log this chunk's line ids and move on.
             print(f" ❌ 失敗: {str(e)}")
-            logger.exception("LLM 解析或寫入失敗")
+            logger.exception("LLM 解析失敗，跳過這一批（台詞 %s）", target_ids)
             continue
             
     print(f"  🏁 章節 {chapter_name} 完成。處理 {total_processed} 句，新增 {total_terms_inserted} 個詞彙索引。")
     return False
 
-async def build_llm_index(limit: int = 0):
+async def build_llm_index(limit: int = 0, game_id: str = DEFAULT_GAME_ID):
     """主流程：初始化 LLM、清理舊索引、逐章節建置索引。
 
     Main flow: initialize the LLM client, optionally clear the old
@@ -368,6 +355,7 @@ async def build_llm_index(limit: int = 0):
 
     Args:
         limit: API 呼叫上限（0 為不限）。API call limit (0 = unlimited).
+        game_id: 遊戲代號。Game id.
     """
     print("🚀 啟動 LLM 語意解析索引建置腳本 (無上下文輕量版 + 物理級 Enum 嚴格限制)...")
     
@@ -385,35 +373,38 @@ async def build_llm_index(limit: int = 0):
     print(f"  🔹 物理級文法 Enum 限制：共載入 {len(ALLOWED_GRAMMAR)} 條嚴格句型")
     print("-" * 50)
 
-    pool = await get_db_pool()
-    
     start_time = time.time()
     try:
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                if limit == 0:
-                    print("🧹 清除舊有 [サノバウィッチ] 索引資料以防重複...")
-                    await cur.execute("DELETE FROM dialogue_terms_index WHERE source = 'サノバウィッチ'")
-                else:
-                    print("⚠️ 啟用 --limit 模式，跳過清除舊有索引 (支援接續執行)。")
-                
-                print("🔍 掃描所有有效章節...")
-                await cur.execute(
-                    "SELECT chapter FROM scripts WHERE source = 'サノバウィッチ' AND status = '1' AND chapter IS NOT NULL GROUP BY chapter ORDER BY MIN(id) ASC"
-                )
-                chapters = await cur.fetchall()
+        # 先確認遊戲存在再清任何資料（打錯 --game 不能清掉別的東西）；LookupError 會列出可用的代號
+        # Validate --game before clearing anything; the error lists valid ids.
+        try:
+            async with corpus_async_session_factory() as session:
+                await get_game_profile(session, game_id)
+        except LookupError as error:
+            print(f"❌ {error}")
+            sys.exit(1)
+
+        if limit == 0:
+            print(f"🧹 清除舊有 [{game_id}] 索引資料以防重複...")
+            async with corpus_async_session_factory() as session:
+                await terms_index_store.clear_game(session, game_id)
+        else:
+            print("⚠️ 啟用 --limit 模式，跳過清除舊有索引（已有索引的台詞會跳過，可接續執行）。")
+
+        print("🔍 掃描所有有效章節...")
+        async with corpus_async_session_factory() as session:
+            chapters = await list_chapters(session, game_id)
         
         print(f"總共找到 {len(chapters)} 個章節。")
         
         state = {"api_calls": 0}
-        for (chapter_name,) in chapters:
-            stop_early = await process_chapter(chapter_name, pool, llm_client, limit, state)
+        for chapter_name in chapters:
+            stop_early = await process_chapter(chapter_name, game_id, llm_client, limit, state)
             if stop_early:
                 break
             
     finally:
-        pool.close()
-        await pool.wait_closed()
+        await dispose_corpus_engine()
         
     elapsed = time.time() - start_time
     print(f"🎉 全部預處理完成！共花費 {elapsed:.2f} 秒。")
@@ -421,9 +412,10 @@ async def build_llm_index(limit: int = 0):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LLM 語意解析索引建置 (無上下文輕量版 + 物理級 Enum 嚴格限制)")
     parser.add_argument("--limit", type=int, default=0, help="限制本次執行的 API 呼叫次數 (0 代表全部執行)")
+    parser.add_argument("--game", default=DEFAULT_GAME_ID, help=f"要建索引的遊戲（game_profiles.game_id，預設 {DEFAULT_GAME_ID}）")
     args = parser.parse_args()
     
     logging.basicConfig(level=logging.WARNING)
     if sys.platform == 'win32':
         sys.stdout.reconfigure(encoding='utf-8')
-    asyncio.run(build_llm_index(args.limit))
+    asyncio.run(build_llm_index(args.limit, args.game))

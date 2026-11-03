@@ -4,16 +4,25 @@
 Pydantic V2 request/response models for the card-relation API.
 
 此模組定義了前端與 TG 操作卡片關聯時使用的 DTO (Data Transfer Object)。
-與 infrastructure/database/models.py 中的 Table Model 解耦，
+與資料庫層解耦（``RelationService`` 內部的 ``RelationRecord`` 與
+infrastructure/database/corpus_tables.py 的 ``rel_links_table``），
 確保 API 介面不直接暴露資料庫結構。
 
 Defines the DTOs used by the frontend and Telegram to manipulate card
-relations, decoupled from the table models in
-infrastructure/database/models.py so the API never exposes DB structure.
+relations, decoupled from the storage layer (``RelationRecord`` in
+``RelationService`` and ``rel_links_table`` in
+infrastructure/database/corpus_tables.py) so the API never exposes DB
+structure.
 
 所有 str 欄位均指定 max_length 以符合 MySQL 相容性準則。
 
 Every str field specifies max_length for MySQL compatibility.
+
+關聯存在語料庫的 ``rel_links``（docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9 的 C），但這些 DTO
+維持舊的形狀與欄位名：``relation_type`` 用對外名稱（``has_context``、``synonym``…，由
+``RelationService`` 轉成 ``core.*`` / ``user.*``），``id`` 是 ``rel_links.relation_id``。
+Relations now live in the corpus ``rel_links``; the DTOs keep their old
+shape, with public relation names and ``id`` = ``rel_links.relation_id``.
 """
 
 from datetime import datetime
@@ -46,7 +55,7 @@ class CardRelationCreate(BaseModel):
 
     source_note_id: int | None = Field(default=None)
     target_note_id: int | None = Field(default=None)
-    relation_type: str = Field(max_length=50)
+    relation_type: str = Field(min_length=1, max_length=50)
     source_label: str = Field(default="", max_length=200)
     target_label: str = Field(default="", max_length=200)
 
