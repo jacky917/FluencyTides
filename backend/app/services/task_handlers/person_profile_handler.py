@@ -2,7 +2,7 @@
 人脈卡任務處理器 (Person Profile Handler) 模組。
 
 負責 Person_Profile_Dark：網頁與 TG 建立、修改一般欄位、刪除；JSON 清單與照片經由具名動作寫入
-（計畫書 ``docs/wip/person_profile_card_FEAT_2026-10-23.md`` §3.11、§3.12）。
+（計畫書 ``docs/archive/person_profile_card_FEAT_2026-10-23.md`` §3.11、§3.12）。
 
 Person profile handler module: owns Person_Profile_Dark; JSON lists and the
 photo are written through named actions, not as plain text.

@@ -4,10 +4,11 @@
 |---|---|
 | **創建日期** | 2026-10-20 |
 | **性質** | 服務層與 API 重新設計 + 實作工作項 |
-| **狀態** | 🚧 實作完成、待部署驗收（2026-10-20：§9 第 0～8 步全部完成，各步結果見 §9；§10 的驗收要部署後在網頁、TG、本機腳本實測）。2026-10-20 已定：對照程式碼更正（§12）；本機腳本與網頁分流（D7）；清除殘骸（D8）；網頁建卡只做純手動填表（D9）；能力綁在 handler 上、以開關宣告（D2）；增刪改查都提供 `/handlers/{name}/notes/...` 版本，另保留通用的卡片查詢（D5）；`BaseHandler` 提供標準 CRUD，本次以單字卡 `TOEIC_Coach_Dark_v2` 為試點、不覆寫跑通整套流程（D10）；寫入後等同步完成（D1）；工具設定頁顯示 handler 能力（§6）；前端最後實作；口說卡網頁改欄位本次不開放（§5）；JSON 欄位改另開設計書 `json_field_editor_FEAT_2026-10-20.md`，本計畫只宣告欄位名稱（D3）；圖譜以 handler 的查詢為基礎、基底只畫單點（預設顯示 nid，可選任意欄位）、點節點開啟單張卡片，單字卡以關聯圖譜保留現有功能，本次的圖譜工作以移植現有實作為主，除單字卡外不開放任何 handler 的圖譜（D12）；媒體上傳另開設計書 `media_upload_FEAT_2026-10-20.md`；web_ui_parity 階段 A2（三頁版面統一與共用元件抽取）併入本計畫（D13）。§13 只剩之後再決定、不擋本計畫的事 |
+| **狀態** | ✅ 完成（2026-10-31 隨 PR #32 合併，2026-11-03 歸檔）。§9 第 0～8 步全部完成；2026-10-20 部署 `6190e15` 後的實測見 §10。§10 未勾選的項目沒有逐項實測，但之後的人脈卡（`person_profile_card_FEAT_2026-10-23.md`）、JSON 欄位表單編輯、三語卡網頁建卡都建在本計畫的服務層與 API 上，並已部署使用。§13 留下的事移到 `docs/wip/backlog.md` §4 |
 | **範圍** | 新增 `backend/app/services/note_service.py`（單一服務層）；`backend/app/services/task_handlers/`（能力宣告、標準 CRUD、建立參數、註冊表、`__init__.py` 統一註冊）；`backend/app/api/handlers.py`（重寫）、新增 `backend/app/api/notes.py`、`backend/app/schemas/`、`backend/app/main.py`（掛新路由、移除 example 路由）；`backend/app/core/dependencies.py`、`backend/app/bot/dependencies.py`（注入服務層）；`backend/app/services/relation_service.py`（改名稱時同步更新關聯的兩端標籤，D12）；TG 呼叫 handler 的 5 處改呼叫服務層（§7）；殘骸清除（D8）；`frontend/src/api/client.ts`、`types/api.ts`、`CardGenerator.tsx`、`CardDetailModal.tsx`、`KnowledgeGraph.tsx`、`ToolSettings.tsx`、`lib/cardFields.ts`、`components/cards/`（`DeckPanel`、`CardViewPanel`）；三頁版面統一與共用元件抽取（D13）：`pages/Cards.tsx`、`lib/cardLayout.ts`、`hooks/usePanelWidths.ts`、`components/cards/panelStyles.ts`、`ErrorNote.tsx` 移到共用位置 |
 | **不動** | 有覆寫的 handler 內部邏輯（口說卡的建卡與 JSON 動作、外語糾錯的建卡、jp 的 `execute_generate`）；TG 的對話流程與文字；`speaking_fsm.py` 自己組對話卡的做法（屬 web_ui_parity 階段 E）；`expression_fsm.py` 預覽用的 `execute_generate`（不寫 Anki）與「覆蓋舊卡」時的刪除（§7）；**本機批次腳本走的整條路**（D7）：`POST /verb-pair/generate-child-cards`、`POST /core-verb/generate-child-cards` 的路徑、請求、回應、驗證方式；`/jp/*`；直接呼叫 handler 或 AnkiConnect 的本機腳本；`GET /cards`、`GET /cards/{card_id}`、`/anki-media`、`/relations/*`、`/capability-routes` |
-| **關聯文件** | `docs/wip/web_ui_parity_FEAT_2026-10-18.md` §7（問題 H1–H11 的盤點）、§4 階段 A2（已併入本計畫 D13）、§5 決策 5（`ValueError` 改 4xx，屬階段 B）；`docs/wip/json_field_editor_FEAT_2026-10-20.md`（JSON 欄位的表單編輯）、`docs/wip/media_upload_FEAT_2026-10-20.md`（網頁上傳媒體），兩者都排在本計畫之後 |
+| **PR / 進度** | [#32](https://github.com/jacky917/FluencyTides/pull/32)（`feat/person-profile`，2026-10-31 合併，merge `a1f6ea0`）。本計畫的 commit 原在 `feat/handlers-api-redesign`，併入 `feat/person-profile` 後隨人脈卡一起合併，沒有單獨的 PR |
+| **關聯文件** | `docs/archive/web_ui_parity_FEAT_2026-10-18.md` §7（問題 H1–H11 的盤點）、§4 階段 A2（已併入本計畫 D13）、§5 決策 5（`ValueError` 改 4xx，屬階段 B）；`docs/archive/json_field_editor_FEAT_2026-10-20.md`（JSON 欄位的表單編輯）、`docs/wip/media_upload_FEAT_2026-10-20.md`（網頁上傳媒體），兩者都排在本計畫之後 |
 
 ---
 
@@ -962,7 +963,9 @@ cd frontend && npm run lint && npm test && npm run build
 
 ## 10. 驗收
 
-- [ ] `GET /handlers` 回傳 6 個 handler 的能力，與 §5 一致（沒有 `verb_pair_example`、舊版 TOEIC、`Default`、`Speaking_Coach_Light`）
+2026-10-20 以 `./deploy_remote.sh all --ref HEAD` 部署 `6190e15`（前後端，35 秒；回滾點後端 `pre-b10012b`、前端 `pre-dac7670`）。下面打勾的是部署後已在正式站或本機實測的項目；其餘要寫入 Anki、TG 或花 LLM 費用，由使用者實測。
+
+- [x] `GET /handlers` 回傳 6 個 handler 的能力，與 §5 一致（沒有 `verb_pair_example`、舊版 TOEIC、`Default`、`Speaking_Coach_Light`）——正式站經前端 nginx 轉發實測；單字卡 `create_schema` 必填 `Expression`
 - [ ] 工具設定頁的「Handler 能力」區塊與 `GET /handlers` 一致，不開放的項目顯示原因
 - [ ] 三頁版面（D13）：Cards 改用共用元件後畫面與行為不變；Generate、Graph 左側是牌組樹，牌組只由它決定；三頁各自記住面板寬度與選取的牌組；窄螢幕時疊成一欄
 - [ ] Graph 全螢幕：圖佔滿整個螢幕（瀏覽器介面也隱藏），點節點的卡片詳情與「選擇關聯類型」視窗在全螢幕中看得到，Esc 退出
@@ -970,12 +973,19 @@ cd frontend && npm run lint && npm test && npm run build
   - Generate 頁：單字卡可選，其他依 §6 反灰或不顯示；表單欄位與 Anki 裡 `_v2` 的欄位一致；`Expression` 空白時無法送出；建出的卡在左側所選牌組、筆記類型為 `_v2`；重複的單字回「已有相同卡片」；建立後 AnkiWeb 上看得到（證明有同步）
   - Cards 頁：單字卡可讀、可改欄位、可刪除；刪除後關聯一併消失；改與刪都同步到 AnkiWeb
 - [ ] Cards 頁：其他筆記依 §5 顯示唯讀或不可刪除與原因（jp 類顯示刪除工具路徑；沒有 handler 的筆記顯示「沒有 handler 負責」）
-- [ ] 對 `jp_verb_pair` 呼叫建立回 400 並帶原因，不再回「建立成功」
+- [x] 對 `jp_verb_pair` 呼叫建立回 400 並帶原因，不再回「建立成功」——正式站回 `HANDLER_OPERATION_UNSUPPORTED`「子卡由本機批次腳本 generate_child_cards.py 產生」
 - [ ] Knowledge Graph：單字卡的圖譜照常顯示（連線、顏色、幽靈節點），牌組選「全部」時正常；滑鼠移到單字節點上會顯示翻譯（現在是空的）；點節點打開那張卡的詳情；在 Cards 頁改了某張單字卡的 `Expression` 後，圖譜上的節點跟著改名、連線不斷
 - [ ] **本機腳本**（部署後，在本機以平常的 `.env` 執行）：
-  - `JP_VerbPair/generate_child_cards.py --limit 0 --dry-run` 與 `JP_CoreVerb/generate_child_cards.py --limit 0 --dry-run` 正常跑完，預計數量與部署前相同（部署前先各跑一次記下數量）
+  - [x] `JP_VerbPair/generate_child_cards.py --limit 0 --dry-run` 與 `JP_CoreVerb/generate_child_cards.py --limit 0 --dry-run` 正常跑完，預計數量與部署前相同（部署前先各跑一次記下數量）——部署前後都是自他動詞 1450 張、核心動詞 1168 張；正式站 OpenAPI 仍有兩個 `generate-child-cards` 端點
   - 兩支各以 `--limit 1` 實跑一次：子卡建出、母卡 JSON 已回寫、語音與頭像已上傳、生成紀錄有寫入（會花一次 LLM 費用）
 - [ ] TG：建單字卡**能成功**（`_v2`、只有單字）、外語糾錯（含覆蓋舊卡）、錄音評分、上傳音檔（一般對話卡與三語卡各一次，含自訂頭像）都正常，同步提醒照舊出現
+
+部署後的其他實測紀錄（正式站，唯讀）：
+
+- `GET /handlers/vocabulary_mining/graph`：799 個節點全部有翻譯（副標）；連線 0 條——正式站的關聯表本來就是空的（`/relations/types` 為 `[]`，舊的 `/relations/graph` 同樣 0 條），不是這次造成的。因此「連線不斷」這一項要等有關聯資料後才看得到。
+- `GET /notes/{單字卡}`：`handler` 為 `vocabulary_mining`，改、刪都允許；`GET /handlers/vocabulary_mining/notes/{id}`、`GET /decks` 回 200。
+- 舊路徑 `/handlers/decks`、`/handlers/cards/{id}` 回 404。
+- 後端啟動後 log 沒有錯誤。
 
 ## 11. 風險
 
@@ -1020,6 +1030,8 @@ cd frontend && npm run lint && npm test && npm run build
 | 22 | 只有建卡能力，前端無法分辨「不能建」與「要在別處建」 | 新增 `create.channels` | D2、§6 |
 
 ## 13. 待決事項
+
+> 2026-11-03 歸檔：下表各項經查在 main 上都還存在，已移到 `docs/wip/backlog.md` §4（H1～H8），之後以 backlog 為準。
 
 **之後再決定的事（不擋本計畫）**
 

@@ -1,6 +1,6 @@
 # 卡片頁的欄位搜尋（handler field search）
 
-日期：2026-10-25　分支：`feat/person-profile`　狀態：S1 實作完成（先開放給人脈卡）
+日期：2026-10-25　分支：`feat/person-profile`　狀態：✅ S1 完成（人脈卡 `0a9127a`、`2053721`；三語卡與標籤條件隨 `trilingual_search_tags` 的 `1a5472c` 開放），2026-10-31 隨 [PR #32](https://github.com/jacky917/FluencyTides/pull/32) 合併（merge `a1f6ea0`），2026-11-03 歸檔。§4 的 S2、S3 移到 `docs/wip/backlog.md` §5
 
 ## 1. 目的
 
@@ -47,7 +47,7 @@
 |---|---|
 | S2 | 短值欄位（關係、公司）列出出現過的值，點一下就選 |
 | S3 | 後端讀資料再篩選：指定互動的地點、很久沒聯絡等 |
-| — | 其他 handler 逐一確認欄位按鈕後開放 |
+| — | 其他 handler 逐一確認欄位按鈕後開放（2026-10-30 三語卡已開放，見 `trilingual_search_tags_FEAT_2026-10-30.md` §4.1） |
 
 ## 5. 驗收
 

@@ -3,7 +3,7 @@
 Familiarity (0–9) of trilingual speaking-card reference answers.
 
 每句參考答案（``References_{ZH,JA,EN}`` 的一筆）可以帶 ``familiarity``：整數 0–9，0＝最正式（正式場合、
-對重要的人），9＝最親密、最隨意；省略表示未標。計畫書：``docs/wip/trilingual_familiarity_FEAT_2026-10-30.md``。
+對重要的人），9＝最親密、最隨意；省略表示未標。計畫書：``docs/archive/trilingual_familiarity_FEAT_2026-10-30.md``。
 
 判斷規則（後端與卡片背面 ``Speaking_Trilingual_Dark_back.html`` 的 ``readFamiliarity`` 相同，
 ``tests/test_trilingual_familiarity.py`` 以同一張表驗證兩邊）：

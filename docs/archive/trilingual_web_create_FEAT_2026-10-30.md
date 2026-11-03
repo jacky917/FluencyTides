@@ -1,6 +1,7 @@
 # 三語對話卡：網頁建卡（LLM 生成說法）
 
 日期：2026-10-30　分支：`feat/person-profile`　卡片：`Speaking_Trilingual_Dark`　handler：`speaking_trilingual`
+狀態：✅ 完成（計畫書 `12284f6`；實作 `c0b77cf`；建卡參數上限 `c5191cb`；建卡頁的折疊與保留草稿 `5b8e246`、`08650c4`、`d98d2d5`、`8421214`），2026-10-31 隨 [PR #32](https://github.com/jacky917/FluencyTides/pull/32) 合併（merge `a1f6ea0`），2026-11-03 歸檔。§4 記錄了實測時發現並已改進的提示詞問題；§8 範圍外的項目移到 `docs/wip/backlog.md` §5
 
 ## 1. 目的
 

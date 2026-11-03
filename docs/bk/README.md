@@ -42,7 +42,7 @@
 1. ~~**F001** `GET /cards/models` 必然 500 —— `list_available_models` 方法定義遭破壞（[card_service.py:488](../backend/app/services/card_service.py)）~~ ✅ **已修復（2026-07-08）**，見 [10_Implementation_Log.md](10_Implementation_Log.md)
 2. ~~**F002** `/sync` 在 Anki 空集合時會**清空整個關聯資料表**，且該資料無法重建~~ ✅ **已修復（2026-07-09，第二輪）**，見 [11_Implementation_Log.md](11_Implementation_Log.md)
 
-> **更正（2026-10-19）**：查證程式與 git 歷史，這個防護與 `test_relation_sync.py` 從未存在；實際修正見 `docs/wip/relation_sync_and_search_escape_FIX_2026-10-19.md`（空清單拒絕、比例防護、只處理掃描開始前建立的關聯）。
+> **更正（2026-10-19）**：查證程式與 git 歷史，這個防護與 `test_relation_sync.py` 從未存在；實際修正見 `docs/archive/relation_sync_and_search_escape_FIX_2026-10-19.md`（空清單拒絕、比例防護、只處理掃描開始前建立的關聯）。
 
 3. ~~**F003 + F012** SQLite 預設路徑不在掛載卷內，**每次自動部署都會清空資料庫**~~ ✅ **已修復（2026-07-09，第二輪）**，見 [11_Implementation_Log.md](11_Implementation_Log.md)
 4. ~~**F004 + F005** 認證全面 fail-open：密鑰未設定時 API 與 Telegram Webhook 完全開放~~ ✅ **已修復（2026-07-09，第二輪）**，見 [11_Implementation_Log.md](11_Implementation_Log.md)

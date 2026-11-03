@@ -2,7 +2,7 @@
 
 Create parameters and JSON field item formats of the person profile card.
 
-欄位的意義與顯示見 ``docs/wip/person_profile_card_FEAT_2026-10-23.md`` §3.2、§3.3。所有日期都是
+欄位的意義與顯示見 ``docs/archive/person_profile_card_FEAT_2026-10-23.md`` §3.2、§3.3。所有日期都是
 ``YYYY-MM-DD`` 文字（字典序就是時間序，也能在 Anki 搜尋）；生日不知年份時寫 ``--MM-DD``。
 JSON 項目的模型都允許多餘的鍵（``extra="allow"``）：既有資料若有模型沒列出的鍵，讀進來、存回去
 都原樣保留。
