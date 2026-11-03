@@ -5,6 +5,7 @@ Generic note read and the deck list.
 
 - ``GET /notes/{note_id}``   任何筆記類型：欄位、負責的 handler、能不能改或刪（``permissions``）
 - ``GET /decks``             所有牌組（原本的 ``/handlers/decks``）
+- ``POST /anki/sync``        Anki 與 AnkiWeb 同步（牌組樹的重新整理按鈕先呼叫它再重抓牌組）
 
 不經 handler；前端從 ``GET /notes/{note_id}`` 拿到 ``handler`` 後，再組 ``/handlers/{name}/notes/...``
 的網址。認證與其他 API 相同（``verify_api_key``）。
@@ -13,7 +14,7 @@ Not routed through a handler; the frontend reads ``handler`` here and then
 builds the ``/handlers/{name}/notes/...`` URLs.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response, status
 
 from app.core.auth import verify_api_key
 from app.core.dependencies import get_anki_client, get_note_service
@@ -51,3 +52,24 @@ async def list_decks(anki_client: AnkiClient = Depends(get_anki_client)) -> list
     """所有牌組的名稱與 ID。Every deck's name and ID."""
     decks = await anki_client.get_deck_names_and_ids()
     return [{"deck_name": name, "deck_id": deck_id} for name, deck_id in decks.items()]
+
+
+@router.post(
+    "/anki/sync",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    tags=["Decks"],
+    summary="Anki 與 AnkiWeb 同步",
+    responses={502: {"model": ErrorResponse, "description": "AnkiConnect 連不上，或與 AnkiWeb 同步失敗（含同步衝突）"}},
+)
+async def sync_anki(anki_client: AnkiClient = Depends(get_anki_client)) -> Response:
+    """立即同步並等它完成；略過 10 秒防抖，失敗時回 502（不吞錯）。
+
+    Sync Anki with AnkiWeb now and wait for it; bypasses the debounce and
+    reports failures as 502 instead of swallowing them.
+
+    Raises:
+        AnkiConnectError: 502——連不上 Anki 或同步失敗。Anki unreachable or the sync failed.
+    """
+    await anki_client.sync(raise_errors=True, force=True)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

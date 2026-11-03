@@ -1,8 +1,10 @@
 import { useMemo, useRef } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, FolderTree, RefreshCw } from 'lucide-react'
+import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../../api/client'
 import { useRevealSelected } from '../../hooks/useRevealSelected'
+import { describeApiError, isBackendError } from '../../lib/apiError'
 import { buildDeckTree, deckAncestors, type DeckNode } from '../../lib/deckTree'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
@@ -10,6 +12,12 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/colla
 import { Skeleton } from '../ui/skeleton'
 import { ErrorNote } from './ErrorNote'
 import { Panel } from './Panel'
+
+/**
+ * 與 AnkiWeb 同步可能帶回別處的新卡片與標籤，牌組以外這些來自 Anki 的清單也要重抓（在背景，不等）。
+ * Other Anki-backed queries refetched in the background after a sync.
+ */
+const OTHER_SYNCED_KEYS = [['cards'], ['card-view'], ['tags'], ['graph']]
 
 /**
  * 牌組樹面板（Anki 牌組名以 `::` 分層，可展開），Cards、Generate、Graph 三頁共用。展開狀態由
@@ -35,10 +43,32 @@ export function DeckTreePanel({
   selected: string | null
   onSelect: (deck: string | null) => void
 }) {
-  const { data, isPending, isError, error, refetch, isFetching } = useQuery({
+  const { data, isPending, isError, error, isFetching } = useQuery({
     queryKey: ['decks'],
     queryFn: FluencyTidesAPI.listDecks,
   })
+  const queryClient = useQueryClient()
+  // 重新整理：先讓 Anki 與 AnkiWeb 同步（例如手機上新增的牌組），不論成敗都再重抓牌組；
+  // 同步失敗時清單仍是本機收藏的內容，另以 toast 說明。mutationFn 等同步與牌組重抓都完成才結束，
+  // 圖示轉到那時才停。
+  const refresh = useMutation({
+    mutationFn: async () => {
+      let syncError: unknown = null
+      try {
+        await FluencyTidesAPI.syncAnki()
+      } catch (err) {
+        syncError = err
+      }
+      for (const queryKey of OTHER_SYNCED_KEYS) queryClient.invalidateQueries({ queryKey })
+      await queryClient.invalidateQueries({ queryKey: ['decks'] })
+      if (syncError) throw syncError
+    },
+    onError: (err) => {
+      if (!isBackendError(err)) console.error('[DeckTreePanel] 與 AnkiWeb 同步失敗', err)
+      toast.error('與 AnkiWeb 同步失敗', { description: `${describeApiError(err).message}（牌組為本機 Anki 的內容）` })
+    },
+  })
+  const busy = refresh.isPending || isFetching
   const tree = useMemo(() => buildDeckTree((data ?? []).map((item) => item.deck_name)), [data])
   // 使用者手動切換過的節點以手動為準；沒動過的，目前選取牌組的上層預設展開
   const ancestors = useMemo(() => new Set(selected ? deckAncestors(selected).slice(0, -1) : []), [selected])
@@ -58,8 +88,15 @@ export function DeckTreePanel({
         </>
       }
       actions={
-        <Button variant="ghost" size="icon" onClick={() => refetch()} disabled={isFetching} aria-label="重新整理牌組">
-          <RefreshCw className={cn('h-4 w-4', isFetching && 'animate-spin')} />
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => refresh.mutate()}
+          disabled={busy}
+          aria-label={refresh.isPending ? '正在與 AnkiWeb 同步' : '與 AnkiWeb 同步並重新整理牌組'}
+          title="與 AnkiWeb 同步並重新整理牌組"
+        >
+          <RefreshCw className={cn('h-4 w-4', busy && 'animate-spin')} />
         </Button>
       }
       contentClassName="text-sm"
