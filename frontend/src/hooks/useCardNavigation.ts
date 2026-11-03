@@ -40,6 +40,11 @@ interface JumpState {
   jumpFrom?: number
 }
 
+/** 打開建卡畫面時放進瀏覽器歷史的狀態：上一筆就是原本的卡片。History state of the create form. */
+interface CreateState {
+  createOpened?: boolean
+}
+
 /** react-router 在瀏覽器歷史裡記的位置（`history.state.idx`）。The history index react-router keeps. */
 const historyIndex = (): unknown => (window.history.state as { idx?: unknown } | null)?.idx
 
@@ -47,7 +52,9 @@ const historyIndex = (): unknown => (window.history.state as { idx?: unknown } |
  * 卡片瀏覽頁的導覽：狀態都在網址（見 `lib/cardBrowse.ts`），這裡提供讀取與各種改變的方式。
  * Navigation of the card browsing page; all state lives in the URL.
  *
- * - 選牌組、搜尋、換頁、從清單選卡：清空跳轉紀錄。
+ * - 選牌組、搜尋、換頁、從清單選卡：清空跳轉紀錄；選牌組、搜尋、選卡也退出建卡畫面（`new`）。
+ * - 建卡畫面（`openCreate`、`closeCreate`）：打開時新增一筆歷史，上一頁就退出；建卡成功後
+ *   `showCreated` 切到新卡片（使用者已經離開建卡畫面時不切）。
  * - 卡面按鈕打開其他筆記（`openNotes`）：查出卡片後切換過去，記下目前這張並新增一筆瀏覽器歷史，
  *   所以「返回」與瀏覽器的上一頁都能回來。查詢期間網址若變了（使用者另選了卡片），結果作廢。
  * - 翻面：取代目前的歷史並保留跳轉狀態，翻面後「返回」仍能直接退回上一頁。
@@ -70,9 +77,17 @@ export function useCardNavigation() {
   const latestParams = useRef(params.toString())
   const jumping = useRef(false)
   const backFrom = useRef<string | null>(null)
+  // 建卡在背景完成時，使用者可能已經離開這頁：卸載後不再導覽
+  const mounted = useRef(true)
   useEffect(() => {
     latestParams.current = params.toString()
   })
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
 
   // 記住瀏覽位置。進來時網址沒有參數就恢復上次的位置；恢復完成（網址變成記下的那一串）之前
   // 不覆寫記錄，否則第一次渲染的空網址會先把記錄清掉。只在這個分頁的位置改變時寫入、不跟著
@@ -158,6 +173,62 @@ export function useCardNavigation() {
   }
 
   /**
+   * 打開建卡表單（右欄）：新增一筆瀏覽器歷史，上一頁就回到原本的卡片；`card`、`trail` 保留。
+   * 不帶跳轉狀態（`jumpFrom`）：這筆歷史的上一筆是同一張卡片，帶過來的話「返回」會誤以為上一筆
+   * 就是跳轉前的卡片。
+   * Opens the create form in a new history entry, keeping the current card but
+   * not the jump state (the previous entry is the same card).
+   */
+  const openCreate = () => {
+    if (state.creating) return
+    const opened: CreateState = { createOpened: true }
+    update({ new: '1' }, { state: opened })
+  }
+
+  /**
+   * 關閉建卡表單，回到原本看的卡片：由 `openCreate` 打開的直接退回上一筆歷史（就是原本的卡片），
+   * 否則（重新整理或從連結打開）移除 `new`、取代目前這筆。
+   * Closes the create form, going back when `openCreate` opened it.
+   */
+  const closeCreate = () => {
+    if (!state.creating) return
+    if ((location.state as CreateState | null)?.createOpened) navigate(-1)
+    else update({ new: null }, { replace: true })
+  }
+
+  /**
+   * 建卡成功後顯示新筆記的卡片：只在使用者還停在同一個建卡畫面（網址沒變）時切換，已經離開或改看
+   * 別的卡片就不打擾。取代目前這筆歷史，上一頁不會回到已經送出的表單。
+   * Shows the new note's card after creating, only if the user is still on the
+   * same create form; replaces the history entry.
+   * @param noteIds - 建立的筆記 ID。The created note IDs.
+   */
+  const showCreated = async (noteIds: number[]) => {
+    if (noteIds.length === 0 || !mounted.current) return
+    const startedAt = latestParams.current
+    if (new URLSearchParams(startedAt).get('new') !== '1') return
+    const search = `nid:${noteIds.join(',')}`
+    try {
+      const result = await queryClient.fetchQuery({
+        queryKey: ['note-cards', noteIds.join(',')],
+        queryFn: () => FluencyTidesAPI.browseCards({ q: search, pageSize: BROWSE_PAGE_SIZE }),
+        retry: retryTransient,
+      })
+      if (!mounted.current || latestParams.current !== startedAt) return
+      const target = pickNoteCard(result.cards, noteIds)
+      if (target === null) {
+        toast.error('找不到新卡片', { description: `可在清單搜尋 ${search} 確認。` })
+        return
+      }
+      update({ new: null, card: String(target), trail: null, side: null }, { replace: true })
+    } catch (error) {
+      if (mounted.current && latestParams.current === startedAt) {
+        toast.error('卡片已建立，但無法打開', { description: `${describeApiError(error).message}。可在清單搜尋 ${search} 找到它。` })
+      }
+    }
+  }
+
+  /**
    * 回到跳轉前的卡片：上一筆瀏覽器歷史就是跳轉前的狀態時直接返回（前進也能用），否則（例如
    * 重新整理或從連結打開）改網址。
    * Goes back to the card before the last jump.
@@ -185,16 +256,22 @@ export function useCardNavigation() {
   return {
     ...state,
     arrivedBack: arrival.key === location.key && arrival.back,
-    selectDeck: (deck: string | null) => update({ deck, page: null, card: null, trail: null }),
-    submitSearch: (q: string) => update({ q, page: null, card: null, trail: null }),
+    // 選牌組、搜尋、從清單選卡代表要看卡片：一併退出建卡畫面（換頁、翻面不退出）
+    selectDeck: (deck: string | null) => update({ deck, page: null, card: null, trail: null, new: null }),
+    submitSearch: (q: string) => update({ q, page: null, card: null, trail: null, new: null }),
     setPage: (page: number) => update({ page: page > 1 ? String(page) : null }),
     // 點目前這張卡片不算換卡，保留正反面
     selectCard: (id: number) =>
-      id === cardId ? update({ card: String(id), trail: null }) : switchCard({ card: String(id), trail: null }),
+      id === cardId
+        ? update({ card: String(id), trail: null, new: null })
+        : switchCard({ card: String(id), trail: null, new: null }),
     clearCard: () => update({ card: null, trail: null }),
     setSide: (side: CardSide) =>
       update({ side: side === 'answer' ? side : null }, { replace: true, state: location.state }),
     openNotes,
     goBack,
+    openCreate,
+    closeCreate,
+    showCreated,
   }
 }
