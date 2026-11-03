@@ -83,6 +83,22 @@ export function CardListPanel({
     onSearch(draft.trim())
   }
 
+  // 觸控時輸入框 16px 字（iOS Safari 聚焦小於 16px 的輸入框會放大整頁），按鈕跟著加高
+  const ankiSearch = (
+    <form onSubmit={submit} className="flex gap-2">
+      <Input
+        value={draft}
+        onChange={(e) => onDraft(e.target.value)}
+        placeholder="Anki 搜尋，例如 note:Speaking_Coach_Dark"
+        aria-label="Anki 搜尋"
+        className="pointer-coarse:text-base"
+      />
+      <Button type="submit" size="icon" variant="outline" className="shrink-0" aria-label="搜尋">
+        <Search className="h-4 w-4" />
+      </Button>
+    </form>
+  )
+
   return (
     <Card ref={panelRef} className={panelScrollClass(scrollable)}>
       <CardHeader className={cn('pb-2 space-y-3', scrollable && STICKY_HEADER)}>
@@ -114,23 +130,18 @@ export function CardListPanel({
             }}
           />
         )}
-        {/* 用欄位搜尋時 Anki 語法收起來（展開可看、可改組好的查詢）；沒用時照常展開 */}
-        <details key={String(fieldSearchOn)} open={!fieldSearchOn} className="group">
-          {fieldSearchOn && (
-            <summary className="cursor-pointer select-none text-xs text-muted-foreground">進階：Anki 語法</summary>
-          )}
-          <form onSubmit={submit} className={cn('flex gap-2', fieldSearchOn && 'mt-2')}>
-            <Input
-              value={draft}
-              onChange={(e) => onDraft(e.target.value)}
-              placeholder="Anki 搜尋，例如 note:Speaking_Coach_Dark"
-              aria-label="Anki 搜尋"
-            />
-            <Button type="submit" size="icon" variant="outline" aria-label="搜尋">
-              <Search className="h-4 w-4" />
-            </Button>
-          </form>
-        </details>
+        {/* 用欄位搜尋時 Anki 語法收起來（展開可看、可改組好的查詢）；沒用時直接顯示。沒有 summary 的
+            details 會出現瀏覽器預設的「Details」，所以沒用欄位搜尋時不包 details */}
+        {fieldSearchOn ? (
+          <details className="group">
+            <summary className="cursor-pointer select-none text-xs text-muted-foreground pointer-coarse:py-1.5">
+              進階：Anki 語法
+            </summary>
+            <div className="mt-2">{ankiSearch}</div>
+          </details>
+        ) : (
+          ankiSearch
+        )}
         {data && (
           <p className="text-xs text-muted-foreground">
             共 {data.total} 張{isFetching && '，更新中…'}
