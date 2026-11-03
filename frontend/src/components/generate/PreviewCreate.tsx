@@ -1,6 +1,6 @@
 /**
- * Card Generator 的預覽流程（`create.flow="preview"`）：以 `draft_schema` 的表單請 LLM 生成草稿 → 預覽、
- * 勾選 → 建立或廢棄（計畫書 `docs/archive/trilingual_web_create_FEAT_2026-10-30.md` §3）。
+ * 建卡表單的預覽流程（`create.flow="preview"`，Card Generator 與卡片瀏覽頁共用）：以 `draft_schema` 的表單
+ * 請 LLM 生成草稿 → 預覽、勾選 → 建立或廢棄（計畫書 `docs/archive/trilingual_web_create_FEAT_2026-10-30.md` §3）。
  *
  * 草稿不存在後端：輸入與草稿（含勾選、修改過的情境）存在這個分頁的 sessionStorage（`useSessionStorage`），
  * 切換頁面、重新整理都還在；生成中離開頁面，結果回來時照樣存下。建立時把勾選的內容送到一般的建卡端點，
@@ -15,6 +15,7 @@ import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-quer
 import { Eraser, Loader2, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../../api/client'
+import { useCreatedNotice } from '../../hooks/useCreatedNotice'
 import { removeStored, useSessionStorage, writeStored } from '../../hooks/useStoredState'
 import { describeApiError, failureTitle, isBackendError } from '../../lib/apiError'
 import { formErrorsFrom, initialValues, missingRequired, schemaFields, type FormErrors } from '../../lib/createForm'
@@ -51,16 +52,20 @@ interface DraftState {
  * @param props.handler - 預覽流程的 handler。The handler.
  * @param props.selectedDeck - 牌組樹選的牌組。The deck picked in the tree.
  * @param props.deckStatus - 牌組樹所選牌組的狀態（見 `useDeckStatus`）。The selected deck's status.
+ * @param props.onViewCreated - 建立成功的提示上「查看新卡片」按下時；省略時提示改顯示到 Cards 頁的連結。
+ *   Views a created note from the success notice.
  * @returns 建卡畫面 JSX。The create screen JSX.
  */
 export function PreviewCreate({
   handler,
   selectedDeck,
   deckStatus,
+  onViewCreated,
 }: {
   handler: HandlerInfo
   selectedDeck: string | null
   deckStatus: DeckStatus
+  onViewCreated?: (result: CreateNoteResponse) => void
 }) {
   const formId = useId()
   const queryClient = useQueryClient()
@@ -77,7 +82,7 @@ export function PreviewCreate({
   const [inputErrors, setInputErrors] = useState<FormErrors | null>(null)
   const [state, setState] = useSessionStorage<DraftState | null>(draftKey, null)
   const [createError, setCreateError] = useState<string | null>(null)
-  const [result, setResult] = useState<CreateNoteResponse | null>(null)
+  const [result, setResult] = useCreatedNotice(handler.name, onViewCreated !== undefined)
 
   const fixedDeck = create.deck === 'fixed' ? create.fixed_deck : null
   const deck = fixedDeck ?? (deckStatus === 'ok' ? selectedDeck : null)
@@ -99,7 +104,7 @@ export function PreviewCreate({
         context: draft.context,
         tags: data.suggested_tags.map((item) => item.tag),
       })
-      toast.success('三語草稿已生成', { description: '在 Card Generator 勾選後建立' })
+      toast.success('三語草稿已生成', { description: '回到建卡表單勾選後建立' })
       setInputErrors(null)
       setCreateError(null)
       setResult(null)
@@ -283,7 +288,7 @@ export function PreviewCreate({
           LLM 正在寫三種語言的說法，通常要半分鐘到一分鐘。可以先去別頁，生成好會通知，回來就看得到。
         </p>
       )}
-      {result && <CreatedNotice result={result} />}
+      {result && <CreatedNotice result={result} onView={onViewCreated && (() => onViewCreated(result))} />}
     </form>
   )
 }

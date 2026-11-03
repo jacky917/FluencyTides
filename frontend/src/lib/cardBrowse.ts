@@ -23,6 +23,11 @@ export interface BrowseParams {
    * Cards visited before jumping here via a card-face button, oldest first.
    */
   trail: number[]
+  /**
+   * 右欄顯示建卡表單（`new=1`）；`card`、`trail` 保留，退出時回到原本看的卡片。
+   * Whether the right column shows the create form; the card is kept for when it closes.
+   */
+  creating: boolean
 }
 
 /** 卡面的正面或背面。A card face. */
@@ -57,6 +62,7 @@ export function parseBrowseParams(params: URLSearchParams): BrowseParams {
     cardId: positiveInt(params.get('card')),
     side: params.get('side') === 'answer' ? 'answer' : 'question',
     trail: parseTrail(params.get('trail')),
+    creating: params.get('new') === '1',
   }
 }
 
@@ -105,7 +111,7 @@ export function pickNoteCard(cards: { card_id: number; note_id: number; ord: num
 
 /**
  * 要記下來的瀏覽位置（下次從側邊欄回到這頁時恢復）：牌組、搜尋、頁碼、選取的卡片與正反面；
- * 跳轉紀錄只對這一輪瀏覽有意義，不記。參數依固定順序排列，同樣的位置得到同樣的字串。
+ * 跳轉紀錄與建卡畫面（`new`）只對這一輪瀏覽有意義，不記。參數依固定順序排列，同樣的位置得到同樣的字串。
  * The browse position to remember, without the jump trail, in a stable order.
  * @param params - 目前的網址參數。The URL parameters.
  * @returns 參數字串（沒有位置時為空字串）。The query string, or ''.

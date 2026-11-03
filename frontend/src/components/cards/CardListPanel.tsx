@@ -1,6 +1,6 @@
 import { useRef, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Search } from 'lucide-react'
+import { Plus, Search } from 'lucide-react'
 import { FluencyTidesAPI } from '../../api/client'
 import { useRevealSelected } from '../../hooks/useRevealSelected'
 import { retryTransient } from '../../lib/apiError'
@@ -34,10 +34,15 @@ interface CardListPanelProps {
   onSearch: (q: string) => void
   onPage: (page: number) => void
   onSelect: (cardId: number) => void
+  /** 右欄是否正在顯示建卡表單（「＋」顯示為按下）。Whether the create form is open. */
+  creating: boolean
+  /** 按「＋」：打開或關閉建卡表單。Toggles the create form. */
+  onToggleCreate: () => void
 }
 
 /**
- * 卡片清單面板（含 Anki 搜尋與分頁）。每張顯示完整文字，放不下兩行時才由 CSS 截斷。
+ * 卡片清單面板（含 Anki 搜尋與分頁）。每張顯示完整文字，放不下兩行時才由 CSS 截斷。標題列右側的「＋」
+ * 在右欄打開建卡表單（`docs/wip/card_list_create_FEAT_2026-10-30.md` D6）。
  * The card list panel with Anki search and paging.
  * @returns 面板 JSX。Panel JSX.
  */
@@ -54,6 +59,8 @@ export function CardListPanel({
   onSearch,
   onPage,
   onSelect,
+  creating,
+  onToggleCreate,
 }: CardListPanelProps) {
   const { data, isPending, isError, error, isFetching } = useQuery({
     queryKey: ['cards', deck, search, page],
@@ -76,10 +83,42 @@ export function CardListPanel({
     onSearch(draft.trim())
   }
 
+  // 觸控時輸入框 16px 字（iOS Safari 聚焦小於 16px 的輸入框會放大整頁），按鈕跟著加高
+  const ankiSearch = (
+    <form onSubmit={submit} className="flex gap-2">
+      <Input
+        value={draft}
+        onChange={(e) => onDraft(e.target.value)}
+        placeholder="Anki 搜尋，例如 note:Speaking_Coach_Dark"
+        aria-label="Anki 搜尋"
+        className="pointer-coarse:text-base"
+      />
+      <Button type="submit" size="icon" variant="outline" className="shrink-0" aria-label="搜尋">
+        <Search className="h-4 w-4" />
+      </Button>
+    </form>
+  )
+
   return (
     <Card ref={panelRef} className={panelScrollClass(scrollable)}>
       <CardHeader className={cn('pb-2 space-y-3', scrollable && STICKY_HEADER)}>
-        <CardTitle className="text-base break-all">{deck ?? '全部牌組'}</CardTitle>
+        {/* 牌組名很長時換行，「＋」固定在右上角不被擠掉 */}
+        <div className="flex items-start justify-between gap-2">
+          <CardTitle className="min-w-0 text-base break-all">{deck ?? '全部牌組'}</CardTitle>
+          <Button
+            type="button"
+            size="icon"
+            variant={creating ? 'default' : 'outline'}
+            className="h-8 w-8 shrink-0"
+            aria-pressed={creating}
+            // 名稱固定，開關狀態由 aria-pressed 表達；提示文字說明再按一次會關閉
+            aria-label="在這個牌組建立卡片"
+            title={creating ? '在這個牌組建立卡片（再按一次關閉）' : '在這個牌組建立卡片'}
+            onClick={onToggleCreate}
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
         {searchable.length > 0 && (
           <FieldSearchPanel
             handlers={searchable}
@@ -91,23 +130,18 @@ export function CardListPanel({
             }}
           />
         )}
-        {/* 用欄位搜尋時 Anki 語法收起來（展開可看、可改組好的查詢）；沒用時照常展開 */}
-        <details key={String(fieldSearchOn)} open={!fieldSearchOn} className="group">
-          {fieldSearchOn && (
-            <summary className="cursor-pointer select-none text-xs text-muted-foreground">進階：Anki 語法</summary>
-          )}
-          <form onSubmit={submit} className={cn('flex gap-2', fieldSearchOn && 'mt-2')}>
-            <Input
-              value={draft}
-              onChange={(e) => onDraft(e.target.value)}
-              placeholder="Anki 搜尋，例如 note:Speaking_Coach_Dark"
-              aria-label="Anki 搜尋"
-            />
-            <Button type="submit" size="icon" variant="outline" aria-label="搜尋">
-              <Search className="h-4 w-4" />
-            </Button>
-          </form>
-        </details>
+        {/* 用欄位搜尋時 Anki 語法收起來（展開可看、可改組好的查詢）；沒用時直接顯示。沒有 summary 的
+            details 會出現瀏覽器預設的「Details」，所以沒用欄位搜尋時不包 details */}
+        {fieldSearchOn ? (
+          <details className="group">
+            <summary className="cursor-pointer select-none text-xs text-muted-foreground pointer-coarse:py-1.5">
+              進階：Anki 語法
+            </summary>
+            <div className="mt-2">{ankiSearch}</div>
+          </details>
+        ) : (
+          ankiSearch
+        )}
         {data && (
           <p className="text-xs text-muted-foreground">
             共 {data.total} 張{isFetching && '，更新中…'}

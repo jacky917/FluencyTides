@@ -18,7 +18,15 @@ describe('parseBrowseParams', () => {
       cardId: 1782033909954,
       side: 'question',
       trail: [],
+      creating: false,
     })
+  })
+
+  it('reads the create form flag only from new=1', () => {
+    expect(parseBrowseParams(new URLSearchParams('deck=A&card=3&new=1'))).toMatchObject({ cardId: 3, creating: true })
+    for (const raw of ['new=0', 'new=true', 'new=', '']) {
+      expect(parseBrowseParams(new URLSearchParams(raw)).creating).toBe(false)
+    }
   })
 
   it('reads the face and the jump trail', () => {
@@ -37,6 +45,7 @@ describe('parseBrowseParams', () => {
       cardId: null,
       side: 'question',
       trail: [],
+      creating: false,
     })
   })
 
@@ -83,5 +92,9 @@ describe('searchToRemember', () => {
       new URLSearchParams('deck=日本語&card=5&side=answer').toString(),
     )
     expect(searchToRemember(new URLSearchParams(''))).toBe('')
+  })
+
+  it('does not remember the create form', () => {
+    expect(searchToRemember(new URLSearchParams('deck=A&card=5&new=1'))).toBe(new URLSearchParams('deck=A&card=5').toString())
   })
 })
