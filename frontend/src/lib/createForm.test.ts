@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formErrorsFrom, initialValues, missingRequired, schemaFields } from './createForm'
+import { deckBlockedReason, deckBlocksForm, formErrorsFrom, initialValues, missingRequired, schemaFields } from './createForm'
 
 /** 後端標準建立產生的 schema（向 Anki 查欄位，第一個欄位必填）。 */
 const standardSchema = {
@@ -100,5 +100,30 @@ describe('formErrorsFrom', () => {
     expect(formErrorsFrom({ error_code: 'NOTE_TYPE_NOT_CREATABLE', status: 422, message: 'x' }, ['A'])).toBeNull()
     expect(formErrorsFrom({ response: { status: 500, data: {} } }, ['A'])).toBeNull()
     expect(formErrorsFrom(null, ['A'])).toBeNull()
+  })
+})
+
+describe('deckBlockedReason', () => {
+  it('固定牌組或牌組存在時不擋', () => {
+    expect(deckBlockedReason('固定', null, 'all')).toBeNull()
+    expect(deckBlockedReason(null, 'Default', 'ok')).toBeNull()
+  })
+
+  it('說明牌組為什麼擋住建立', () => {
+    expect(deckBlockedReason(null, null, 'all')).toContain('還沒選牌組')
+    expect(deckBlockedReason(null, 'Default', 'loading')).toContain('正在確認')
+    expect(deckBlockedReason(null, 'Default', 'error')).toContain('無法載入牌組清單')
+    expect(deckBlockedReason(null, 'Old', 'missing')).toContain('「Old」已不存在')
+  })
+})
+
+describe('deckBlocksForm', () => {
+  it('沒選、已不存在、清單載入失敗時擋住；載入中與固定牌組不擋', () => {
+    expect(deckBlocksForm(null, null, 'all')).toBe(true)
+    expect(deckBlocksForm(null, 'Old', 'missing')).toBe(true)
+    expect(deckBlocksForm(null, 'Default', 'error')).toBe(true)
+    expect(deckBlocksForm(null, 'Default', 'loading')).toBe(false)
+    expect(deckBlocksForm(null, 'Default', 'ok')).toBe(false)
+    expect(deckBlocksForm('固定', null, 'all')).toBe(false)
   })
 })

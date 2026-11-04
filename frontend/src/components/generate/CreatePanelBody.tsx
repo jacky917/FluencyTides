@@ -24,14 +24,22 @@ import { useCreatedNotice } from '../../hooks/useCreatedNotice'
 import { removeStored, useLocalStorage, useSessionStorage } from '../../hooks/useStoredState'
 import type { DeckStatus } from '../../hooks/useDeckStatus'
 import { describeApiError, failureTitle, isBackendError, retryTransient } from '../../lib/apiError'
-import { formErrorsFrom, initialValues, missingRequired, schemaFields, type FormErrors } from '../../lib/createForm'
+import {
+  deckBlockedReason,
+  deckBlocksForm,
+  formErrorsFrom,
+  initialValues,
+  missingRequired,
+  schemaFields,
+  type FormErrors,
+} from '../../lib/createForm'
 import { createAvailability, type CreateAvailability } from '../../lib/handlerCapabilities'
 import { cn } from '../../lib/utils'
 import type { CreateNoteResponse, HandlerInfo } from '../../types/api'
 import { ErrorNote } from '../shared/ErrorNote'
 import { Button } from '../ui/button'
 import { Skeleton } from '../ui/skeleton'
-import { CollapsibleSection, CreatedNotice, DeckSummary, SchemaFieldInput } from './formParts'
+import { CollapsibleSection, CreatedNotice, DeckRequiredNotice, DeckSummary, SchemaFieldInput } from './formParts'
 import { PreviewCreate } from './PreviewCreate'
 import { TagInput } from './TagInput'
 
@@ -254,10 +262,28 @@ function CreateForm({
 
   const formReady = handler.create_schema !== null && create.note_type !== null
   const canSubmit = formReady && deck !== null && missing.length === 0 && !mutation.isPending
+  // 不能送出的原因寫在按鈕旁：牌組說明在表單最上方，欄位多時看不到
+  const blockedReason = !formReady
+    ? null
+    : (deckBlockedReason(fixedDeck, selectedDeck, deckStatus) ??
+      (missing.length > 0
+        ? `還沒填：${missing.map((name) => fields.find((field) => field.name === name)?.title ?? name).join('、')}。`
+        : null))
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (canSubmit) mutation.mutate()
+  }
+
+  // 牌組不能用：一開始就不顯示表單（建立進行中照常顯示）。填到一半的內容還在 sessionStorage
+  if (formReady && !mutation.isPending && deckBlocksForm(fixedDeck, selectedDeck, deckStatus)) {
+    const hasInput = Object.values(storedValues).some((value) => value.trim() !== '') || tags.length > 0
+    return (
+      <DeckRequiredNotice
+        reason={deckBlockedReason(fixedDeck, selectedDeck, deckStatus) ?? ''}
+        kept={hasInput ? '填到一半的內容還在，選好牌組就會出現。' : null}
+      />
+    )
   }
 
   return (
@@ -295,11 +321,16 @@ function CreateForm({
         <ErrorNote title="建立失敗" error={{ error_code: 'VALIDATION', message: errors.other.join('；') }} />
       )}
 
+      {!mutation.isPending && blockedReason && (
+        <p id={`${formId}-blocked`} role="status" className="text-xs text-muted-foreground">
+          {blockedReason}
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <Button
           type="submit"
           disabled={!canSubmit}
-          aria-describedby={deck === null && !fixedDeck ? `${formId}-deck` : undefined}
+          aria-describedby={!mutation.isPending && blockedReason ? `${formId}-blocked` : undefined}
         >
           {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {mutation.isPending ? '建立中、同步中…' : '建立'}

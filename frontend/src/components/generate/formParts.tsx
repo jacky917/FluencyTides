@@ -183,6 +183,24 @@ export function SchemaFieldInput({
 }
 
 /**
+ * 牌組不能用時取代整個表單的提示：說明原因與怎麼做；填到一半的內容或草稿還在時一併說明，使用者
+ * 知道沒有遺失。
+ * Replaces the form while the deck rules out creating.
+ * @param props.reason - 原因（見 `deckBlockedReason`）。The reason.
+ * @param props.kept - 保留著的內容說明；沒有時省略。What is kept, if anything.
+ * @returns 提示 JSX。The notice JSX.
+ */
+export function DeckRequiredNotice({ reason, kept }: { reason: string; kept?: string | null }) {
+  return (
+    <div role="status" className="space-y-1 rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-3 text-sm">
+      <p className="font-medium">這種卡片要建在牌組樹選的牌組</p>
+      <p>{reason}</p>
+      {kept && <p className="text-xs text-muted-foreground">{kept}</p>}
+    </div>
+  )
+}
+
+/**
  * 建立成功的提示：筆記數、牌組、同步提醒，加上查看新卡片的方式——有 `onView` 時是按鈕（卡片瀏覽頁的
  * 建卡畫面：在右欄打開新卡片），否則是到 Cards 頁這個牌組的連結（Card Generator）。
  * The success notice after creating notes, with a way to view them.
