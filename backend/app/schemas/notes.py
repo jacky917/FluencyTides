@@ -194,7 +194,10 @@ class CreateNoteResponse(BaseModel):
 
     note_ids: list[int] = Field(description="一律是陣列（外語糾錯一次建母卡與多張子卡）")
     deck: str = Field(description="實際建立的牌組")
-    sync_warning: str | None = Field(description="寫入後同步 AnkiWeb 失敗時的提醒；卡片仍已建立")
+    sync_warning: str | None = Field(
+        description="建立後要注意的事（加標籤失敗、建立後的後續處理例如刪舊卡失敗、同步 AnkiWeb 失敗），"
+        "以換行分隔；卡片仍已建立"
+    )
 
 
 class UpdateNoteRequest(BaseModel):

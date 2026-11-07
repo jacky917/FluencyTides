@@ -29,6 +29,29 @@ class DuplicateCardError(ServiceBaseError):
     status_code = 409
 
 
+class DuplicateFoundError(ServiceBaseError):
+    """生成草稿前發現 Anki 已有同一張卡，要使用者決定覆蓋、允許重複或取消（server_drafts 計畫書 D10.2）。
+
+    An existing card was found before generating a draft; the user decides.
+
+    Attributes:
+        duplicate: 舊卡的摘要（``note_id`` 與給網頁顯示的內容）；全域 handler 放進回應的 ``duplicate``。
+            The old card, put into the response's ``duplicate``.
+    """
+    error_code = "DUPLICATE_FOUND"
+    status_code = 409
+
+    def __init__(self, message: str, duplicate: dict[str, object]) -> None:
+        """初始化錯誤。Initialize the error.
+
+        Args:
+            message: 人類可讀的錯誤訊息。The message.
+            duplicate: 舊卡的摘要。The old card.
+        """
+        super().__init__(message)
+        self.duplicate = duplicate
+
+
 class DeckNotFoundError(ServiceBaseError):
     """牌組不存在錯誤。
 

@@ -25,6 +25,7 @@ from app.schemas.card import ErrorResponse
 from app.schemas.drafts import DraftOut, RetryDraftRequest, UpdateDraftRequest
 from app.services.create_session import CreateSession, get_create_session
 from app.services.note_service import NoteService
+from app.services.task_handlers.base import DuplicateResolution
 
 router = APIRouter(
     prefix="/drafts",
@@ -75,7 +76,7 @@ async def update_draft(
     description="沿用原本的輸入；帶 params 就換成新的輸入。立刻回 202，LLM 在背景生成。",
     responses={
         **_GONE,
-        409: {"model": ErrorResponse, "description": _STATE},
+        409: {"model": ErrorResponse, "description": f"{_STATE}；換了輸入時 Anki 已有同一張卡（DUPLICATE_FOUND，附舊卡 duplicate）"},
         422: {"description": "新的輸入驗證失敗（detail）"},
     },
 )
@@ -94,14 +95,21 @@ async def retry_draft(
         DraftNotFailedError: 不是生成失敗的草稿。Not failed.
         DraftVersionConflictError: 版本不是最新的。Stale version.
         RequestValidationError: 新的輸入驗證失敗。On invalid new input.
+        DuplicateFoundError: 新的輸入在 Anki 已有同一張卡，還沒決定怎麼處理。A duplicate needs a decision.
     """
-    handler_name = session.get(draft_id).handler_name
+    previous = session.get(draft_id)
+    handler_name = previous.handler_name
     parameters = None
     if body.params is not None:
         try:
             parameters = note_service.validate_draft_input(handler_name, body.params)
         except ValidationError as exc:
             raise RequestValidationError(_params_errors(exc)) from exc
+        # 換了輸入就重新查重複。沒帶新的決定時，上一次的決定只在查到的還是同一張舊卡時沿用（例如只改了情境）；
+        # 換了原文、對到另一張舊卡，就再回 409 讓使用者看過再決定
+        parameters = await note_service.resolve_draft_duplicate(
+            handler_name, parameters, body.duplicate_decision, previous=DuplicateResolution.from_input(previous.input)
+        )
     return await session.retry(
         draft_id, body.version, lambda p: note_service.generate_draft(handler_name, p), parameters
     )

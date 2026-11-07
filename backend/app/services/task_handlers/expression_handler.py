@@ -12,13 +12,18 @@ Expression_Master_Dark master cards and Expression_Micro_Dark micro
 cards, and supports JSON updates of audio fields.
 """
 
+import html
 import json
 import logging
+import re
+from collections.abc import Mapping
 from typing import override, TYPE_CHECKING
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.services.task_handlers.base import BaseHandler
+from app.infrastructure.anki.search import deck_term, field_term, note_type_term
+from app.infrastructure.anki.client import AnkiConnectError
+from app.services.task_handlers.base import BaseHandler, DuplicateResolution
 from app.services.task_handlers.capabilities import (
     CreateCapability,
     GraphCapability,
@@ -45,6 +50,94 @@ CORRECTION_LLM = route("expression_correction", "外語糾錯", capabilities={"l
 
 #: 母卡固定建在這個牌組（execute_create 忽略指定的牌組）。The fixed master deck.
 MASTER_DECK = "日本語::外語糾錯::母卡片"
+#: 子卡的牌組（底下再分文法修正、重新組織）。The micro card deck.
+MICRO_DECK = "日本語::外語糾錯::子卡片"
+MASTER_MODEL = "Expression_Master_Dark"
+MICRO_MODEL = "Expression_Micro_Dark"
+
+_TEXTAREA = {"x-ui": "textarea"}
+_BREAK = re.compile(r"<\s*br\s*/?\s*>|</\s*(div|p|li)\s*>", re.IGNORECASE)
+_TAG = re.compile(r"<[^>]+>")
+
+
+def plain_text(value: str) -> str:
+    """欄位值（HTML）轉成純文字（``<br>`` 等換成換行、去掉標籤、還原轉義、去掉前後空白）。
+
+    A field value (HTML) as plain text.
+    """
+    return html.unescape(_TAG.sub("", _BREAK.sub("\n", value))).strip()
+
+
+def same_original(field_value: str, original_text: str) -> bool:
+    """舊母卡的 ``My_Original``（HTML）與這次的原文（純文字）是不是同一句。
+
+    Whether a master's ``My_Original`` holds this original text.
+
+    網頁與 TG 建的卡原樣寫入原文，欄位與原文字面相同（查重複也是用字面找到的）；在 Anki 裡手打的卡，
+    ``&``、``<`` 會被轉義、換行變 ``<br>``，轉成純文字後才相同。兩種都算。不能把原文也當 HTML 處理：
+    原文裡的 ``<x>`` 會被當成標籤去掉。
+    """
+    original = original_text.strip()
+    return field_value.strip() == original or plain_text(field_value) == original
+
+
+def _field_text(fields: Mapping[str, object], name: str) -> str:
+    """notesInfo 的欄位值轉成純文字。A field of notesInfo as plain text."""
+    entry = fields.get(name)
+    return plain_text(str(entry.get("value", "")) if isinstance(entry, dict) else "")
+
+
+def duplicate_query(original_text: str) -> str:
+    """找同一句原文的母卡（照字面比對）。The search for masters with the same original text.
+
+    TG 流程（``expression_fsm.py`` 的 ``_check_duplicate_before_generate``）在 D10.3 移除前有自己的一份，
+    條件相同；改比對條件時兩邊要一起改。
+    """
+    return f"{deck_term(MASTER_DECK)} {note_type_term(MASTER_MODEL)} {field_term('My_Original', original_text)}"
+
+
+def _children_query(master_note_id: int) -> str:
+    """一張母卡的子卡。The micro cards of a master."""
+    return f"{note_type_term(MICRO_MODEL)} {field_term('Master_Note_ID', str(master_note_id))}"
+
+
+class ExpressionDraftParams(BaseModel):
+    """網頁預覽流程的草稿輸入：TG 流程六步收的內容（server_drafts 計畫書 D10.2）。
+
+    Draft input of the web preview flow; the same items the TG flow asks for.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    native_language: str = Field(default="中文", min_length=1, title="母語", examples=["中文"])
+    target_language: str = Field(default="日文", min_length=1, title="目標語言", examples=["日文", "英文"])
+    original_text: str = Field(
+        min_length=1, title="原文", description="自己寫的外語句子", json_schema_extra=_TEXTAREA
+    )
+    context: str = Field(
+        default="",
+        title="情境",
+        description="選填；對話情境，多段以連續五個以上的「ー」分隔",
+        json_schema_extra=_TEXTAREA,
+    )
+    source_tag: str = Field(
+        default="",
+        title="來源標籤",
+        description="選填；加在母卡與子卡上",
+        examples=settings.note_source_tags_list,
+    )
+    user_grammar_correction: str = Field(
+        default="",
+        title="自己的文法修正",
+        description="選填；自己先改過的版本，LLM 會參考",
+        json_schema_extra=_TEXTAREA,
+    )
+    user_reorganization: str = Field(
+        default="",
+        title="自己的重新組織",
+        description="選填；自己想的另一種說法，LLM 會參考",
+        json_schema_extra=_TEXTAREA,
+    )
 
 
 class ExpressionCreateParams(BaseModel):
@@ -82,6 +175,10 @@ class ExpressionCreateParams(BaseModel):
         default=None, description="要建立的子卡編號（1 起算）；None 表示全部"
     )
     allow_duplicate: bool = Field(default=False, description="是否允許與既有卡片重複")
+    replace_note_id: int | None = Field(
+        default=None,
+        description="覆蓋舊卡：新卡建好後刪掉這張舊母卡與其子卡（必須是同一句原文的母卡，否則不刪）",
+    )
 
 @register_handler
 class ExpressionCorrectionHandler(BaseHandler):
@@ -93,12 +190,11 @@ class ExpressionCorrectionHandler(BaseHandler):
     CAPABILITIES = HandlerCapabilities(
         create=CreateCapability(
             supported=True,
-            channels=("tg",),
+            channels=("web", "tg"),
             flow="preview",
             deck="fixed",
             fixed_deck=MASTER_DECK,
-            note_type="Expression_Master_Dark",
-            reason="需要先預覽 LLM 結果再勾選子卡，目前只能在 TG 建立",
+            note_type=MASTER_MODEL,
         ),
         update_fields=Operation(reason="目前只支援新增音檔"),
         delete=Operation(reason="外語糾錯的母子卡刪除尚未開放"),
@@ -106,6 +202,8 @@ class ExpressionCorrectionHandler(BaseHandler):
         graph=GraphCapability(reason="尚未實作"),
     )
     CREATE_PARAMS = ExpressionCreateParams
+    DRAFT_PARAMS = ExpressionDraftParams
+    CREATE_TAGS = ("Expression_Correction", "HandlerGenerated", "MicroPoint")
 
     @property
     @override
@@ -133,7 +231,7 @@ class ExpressionCorrectionHandler(BaseHandler):
 
     async def execute_generate(
         self,
-        parameters: dict[str, str]
+        parameters: Mapping[str, object]
     ) -> LLMExpressionCorrectionResult:
         """僅呼叫 LLM 產生糾錯結果，不寫入 Anki。
 
@@ -163,9 +261,8 @@ class ExpressionCorrectionHandler(BaseHandler):
         native_lang = parameters.get("native_language", "中文")
         target_lang = parameters.get("target_language", "日文")
         original_text = parameters.get("original_text", "")
-        context_raw = parameters.get("context", "")
-        
-        import re
+        context_raw = str(parameters.get("context", ""))
+
         # 以連續五個以上的「ー」為分隔符切分對話
         context_parts = [p.strip() for p in re.split(r'ー{5,}', context_raw) if p.strip()]
         user_grammar_correction = parameters.get("user_grammar_correction", "")
@@ -196,6 +293,107 @@ class ExpressionCorrectionHandler(BaseHandler):
         )
 
         return LLMExpressionCorrectionResult.model_validate(result.parsed_data)
+
+    @override
+    async def execute_draft(self, parameters: dict[str, object], existing_tags: list[str]) -> dict[str, object]:
+        """網頁預覽流程的草稿：請 LLM 糾錯，整理成建立參數（子卡預設全選；不寫入）。
+
+        Ask the LLM for the correction, shaped as draft create parameters.
+
+        生成前的重複決定（``NoteService.resolve_draft_duplicate`` 放進輸入的 ``DuplicateResolution``）在這裡轉成
+        建立參數：允許重複＝``allow_duplicate``；覆蓋＝也要 ``allow_duplicate``（舊卡在新卡建好後才刪，建立當下
+        兩張原文相同），再加 ``replace_note_id``。輸入裡的其他系統鍵（例如略過了查重複）不進建立參數。
+
+        Args:
+            parameters: ``ExpressionDraftParams`` 驗證後的輸入，可能另帶重複決定。The validated input.
+            existing_tags: 用不到（外語糾錯不建議標籤）。Unused.
+
+        Returns:
+            ``ExpressionCreateParams`` 形狀的草稿。The draft create parameters.
+        """
+        result = await self.execute_generate(parameters)
+        resolution = DuplicateResolution.from_input(parameters)
+        return ExpressionCreateParams.model_validate({
+            **{name: parameters[name] for name in ExpressionDraftParams.model_fields},
+            "llm_result": result.model_dump(),
+            "selected_indices": None,
+            "allow_duplicate": resolution is not None,
+            "replace_note_id": resolution.note_id if resolution and resolution.decision == "overwrite" else None,
+        }).model_dump()
+
+    @override
+    async def find_draft_duplicate(
+        self, card_service: "CardService", parameters: Mapping[str, object]
+    ) -> dict[str, object] | None:
+        """同一句原文建過母卡沒有（與 TG 流程相同的比對：母卡牌組、母卡類型、原文完全相同）。
+
+        Look for a master card with the same original text.
+
+        Returns:
+            ``{"note_id", "original_text", "correct_answer", "reorganized_expression"}``（純文字），
+            沒有時為 None。有好幾張時取第一張（與 TG 相同）。The old master, or None.
+
+        Raises:
+            AnkiConnectError: 查詢失敗。When the lookup fails.
+        """
+        note_ids = await card_service.find_notes(duplicate_query(str(parameters.get("original_text", ""))))
+        if not note_ids:
+            return None
+        notes = await card_service.get_notes_info([note_ids[0]])
+        if not notes:
+            return None
+        fields = notes[0].get("fields", {})
+        return {
+            "note_id": note_ids[0],
+            "original_text": _field_text(fields, "My_Original"),
+            "correct_answer": _field_text(fields, "Correct_Answer"),
+            "reorganized_expression": _field_text(fields, "Reorganized_Expression"),
+        }
+
+    @override
+    async def after_create(
+        self, card_service: "CardService", parameters: Mapping[str, object], note_ids: list[int]
+    ) -> str | None:
+        """覆蓋舊卡：新卡已建好，刪掉舊的母卡與其子卡（先建後刪：建立失敗時舊卡不動）。
+
+        On overwrite, delete the old master and its micro cards after the new ones exist.
+
+        只刪「同一句原文的母卡」：``replace_note_id`` 來自網頁送回的建立參數，不能讓它刪到別的卡。
+        舊卡已經不在時（例如在 Anki 裡先刪了）不必提醒。Anki 的錯誤回提醒（附舊卡 ID 與原因）；其他例外照常
+        往上拋，由 ``NoteService.create`` 轉成通用的提醒（新卡已建立，同樣不會報成建立失敗）。
+
+        TG 流程（``expression_fsm.py``）在 D10.3 移除前不帶 ``replace_note_id``，自己刪舊卡、另外同步一次，
+        不經過這裡。
+
+        Returns:
+            刪除失敗或不符時的提醒，沒事時為 None。A warning, or None.
+        """
+        old_id = parameters.get("replace_note_id")
+        if not isinstance(old_id, int) or old_id in note_ids:
+            return None
+        new_text = str(parameters.get("original_text", ""))
+        try:
+            notes = await card_service.get_notes_info([old_id])
+            if not notes:
+                logger.info("覆蓋：舊母卡 %s 已不在，不必刪除", old_id)
+                return None
+            note = notes[0]
+            field = note.get("fields", {}).get("My_Original")
+            old_text = str(field.get("value", "")) if isinstance(field, dict) else ""
+            if note.get("modelName") != MASTER_MODEL or not same_original(old_text, new_text):
+                logger.warning(
+                    "覆蓋：筆記 %s 不是同一句原文的母卡（modelName=%s, 舊原文=%r, 新原文=%r），不刪除",
+                    old_id, note.get("modelName"), old_text, new_text,
+                )
+                return f"⚠️ 要覆蓋的舊卡（Note ID {old_id}）與這次的原文不符，沒有刪除；請到 Cards 頁確認。"
+            children = await card_service.find_notes(_children_query(old_id))
+            await card_service.anki_client.delete_notes([old_id, *children])
+        except AnkiConnectError as exc:
+            # 新卡已寫入：刪不掉舊卡只能請使用者手動處理，不能報成建立失敗
+            logger.warning("覆蓋：新卡 %s 已建立，但刪除舊卡 %s 失敗：%s", note_ids, old_id, exc)
+            return f"⚠️ 新卡已建立，但舊卡（Note ID {old_id}）刪除失敗（{exc}），請到 Cards 頁手動刪除舊的母卡與子卡。"
+        logger.info("覆蓋：已刪除舊母卡 %s 及其 %d 張子卡", old_id, len(children))
+        return None
 
     @override
     async def execute_create(
@@ -238,7 +436,6 @@ class ExpressionCorrectionHandler(BaseHandler):
         """
         original_text = parameters.get("original_text", "")
         context_raw = parameters.get("context", "")
-        import re
         context_parts = [p.strip() for p in re.split(r'ー{5,}', context_raw) if p.strip()]
         context_json = json.dumps([{"text": p} for p in context_parts], ensure_ascii=False)
         
@@ -319,7 +516,7 @@ class ExpressionCorrectionHandler(BaseHandler):
             for mp in correction_result.reorganized_micro_points:
                 all_micro_entries.append(("Reorganized", "重新組織", mp))
 
-            base_micro_deck = "日本語::外語糾錯::子卡片"
+            base_micro_deck = MICRO_DECK
             micro_tags = base_tags + ["MicroPoint"]
 
             for idx, (card_type, sub_deck_name, mp) in enumerate(all_micro_entries):

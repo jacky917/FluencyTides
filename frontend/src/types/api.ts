@@ -240,12 +240,66 @@ export interface TrilingualCreateParams {
   references_en: TrilingualReference[];
 }
 
+/**
+ * 生成前發現 Anki 已有同一張卡時的決定：`overwrite` 新卡建好後刪掉舊卡、`allow` 允許重複。
+ * The decision on a duplicate found before generating.
+ */
+export type DuplicateDecision = 'overwrite' | 'allow';
+
+/** 409 `DUPLICATE_FOUND` 附上的舊卡（外語糾錯：同一句原文的母卡，純文字）。The existing card. */
+export interface DuplicateCard {
+  note_id: number;
+  original_text?: string;
+  correct_answer?: string;
+  reorganized_expression?: string;
+}
+
+/** 外語糾錯 LLM 萃取的一個知識點（子卡）。One micro point (a micro card). */
+export interface ExpressionMicroPoint {
+  original_phrase: string;
+  target_phrase: string;
+  native_translation: string;
+  context_hint: string;
+  context_sentence: string;
+  error_hint: string;
+}
+
+/** 外語糾錯的 LLM 結果。The expression correction LLM result. */
+export interface ExpressionCorrectionResult {
+  /** 原文，錯的片段以 `<u>…</u>` 標出。The original with errors marked by `<u>`. */
+  error_comparison: string;
+  grammar_correction: string;
+  reorganized_expression: string;
+  grammar_micro_points: ExpressionMicroPoint[];
+  reorganized_micro_points: ExpressionMicroPoint[];
+}
+
+/** 外語糾錯的建立參數（草稿就是這個形狀）。Expression correction create parameters. */
+export interface ExpressionCreateParams {
+  original_text: string;
+  context: string;
+  source_tag: string;
+  native_language: string;
+  target_language: string;
+  user_grammar_correction: string;
+  user_reorganization: string;
+  llm_result: ExpressionCorrectionResult;
+  /** 要建立的子卡編號（1 起算，文法修正在前）；null 表示全部。Micro cards to create. */
+  selected_indices: number[] | null;
+  allow_duplicate: boolean;
+  /** 覆蓋：新卡建好後刪掉的舊母卡。The old master to replace. */
+  replace_note_id: number | null;
+}
+
 /** 建卡結果。The created notes. */
 export interface CreateNoteResponse {
   note_ids: number[];
   /** 實際建立的牌組。The deck actually used. */
   deck: string;
-  /** 寫入後同步 AnkiWeb 失敗時的提醒；卡片仍已建立。The sync warning, if any. */
+  /**
+   * 建立後要注意的事（加標籤失敗、建立後的後續處理例如刪舊卡失敗、同步 AnkiWeb 失敗），以換行分隔；
+   * 卡片仍已建立。Warnings after creating, if any.
+   */
   sync_warning: string | null;
 }
 

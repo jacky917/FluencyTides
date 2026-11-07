@@ -67,6 +67,10 @@ _NOT_FOUND = {404: {"model": ErrorResponse, "description": "handler 或筆記不
 _REFUSED = {400: {"model": ErrorResponse, "description": "操作不開放、筆記不歸這個 handler、欄位不能修改或不存在"}}
 _ANKI_ERROR = {502: {"model": ErrorResponse, "description": "AnkiConnect 連不上或回傳錯誤"}}
 _SESSION_BUSY = "已經有一份草稿或一張建立中的卡片（CREATE_SESSION_BUSY）；回應附上目前的草稿 draft"
+_DUPLICATE_FOUND = (
+    "Anki 已有同一張卡（DUPLICATE_FOUND，例如外語糾錯的同一句原文），回應附上舊卡 duplicate；"
+    "帶 duplicate_decision 重送才會生成"
+)
 _DRAFT_STATE = "草稿不能建立（DRAFT_BUSY）或版本不是最新的（DRAFT_VERSION_CONFLICT）；回應附上目前的草稿 draft"
 
 
@@ -166,7 +170,7 @@ async def list_tags(handler_name: str, note_service: NoteService = Depends(get_n
     responses={
         **_REFUSED,
         **_NOT_FOUND,
-        409: {"model": ErrorResponse, "description": _SESSION_BUSY},
+        409: {"model": ErrorResponse, "description": f"{_SESSION_BUSY}；{_DUPLICATE_FOUND}"},
         422: {"description": "輸入驗證失敗（detail）"},
     },
 )
@@ -178,13 +182,19 @@ async def start_draft(
 ) -> dict[str, object]:
     """開始生成草稿。Start generating a draft.
 
+    槽位是空的才查重複（例如外語糾錯的同一句原文）：已經有草稿時 ``session.start`` 本來就會回 409，
+    不必先查 Anki。
+
     Raises:
         RequestValidationError: 輸入驗證失敗；``loc`` 前面接上 ``body``、``params``。On invalid input.
+        DuplicateFoundError: Anki 已有同一張卡，還沒決定怎麼處理（D10.2）。A duplicate needs a decision.
     """
     try:
         parameters = note_service.validate_draft_input(handler_name, body.params)
     except ValidationError as exc:
         raise RequestValidationError(_params_errors(exc)) from exc
+    if session.snapshot() is None:
+        parameters = await note_service.resolve_draft_duplicate(handler_name, parameters, body.duplicate_decision)
     return await session.start(handler_name, parameters, lambda p: note_service.generate_draft(handler_name, p))
 
 

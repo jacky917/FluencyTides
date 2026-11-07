@@ -7,7 +7,8 @@
  *
  * 支援的 schema 寫法：`title`、`description`、`required`、`default`、`examples`（可輸入的下拉）、
  * `enum`（只能選的下拉）、`pattern`、`x-ui: textarea`（多行）；不認得的 `x-ui` 值當一般文字欄位。
- * 只畫字串欄位：其他型別的參數（例如外語糾錯預覽流程的 LLM 結果）不會出現在網頁表單。
+ * 只畫字串欄位，以及 `x-ui: lines` 的字串陣列（多行文字框、一行一筆，送出時拆成陣列、去掉空行，
+ * 例如對話卡的多筆參考回答）；其他型別的參數不會出現在網頁表單。
  */
 
 import type { DeckStatus } from '../hooks/useDeckStatus'
@@ -26,6 +27,8 @@ export interface FormField {
   /** 只能從中選一個的值（下拉選單）；空陣列表示自由輸入。Allowed values, or empty. */
   options: string[]
   multiline: boolean
+  /** 一行一筆的陣列欄位（`x-ui: lines`）：送出時拆成字串陣列。A one-entry-per-line list. */
+  lines: boolean
   /** 格式（正規表示式），用來提示；實際驗證由後端負責。A format hint. */
   pattern: string | null
 }
@@ -33,6 +36,7 @@ export interface FormField {
 /** schema 的一個屬性（只列用到的鍵）。A schema property. */
 interface SchemaProperty {
   type?: string
+  items?: { type?: string }
   anyOf?: { type?: string }[]
   title?: string
   description?: string
@@ -49,6 +53,11 @@ function isStringProperty(prop: SchemaProperty): boolean {
   return Array.isArray(prop.anyOf) && prop.anyOf.some((option) => option.type === 'string')
 }
 
+/** 是否為一行一筆的字串陣列（`x-ui: lines`）。Whether a property is a one-per-line string list. */
+function isLinesProperty(prop: SchemaProperty): boolean {
+  return prop.type === 'array' && prop.items?.type === 'string' && prop['x-ui'] === 'lines'
+}
+
 /**
  * 把 `create_schema` 轉成表單欄位（依 schema 的屬性順序）。
  * Turns a create schema into form fields.
@@ -61,7 +70,8 @@ export function schemaFields(schema: Record<string, unknown> | null): { fields: 
   const fields: FormField[] = []
   const skipped: string[] = []
   for (const [name, prop] of Object.entries(properties)) {
-    if (!isStringProperty(prop)) {
+    const lines = isLinesProperty(prop)
+    if (!lines && !isStringProperty(prop)) {
       skipped.push(name)
       continue
     }
@@ -71,13 +81,33 @@ export function schemaFields(schema: Record<string, unknown> | null): { fields: 
       description: prop.description ?? null,
       required: required.has(name),
       defaultValue: typeof prop.default === 'string' ? prop.default : '',
-      examples: (prop.examples ?? []).filter((example): example is string => typeof example === 'string'),
-      options: (prop.enum ?? []).filter((option): option is string => typeof option === 'string'),
-      multiline: prop['x-ui'] === 'textarea',
+      examples: lines ? [] : (prop.examples ?? []).filter((example): example is string => typeof example === 'string'),
+      options: lines ? [] : (prop.enum ?? []).filter((option): option is string => typeof option === 'string'),
+      multiline: lines || prop['x-ui'] === 'textarea',
+      lines,
       pattern: prop.pattern ?? null,
     })
   }
   return { fields, skipped }
+}
+
+/**
+ * 表單的值轉成送出的參數：一行一筆的欄位拆成陣列（去掉前後空白與空行），其餘原樣。
+ * Turns form values into request parameters; line fields become arrays.
+ * @param fields - 欄位。The fields.
+ * @param values - 表單的值。The form values.
+ * @returns 參數。The parameters.
+ */
+export function formParams(fields: FormField[], values: Record<string, string>): Record<string, unknown> {
+  const params: Record<string, unknown> = { ...values }
+  for (const field of fields) {
+    if (!field.lines) continue
+    params[field.name] = (values[field.name] ?? '')
+      .split(/\r\n|\r|\n/)
+      .map((line) => line.trim())
+      .filter((line) => line !== '')
+  }
+  return params
 }
 
 /**
@@ -161,9 +191,12 @@ export function formErrorsFrom(error: unknown, fieldNames: string[]): FormErrors
   const result: FormErrors = { fields: {}, other: [] }
   for (const item of detail as ValidationItem[]) {
     const loc = Array.isArray(item.loc) ? item.loc : []
-    const msg = item.msg ?? '格式不符'
-    const name = loc.length === 3 && loc[0] === 'body' && loc[1] === 'params' ? String(loc[2]) : null
-    if (name !== null && known.has(name)) {
+    const rawMsg = item.msg ?? '格式不符'
+    const name = loc.length >= 3 && loc[0] === 'body' && loc[1] === 'params' ? String(loc[2]) : null
+    // 陣列欄位的某一筆（例如 ["body", "params", "references", 1]）：標在欄位上並註明第幾筆
+    const index = loc.length === 4 && typeof loc[3] === 'number' ? loc[3] : null
+    const msg = index !== null ? `第 ${index + 1} 筆：${rawMsg}` : rawMsg
+    if (name !== null && known.has(name) && (loc.length === 3 || index !== null)) {
       result.fields[name] = result.fields[name] ? `${result.fields[name]}；${msg}` : msg
     } else {
       result.other.push(name !== null ? `${name}: ${msg}` : msg)

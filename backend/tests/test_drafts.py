@@ -359,7 +359,7 @@ def test_start_requires_valid_input(client):
     assert client.get("/api/v1/drafts/current").json() is None
 
 
-@pytest.mark.parametrize("handler", ["vocabulary_mining", "expression_correction"])
+@pytest.mark.parametrize("handler", ["vocabulary_mining", "speaking_coach"])
 def test_start_refused_without_web_preview(client, handler):
     response = client.post(f"/api/v1/handlers/{handler}/drafts", json={"params": {}})
     assert _error(response) == (400, "HANDLER_OPERATION_UNSUPPORTED")

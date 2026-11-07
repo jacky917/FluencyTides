@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-11-04（2026-11-07 依使用者決定改寫：只存記憶體、全站一把鎖、TG 建卡移到網頁、腳本例外） |
 | **性質** | 新增機能設計 + 實作工作項 |
-| **狀態** | 🚧 PR 1（P1～P4）實作完成，待部署後在正式站驗收（§9.1）；PR 2、PR 3 尚未開始。實作與設計的差異見 §11 |
+| **狀態** | 🚧 PR 1（P1～P4）、PR 2（P6、P7）實作完成，待部署後在正式站驗收（§9.1、§9.2）；PR 3 等使用者確認網頁沒問題、明確指示後才開始。實作紀錄見 §11、§12 |
 | **範圍** | 後端：預覽流程的草稿改為背景生成、存在後端記憶體（新的 `CreateSession`）；全站「建卡工作階段」鎖，網頁的建卡入口都要先通過它；新的 `/drafts` 端點、建卡帶 `draft_id`。前端：`components/generate/PreviewCreate.tsx` 改讀寫後端草稿、全站的生成完成通知、生成中的按鈕狀態、填表內容改存 localStorage。最後兩個階段：網頁補上對話卡（單語）與外語糾錯的建卡；網頁驗收後，依使用者指示移除 TG 的建卡（D10） |
 | **不動** | LLM 呼叫本身（提示詞、模型路由、`execute_draft` 的輸出形狀、`cli_base.py` 的子程序呼叫方式）；建卡的寫入流程（`execute_create`、同步 AnkiWeb）；本機批次腳本的整條路（`/verb-pair/generate-child-cards`、`/core-verb/generate-child-cards`、直接呼叫 AnkiConnect 的腳本）；資料庫（不新增資料表）；TG 的錄音評分、上傳音檔、刪除條目、人脈卡 `/p` 的編輯、`/sync`、`/setconfig`；卡片瀏覽頁與 Card Generator 的版面 |
-| **PR / 進度** | 分支 `feat/server-drafts`；PR 1 已實作並經多面向審查修正（2026-11-07：後端 1663 項、前端 332 項測試與 lint、build 通過；以假 Anki 與假 LLM 在瀏覽器實測，見 §11） |
+| **PR / 進度** | 分支 `feat/server-drafts`；PR 1 已實作並經多面向審查修正（2026-11-07：後端 1663 項、前端 332 項測試與 lint、build 通過；以假 Anki 與假 LLM 在瀏覽器實測，見 §11）；PR 2 同一個分支接著做（後端 1693 項、前端 346 項，見 §12） |
 | **關聯文件** | `docs/archive/trilingual_web_create_FEAT_2026-10-30.md`（預覽流程；當時決定「草稿不存在後端」，本計畫取代該項）；`docs/wip/card_list_create_FEAT_2026-10-30.md`（兩頁共用 `CreatePanelBody`）；`docs/wip/backlog.md` W1、W2（單語對話卡、外語糾錯的網頁建卡，併入本計畫 D10，完成後從 backlog 刪除） |
 
 > **改寫說明（2026-11-07）**：第一版（2026-11-04）把草稿存在網站 SQLite 的新表 `card_drafts`，每種卡片各一份。討論後使用者決定改成最簡單的設計：
@@ -509,4 +509,47 @@ npm run build
 補的後端測試：生成失敗的草稿能廢棄、生成中與失敗時不能從草稿建卡、TG 直接呼叫 `NoteService.create` 不受鎖限制（取代原本只檢查 import 的測試）、填表佔用的 API 形狀、從草稿建卡時 Anki 拒絕會退回可建立、重試的版本檢查與錯誤 ID、背景生成不碰 `relation_service`、`/drafts` 需要 API Key、背景 task 的正式路徑與關機取消、未預期例外發警報、task 異常結束的安全網。
 
 沒做的（審查列為建議）：背景生成的總逾時、409 的 `draft` 寫進 OpenAPI 的回應模型、前端 `ServerDraft` 改成 discriminated union、`Draft` 的轉換收進方法、預覽流程的說明文字依卡片類型而定（D10.2 加外語糾錯時一起處理）。
+
+## 12. PR 2 實作紀錄（2026-11-07）
+
+P6（D10.1）、P7（D10.2）在同一個分支 `feat/server-drafts` 接著 PR 1 做。後端測試 1693 項、前端 346 項、lint（只有原本的 15 個警告）、build 通過。
+
+### 12.1 對話卡（D10.1）
+
+- `speaking_coach`：`CreateCapability(supported=True, channels=("web", "tg"), flow="form", deck="selected")`；`CREATE_PARAMS` 加 `references: list[str]`（`x-ui: lines`，去空白、丟空行，最多 100 筆、每筆 2000 字）。`execute_create` 寫入 `{date: 今天, content, status: 1, audios: []}`，經 HTML 轉義（與三語對話卡相同；TG 舊流程沒轉義，卡片的讀取兩種都吃）。`CREATE_TAGS` 改成 `Speaking_Coach`、`HandlerGenerated`。
+- 前端建卡表單支援 `x-ui: lines`：多行文字框、一行一筆，送出時 `formParams` 拆成陣列；陣列某一筆的 422 標在欄位上並註明「第 N 筆」。
+
+### 12.2 外語糾錯（D10.2）
+
+- `expression_correction`：`channels=("web", "tg")`；`DRAFT_PARAMS = ExpressionDraftParams`（TG 六步收的內容；來源標籤的建議值取 `NOTE_SOURCE_TAGS`）；`execute_draft` 呼叫既有的 `execute_generate`，回傳建立參數（子卡預設全選，沒有建議標籤）。
+- 生成前查重複（handler 新 hook `find_draft_duplicate`，`NoteService.resolve_draft_duplicate`）：
+  - 槽位是空的才查（已有草稿時照舊回 `CREATE_SESSION_BUSY`，不必查 Anki）。
+  - 有重複、還沒決定：回 409 `DUPLICATE_FOUND`，附舊卡摘要 `duplicate`，不建草稿、不呼叫 LLM。網頁顯示舊卡，選「覆蓋舊卡」「另建新卡」就帶 `duplicate_decision` 重送；「取消」回到輸入。
+  - 決定綁著舊卡（`DuplicateResolution(decision, note_id)`，存在草稿輸入的系統鍵）：重試換了輸入時，查到的還是同一張舊卡才沿用，換了一張就再回 409（不能把對 A 卡的覆蓋套到沒看過的 B 卡上）。
+  - Anki 查詢失敗：略過檢查照常生成，在草稿輸入記下原因（`duplicate_check_skipped`）；預覽顯示提醒，並可勾「允許重複」（真的重複時建立會被 Anki 的首欄位檢查擋下）。
+- 覆蓋舊卡（handler 新 hook `after_create`，在加標籤之後、同步之前呼叫）：新卡建好後刪舊母卡與其子卡，刪除與新卡同一次同步。只刪「同一句原文的 `Expression_Master_Dark`」（`replace_note_id` 來自網頁送回的建立參數）；原文比對兼容 Anki 裡手打的卡（HTML 轉義、`<br>`）。刪除失敗、不符時回提醒（附舊卡 Note ID 與原因），不報成建立失敗；舊卡已不在時不提醒。`NoteService.create` 另外包住 `after_create`：程式錯誤也轉成提醒，避免卡已寫入卻回失敗、使用者再建一組。
+- 前端：預覽改成依卡片類型的 `PreviewKind`（`components/generate/previewTypes.ts`），建立、廢棄、自動存檔、衝突由 `PreviewCreate` 統一處理；新增 `ExpressionDraftPreview.tsx`（原文的錯誤以紅底線標示、文法修正、重新組織、子卡勾選）與 `lib/expressionDraft.ts`（子卡編號與後端一致：文法修正在前，從 1 起算）。生成失敗時帶回的輸入只寫表單上的欄位（系統鍵不進 localStorage）。
+- 與設計的差異：TG 的外語糾錯（`expression_fsm.py`）、對話卡（`speaking_fsm.py`）流程**沒有改**，仍有自己的查重、刪舊卡與建卡（D10.3 會整個移除，不值得先改接）。查重的查詢條件兩邊相同，改的時候要一起改（`duplicate_query` 的 docstring 有註明）。
+
+### 12.3 瀏覽器實測（假 Anki、假 LLM）
+
+- 對話卡：填三筆參考回答（含空行、`<`、`&`），建立後 `References` 是兩筆、HTML 轉義、日期是今天，語言 `en-us` 正規化成 `en-US`，`Card_ID` 是 uuid4。
+- 外語糾錯：生成 → 預覽（錯的地方紅底線）→ 取消勾選一張子卡 → 自動存檔 → 建立，只建母卡與勾選的子卡，各在自己的子牌組。
+- 同一句原文已有卡：按生成先顯示舊卡、沒有建草稿；選覆蓋 → 生成 → 預覽上方顯示要覆蓋的 Note ID → 建立後舊母卡與子卡被刪。
+- 查重複失敗：預覽顯示提醒與「允許重複」，勾選後存回後端，建立時帶上。
+- 三語對話卡改用 `PreviewKind` 後照常生成、建立。
+
+### 12.4 審查後的修正（2026-11-07，多面向審查的 Critical 與 Important）
+
+| 問題 | 修正 |
+|---|---|
+| 重試換了原文、對到另一張舊卡時，沿用上一次的「覆蓋」，會刪掉使用者沒看過的卡 | 決定綁著舊卡 ID（`DuplicateResolution`），不是同一張就再回 409 |
+| `after_create` 拋錯時卡已寫入卻回失敗，草稿退回可建立，再按一次會多一組 | `NoteService.create` 包住 `after_create`，轉成提醒 |
+| 查重複失敗時使用者不知道，建立被 Anki 擋下後只能廢棄重來 | 記下原因、預覽提醒，可勾「允許重複」；log 附 handler 與輸入 |
+| 刪舊卡失敗、不符的提醒沒附 Note ID 與原因；程式錯誤也被報成「刪除失敗」 | 提醒附 Note ID 與原因；handler 只接 Anki 的錯誤，其他交給呼叫端 |
+| 原文比對只處理 Anki 那一邊，原文含 `&`、`<` 時誤判成不同的卡 | `same_original`：字面相同，或 Anki 欄位轉成純文字後相同 |
+| 假 Anki 不看欄位，查詢條件寫壞（刪到所有子卡）測不出來 | 補查詢本身的單元測試、覆蓋時檢查子卡查詢；另補全不選只建母卡、刪除在同步之前、看過新的舊卡後同版本重送、換原文對到另一張卡要再問、不合法的決定回 422、`after_create` 程式錯誤轉提醒 |
+| 註解與文件不準：「與 TG 相同的退路」、「格式與 TG 相同」、`sync_warning` 與 `Draft.input` 的說明過時 | 改寫；`MICRO_DECK` 改由 `execute_create` 使用 |
+
+沒做的（審查列為建議）：`DuplicateCard` 改成 TypedDict／Pydantic 模型、前端 `{note_id: 0}` 的退路、`ExpressionCreateParams` 加「有 `replace_note_id` 就必須允許重複」的驗證、草稿輸入與建立參數共用基底、`PreviewKind` 兩處登記合成一份、`params` 與 `blockedReason` 合併、同一句原文有好幾張舊卡時只刪第一張（TG 也一樣）、重試先查重複後查狀態的順序。
 

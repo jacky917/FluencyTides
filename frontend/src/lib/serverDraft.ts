@@ -5,7 +5,7 @@
  * Pure helpers for the backend create draft.
  */
 
-import type { DraftStatus, ServerDraft } from '../types/api'
+import type { DraftStatus, DuplicateCard, ServerDraft } from '../types/api'
 
 /** 目前草稿的 query key（全站共用一份快取）。Query key of the current draft. */
 export const CURRENT_DRAFT_QUERY_KEY = ['draft', 'current'] as const
@@ -84,6 +84,21 @@ export function draftFromError(error: unknown): ServerDraft | null | undefined {
   if (err.error_code === 'DRAFT_NOT_FOUND') return null
   if (err.error_code && DRAFT_ERROR_CODES.has(err.error_code)) return err.draft ?? null
   return undefined
+}
+
+/**
+ * 409 `DUPLICATE_FOUND`（生成前發現 Anki 已有同一張卡）附上的舊卡；其他錯誤為 null。
+ * The existing card carried by a `DUPLICATE_FOUND` error, or null.
+ * @param error - 捕捉到的錯誤。The caught error.
+ * @returns 舊卡或 null。The old card or null.
+ */
+export function duplicateFromError(error: unknown): DuplicateCard | null {
+  if (typeof error !== 'object' || error === null) return null
+  const err = error as { error_code?: string; duplicate?: unknown }
+  if (err.error_code !== 'DUPLICATE_FOUND') return null
+  const duplicate = err.duplicate as Partial<DuplicateCard> | null | undefined
+  // 後端一律會附；沒附時仍讓使用者決定，只是看不到舊卡內容
+  return duplicate && typeof duplicate.note_id === 'number' ? (duplicate as DuplicateCard) : { note_id: 0 }
 }
 
 /**

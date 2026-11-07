@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.schemas.notes import SuggestedTag
 from app.services.create_session import DraftStatus
+from app.services.task_handlers.base import DuplicateDecision
 
 
 class DraftResult(BaseModel):
@@ -54,6 +55,13 @@ class StartDraftRequest(BaseModel):
     """``POST /handlers/{name}/drafts``：開始生成。"""
 
     params: dict[str, Any] = Field(default_factory=dict, description="草稿輸入，依 draft_schema")
+    duplicate_decision: DuplicateDecision | None = Field(
+        default=None,
+        description=(
+            "收到 409 DUPLICATE_FOUND（Anki 已有同一張卡）後的決定：overwrite 新卡建好後刪掉舊卡、"
+            "allow 允許重複；第一次送出時省略"
+        ),
+    )
 
 
 class UpdateDraftRequest(BaseModel):
@@ -68,3 +76,10 @@ class RetryDraftRequest(BaseModel):
 
     version: int = Field(description="讀到的草稿版本")
     params: dict[str, Any] | None = Field(default=None, description="新的草稿輸入；省略時沿用原本的輸入")
+    duplicate_decision: DuplicateDecision | None = Field(
+        default=None,
+        description=(
+            "換了輸入、收到 409 DUPLICATE_FOUND 後的決定（同開始生成）；只在帶 params 時有用。省略時，原本的決定"
+            "只在查到的還是同一張舊卡時沿用，換了一張就回 409"
+        ),
+    )

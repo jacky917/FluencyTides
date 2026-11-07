@@ -31,6 +31,7 @@ from .bot import (
 from .services import (
     ServiceBaseError,
     DuplicateCardError,
+    DuplicateFoundError,
     DeckNotFoundError,
     ModelFileNotFoundError,
     PromptTemplateNotFoundError,
@@ -87,6 +88,7 @@ __all__ = [
     "BotActionError",
     "ServiceBaseError",
     "DuplicateCardError",
+    "DuplicateFoundError",
     "DeckNotFoundError",
     "ModelFileNotFoundError",
     "PromptTemplateNotFoundError",

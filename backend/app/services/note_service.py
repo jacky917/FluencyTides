@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapte
 from app.core.config import settings
 from app.core.exceptions import (
     AnkiFieldCorruptedError,
+    DuplicateFoundError,
     FieldNotEditableError,
     HandlerOperationUnsupportedError,
     InvalidNoteFieldsError,
@@ -39,7 +40,14 @@ MAX_PROMPT_TAGS = 50
 from app.infrastructure.anki.client import AnkiConnectError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.anki.search import contains_term, note_types_query, tag_term
-from app.services.task_handlers.base import note_detail, note_field_values
+from app.services.task_handlers.base import (
+    DRAFT_SYSTEM_KEYS,
+    DUPLICATE_CHECK_SKIPPED_KEY,
+    DuplicateDecision,
+    DuplicateResolution,
+    note_detail,
+    note_field_values,
+)
 from app.services.task_handlers.capabilities import ANY_FIELD_KEY, TAG_SEARCH_KEY
 from app.services.task_handlers.registry import handler_registry
 
@@ -173,7 +181,7 @@ class NoteService:
         tg_bot: str | None = None,
         tags: list[str] | None = None,
     ) -> dict[str, object]:
-        """建卡：檢查能力 → 驗證參數與標籤 → ``execute_create`` → 加標籤 → 寫入後同步（§4.2）。
+        """建卡：檢查能力 → 驗證參數與標籤 → ``execute_create`` → 加標籤 → 後續處理（``after_create``，例如覆蓋時刪舊卡）→ 寫入後同步（§4.2）。
 
         Create cards: capability check, parameter validation, the handler's
         create, then the sync after writing.
@@ -189,7 +197,7 @@ class NoteService:
                 建卡程式不用管。User tags, added after the handler creates the notes.
 
         Returns:
-            ``{"note_ids", "deck", "sync_warning"}``。
+            ``{"note_ids", "deck", "sync_warning"}``；``sync_warning`` 是加標籤、後續處理、同步的提醒（換行分隔）。
 
         Raises:
             HandlerNotFoundError: handler 不存在。Unknown handler.
@@ -221,8 +229,14 @@ class NoteService:
 
         note_ids = await handler.execute_create(self.card_service, self.relation_service, deck, note_type, parameters)
         tag_warning = await self._add_tags(list(note_ids), user_tags)
+        # 後續處理（例如覆蓋時刪舊卡）在同步之前：刪除也在這一次同步推上 AnkiWeb
+        try:
+            after_warning = await handler.after_create(self.card_service, parameters, list(note_ids))
+        except Exception:  # noqa: BLE001 - 卡片已寫入：不能報成建立失敗，否則草稿退回可建立、使用者會再建一組
+            logger.exception("%s 建卡後的後續處理失敗（note_ids=%s）", handler_name, list(note_ids))
+            after_warning = "⚠️ 卡片已建立，但建立後的後續處理失敗（例如沒刪掉要覆蓋的舊卡），請到 Cards 頁確認。"
         sync = await self.sync_after_write()
-        warning = "\n".join(w for w in (tag_warning, sync) if w) or None
+        warning = "\n".join(w for w in (tag_warning, after_warning, sync) if w) or None
         return {"note_ids": list(note_ids), "deck": deck, "sync_warning": warning}
 
     async def _add_tags(self, note_ids: list[int], tags: list[str]) -> str | None:
@@ -283,6 +297,56 @@ class NoteService:
         if handler.DRAFT_PARAMS is None or _draft_schema(handler) is None:
             raise HandlerOperationUnsupportedError(f"「{handler.title}」沒有網頁的預覽建卡流程")
         return handler.DRAFT_PARAMS.model_validate(dict(params)).model_dump()
+
+    async def resolve_draft_duplicate(
+        self,
+        handler_name: str,
+        parameters: dict[str, object],
+        decision: DuplicateDecision | None,
+        *,
+        previous: DuplicateResolution | None = None,
+    ) -> dict[str, object]:
+        """生成草稿之前查重複（server_drafts 計畫書 D10.2）：有重複又還沒決定時擋下，不呼叫 LLM。
+
+        Check for a duplicate before generating a draft.
+
+        - 輸入裡原有的系統鍵（``DRAFT_SYSTEM_KEYS``）一律先拿掉，以這次查到的為準。
+        - 有重複而且已經決定（覆蓋、允許重複）時，把決定與舊卡 ID 放進輸入（``DuplicateResolution``），存在草稿裡，
+          ``execute_draft`` 再轉成建立參數。沒有重複時不帶決定。
+        - ``previous``（重試時上一次的決定）只在這次查到的還是**同一張**舊卡時沿用：換了一張就要使用者重新看過、
+          重新決定，不能把對 A 卡的「覆蓋」套到沒看過的 B 卡上。
+        - Anki 查詢失敗時略過檢查照常生成，並在輸入記下原因（``DUPLICATE_CHECK_SKIPPED_KEY``）讓網頁提醒；
+          真的重複時，建卡會被 Anki 的首欄位檢查擋下（409 ``DUPLICATE_CARD``），網頁可以改成允許重複再建。
+
+        目前只有外語糾錯實作了 ``find_draft_duplicate``，其他 handler 一律查不到重複。
+
+        Args:
+            handler_name: handler 名稱。The handler.
+            parameters: ``validate_draft_input`` 驗證過的輸入。The validated input.
+            decision: 使用者這次看過舊卡後的決定；第一次送出時為 None。The user's decision.
+            previous: 上一次存在草稿裡的決定（重試時）。The decision stored before.
+
+        Returns:
+            要存進草稿的輸入。The input to store in the draft.
+
+        Raises:
+            DuplicateFoundError: 有重複、還沒決定（回應附上舊卡）。A duplicate needs a decision.
+        """
+        handler = self.registry.get_handler(handler_name)
+        clean = {k: v for k, v in parameters.items() if k not in DRAFT_SYSTEM_KEYS}
+        try:
+            duplicate = await handler.find_draft_duplicate(self.card_service, clean)
+        except AnkiConnectError as exc:
+            logger.warning("生成草稿前查重複失敗，略過檢查（handler=%s, input=%r）：%s", handler_name, clean, exc)
+            return {**clean, DUPLICATE_CHECK_SKIPPED_KEY: f"無法確認 Anki 是否已有同一張卡（{exc}）"}
+        if duplicate is None:
+            return clean
+        note_id = int(str(duplicate["note_id"]))
+        if decision is None and previous is not None and previous.note_id == note_id:
+            decision = previous.decision
+        if decision is None:
+            raise DuplicateFoundError("Anki 已有同一張卡：要覆蓋舊卡、另建新卡，還是取消？", duplicate)
+        return DuplicateResolution(decision, note_id).into_input(clean)
 
     async def generate_draft(self, handler_name: str, parameters: dict[str, object]) -> dict[str, object]:
         """請 LLM 生成草稿（不寫入 Anki）；輸入要先經 :meth:`validate_draft_input`。

@@ -5,7 +5,7 @@
  * - 卡片類型依 `capabilities.create.channels` 呈現：含 web 可選；只能在 TG、本機腳本建立的反灰並
  *   顯示原因；沒有任何管道的不顯示。前端不自行判斷，只看宣告（`lib/handlerCapabilities.ts`）。
  * - 填表流程（`flow="form"`）：表單由 `create_schema` 產生（`lib/createForm.ts`），不呼叫 LLM。
- * - 預覽流程（`flow="preview"`，目前只有三語對話卡）：見 `PreviewCreate.tsx`。
+ * - 預覽流程（`flow="preview"`，三語對話卡與外語糾錯）：見 `PreviewCreate.tsx`。
  * - 選的卡片類型、選單是否展開、填到一半的內容都記在 localStorage（關掉分頁再開還在）；鍵與頁面無關，
  *   兩個入口看到的是同一份。
  * - 全站同一時間只有一份建卡草稿（`docs/wip/server_drafts_FEAT_2026-11-04.md`）：有別種卡片的草稿時，
@@ -31,6 +31,7 @@ import {
   deckBlockedReason,
   deckBlocksForm,
   formErrorsFrom,
+  formParams,
   initialValues,
   missingRequired,
   schemaFields,
@@ -321,7 +322,12 @@ function CreateForm({
 
   const mutation = useMutation({
     mutationFn: () =>
-      FluencyTidesAPI.createNote(handler.name, { deck: deck!, note_type: create.note_type!, params: values, tags }),
+      FluencyTidesAPI.createNote(handler.name, {
+        deck: deck!,
+        note_type: create.note_type!,
+        params: formParams(fields, values),
+        tags,
+      }),
     onSuccess: (data) => {
       setResult(data)
       setErrors(null)

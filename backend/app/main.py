@@ -55,7 +55,7 @@ from app.api.story import router as story_router
 from app.api.jp_verb_readings import router as jp_verb_readings_router
 from app.bot.dispatcher import create_bot, setup_dispatcher
 from app.core.config import settings
-from app.core.exceptions import DraftStateError, FluencyTidesError
+from app.core.exceptions import DraftStateError, DuplicateFoundError, FluencyTidesError
 from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.database.database import (
     create_db_and_tables,
@@ -284,8 +284,9 @@ async def fluencytides_error_handler(
 
     Returns:
         JSONResponse 包含 ErrorResponse 結構；建卡草稿狀態的 409（``DraftStateError``）另帶 ``draft``
-        （目前的草稿或 null）。A JSONResponse carrying the ErrorResponse
-        structure, plus ``draft`` for draft state conflicts.
+        （目前的草稿或 null），生成前發現重複（``DuplicateFoundError``）另帶 ``duplicate``（舊卡摘要）。
+        A JSONResponse carrying the ErrorResponse structure, plus ``draft``
+        for draft state conflicts and ``duplicate`` for DUPLICATE_FOUND.
     """
     logger.warning(
         "業務異常 [%s] -> %s (HTTP %d)",
@@ -302,6 +303,9 @@ async def fluencytides_error_handler(
     # 草稿狀態的 409 附上目前的草稿，網頁不必再讀一次（server_drafts 計畫書 D6）
     if isinstance(exc, DraftStateError):
         content["draft"] = exc.draft
+    # 生成前發現重複：附上舊卡，網頁讓使用者選覆蓋、允許重複或取消（D10.2）
+    if isinstance(exc, DuplicateFoundError):
+        content["duplicate"] = exc.duplicate
 
     return JSONResponse(
         status_code=exc.status_code,

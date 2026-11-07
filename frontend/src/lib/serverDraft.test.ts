@@ -4,6 +4,7 @@ import {
   classifySaveError,
   draftFromError,
   draftNotice,
+  duplicateFromError,
   errorCode,
   initialEditState,
   inputAsValues,
@@ -73,6 +74,17 @@ describe('draftFromError', () => {
     expect(draftFromError({ error_code: 'DUPLICATE_CARD', message: 'x' })).toBeUndefined()
     expect(draftFromError(new Error('network'))).toBeUndefined()
     expect(draftFromError(null)).toBeUndefined()
+  })
+
+  it('duplicateFromError：生成前發現重複時附上的舊卡', () => {
+    const card = { note_id: 20, correct_answer: '修正' }
+    expect(duplicateFromError({ error_code: 'DUPLICATE_FOUND', status: 409, duplicate: card })).toBe(card)
+    // 沒附舊卡也讓使用者決定
+    expect(duplicateFromError({ error_code: 'DUPLICATE_FOUND', status: 409 })).toEqual({ note_id: 0 })
+    expect(duplicateFromError({ error_code: 'DUPLICATE_CARD', status: 409 })).toBeNull()
+    expect(duplicateFromError(new Error('x'))).toBeNull()
+    // 不是草稿狀態的錯誤：draftFromError 不會把它當成草稿已不在
+    expect(draftFromError({ error_code: 'DUPLICATE_FOUND', duplicate: card })).toBeUndefined()
   })
 
   it('errorCode', () => {

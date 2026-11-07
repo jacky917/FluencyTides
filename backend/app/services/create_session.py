@@ -76,7 +76,8 @@ class Draft:
         id: UUID4 hex。
         handler_name: handler 名稱。The handler.
         status: 狀態。The status.
-        input: 生成的輸入（``DRAFT_PARAMS`` 驗證後）。The generation input.
+        input: 生成的輸入（``DRAFT_PARAMS`` 驗證後）；可能另帶系統鍵（重複決定、略過查重複的原因，
+            見 ``task_handlers.base.DRAFT_SYSTEM_KEYS``）。The generation input.
         result: 生成結果 ``{"params", "suggested_tags"}``。The generated result.
         state: 網頁的編輯狀態，後端不解讀。The web editing state.
         error_code、error_message: 生成失敗時。On failure.

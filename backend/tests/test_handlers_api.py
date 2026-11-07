@@ -150,7 +150,7 @@ def test_invalid_params_are_422_with_field_loc(client, anki):
          (422, "NOTE_TYPE_NOT_CREATABLE")),
         ("jp_verb_pair", {"deck": "D", "note_type": "JP_VerbPair_Master_Dark", "params": {}},
          (400, "HANDLER_OPERATION_UNSUPPORTED")),
-        ("speaking_coach", {"deck": "D", "note_type": "Speaking_Coach_Dark", "params": {"prompt": "x"}},
+        ("jp_core_verb", {"deck": "D", "note_type": "JP_CoreVerb_Master_Dark", "params": {}},
          (400, "HANDLER_OPERATION_UNSUPPORTED")),
         ("nope", {"deck": "D", "note_type": V2, "params": {}}, (404, "HANDLER_NOT_FOUND")),
         ("vocabulary_mining", {"deck": "D", "note_type": V2, "params": {"Expression": "x", "Meaning": "y"}},
