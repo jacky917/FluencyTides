@@ -50,11 +50,12 @@ from app.api.jp_tokenizer import router as jp_tokenizer_router
 from app.api.capability_routes import router as capability_routes_router
 from app.api.cards import router as cards_router
 from app.api.notes import router as notes_router
+from app.api.drafts import router as drafts_router
 from app.api.story import router as story_router
 from app.api.jp_verb_readings import router as jp_verb_readings_router
 from app.bot.dispatcher import create_bot, setup_dispatcher
 from app.core.config import settings
-from app.core.exceptions import FluencyTidesError
+from app.core.exceptions import DraftStateError, FluencyTidesError
 from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.database.database import (
     create_db_and_tables,
@@ -194,6 +195,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # === Shutdown ===
     logger.info("🛑 FluencyTides API 正在關閉...")
+
+    # 網頁的建卡草稿只在記憶體（server_drafts 計畫書 R1）：取消背景生成，重啟後槽位本來就是空的
+    from app.services.create_session import create_session
+
+    await create_session.shutdown()
     
     # 停止 Telegram Bot
     if bot:
@@ -277,8 +283,9 @@ async def fluencytides_error_handler(
         exc: FluencyTidesError 異常實例。The FluencyTidesError instance.
 
     Returns:
-        JSONResponse 包含 ErrorResponse 結構。A JSONResponse carrying the
-        ErrorResponse structure.
+        JSONResponse 包含 ErrorResponse 結構；建卡草稿狀態的 409（``DraftStateError``）另帶 ``draft``
+        （目前的草稿或 null）。A JSONResponse carrying the ErrorResponse
+        structure, plus ``draft`` for draft state conflicts.
     """
     logger.warning(
         "業務異常 [%s] -> %s (HTTP %d)",
@@ -291,10 +298,14 @@ async def fluencytides_error_handler(
         error_code=exc.error_code,
         message=exc.message,
     )
+    content = error_response.model_dump()
+    # 草稿狀態的 409 附上目前的草稿，網頁不必再讀一次（server_drafts 計畫書 D6）
+    if isinstance(exc, DraftStateError):
+        content["draft"] = exc.draft
 
     return JSONResponse(
         status_code=exc.status_code,
-        content=error_response.model_dump(),
+        content=content,
     )
 
 
@@ -376,6 +387,7 @@ app.include_router(jp_tokenizer_router, prefix="/api/v1")
 app.include_router(capability_routes_router, prefix="/api/v1")
 app.include_router(cards_router, prefix="/api/v1")
 app.include_router(notes_router, prefix="/api/v1")
+app.include_router(drafts_router, prefix="/api/v1")
 app.include_router(story_router, prefix="/api/v1")
 
 # 註冊 Webhook Router路由 (不受 prefix 限制，完全依照 TG_WEBHOOK_PATH 設定)

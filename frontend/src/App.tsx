@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { Routes, Route, Link, Navigate, useLocation } from 'react-router-dom'
 import { LayoutDashboard, PlusCircle, Network, Bot, Layers, SlidersHorizontal, GitBranch } from 'lucide-react'
 import { Toaster } from './components/ui/sonner'
+import { DraftWatcher } from './components/shared/DraftWatcher'
 import {
   Sidebar,
   SidebarContent,
@@ -115,6 +116,8 @@ function App() {
 
       {/* Global Toast Provider */}
       <Toaster />
+      {/* 建卡草稿生成完成、草稿已不在的通知（全站） */}
+      <DraftWatcher />
     </SidebarProvider>
   )
 }

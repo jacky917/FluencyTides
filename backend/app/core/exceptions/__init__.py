@@ -59,6 +59,13 @@ from .services import (
     InvalidNoteQueryError,
     InvalidNoteFieldsError,
     TagInvalidError,
+    DraftStateError,
+    CreateSessionBusyError,
+    DraftBusyError,
+    DraftVersionConflictError,
+    DraftNotFailedError,
+    DraftNotFoundError,
+    DraftStateTooLargeError,
 )
 
 __all__ = [
@@ -108,4 +115,11 @@ __all__ = [
     "InvalidNoteQueryError",
     "InvalidNoteFieldsError",
     "TagInvalidError",
+    "DraftStateError",
+    "CreateSessionBusyError",
+    "DraftBusyError",
+    "DraftVersionConflictError",
+    "DraftNotFailedError",
+    "DraftNotFoundError",
+    "DraftStateTooLargeError",
 ]

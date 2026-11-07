@@ -22,6 +22,7 @@ from tests.test_handler_base import V2, make_handler
 from tests.test_handlers_api import _error, anki, client, relations  # noqa: F401 （pytest fixtures）
 from tests.test_note_service import _model_note
 from tests.test_trilingual_create import _draft
+from tests.test_drafts import start_draft
 
 TRILINGUAL = "Speaking_Trilingual_Dark"
 
@@ -194,13 +195,11 @@ def test_tag_list(client, anki):
     ]
 
 
-def test_draft_suggests_tags_from_existing(client, anki):
+def test_draft_suggests_tags_from_existing(client, anki, draft_slot):
     _trilingual_notes(anki)
     generate = mock.AsyncMock(return_value=_draft(tags=["interview", "HairSalon"]))
     with mock.patch.object(generate_service, "generate", generate):
-        response = client.post("/api/v1/handlers/speaking_trilingual/draft", json={"params": {"background": "剪髮"}})
-    assert response.status_code == 200
-    body = response.json()
+        body = start_draft(client, draft_slot)["result"]
     assert "tags" not in body["params"]
     assert body["suggested_tags"] == [{"tag": "Interview", "existing": True}, {"tag": "HairSalon", "existing": False}]
     # 既有標籤依次數排序交給 LLM
@@ -215,7 +214,7 @@ def test_prompt_renders_tag_section(existing):
     assert "Step1" in prompt  # 排序標籤不要建議
 
 
-def test_draft_still_works_when_anki_is_down(client, anki):
+def test_draft_still_works_when_anki_is_down(client, anki, draft_slot):
     """既有標籤只是給 LLM 參考：查不到時照樣生成草稿，只是沒有既有標籤可沿用。"""
 
     async def down(query):
@@ -224,7 +223,7 @@ def test_draft_still_works_when_anki_is_down(client, anki):
     anki.find_notes = down
     generate = mock.AsyncMock(return_value=_draft(tags=["HairSalon"]))
     with mock.patch.object(generate_service, "generate", generate):
-        response = client.post("/api/v1/handlers/speaking_trilingual/draft", json={"params": {"background": "剪髮"}})
-    assert response.status_code == 200
+        draft = start_draft(client, draft_slot)
+    assert draft["status"] == "ready"
     assert generate.await_args.args[3] == []
-    assert response.json()["suggested_tags"] == [{"tag": "HairSalon", "existing": False}]
+    assert draft["result"]["suggested_tags"] == [{"tag": "HairSalon", "existing": False}]

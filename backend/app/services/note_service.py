@@ -260,29 +260,51 @@ class NoteService:
         ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0].casefold()))
         return [{"tag": tag, "count": count} for tag, count in ranked]
 
-    async def draft(self, handler_name: str, params: Mapping[str, object]) -> dict[str, object]:
-        """網頁預覽流程的草稿：檢查能力 → 驗證輸入 → ``execute_draft``；不寫入 Anki。
+    def validate_draft_input(self, handler_name: str, params: Mapping[str, object]) -> dict[str, object]:
+        """網頁預覽流程的草稿輸入：檢查能力 → 以 ``DRAFT_PARAMS`` 驗證（server_drafts 計畫書 D4）。
 
-        Draft for the web preview flow; nothing is written.
+        Check the web preview flow and validate the draft input.
+
+        在請求裡呼叫，錯誤直接回給網頁；驗證過的輸入再交給背景的 :meth:`generate_draft`。
 
         Args:
             handler_name: handler 名稱。The handler.
             params: 草稿輸入（``DRAFT_PARAMS``）。The draft input.
 
         Returns:
-            ``{"params": 建立參數的草稿, "suggested_tags": [{"tag", "existing"}]}``。建議的標籤去掉不合格與
-            系統標籤；與既有標籤只差大小寫時改用既有的寫法。The draft and its suggested tags.
+            驗證後的輸入。The validated input.
 
         Raises:
             HandlerNotFoundError: handler 不存在。Unknown handler.
             HandlerOperationUnsupportedError: 沒有網頁的預覽流程。No web preview flow.
             pydantic.ValidationError: 輸入驗證失敗（REST 轉成 422）。Invalid input.
-            LLMServiceError、LLMGenerationError 等：LLM 呼叫失敗或回傳格式不對。When the LLM fails.
         """
         handler = self.registry.get_handler(handler_name)
         if handler.DRAFT_PARAMS is None or _draft_schema(handler) is None:
             raise HandlerOperationUnsupportedError(f"「{handler.title}」沒有網頁的預覽建卡流程")
-        parameters = handler.DRAFT_PARAMS.model_validate(dict(params)).model_dump()
+        return handler.DRAFT_PARAMS.model_validate(dict(params)).model_dump()
+
+    async def generate_draft(self, handler_name: str, parameters: dict[str, object]) -> dict[str, object]:
+        """請 LLM 生成草稿（不寫入 Anki）；輸入要先經 :meth:`validate_draft_input`。
+
+        Generate a draft with the LLM; nothing is written.
+
+        在背景執行（``CreateSession``），請求早已結束：只用到 ``self.anki_client``（``card_service`` 底下的
+        AnkiConnect 單例，查既有標籤）與 handler 註冊表，``execute_draft`` 不接任何服務。不能在這裡用
+        ``relation_service``：它綁著請求的 DB session，回應送出後就關閉了（server_drafts 計畫書 D4、§11.1）。
+
+        Args:
+            handler_name: handler 名稱。The handler.
+            parameters: 驗證過的草稿輸入。The validated input.
+
+        Returns:
+            ``{"params": 建立參數的草稿, "suggested_tags": [{"tag", "existing"}]}``。建議的標籤去掉不合格與
+            系統標籤；與既有標籤只差大小寫時改用既有的寫法。The draft and its suggested tags.
+
+        Raises:
+            LLMServiceError、LLMGenerationError 等：LLM 呼叫失敗或回傳格式不對。When the LLM fails.
+        """
+        handler = self.registry.get_handler(handler_name)
         try:
             existing = [str(item["tag"]) for item in await self.tags(handler_name)]
         except AnkiConnectError as exc:

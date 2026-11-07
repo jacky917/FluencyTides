@@ -161,3 +161,31 @@ def declare_route_key():
     yield declare
     for key in added:
         _routing._DECLARED.pop(key, None)
+
+
+@pytest.fixture(autouse=True)
+def draft_slot():
+    """每個測試都從空的建卡槽位開始；背景生成改成收集起來，由測試自己執行（server_drafts 計畫書）。
+
+    Start every test with an empty create slot; background generations are
+    collected for the test to run.
+
+    TestClient 每個請求各用一個事件迴圈，請求結束時留在上面的 task 會被丟掉，所以不用 ``create_task``。
+
+    Yields:
+        還沒執行的背景生成（coroutine）清單。The pending background generations.
+    """
+    from app.services.create_session import create_session
+
+    pending: list = []
+    create_session.current = None
+    create_session._task = None
+    # 每個 asyncio.run 都是新的事件迴圈：換一把新鎖，避免鎖綁在舊迴圈上
+    create_session._lock = asyncio.Lock()
+    create_session._spawn = pending.append
+    yield pending
+    for coro in pending:
+        coro.close()
+    create_session.current = None
+    create_session._task = None
+    create_session._spawn = asyncio.create_task

@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-11-04（2026-11-07 依使用者決定改寫：只存記憶體、全站一把鎖、TG 建卡移到網頁、腳本例外） |
 | **性質** | 新增機能設計 + 實作工作項 |
-| **狀態** | 📝 設計已確認（2026-11-07），尚未實作 |
+| **狀態** | 🚧 PR 1（P1～P4）實作完成，待部署後在正式站驗收（§9.1）；PR 2、PR 3 尚未開始。實作與設計的差異見 §11 |
 | **範圍** | 後端：預覽流程的草稿改為背景生成、存在後端記憶體（新的 `CreateSession`）；全站「建卡工作階段」鎖，網頁的建卡入口都要先通過它；新的 `/drafts` 端點、建卡帶 `draft_id`。前端：`components/generate/PreviewCreate.tsx` 改讀寫後端草稿、全站的生成完成通知、生成中的按鈕狀態、填表內容改存 localStorage。最後兩個階段：網頁補上對話卡（單語）與外語糾錯的建卡；網頁驗收後，依使用者指示移除 TG 的建卡（D10） |
 | **不動** | LLM 呼叫本身（提示詞、模型路由、`execute_draft` 的輸出形狀、`cli_base.py` 的子程序呼叫方式）；建卡的寫入流程（`execute_create`、同步 AnkiWeb）；本機批次腳本的整條路（`/verb-pair/generate-child-cards`、`/core-verb/generate-child-cards`、直接呼叫 AnkiConnect 的腳本）；資料庫（不新增資料表）；TG 的錄音評分、上傳音檔、刪除條目、人脈卡 `/p` 的編輯、`/sync`、`/setconfig`；卡片瀏覽頁與 Card Generator 的版面 |
-| **PR / 進度** | 分支 `feat/server-drafts`；只有計畫書，尚未實作 |
+| **PR / 進度** | 分支 `feat/server-drafts`；PR 1 已實作並經多面向審查修正（2026-11-07：後端 1663 項、前端 332 項測試與 lint、build 通過；以假 Anki 與假 LLM 在瀏覽器實測，見 §11） |
 | **關聯文件** | `docs/archive/trilingual_web_create_FEAT_2026-10-30.md`（預覽流程；當時決定「草稿不存在後端」，本計畫取代該項）；`docs/wip/card_list_create_FEAT_2026-10-30.md`（兩頁共用 `CreatePanelBody`）；`docs/wip/backlog.md` W1、W2（單語對話卡、外語糾錯的網頁建卡，併入本計畫 D10，完成後從 backlog 刪除） |
 
 > **改寫說明（2026-11-07）**：第一版（2026-11-04）把草稿存在網站 SQLite 的新表 `card_drafts`，每種卡片各一份。討論後使用者決定改成最簡單的設計：
@@ -101,7 +101,7 @@ L1～L5 只改前端解決不了：結果還沒回到瀏覽器時，頁面就沒
 - 槽位不是空的（不論狀態），就是「有一份建卡工作進行中」。這段期間：
   - 網頁的「生成」（`POST /handlers/{name}/drafts`）：回 409 `CREATE_SESSION_BUSY`，附上目前的草稿。
   - 網頁的填表建卡（單字卡、人脈卡等沒有預覽流程的卡片，`POST /handlers/{name}/notes` 不帶 `draft_id`）：同樣回 409 `CREATE_SESSION_BUSY`。使用者 2026-11-07 決定：降低設計難度，也沒有同時生成多張卡的需求。
-- 槽位是空的時候，網頁的填表建卡也要「佔一下」槽位：請求進來時在鎖內確認槽位是空的，並把槽位設成 `creating`（沒有生成結果的那種），寫入 Anki 後清空。這樣填表建卡和另一邊的「生成」不會同時發生。
+- 槽位是空的時候，網頁的填表建卡也要「佔一下」槽位：請求進來時在鎖內確認槽位是空的，並把槽位設成 `form_creating`（沒有輸入與生成結果），寫入 Anki 後清空。這樣填表建卡和另一邊的「生成」不會同時發生。
 - 鎖的檢查放在**網頁的入口**（`app/api/drafts.py` 與 `app/api/handlers.py` 的建卡端點），不放進 `NoteService.create`：TG 也呼叫 `NoteService.create`，放在裡面會連 TG 一起擋（D10）。
 - 例外：本機腳本不受限制（G8），**不必寫任何程式**，因為腳本建卡的三種方式都不經過上鎖的入口（`NoteService.create` 與 `/drafts`）：
   - 呼叫後端專用的端點：`JP_VerbPair`、`JP_CoreVerb` 的 `generate_child_cards.py` 打 `/verb-pair/generate-child-cards`、`/core-verb/generate-child-cards`，後端在裡面呼叫 handler 的 `execute_generate`。
@@ -126,6 +126,7 @@ L1～L5 只改前端解決不了：結果還沒回到瀏覽器時，頁面就沒
 - `ready`：可預覽、修改、建立、廢棄。
 - `failed`：顯示原因；可以「重試」（同樣的輸入）、「改輸入後重試」（回到輸入畫面，帶著原本的輸入）、「廢棄」。
 - `creating`：建立中（正在寫入 Anki）。不能修改、不能廢棄、不能再按建立；其他分頁顯示「建立中」。
+- `form_creating`：填表建卡暫時佔用（D2），寫入 Anki 後清空；其他分頁顯示「正在建立一張○○」。前端不記住它的 ID（D11）。
 - 每次轉換都把 `version` 加一。需要前提狀態的轉換（修改、重試、開始建立）帶上請求方看到的 `version`，不符就回 409 與最新的草稿（D6）。
 
 ### D4 生成改為背景工作
@@ -143,8 +144,8 @@ L1～L5 只改前端解決不了：結果還沒回到瀏覽器時，頁面就沒
   - `result`：後端產生、之後不再改的生成結果（`params` 與 `suggested_tags`，即現在 `DraftResponse` 的內容）。
   - `state`：網頁的編輯狀態（勾選、卡面情境、補充、標籤），也就是現在 sessionStorage 裡的 `DraftState`。後端只當成 JSON 存取、檢查大小（上限 256 KB），不解讀內容。建立時網頁照舊把勾選結果組成建立參數送出（`selectedParams`），後端照舊以 `CREATE_PARAMS` 驗證。
 - 網頁在使用者修改後 800 ms 送 `PATCH /drafts/{id}`，帶 `version`。版本不符時回 409 `DRAFT_VERSION_CONFLICT` 與最新的草稿；網頁顯示「這份草稿在其他地方改過了」，提供「載入最新」與「用這裡的覆蓋」。正常使用不會發生（同一時間只有一份草稿、通常只在一個地方編輯），真的發生時後到的一方看到這個提示（使用者 2026-11-07 決定）。
-- 存檔失敗（網路斷了）：編輯狀態先存一份在 localStorage（`draft_state_backup:{draft_id}`），預覽畫面顯示「尚未儲存」；恢復連線後自動重送，成功後刪除備份。
-- 預覽畫面顯示儲存狀態：「已儲存」、「儲存中…」、「尚未儲存（離線）」。
+- 每次修改都先存一份在 localStorage（`draft_state_backup:{draft_id}`），存回後端後刪除；還沒存回去就關掉分頁，同一台裝置回來也不會遺失。存檔失敗時依原因處理（`lib/serverDraft.ts` 的 `classifySaveError`）：沒有回應或 5xx 每 10 秒自動重送、恢復連線時馬上重送；版本衝突讓使用者選；草稿已不在時告知；草稿忙碌（另一個分頁正在建立）時保留修改，回到可建立再送；其他 4xx（例如內容太大）顯示原因，不自動重送。
+- 預覽畫面顯示儲存狀態：「已儲存」、「儲存中…」、「尚未儲存」、「尚未儲存（連不上伺服器，恢復後會自動存好）」、衝突。
 
 ### D6 同時操作：每個動作先「搶到」草稿再做
 
@@ -163,9 +164,9 @@ L1～L5 只改前端解決不了：結果還沒回到瀏覽器時，頁面就沒
 
 ### D7 建立時帶 `draft_id`，成功後清空槽位
 
-- `POST /handlers/{name}/notes` 加選填的 `draft_id` 與 `draft_version`。
-  - 帶 `draft_id`：在鎖內確認槽位裡是這份草稿、狀態是 `ready`、版本相符、handler 相同，改成 `creating`，鎖外寫入 Anki。
-  - 不帶 `draft_id`（填表建卡）：依 D2，槽位必須是空的。
+- `POST /handlers/{name}/notes` 加選填的 `draft: {id, version}`（ID 與版本成對，2026-11-07 審查後由兩個獨立欄位改成一個物件，版本一定檢查）。
+  - 帶 `draft`：在鎖內確認槽位裡是這份草稿、狀態是 `ready`、版本相符，改成 `creating`，鎖外寫入 Anki。草稿是另一種卡片的回 409 `CREATE_SESSION_BUSY`。
+  - 不帶 `draft`（填表建卡）：依 D2，槽位必須是空的。
 - 寫入 Anki 成功：清空槽位，回 201。清空只是改記憶體，不會失敗，所以第一版的 `draft_warning`（刪草稿失敗）不再需要。
 - 寫入失敗（422、Anki 錯誤）：退回 `ready`，網頁照舊顯示錯誤，草稿還在。
 - 回應在路上遺失（建立成功但網頁沒收到）：網頁重新讀取時槽位是空的，顯示「這份草稿已不在（可能已建立，或在其他地方廢棄）」，附上到卡片瀏覽頁的連結。
@@ -192,7 +193,7 @@ L1～L5 只改前端解決不了：結果還沒回到瀏覽器時，頁面就沒
   - 沒有草稿：顯示輸入畫面（預覽流程）或表單（填表流程）。
   - `generating`、`creating`：每 3 秒重新讀取一次（TanStack Query `refetchInterval`），變成其他狀態後停止。
   - 分頁回到前景（`visibilitychange`）時立刻讀一次：手機從別的 App 回來會馬上看到結果。
-- 全站通知：版面層級掛一個 `DraftWatcher`。只在已知有 `generating` 的草稿時，每 10 秒讀 `GET /drafts/current`；草稿從 `generating` 變成 `ready` 或 `failed` 時跳 toast（「三語草稿已生成」附「前往」按鈕，或「生成失敗」）。取代現在 mutation `onSuccess` 的 toast。
+- 全站通知：版面層級掛一個 `DraftWatcher`。打開網站、回到分頁時各讀一次，進行中時每 10 秒讀 `GET /drafts/current`；草稿從 `generating` 變成 `ready` 或 `failed` 時跳 toast（「三語草稿已生成」附「前往」按鈕，或「生成失敗」）。取代現在 mutation `onSuccess` 的 toast。
 - 不用 SSE、WebSocket：Cloudflare Access 加 Tunnel 的環境下，輪詢最單純也最不容易出錯；只有一份草稿，負擔可以忽略。
 
 ### D10 最後階段：TG 建卡移到網頁，網頁驗收後才移除 TG 端
@@ -232,7 +233,7 @@ L1～L5 只改前端解決不了：結果還沒回到瀏覽器時，頁面就沒
 ### D11 生成前的輸入與填表內容改存 localStorage
 
 - `generate_form:{handler}`、`generate_tags:{handler}` 從 sessionStorage 改成 localStorage：關掉分頁再開還在，同一個瀏覽器的分頁共用（`useLocalStorage` 已會跨分頁同步，`hooks/useStoredState.ts`）。
-- 按「生成」後，輸入也存在後端草稿的 `input`。生成成功後清掉本機的輸入，與現在相同；失敗時保留，「改輸入後重試」直接帶回。
+- 按「生成」後，輸入也存在後端草稿的 `input`。建立成功後才清掉本機的輸入（與原本的程式相同，§11.1）；失敗時保留，「改輸入後重試」直接帶回。
 - 後端重啟、草稿遺失時：本機的輸入只在「生成成功後」才會清掉，所以要等到 `ready` 才清。
 - 「草稿已遺失」的提示（使用者 2026-11-07 決定要做）：網頁在 localStorage 記住目前草稿的 `id`（鍵 `current_draft_id`；建立草稿時寫入，建立成功或廢棄時刪除）。建卡畫面讀到後端沒有草稿、本機卻記得有一份時，顯示一行「伺服器重新啟動過，上一份草稿已遺失，可以用原本的輸入重新生成」，並刪掉這個 `id`。
 - 仍用 sessionStorage 的：卡片瀏覽頁的成功提示（`generate_created:{handler}`）、劇情流程圖各分頁的捲動位置（`StoryGraph.tsx`）。選的牌組、卡片類型、面板寬度、卡片瀏覽的位置本來就在 localStorage，不動。
@@ -271,7 +272,7 @@ L1～L5 只改前端解決不了：結果還沒回到瀏覽器時，頁面就沒
 ```
 
 - `result` 只有 `ready`、`creating` 時有值；`error` 只有 `failed` 時有值；`state` 在網頁第一次存檔前是 `null`。
-- 填表建卡佔槽位時（D2）也是一份 `creating` 的草稿，`input`、`result` 為 `null`；其他頁面讀到時顯示「正在建立一張○○」。
+- 填表建卡佔槽位時（D2）也是一份 `form_creating` 的草稿，`input`、`result` 為 `null`；其他頁面讀到時顯示「正在建立一張○○」。
 
 ### 4.2 端點
 
@@ -280,9 +281,9 @@ L1～L5 只改前端解決不了：結果還沒回到瀏覽器時，頁面就沒
 | `GET /drafts/current` | 讀目前的草稿 | 200 草稿；沒有草稿時 200 `null` | — |
 | `POST /handlers/{name}/drafts` | 開始生成（body：`{params}`，即現在的草稿輸入；外語糾錯另可帶 `duplicate_decision`：`overwrite`、`allow`，D10.2） | 202 草稿 | 404 handler 不存在；400 `HANDLER_OPERATION_UNSUPPORTED`（沒有預覽流程）；409 `CREATE_SESSION_BUSY`；409 `DUPLICATE_FOUND`（外語糾錯，附舊卡摘要）；422 輸入驗證失敗 |
 | `PATCH /drafts/{id}` | 存編輯狀態（body：`{state, version}`） | 200 草稿 | 404 `DRAFT_NOT_FOUND`；409 `DRAFT_VERSION_CONFLICT`；409 `DRAFT_BUSY`（不是 `ready`）；413 `state` 太大 |
-| `POST /drafts/{id}/retry` | 失敗後重試（body：`{version}`，選填 `params`：給了就換成新的輸入） | 202 草稿 | 404；409 `DRAFT_NOT_FAILED`；422 |
+| `POST /drafts/{id}/retry` | 失敗後重試（body：`{version}`，選填 `params`：給了就換成新的輸入） | 202 草稿 | 404；409 `DRAFT_NOT_FAILED`、`DRAFT_VERSION_CONFLICT`；422 |
 | `DELETE /drafts/{id}` | 廢棄（只限 `ready`、`failed`，D8） | 204 | 404；409 `DRAFT_BUSY`（`generating`、`creating`） |
-| `POST /handlers/{name}/notes` | 既有的建卡；body 加選填 `draft_id`、`draft_version` | 201 | 既有的錯誤；409 `CREATE_SESSION_BUSY`（不帶 `draft_id` 而槽位不是空的）；404 `DRAFT_NOT_FOUND`（帶了 `draft_id` 但槽位裡不是它）；409 `DRAFT_BUSY`、`DRAFT_VERSION_CONFLICT` |
+| `POST /handlers/{name}/notes` | 既有的建卡；body 加選填 `draft: {id, version}` | 201 | 既有的錯誤；409 `CREATE_SESSION_BUSY`（不帶 `draft` 而槽位不是空的）；404 `DRAFT_NOT_FOUND`（帶了 `draft` 但槽位裡不是它）；409 `CREATE_SESSION_BUSY`（草稿是另一種卡片的）；409 `DRAFT_BUSY`、`DRAFT_VERSION_CONFLICT` |
 
 - 所有 `{id}` 端點都比對槽位裡的草稿 `id`：舊分頁拿著已經結束的草稿操作時回 404，不會誤動到新的一份。
 - 草稿的 `error` 沿用生成失敗時現有的錯誤碼，例如 `LLM_SERVICE_ERROR`（現在回 502）、`LLM_GENERATION_FAILED`（現在回 422）；背景生成沒有 HTTP 回應，只把錯誤碼與訊息存進草稿。
@@ -295,15 +296,16 @@ L1～L5 只改前端解決不了：結果還沒回到瀏覽器時，頁面就沒
 |---|---|---|
 | `id` | `str` | UUID4 hex |
 | `handler_name` | `str` | handler 名稱 |
-| `status` | `Literal["generating", "ready", "failed", "creating"]` | |
+| `status` | `Literal["generating", "ready", "failed", "creating", "form_creating"]` | 後端 `DraftOut` 共用同一個型別 |
 | `input` | `dict \| None` | 生成的輸入（`DRAFT_PARAMS` 驗證後） |
 | `result` | `dict \| None` | 生成結果 |
 | `state` | `dict \| None` | 網頁的編輯狀態（上限 256 KB） |
 | `error_code`、`error_message` | `str \| None` | 失敗時 |
 | `version` | `int` | 每次轉換加一 |
-| `created_at`、`updated_at`、`generation_started_at` | `datetime` | UTC |
+| `created_at`、`updated_at` | `datetime` | UTC |
+| `generation_started_at` | `datetime \| None` | 最近一次開始生成；`form_creating` 為 None |
 
-`CreateSession` 另外持有：`lock: asyncio.Lock`、`task: asyncio.Task | None`（目前的背景生成）。
+`CreateSession` 另外持有：`_lock: asyncio.Lock`、`_task: asyncio.Task | None`（目前的背景生成，結束時清掉；異常結束時 done callback 把草稿標成失敗）、`_spawn`（啟動背景生成的方式，測試換掉）。
 
 ## 6. 改動清單
 
@@ -311,13 +313,13 @@ L1～L5 只改前端解決不了：結果還沒回到瀏覽器時，頁面就沒
 
 | 檔案 | 改動 |
 |---|---|
-| `app/services/create_session.py`（新） | `Draft`、`CreateSession`（槽位、鎖、狀態轉換、版本檢查、背景 task）與 `generate_draft()`（不綁請求的生成，D4） |
+| `app/services/create_session.py`（新） | `Draft`、`CreateSession`（槽位、鎖、狀態轉換、版本檢查、背景 task）（生成改為 `NoteService.generate_draft()`，見 §11.1） |
 | `app/schemas/drafts.py`（新） | `DraftOut`、`StartDraftRequest`、`UpdateDraftRequest`、`RetryDraftRequest` |
 | `app/services/note_service.py` | `draft()` 拆成「驗證輸入」與「生成」（D4）；`create()` 本身不變（TG 照舊呼叫，D10） |
 | `app/api/drafts.py`（新）、`app/api/handlers.py` | 新端點；建卡端點接受 `draft_id`、`draft_version`，在呼叫 `NoteService.create` 前後經 `CreateSession` 佔用與釋放槽位（D2、D7）；移除舊的 `POST /handlers/{name}/draft` |
-| `app/core/exceptions/…`、全域 handler | `CreateSessionBusyError`、`DraftNotFoundError`、`DraftBusyError`、`DraftVersionConflictError`、`DraftNotFailedError` 對應的錯誤碼與狀態碼；409 的回應附 `draft` |
-| `app/core/dependencies.py` | 注入同一個 `CreateSession`（從 `app.state` 取） |
-| `app/main.py` | lifespan 建立 `CreateSession`；關機時取消背景 task（CLI 子程序停不下來，見 §8 R2） |
+| `app/core/exceptions/…`、全域 handler | `DraftStateError`（基底）、`CreateSessionBusyError`、`DraftStateTooLargeError`、`DraftNotFoundError`、`DraftBusyError`、`DraftVersionConflictError`、`DraftNotFailedError` 對應的錯誤碼與狀態碼；409 的回應附 `draft` |
+| ~~`app/core/dependencies.py`~~ | 實作改為 `create_session.get_create_session()`，沒有改這個檔（§11.1） |
+| `app/main.py` | 註冊 `/drafts` 路由；409 附 `draft`；關機時取消背景 task（CLI 子程序停不下來，見 §8 R2）。`CreateSession` 是模組單例，不在 lifespan 建立（§11.1） |
 | `backend/Dockerfile` | `CMD` 旁加註解：草稿與鎖都在記憶體，不能加 `--workers`（§8 R4） |
 
 ### Frontend
@@ -392,12 +394,12 @@ L1～L5 只改前端解決不了：結果還沒回到瀏覽器時，頁面就沒
 - [ ] 兩個分頁同時修改同一份草稿：後存的一方看到衝突提示，可以選擇載入最新或覆蓋
 - [ ] 預覽中修改後立刻關掉分頁：回來時修改還在；離線時顯示「尚未儲存」，恢復連線後自動存好
 - [ ] 「廢棄」要確認；預覽畫面沒有「清除」；草稿只因「建立」成功、「廢棄」或後端重啟消失
-- [ ] 生成中沒有「廢棄」按鈕；直接呼叫 `DELETE` 或建卡回 409；結果回來（含失敗）後才能廢棄或建立
+- [ ] 生成中「生成」「廢棄」「清除」停用，「清除」右邊顯示旋轉圖示；直接呼叫 `DELETE` 或建卡回 409；結果回來（含失敗）後才能廢棄或建立
 - [ ] 建立成功後槽位清空、可以再生成；建立失敗時草稿還在
 - [ ] 在別的頁面等生成：完成時跳通知，按「前往」回到建卡畫面
 - [ ] 生成前填到一半的輸入、一般卡片填到一半的內容，關掉分頁再開還在
 - [ ] 有草稿時，本機腳本 `JP_VerbPair/generate_child_cards.py --limit 0 --dry-run`、`JP_CoreVerb/generate_child_cards.py --limit 0 --dry-run` 照常跑完
-- [ ] 後端重啟後打開建卡畫面：顯示「伺服器重新啟動過，上一份草稿已遺失」，只顯示一次
+- [ ] 後端重啟後打開網站：跳一次「上一份建卡草稿已不在」的通知（§11.1）；填表建卡結束後不會誤跳
 
 ### 9.2 網頁補上對話卡與外語糾錯（PR 2）
 
@@ -446,3 +448,65 @@ npm run build
 ## 10. 待決問題
 
 目前沒有。各輪的決定見檔頭的改寫說明。
+
+## 11. PR 1 實作紀錄（2026-11-07）
+
+### 11.1 與設計的差異
+
+| 項目 | 設計 | 實作 | 原因 |
+|---|---|---|---|
+| `CreateSession` 放哪（D1） | lifespan 建立、放在 `app.state` | 模組層的單例 `create_session`，依賴 `get_create_session()` 取得；lifespan 關機時呼叫 `shutdown()` | 測試的 `TestClient` 不跑 lifespan；單一 process 下兩者等價 |
+| 背景生成用的服務（D4） | 抽成只依賴註冊表與 `CardService` 的函式 `generate_draft(registry, card_service, …)` | `NoteService.generate_draft()` 方法，背景沿用請求建好的 `NoteService` | 這個方法只用到 `card_service`（AnkiConnect 單例）與註冊表，不碰綁著請求 DB session 的 `relation_service`；docstring 註明這個限制 |
+| 生成前的輸入何時清掉（D11） | 生成成功後清掉 | **建立成功後**才清掉 | 與原本的程式相同（原本也是建立成功才清）；後端重啟、草稿遺失時還能用原本的輸入重新生成 |
+| 「草稿已遺失」的提示（D11） | 建卡畫面顯示一行，文字「伺服器重新啟動過…」 | 全站的 `DraftWatcher` 跳一次通知：「上一份建卡草稿已不在（可能已在其他地方建立或廢棄，或伺服器重新啟動過）」 | 前端分不出是重啟還是另一台裝置建立、廢棄，用不斷言的說法；放在全站，打開網站任何一頁都看得到 |
+| 廢棄的確認（D8） | 對話框 | 沿用專案既有的 `ConfirmDialog`（`components/shared/ConfirmDialog.tsx`） | — |
+| 生成失敗的畫面（D3） | 「重試」與「改輸入後重試」兩個動作 | 一個「重試」按鈕：送出目前表單的輸入（沒改就是原本的輸入） | 合成一個按鈕較單純；失敗時本機沒有輸入（例如換了裝置）會先帶入當時的輸入 |
+
+### 11.2 檔案
+
+- 後端：`app/services/create_session.py`（新）、`app/api/drafts.py`（新）、`app/schemas/drafts.py`（新）、`app/api/handlers.py`（新增 `POST /handlers/{name}/drafts`、建卡端點佔用槽位、移除舊的 `POST /handlers/{name}/draft`）、`app/services/note_service.py`（`draft()` 拆成 `validate_draft_input()` 與 `generate_draft()`）、`app/schemas/notes.py`、`app/core/exceptions/`、`app/main.py`（註冊路由、409 附 `draft`、關機時取消背景生成）、`Dockerfile`（`--workers` 的註解）。
+- 後端測試：`tests/test_drafts.py`（新：狀態轉換、並發、REST）、`tests/conftest.py`（每個測試清空槽位，背景生成改由測試自己執行）、`tests/test_tags.py`、`tests/test_trilingual_create.py`（改用新端點）。
+- 前端：`lib/serverDraft.ts`（新，純函式與測試）、`hooks/useServerDraft.ts`（新：讀取、輪詢、自動存檔）、`components/generate/useDiscardDraft.tsx`（新）、`components/shared/DraftWatcher.tsx`（新）、`components/generate/PreviewCreate.tsx`（改寫）、`components/generate/CreatePanelBody.tsx`（別種卡片草稿的提示、localStorage、409 的處理）、`api/client.ts`、`types/api.ts`、`App.tsx`。
+
+### 11.3 瀏覽器實測
+
+以這個分支的真實後端程式執行，只把 Anki 換成測試用的假 Anki、LLM 換成延遲 8 秒的假生成（不寫入真的 Anki、不呼叫 LLM）：
+
+- 生成中：「生成」「廢棄」「清除」停用，「清除」右邊顯示旋轉圖示與「生成中…」、開始時間。
+- 生成中重新整理：回來仍顯示生成中，完成後自動顯示預覽（L1）。
+- 預覽中修改：800 ms 後存回後端，顯示「已儲存」；開新分頁看得到同一份草稿與修改（L4）。
+- 有三語卡草稿時改選單字卡：顯示「目前有一份三語對話卡的草稿…」與「前往那份草稿」「廢棄」，不顯示表單；「前往」切回三語卡。
+- 從草稿建立：卡片寫入、後端槽位清空、本機的輸入與記住的草稿 ID 清掉，不會誤跳「草稿已不在」。
+- 後端重啟：打開網頁時跳「上一份建卡草稿已不在」，生成前的輸入還在。
+- 生成失敗：顯示原因與「重試」，重試期間顯示旋轉圖示，成功後變成預覽。
+- 廢棄：跳出確認視窗，確認後回到輸入畫面，輸入保留。
+- 生成完成的全站通知「三語對話卡草稿已生成」附「前往」。
+
+未驗證（要部署後在正式站與手機實測，§9.1）：iPhone 切到別的 App、超過 100 秒的生成經過 Cloudflare、兩台裝置同時修改的衝突畫面、離線時的「尚未儲存」與恢復後自動重送。
+
+### 11.4 留意
+
+- 建卡請求在寫入 Anki **之後**才發生未預期的例外（500）時，草稿會退回「可建立」，可能再建一次而重複。正常路徑中，寫入後的加標籤與同步失敗都已轉成提醒、不會拋錯，所以只有程式錯誤才會走到這裡；同一個牌組的話 Anki 的首欄位重複檢查也會擋下。實測時遇過一次，原因是假 Anki 少了 `add_tags`（實測腳本的問題，正式的 AnkiConnect 有這個方法）。
+
+### 11.5 審查後的修正（2026-11-07，多面向審查的 Critical 與 Important）
+
+| 問題 | 修正 |
+|---|---|
+| 填表建卡的佔用也是 `creating`，前端靠「有沒有生成結果」分辨，佔用的 ID 被記住，建完誤跳「草稿已不在」 | 新增狀態 `form_creating`（前後端），佔用不記 ID；判斷抽成 `lib/serverDraft.ts` 的 `shouldRemember`、`draftNotice` 並加測試 |
+| 自動存檔收到「草稿已不在」時預覽畫面直接消失、沒有提示 | 跳通知「這份草稿已不在」再回到輸入畫面 |
+| 建立失敗後重讀草稿，「讀取失敗」與「草稿已不在（其實建好了）」被混成同一個結果 | 分開處理：已不在時提示「建立結果未知，請先到卡片瀏覽頁確認」；讀取失敗時保留畫面並恢復自動存檔 |
+| 廢棄、建立前停掉自動存檔，失敗後沒有恢復；存檔遇到「另一個分頁正在建立」時刪掉備份 | `pause()`／`resume()` 成對，廢棄與建立失敗都會恢復；忙碌時保留修改與備份，草稿回到可建立再送 |
+| 存檔失敗一律當成離線並無限重送（內容太大也重送） | 依原因分類（`classifySaveError`），只有沒有回應或 5xx 才重送 |
+| 背景重讀失敗一次就把整個畫面換成錯誤畫面 | 只有從沒讀到過才擋住；已有資料時顯示一行「暫時讀不到最新的草稿狀態」 |
+| 背景生成的未預期例外沒有 TG 警報，訊息透露內部細節 | 發 TG 警報；訊息改成「生成時發生未預期的錯誤，已通知管理員；可以重試或廢棄」 |
+| 背景 task 在寫回前異常結束時，槽位會一直卡在生成中 | 先啟動 task 再放進槽位；加 done callback，異常結束時把草稿標成失敗 |
+| 從草稿建卡時卡片類型不符回 404「草稿已不在」 | 改回 409 `CREATE_SESSION_BUSY`「目前的草稿是另一種卡片的」 |
+| `draft_version` 選填，沒帶就不檢查版本 | 改成 `draft: {id, version}` 成對，版本一定檢查 |
+| 舊版本的本機備份在打開時被默默丟掉 | 保留並標成沒存，送出時走版本衝突讓使用者選 |
+| 存檔送出中按建立，會誤報「在其他地方改過了」 | 存檔送出中停用「建立」 |
+| （複審）建立時遇到版本衝突，恢復自動存檔只對齊版本、不看內容，可能默默蓋掉別處的修改 | 跟上較新的草稿時先比對內容（`rebaseDecision`）：只是狀態轉換就對齊版本；別處改了內容而這裡沒有沒存的修改就採用；兩邊都改了就進入衝突讓使用者選 |
+
+補的後端測試：生成失敗的草稿能廢棄、生成中與失敗時不能從草稿建卡、TG 直接呼叫 `NoteService.create` 不受鎖限制（取代原本只檢查 import 的測試）、填表佔用的 API 形狀、從草稿建卡時 Anki 拒絕會退回可建立、重試的版本檢查與錯誤 ID、背景生成不碰 `relation_service`、`/drafts` 需要 API Key、背景 task 的正式路徑與關機取消、未預期例外發警報、task 異常結束的安全網。
+
+沒做的（審查列為建議）：背景生成的總逾時、409 的 `draft` 寫進 OpenAPI 的回應模型、前端 `ServerDraft` 改成 discriminated union、`Draft` 的轉換收進方法、預覽流程的說明文字依卡片類型而定（D10.2 加外語糾錯時一起處理）。
+

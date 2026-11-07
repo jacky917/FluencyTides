@@ -343,3 +343,76 @@ class TagInvalidError(ServiceBaseError):
     """
     error_code = "TAG_INVALID"
     status_code = 400
+
+
+class DraftStateError(ServiceBaseError):
+    """建卡草稿的狀態不允許這個操作；回應附上目前的草稿（server_drafts 計畫書 D6）。只作為基底，實際拋出子類別。
+
+    The create session's state does not allow this; the response carries the current draft.
+
+    Attributes:
+        draft: 目前的草稿（``Draft.to_dict()``），沒有草稿時為 None；全域 handler 放進回應的 ``draft``。
+            The current draft, put into the response's ``draft``.
+    """
+    error_code = "DRAFT_STATE_ERROR"
+    status_code = 409
+
+    def __init__(self, message: str, draft: dict[str, object] | None = None) -> None:
+        """初始化錯誤。Initialize the error.
+
+        Args:
+            message: 人類可讀的錯誤訊息。The message.
+            draft: 目前的草稿。The current draft.
+        """
+        super().__init__(message)
+        self.draft = draft
+
+
+class CreateSessionBusyError(DraftStateError):
+    """已經有一份建卡工作進行中（全站同一時間只有一份），或草稿是另一種卡片的，不接受新的生成或建卡（D2）。
+
+    Another create session is in progress; nothing new is accepted.
+    """
+    error_code = "CREATE_SESSION_BUSY"
+
+
+class DraftBusyError(DraftStateError):
+    """草稿不是 ``ready``（生成中、建立中或生成失敗），不能修改或建立；生成中、建立中也不能廢棄（D3、D8）。
+
+    The draft is not ready for this operation.
+    """
+    error_code = "DRAFT_BUSY"
+
+
+class DraftVersionConflictError(DraftStateError):
+    """草稿在其他地方改過了：請求帶的版本不是最新的（D5）。
+
+    The draft changed elsewhere; the given version is stale.
+    """
+    error_code = "DRAFT_VERSION_CONFLICT"
+
+
+class DraftNotFailedError(DraftStateError):
+    """只有生成失敗的草稿能重試（D3）。
+
+    Only a failed draft can be retried.
+    """
+    error_code = "DRAFT_NOT_FAILED"
+
+
+class DraftNotFoundError(ServiceBaseError):
+    """草稿已不在：可能已建立、在其他地方廢棄，或後端重啟過（D7、R1）。
+
+    The draft is gone: created, discarded elsewhere, or the backend restarted.
+    """
+    error_code = "DRAFT_NOT_FOUND"
+    status_code = 404
+
+
+class DraftStateTooLargeError(ServiceBaseError):
+    """網頁的編輯狀態超過上限（D5）。
+
+    The web editing state is over the size limit.
+    """
+    error_code = "DRAFT_STATE_TOO_LARGE"
+    status_code = 413
