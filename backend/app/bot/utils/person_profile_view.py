@@ -71,7 +71,8 @@ LIST_CODES = {
 CODE_OF_LIST = {name: code for code, name in LIST_CODES.items()}
 
 #: 卡片背面區塊的「+」（深連結 ``psec``）對應的欄位：多個時 TG 先問新增哪一項（登錄日計畫書 §4.4）。
-#: 鍵要與模板 ``addLink({ section: ... })`` 的代號相同。
+#: 鍵要與模板 ``addLink({ section: ... })`` 的代號相同。清單之外也可以放文字欄位（``EDITABLE_FIELDS``），
+#: 按鈕會進「改資料」的那個欄位。
 #: 只對應一個欄位的區塊（家庭、互動等）直接用 ``padd``。The fields behind each section's "+".
 SECTION_FIELDS: dict[str, tuple[str, ...]] = {
     "must": ("Followups_JSON", "Dietary"),
@@ -79,6 +80,8 @@ SECTION_FIELDS: dict[str, tuple[str, ...]] = {
     "work": ("Company", "Work_Detail", "Education"),
     "personality": ("Personality_Values", "Praise", "Ask_Advice"),
     "contacts": ("Contacts_JSON", "Comm_Prefs"),
+    # 生日是文字欄位：沒填時卡片上沒有那一列可以長按，從這裡新增（走改資料）
+    "dates": ("Birthday", "Key_Dates_JSON"),
     "context": ("Residence", "Languages", "Timezone", "Relationship", "Closeness"),
 }
 

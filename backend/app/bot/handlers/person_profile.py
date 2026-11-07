@@ -329,7 +329,8 @@ async def handle_person_link(
             if action.verb == "del":
                 await _confirm_delete(message, card_service, note_id, action.field_name, int(index), fingerprint)
             elif action.verb == "done":
-                await _set_followup_status(message, note_service, card_service, note_id, int(index), fingerprint, "done")
+                # 卡片上點待追蹤：先確認，不直接標成完成（點到不一定是做完了）
+                await _confirm_done(message, card_service, note_id, int(index), fingerprint)
             else:
                 await _set_history_status(
                     message, note_service, note_id, action.field_name, int(index), fingerprint, ended=True
@@ -529,8 +530,13 @@ async def _send_lists_menu(message: types.Message, card_service: CardService, no
 
 async def _send_section_menu(message: types.Message, note_id: int, section: str) -> None:
     """卡片區塊的「+」對應多個欄位時：先問要新增哪一項。Ask which field a section's "+" adds to."""
-    rows = [[_button(f"+ {view.list_title(name)}", f"pp:add:{note_id}:{view.CODE_OF_LIST[name]}")]
-            for name in view.SECTION_FIELDS[section]]
+    rows = []
+    for name in view.SECTION_FIELDS[section]:
+        if name in view.CODE_OF_LIST:
+            rows.append([_button(f"+ {view.list_title(name)}", f"pp:add:{note_id}:{view.CODE_OF_LIST[name]}")])
+        else:
+            # 文字欄位（例如生日）：進改資料的那個欄位
+            rows.append([_button(view.field_title(name), f"pp:ef:{note_id}:{view.EDITABLE_FIELDS.index(name)}")])
     rows.append(CANCEL_ROW)
     await message.answer("要新增哪一項？", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
@@ -592,6 +598,38 @@ async def _confirm_delete(
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             _button("確認刪除", f"pp:delok:{note_id}:{code}:{index}:{fingerprint}"),
             _button("取消", f"pp:s:{note_id}"),
+        ]]),
+        parse_mode="HTML",
+    )
+
+
+async def _confirm_done(
+    message: types.Message, card_service: CardService, note_id: int, index: int, fingerprint: str
+) -> None:
+    """卡片上點了待追蹤：顯示那一筆，問要不要標成完成；已經完成或找不到時說明。Confirm marking a follow-up done."""
+    loaded = await _load(card_service, note_id)
+    if loaded is None:
+        await message.answer(CARD_NOT_FOUND)
+        return
+    items = loaded[1].get("Followups_JSON", [])
+    if not (0 <= index < len(items) and item_fingerprint(items[index]) == fingerprint):
+        matches = [i for i, item in enumerate(items) if item_fingerprint(item) == fingerprint]
+        if len(matches) != 1:
+            await message.answer("❌ 這一筆已經變了或不在了（卡片畫面可能還沒更新），請在 Anki 同步後再看。")
+            return
+        index = matches[0]
+    item = items[index]
+    line = view.item_line("Followups_JSON", item)
+    if isinstance(item, dict) and item.get("status") == "done":
+        await message.answer(f"這一筆已經是完成的了。\n\n{line}",
+                             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("回摘要", f"pp:s:{note_id}")]]),
+                             parse_mode="HTML")
+        return
+    await message.answer(
+        f"要把這一筆待追蹤標成完成嗎？\n\n{line}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            _button("標成完成", f"pp:st:{note_id}:{index}:{fingerprint}:d"),
+            _button("還沒，回摘要", f"pp:s:{note_id}"),
         ]]),
         parse_mode="HTML",
     )
@@ -836,8 +874,9 @@ async def process_edit_value(
     value = "" if text == "清空" else text
     if value and not view.is_multiline(field_name):
         try:
-            # 格式檢查與建立時相同（日期、親密度等）；稱呼以外的欄位搭配假的稱呼
-            PersonCreateParams.model_validate({"Display_Name": "x", field_name: value})
+            # 格式檢查與建立時相同（日期等）；稱呼以外的欄位搭配假的稱呼。存整理過的寫法（例如生日 3/15 → --03-15）
+            validated = PersonCreateParams.model_validate({"Display_Name": "x", field_name: value})
+            value = str(getattr(validated, field_name))
         except ValidationError as e:
             detail = str(e.errors()[0].get("msg", ""))
             await message.answer(f"❌ 格式不對：{escape_tg(detail, 120)}，請重新輸入。", parse_mode="HTML")

@@ -18,9 +18,10 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 #: 筆記類型。The note type.
 PERSON_NOTE_TYPE = "Person_Profile_Dark"
@@ -73,7 +74,7 @@ class PersonCreateParams(BaseModel):
     Honorific: str = _text("稱呼與敬語", "例如「さん／敬語」")
     Name_Memo: str = _text("名字記憶法", "名字的由來、諧音或聯想口訣")
     Appearance: str = _text("外貌特徵", "沒有照片時是「認人」卡的主要線索", multiline=True)
-    Birthday: str = _text("生日", "YYYY-MM-DD；不知年份寫 --MM-DD", pattern=BIRTHDAY)
+    Birthday: str = _text("生日", "例如 1994-03-15；不知年份只寫月日，例如 3/15", pattern=BIRTHDAY)
     Hometown: str = _text("出身地")
     Residence: str = _text("現居地")
     Languages: str = _text("語言", "逗號、頓號分隔的會存成多筆")
@@ -100,6 +101,36 @@ class PersonCreateParams(BaseModel):
     Notes: str = _text("備註", multiline=True)
     Last_Contact: str = _text("上次聯絡", "YYYY-MM-DD", pattern=OPTIONAL_DATE)
     Contact_Cadence: str = _text("聯絡間隔（天）", "超過時背面的「N 天前」變紅", pattern=r"^$|^[1-9]\d{0,3}$")
+
+    @field_validator("Birthday", mode="before")
+    @classmethod
+    def _normalize_birthday(cls, value: object) -> object:
+        """生日的寫法放寬：有年份存 ``YYYY-MM-DD``，沒有年份存 ``--MM-DD``（見 :func:`normalize_birthday`）。"""
+        return normalize_birthday(value) if isinstance(value, str) else value
+
+
+_BIRTHDAY_INPUT = re.compile(
+    r"\s*(?:(?:(\d{4})\s*[-/.年]\s*)|--)?(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*日?\s*"
+)
+
+
+def normalize_birthday(text: str) -> str:
+    """生日的輸入整理成存放的寫法：``1994-03-15``、``1994/3/15``、``1994年3月15日`` → ``1994-03-15``；
+    沒有年份的 ``3/15``、``03-15``、``3月15日``、``--03-15`` → ``--03-15``。
+
+    Normalize a typed birthday; without a year it becomes ``--MM-DD``.
+
+    看不懂或不是真的日期（``2/30``）時原樣回傳，交給欄位的格式檢查擋下；沒有年份時 2/29 也算合法。
+    """
+    m = _BIRTHDAY_INPUT.fullmatch(text or "")
+    if not m:
+        return text
+    year, month, day = m.group(1), int(m.group(2)), int(m.group(3))
+    try:
+        date(int(year) if year else 2000, month, day)  # 2000 年是閏年：沒有年份時 2/29 也收
+    except ValueError:
+        return text
+    return f"{year}-{month:02d}-{day:02d}" if year else f"--{month:02d}-{day:02d}"
 
 
 # =============================================================================

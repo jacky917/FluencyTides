@@ -170,7 +170,7 @@ class TestView:
     def test_every_list_has_a_code_and_sections_point_to_lists(self):
         assert set(view.LIST_CODES.values()) == {*PERSON_JSON_ITEMS, *PERSON_HISTORY_FIELDS}
         for names in view.SECTION_FIELDS.values():
-            assert all(name in view.CODE_OF_LIST for name in names)
+            assert all(name in view.CODE_OF_LIST or name in view.EDITABLE_FIELDS for name in names)
         displayed = [name for _, names in view.DISPLAY_GROUPS for name in names]
         assert set(PERSON_HISTORY_FIELDS) <= set(displayed)
 
@@ -214,16 +214,50 @@ class TestDeepLinks:
         action = DeepLinkParser.parse(payload)
         assert isinstance(action, PersonLinkAction) and action.verb == verb and action.card_id == "PP_1"
 
-    def test_start_dispatches_to_person_flow(self):
+    def test_done_link_asks_before_marking(self):
+        """卡片上點待追蹤：先確認，不直接標成完成。"""
         message, _ = _message("/start pdone-Followups_JSON-1_r1tbnf-PP_1")
         note_service = _note_service()
         _run(commands.command_start_handler(
-            message, _anki(), mock.MagicMock(), _card_service(), state=_fsm(), note_service=note_service
+            message, _anki(), mock.MagicMock(), _card_service(_note(Followups_JSON=json.dumps(FOLLOWUPS))),
+            state=_fsm(), note_service=note_service,
         ))
+        note_service.run_action.assert_not_awaited()
+        (text,) = _sent(message.answer)
+        _assert_tg_html(text)
+        assert "要把這一筆待追蹤標成完成嗎" in text and "介紹 Ken 給他" in text
+        confirm = message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        assert confirm.callback_data == "pp:st:5:1:r1tbnf:d"
+
+    def test_confirmed_done_marks_it(self):
+        state, note_service, card_service = _fsm(), _note_service(), _card_service()
+        query = _callback("pp:st:5:1:r1tbnf:d")
+        _run(person_profile.on_person_button(query, state, note_service, card_service))
         note_service.run_action.assert_awaited_once_with(
             5, "set_followup_status", {"index": 1, "fingerprint": "r1tbnf", "status": "done"}
         )
-        assert "已標成完成" in _sent(message.answer)[0]
+        assert "已標成完成" in _sent(query.message.answer)[0]
+
+    def test_done_link_for_a_finished_item(self):
+        done = [{**FOLLOWUPS[1], "status": "done"}]
+        message, _ = _message(f"/start pdone-Followups_JSON-0_{item_fingerprint(done[0])}-PP_1")
+        note_service = _note_service()
+        _run(commands.command_start_handler(
+            message, _anki(), mock.MagicMock(), _card_service(_note(Followups_JSON=json.dumps(done))),
+            state=_fsm(), note_service=note_service,
+        ))
+        note_service.run_action.assert_not_awaited()
+        assert "已經是完成的了" in _sent(message.answer)[0]
+
+    def test_dates_section_offers_birthday(self):
+        message, _ = _message("/start psec-dates-none-PP_1")
+        _run(commands.command_start_handler(
+            message, _anki(), mock.MagicMock(), _card_service(), state=_fsm(), note_service=_note_service()
+        ))
+        rows = message.answer.await_args.kwargs["reply_markup"].inline_keyboard
+        assert rows[0][0].text == "生日"
+        assert rows[0][0].callback_data == f"pp:ef:5:{view.EDITABLE_FIELDS.index('Birthday')}"
+        assert rows[1][0].callback_data == "pp:add:5:D"
 
     def test_end_link_ends_the_entry(self):
         message, _ = _message("/start pend-Interests-1_1ks3weh-PP_1")
@@ -502,6 +536,13 @@ class TestEditFlow:
         typed, _ = _message("福岡 & 博多")
         _run(person_profile.process_edit_value(typed, state, note_service, card_service))
         note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Hometown": "福岡 &amp; 博多"})
+
+    @pytest.mark.parametrize(("typed", "stored"), [("3/15", "--03-15"), ("1994/3/15", "1994-03-15"), ("--02-29", "--02-29")])
+    def test_birthday_with_or_without_year(self, typed, stored):
+        state, note_service, card_service = self._start("Birthday")
+        message, _ = _message(typed)
+        _run(person_profile.process_edit_value(message, state, note_service, card_service))
+        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Birthday": stored})
 
     def test_rejects_malformed_date(self):
         state, note_service, card_service = self._start("Met_Date")

@@ -111,7 +111,7 @@ class TestCreateParams:
 
     @pytest.mark.parametrize(
         ("field", "value"),
-        [("Birthday", "11/04"), ("Met_Date", "2026-6-7"), ("Closeness", "6"), ("Contact_Cadence", "0"),
+        [("Birthday", "2/30"), ("Birthday", "五月"), ("Met_Date", "2026-6-7"), ("Closeness", "6"), ("Contact_Cadence", "0"),
          ("Introducer_Note_ID", "abc")],
     )
     def test_rejects_malformed_values(self, field, value):
@@ -121,6 +121,15 @@ class TestCreateParams:
     @pytest.mark.parametrize("birthday", ["", "1994-03-15", "--03-15"])
     def test_birthday_formats(self, birthday):
         assert PersonCreateParams.model_validate({"Display_Name": "田中さん", "Birthday": birthday}).Birthday == birthday
+
+    @pytest.mark.parametrize(
+        ("typed", "stored"),
+        [("1994/3/15", "1994-03-15"), ("1994年3月15日", "1994-03-15"), (" 3/15 ", "--03-15"), ("03-15", "--03-15"),
+         ("3月15日", "--03-15"), ("2/29", "--02-29")],
+    )
+    def test_birthday_year_is_optional(self, typed, stored):
+        """生日可以給或省略年份：寫法放寬，存成 YYYY-MM-DD 或 --MM-DD。"""
+        assert PersonCreateParams.model_validate({"Display_Name": "田中さん", "Birthday": typed}).Birthday == stored
 
     def test_unknown_or_locked_fields_rejected(self):
         for field in ("Interactions_JSON", "Photo", "Card_ID", "Nickname"):

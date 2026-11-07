@@ -711,9 +711,10 @@
         box.appendChild(title);
         var any = false;
 
+        // 一列：小字標題在上、內容在下（與下面各區塊的「標籤：內容」同一種樣式）
         function mustRow(label, content) {
             var r = el('div', 'must-row');
-            r.appendChild(el('span', 'must-label', label));
+            r.appendChild(el('div', 'p-label', label));
             r.appendChild(content);
             box.appendChild(r);
             any = true;
@@ -739,12 +740,19 @@
                     var li = el('li', null, f.item || '');
                     var note = f.due ? '期限 ' + shortDate(f.due) : f.added ? shortDate(f.added) + ' 記' : '';
                     if (note) li.appendChild(el('span', 'followup-date', note));
-                    if (tgEnabled) {
-                        var done = tgLink('完成', tgUrl('pdone', 'Followups_JSON', itemRef(entry.index, f)), 'done-link');
-                        done.title = '在 TG 標成完成';
-                        li.appendChild(done);
-                    }
                     list.appendChild(longPressDelete(li, 'Followups_JSON', entry.index, f));
+                    if (tgEnabled) {
+                        // 點一下開 TG，TG 先問要不要標成完成（不直接標）；長按 3 秒仍是刪除。
+                        // 在 longPressDelete 之後註冊：長按觸發後的那次點擊已被它 preventDefault，這裡就不開
+                        var doneUrl = tgUrl('pdone', 'Followups_JSON', itemRef(entry.index, f));
+                        li.className += ' tap-target';
+                        li.setAttribute('title', '點一下在 TG 標成完成（會先確認）；長按 3 秒刪除');
+                        li.addEventListener('click', function (e) {
+                            if (e.defaultPrevented) return;
+                            e.stopPropagation();
+                            openUrl(doneUrl);
+                        });
+                    }
                 });
                 mustRow(group[1], list);
             });
@@ -754,10 +762,7 @@
             mustRow('飲食', errorNode(historyLists.Dietary));
         } else {
             var dietary = activeText('Dietary', '；');
-            if (dietary) {
-                box.appendChild(el('div', 'warn-box hist-text', '飲食：' + dietary));
-                any = true;
-            }
+            if (dietary) mustRow('飲食限制', el('div', 'warn-box hist-text', dietary));
         }
 
         if (isError(interactions)) {
@@ -803,7 +808,7 @@
         wrap.appendChild(tgLink('照片', tgUrl('pphoto', 'Photo', 'none')));
         wrap.appendChild(tgLink('AI 分析與話題', tgUrl('ptopic', 'Display_Name', 'none')));
         wrap.appendChild(maskToggle());
-        wrap.appendChild(el('span', 'tg-hint', '長按 3 秒：清單項目刪除、文字欄位修改'));
+        wrap.appendChild(el('span', 'tg-hint', '點待追蹤：在 TG 標成完成｜長按 3 秒：清單項目刪除、文字欄位修改'));
         document.getElementById('person-tg').appendChild(wrap);
     })();
 
@@ -920,7 +925,8 @@
                 dateNodes.push(longPressDelete(r, 'Key_Dates_JSON', index, k));
             });
         }
-        sections.push(section('dates', '重要日期', '#1abc9c', dateNodes, '', { field: 'Key_Dates_JSON' }));
+        // 「+」可新增生日（沒填時卡片上沒有那一列可以長按）或重要日期
+        sections.push(section('dates', '重要日期', '#1abc9c', dateNodes, '', { section: 'dates' }));
 
         // 聯絡方式
         var contactNodes = [];

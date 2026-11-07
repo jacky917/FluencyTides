@@ -267,18 +267,23 @@ html, body {
     margin-bottom: 8px;
 }
 
+/* 一列：小字標題（.p-label）在上、內容在下，與各區塊的列同一種樣式 */
 .must-row {
-    display: flex;
-    gap: 8px;
-    align-items: baseline;
-    padding: 4px 0;
+    padding: 6px 0;
     font-size: 16px;
 }
 
-.must-label {
-    flex-shrink: 0;
-    color: #bdc3c7;
-    font-size: 14px;
+.must-row .warn-box {
+    margin: 2px 0 0;
+}
+
+/* 點一下開 TG（待追蹤：TG 先確認要不要標成完成） */
+.tap-target {
+    cursor: pointer;
+}
+
+.tap-target:hover {
+    color: #ffffff;
 }
 
 .followup-list {

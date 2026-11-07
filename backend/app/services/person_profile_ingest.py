@@ -235,9 +235,13 @@ def proposals_from(
             if value == current:
                 continue
             try:
-                PersonCreateParams.model_validate({"Display_Name": "x", name: value})
+                validated = PersonCreateParams.model_validate({"Display_Name": "x", name: value})
             except ValidationError:
                 logger.info("略過格式不對的欄位建議: %s=%s", name, value)
+                continue
+            # 存整理過的寫法（例如生日 3/15 → --03-15）
+            value = str(getattr(validated, name))
+            if value == current:
                 continue
         elif value in current:
             continue
