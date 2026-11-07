@@ -8,6 +8,7 @@ a counselor, then suggests conversation topics.
 做法是最基本的字串比對：姓名欄位（稱呼與去掉敬稱的部分、各語言的姓名、讀音）與家人名字的完整值，
 以及只寫名字的情況（「姓 名」分開寫的欄位取出的名字），假名再加平假名、片假名兩種寫法，出現就換掉。
 沒有登記的第三者名字不會被遮。聯絡方式、敏感話題、名字記憶法、外貌等與話題無關的欄位不送。
+會變的欄位（興趣、職位等）有效的照常送，劃掉的也送並標成「以前：」（過去的事也是聊天素材）。
 
 Names of the person and their family are replaced with tokens before the
 LLM sees them and restored afterwards.
@@ -29,7 +30,7 @@ from app.core.dependencies import get_template_engine
 from app.core.exceptions import LLMGenerationError
 from app.infrastructure.llm.routing import route
 from app.schemas.llm.person_profile import LLMPersonTopicsResult
-from app.schemas.person_profile import PersonCreateParams
+from app.schemas.person_profile import PERSON_HISTORY_FIELDS, RETIRED_FIELDS, PersonCreateParams, entry_text, is_active
 from app.services.person_profile_ingest import WEEKDAYS, plain_text
 
 logger = logging.getLogger(__name__)
@@ -45,9 +46,10 @@ NAME_FIELDS = ("Display_Name", "Name_ZH", "Name_EN", "Name_JA", "Name_JA_Kana", 
 #: 以空白分開「姓 名」的欄位裡，名字在第幾段（只寫名字時也要遮）。Where the given name sits.
 GIVEN_NAME_POSITION = {"Name_JA": -1, "Name_JA_Kana": -1, "Name_Romaji": -1, "Name_EN": 0}
 
-#: 不送給 LLM 的欄位：姓名（另以代號表示）、與話題無關或不該外送的資料。Fields never sent.
+#: 不送給 LLM 的欄位：姓名（另以代號表示）、與話題無關或不該外送的資料、不再使用的欄位（``Title``）。
+#: Fields never sent.
 EXCLUDED_FIELDS = (*NAME_FIELDS, "Honorific", "Name_Memo", "Appearance", "Sensitive", "Introducer_Note_ID",
-                   "Contact_Cadence")
+                   "Contact_Cadence", *RETIRED_FIELDS)
 
 #: 稱呼後面常見的敬稱：還原時避免變成「田中さんさん」。Honorific suffixes.
 HONORIFICS = ("さん", "くん", "君", "ちゃん", "さま", "様", "先生", "桑", "san")
@@ -152,11 +154,18 @@ def build_prompt(
     """
     mask = build_mask(fields, lists)
     m = mask.mask if mask_text else (lambda text: text)
-    profile = [
-        (PersonCreateParams.model_fields[name].title or name, m(plain_text(fields.get(name, ""))))
-        for name in PersonCreateParams.model_fields
-        if name not in EXCLUDED_FIELDS and plain_text(fields.get(name, ""))
-    ]
+    profile = []
+    for name in PersonCreateParams.model_fields:
+        if name in EXCLUDED_FIELDS:
+            continue
+        if name in PERSON_HISTORY_FIELDS:
+            value = history_text(name, lists.get(name, []))
+            title = PERSON_HISTORY_FIELDS[name].title
+        else:
+            value = plain_text(fields.get(name, ""))
+            title = PersonCreateParams.model_fields[name].title or name
+        if value:
+            profile.append((title, m(value)))
     family = []
     for member in lists.get("Family_JSON", []):
         if not isinstance(member, dict):
@@ -210,9 +219,30 @@ def build_prompt(
         followups=followups,
         key_dates=key_dates,
         gifts=gifts,
-        has_sensitive=bool(plain_text(fields.get("Sensitive", ""))),
+        # 劃掉的敏感話題也算（過去的事一樣不該主動提）；欄位格式壞了讀不出清單時看原文
+        has_sensitive=bool(lists.get("Sensitive")) or bool(plain_text(fields.get("Sensitive", ""))),
     )
     return prompt, mask
+
+
+def history_text(name: str, items: list[object]) -> str:
+    """會變的欄位給 LLM 的一行：有效的照常列出，劃掉的標明是過去的事（也是聊天素材）。
+
+    One line of a history field: current entries, then the past ones marked as such.
+    """
+    # 不是物件的項目是格式壞掉的（在 Anki 手改的），不當成過去的事送出
+    entries = [item for item in items if isinstance(item, dict)]
+    current = [plain_text(entry_text(name, item), 200) for item in entries if is_active(item)]
+    past = []
+    for item in entries:
+        if is_active(item) or not (text := plain_text(entry_text(name, item), 200)):
+            continue
+        ended = str(item.get("ended") or "")
+        past.append(f"{text}（到 {ended} 為止）" if ended else text)
+    line = "、".join(text for text in current if text)
+    if past:
+        line += ("；" if line else "") + "以前：" + "、".join(past)
+    return line
 
 
 async def suggest(

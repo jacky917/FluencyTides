@@ -40,6 +40,7 @@ import logging
 import sys
 from types import FrameType
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -160,6 +161,14 @@ class Settings(BaseSettings):
     API_SECRET_KEY: str | None = Field(
         default=None,
         description="API 認證金鑰。若未設定或為空字串，則跳過認證（用於開發環境）。",
+    )
+    APP_TIMEZONE: str = Field(
+        default="Asia/Tokyo",
+        description=(
+            "應用程式的「今天」用哪個時區（IANA 名稱，例如 Asia/Tokyo）：人脈卡的登錄日、失效日、"
+            "互動日期等都依它算（app.core.clock）。與容器的 TZ 是兩回事：TZ 仍影響 log 的時間，"
+            "以及還沒改用 clock 的地方（例如三語口說卡建卡時的 date.today()）。"
+        ),
     )
 
     # ====================================================================
@@ -318,6 +327,23 @@ class Settings(BaseSettings):
             f"mysql+aiomysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}"
             f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DATABASE}?charset=utf8mb4"
         )
+
+    @field_validator("APP_TIMEZONE")
+    @classmethod
+    def check_timezone(cls, v: str) -> str:
+        """時區名稱要是 IANA 的名稱（``ZoneInfo`` 認得）；寫錯時啟動就報錯，不要等到算日期才失敗。
+
+        The time zone must be an IANA name ``ZoneInfo`` knows; fail at startup otherwise.
+
+        Raises:
+            ValueError: 不認得的時區。On an unknown zone.
+        """
+        name = v.strip()
+        try:
+            ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError) as e:
+            raise ValueError(f"APP_TIMEZONE 不是有效的時區名稱：{v!r}（例如 Asia/Tokyo）") from e
+        return name
 
     @field_validator("DATABASE_URL")
     @classmethod

@@ -31,13 +31,26 @@ class IngestFollowup(BaseModel):
 
 
 class IngestFieldUpdate(BaseModel):
-    """建議更新的一個人物資料欄位。One suggested profile field update."""
+    """建議更新的一個文字欄位。One suggested text field update."""
 
-    field: str = Field(description="欄位名稱，必須是提示中列出的欄位之一")
+    field: str = Field(description="欄位名稱，必須是提示中「文字欄位」列出的之一")
     value: str = Field(description="要寫入的內容（純文字）")
     mode: Literal["append", "replace"] = Field(
-        description="append：接在原本內容後面（興趣、個性等描述）；replace：取代原本的值（公司、職稱、生日等單一值）"
+        description="append：接在原本內容後面（備註、第一印象等描述）；replace：取代原本的值（生日、出身地等單一值）"
     )
+    reason: str = Field(description="依據文中的哪句話（簡短）")
+
+
+class IngestListUpdate(BaseModel):
+    """會變的欄位（每筆附登錄日與有效狀態）的一項建議：新增一筆或劃掉一筆。One history field change."""
+
+    field: str = Field(description="欄位名稱，必須是提示中「清單欄位」列出的之一")
+    op: Literal["add", "end"] = Field(
+        description="add：新增一筆；end：劃掉目前有效的某一筆（不再適用了，例如離職、搬走、不再玩的興趣）"
+    )
+    value: str = Field("", description="add 時要新增的內容（純文字）；職位（Company）填公司名稱；end 時空字串")
+    job_title: str = Field("", description="只有職位（Company）用：職稱；其他欄位空字串")
+    entry: int = Field(0, description="end 時要劃掉的那一筆的編號（提示中「#」後面的數字）；add 時 0")
     reason: str = Field(description="依據文中的哪句話（簡短）")
 
 
@@ -47,6 +60,7 @@ class LLMPersonIngestResult(BaseModel):
     interaction: IngestInteraction
     followups: list[IngestFollowup] = Field(default_factory=list)
     field_updates: list[IngestFieldUpdate] = Field(default_factory=list)
+    list_updates: list[IngestListUpdate] = Field(default_factory=list)
 
 
 

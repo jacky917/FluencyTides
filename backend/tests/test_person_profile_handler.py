@@ -1,4 +1,5 @@
-"""人脈卡 handler 的測試（計畫書 docs/archive/person_profile_card_FEAT_2026-10-23.md §3.11）。
+"""人脈卡 handler 的測試（計畫書 docs/archive/person_profile_card_FEAT_2026-10-23.md §3.11、
+docs/wip/person_field_history_FEAT_2026-11-07.md）。
 
 Tests for the person profile handler.
 """
@@ -6,21 +7,22 @@ Tests for the person profile handler.
 import asyncio
 import json
 import re
-from datetime import date
 
 import pytest
 from pydantic import ValidationError
 
+from app.core.clock import today_iso
 from app.core.exceptions import FieldNotEditableError, InvalidNoteFieldsError, JsonItemChangedError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.anki import AnkiNoteInfo
-from app.schemas.person_profile import PERSON_NOTE_TYPE, PersonCreateParams, item_fingerprint
+from app.schemas.person_profile import PERSON_HISTORY_FIELDS, PERSON_NOTE_TYPE, PersonCreateParams, item_fingerprint
 from app.services.task_handlers.person_profile_handler import PersonProfileHandler, new_card_id
 from app.services.task_handlers.registry import handler_registry
 from tests.test_handler_base import FakeAnki, _card_service, _relations
 
 PERSON_FIELDS = json.load(open("app/anki_models/Person_Profile_Dark.json", encoding="utf-8"))["inOrderFields"]
 JSON_FIELDS = ["Interactions_JSON", "Followups_JSON", "Family_JSON", "Gifts_JSON", "Key_Dates_JSON", "Contacts_JSON"]
+HISTORY_FIELDS = list(PERSON_HISTORY_FIELDS)
 
 
 def _run(coro):
@@ -75,8 +77,22 @@ class TestDeclarations:
 
     def test_json_and_photo_fields_are_locked(self):
         handler = PersonProfileHandler()
-        assert list(handler.JSON_FIELDS) == JSON_FIELDS
+        assert list(handler.JSON_FIELDS) == JSON_FIELDS + HISTORY_FIELDS
         assert handler.MEDIA_FIELDS == ("Photo",)
+
+    def test_history_fields_are_editable_on_the_web(self):
+        handler = PersonProfileHandler()
+        assert set(handler.JSON_FIELD_SPECS) == set(JSON_FIELDS + HISTORY_FIELDS)
+        assert handler.JSON_FIELD_SPECS["Company"].title == "職位"
+        # 網頁新增一筆時預填今天的標記
+        schema = handler.JSON_FIELD_SPECS["Interests"].item.model_json_schema()
+        assert schema["properties"]["added"]["x-default"] == "today"
+        assert list(schema["properties"]) == ["value", "added", "ended"]
+
+    def test_history_fields_exist_in_the_note_type(self):
+        """D1：欄位名不變、不增刪筆記類型的欄位。"""
+        assert set(HISTORY_FIELDS) <= set(PERSON_FIELDS)
+        assert "Title" in PERSON_FIELDS
 
     def test_create_form_has_no_system_or_locked_fields(self):
         properties = PersonCreateParams.model_json_schema()["properties"]
@@ -117,15 +133,39 @@ class TestCreate:
         anki = PersonAnki()
         fields = _create(anki, Display_Name="田中さん", Company="Geekly", Interests="登山, 精釀啤酒")
         assert fields["Display_Name"] == "田中さん"
-        assert fields["Company"] == "Geekly"
         assert re.fullmatch(r"PP_\d{8}_\d{6}_[0-9a-f]{4}", fields["Card_ID"])
         assert fields["TG_Bot"] == "FluencyTidesBot"
-        assert fields["Updated_At"] == date.today().isoformat()
+        assert fields["Updated_At"] == today_iso()
         for name in JSON_FIELDS:
             assert fields[name] == "[]"
-        # 沒填的欄位留空
+        # 沒填的欄位留空（會變的欄位也是空字串，不是 []：Company 的 [] 會產生空的「認人」卡）
         assert fields["Name_EN"] == ""
+        assert fields["Residence"] == ""
         assert anki.added[0].tags == ["PersonProfile", "HandlerGenerated"]
+
+    def test_history_fields_become_lists_dated_today(self):
+        """D6：建卡時文字轉成清單、登錄日填今天；興趣等以逗號、頓號切成多筆，其他整段一筆。"""
+        anki = PersonAnki()
+        fields = _create(anki, Display_Name="田中さん", Company="Geekly", Title="エンジニア",
+                         Interests="登山, 精釀啤酒、攝影", Work_Detail="後端開發，負責 API", Closeness="4")
+        today = today_iso()
+        assert AnkiJsonFieldManager.parse_field_string(fields["Interests"]) == [
+            {"value": v, "added": today, "ended": ""} for v in ("登山", "精釀啤酒", "攝影")
+        ]
+        assert AnkiJsonFieldManager.parse_field_string(fields["Work_Detail"]) == [
+            {"value": "後端開發，負責 API", "added": today, "ended": ""}
+        ]
+        assert AnkiJsonFieldManager.parse_field_string(fields["Company"]) == [
+            {"company": "Geekly", "title": "エンジニア", "added": today, "ended": ""}
+        ]
+        assert AnkiJsonFieldManager.parse_field_string(fields["Closeness"])[0]["value"] == "4"
+        # 職稱併進職位，Title 不再寫入
+        assert fields["Title"] == ""
+
+    def test_title_alone_becomes_a_position(self):
+        anki = PersonAnki()
+        fields = _create(anki, Display_Name="田中さん", Title="社長")
+        assert AnkiJsonFieldManager.parse_field_string(fields["Company"])[0]["title"] == "社長"
 
     def test_allows_duplicate_display_names(self):
         """不同的人可以都叫「田中さん」：建立時不擋首欄位重複。"""
@@ -141,20 +181,20 @@ class TestUpdate:
     def test_updates_fields_and_stamps_updated_at(self):
         anki = PersonAnki([person(1, Display_Name="田中さん", Card_ID="PP_x", Updated_At="2026-01-01")])
         _run(PersonProfileHandler().execute_update(
-            _card_service(anki), _relations(), 1, {"action": "update_fields", "fields": {"Company": "Geekly"}}
+            _card_service(anki), _relations(), 1, {"action": "update_fields", "fields": {"Hometown": "福岡"}}
         ))
-        assert anki.value(1, "Company") == "Geekly"
-        assert anki.value(1, "Updated_At") == date.today().isoformat()
+        assert anki.value(1, "Hometown") == "福岡"
+        assert anki.value(1, "Updated_At") == today_iso()
 
     def test_no_change_writes_nothing(self):
-        anki = PersonAnki([person(1, Display_Name="田中さん", Company="Geekly", Updated_At="2026-01-01")])
+        anki = PersonAnki([person(1, Display_Name="田中さん", Hometown="福岡", Updated_At="2026-01-01")])
         _run(PersonProfileHandler().execute_update(
-            _card_service(anki), _relations(), 1, {"action": "update_fields", "fields": {"Company": "Geekly"}}
+            _card_service(anki), _relations(), 1, {"action": "update_fields", "fields": {"Hometown": "福岡"}}
         ))
         assert anki.updated == []
         assert anki.value(1, "Updated_At") == "2026-01-01"
 
-    @pytest.mark.parametrize("field", ["Card_ID", "Photo", "Interactions_JSON"])
+    @pytest.mark.parametrize("field", ["Card_ID", "Photo", "Interactions_JSON", "Interests", "Company", "Title"])
     def test_locked_fields(self, field):
         anki = PersonAnki([person(1, Display_Name="田中さん", Card_ID="PP_x")])
         with pytest.raises(FieldNotEditableError):
@@ -206,7 +246,7 @@ class TestActions:
         _act(anki, 1, action="add_interaction", item={"date": "2026-10-01", "topics": "轉職", "place": ""})
         assert _list(anki, 1, "Interactions_JSON") == [{"date": "2026-10-01", "topics": "轉職"}]
         assert anki.value(1, "Last_Contact") == "2026-10-01"
-        assert anki.value(1, "Updated_At") == date.today().isoformat()
+        assert anki.value(1, "Updated_At") == today_iso()
 
         _act(anki, 1, action="add_interaction", item={"date": "2026-08-01", "topics": "以前的事"})
         assert anki.value(1, "Last_Contact") == "2026-10-01"
@@ -224,7 +264,7 @@ class TestActions:
         anki = PersonAnki([person(1, Display_Name="田中さん", Followups_JSON="[]")])
         _act(anki, 1, action="add_followup", item={"item": "N1 考得如何？"})
         assert _list(anki, 1, "Followups_JSON") == [
-            {"item": "N1 考得如何？", "type": "ask", "status": "open", "added": date.today().isoformat()}
+            {"item": "N1 考得如何？", "type": "ask", "status": "open", "added": today_iso()}
         ]
 
     def test_set_followup_status_by_fingerprint(self):
@@ -285,7 +325,7 @@ class TestActions:
                                   Interactions_JSON="[]", Last_Contact="2026-09-01")])
         _act(anki, 1, **parameters)
         (( _, fields),) = anki.updated
-        assert fields["Updated_At"] == date.today().isoformat()
+        assert fields["Updated_At"] == today_iso()
         if parameters["action"] == "add_interaction":
             assert fields["Last_Contact"] == "2026-10-01" and "Interactions_JSON" in fields
 
@@ -296,5 +336,131 @@ class TestActions:
 
     def test_declared_actions(self):
         assert set(PersonProfileHandler.CAPABILITIES.actions) == {
-            "add_interaction", "add_followup", "set_followup_status", "add_item", "remove_item", "set_photo",
+            "add_interaction", "add_followup", "set_followup_status", "add_item", "add_history", "set_history_status",
+            "remove_item", "set_photo",
         }
+
+
+# =============================================================================
+# 會變的欄位（登錄日計畫書 §4.1、D5、D6）
+# =============================================================================
+
+
+def _entry(value: str, added: str = "2026-01-01", ended: str = "") -> dict[str, str]:
+    return {"value": value, "added": added, "ended": ended}
+
+
+class TestHistory:
+    def test_add_dates_today_and_ignores_given_dates(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん")])
+        _act(anki, 1, action="add_history", field="Praise", item={"value": "簡報很清楚", "added": "1999-01-01",
+                                                                  "ended": "1999-01-02"})
+        assert _list(anki, 1, "Praise") == [_entry("簡報很清楚", today_iso())]
+        assert anki.value(1, "Updated_At") == today_iso()
+
+    def test_split_fields_add_several_and_skip_current_duplicates(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん", Interests=json.dumps([_entry("登山")]))])
+        _act(anki, 1, action="add_history", field="Interests", item={"value": "登山、攝影, 咖啡"})
+        assert [e["value"] for e in _list(anki, 1, "Interests")] == ["登山", "攝影", "咖啡"]
+
+    def test_duplicates_within_one_add_are_stored_once(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん")])
+        _act(anki, 1, action="add_history", field="Interests", item={"value": "登山、登山"})
+        assert [e["value"] for e in _list(anki, 1, "Interests")] == ["登山"]
+
+    def test_ended_duplicate_can_be_added_again(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん",
+                                  Interests=json.dumps([_entry("攝影", ended="2026-05-01")]))])
+        _act(anki, 1, action="add_history", field="Interests", item={"value": "攝影"})
+        items = _list(anki, 1, "Interests")
+        assert [(e["value"], e["ended"]) for e in items] == [("攝影", "2026-05-01"), ("攝影", "")]
+
+    def test_single_value_field_ends_the_current_one(self):
+        """D5：現居地、時區、關係、親密度新增時，原本有效的那筆劃掉（失效日＝今天）。"""
+        old = [_entry("大阪", ended="2025-03-01"), _entry("東京")]
+        anki = PersonAnki([person(1, Display_Name="田中さん", Residence=json.dumps(old))])
+        _act(anki, 1, action="add_history", field="Residence", item={"value": "橫濱"})
+        assert _list(anki, 1, "Residence") == [
+            _entry("大阪", ended="2025-03-01"), _entry("東京", ended=today_iso()), _entry("橫濱", today_iso()),
+        ]
+
+    def test_single_value_same_as_current_changes_nothing(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん", Residence=json.dumps([_entry("東京")]))])
+        _act(anki, 1, action="add_history", field="Residence", item={"value": "東京"})
+        assert _list(anki, 1, "Residence") == [_entry("東京")]
+
+    def test_positions_are_not_single_value(self):
+        """D5：職位可能同時有兩份，新增不會自動劃掉。"""
+        anki = PersonAnki([person(1, Display_Name="田中さん",
+                                  Company=json.dumps([{"company": "A 社", "title": "", "added": "", "ended": ""}]))])
+        _act(anki, 1, action="add_history", field="Company", item={"company": "B 社", "title": "顧問"})
+        items = _list(anki, 1, "Company")
+        assert [(e["company"], e["ended"]) for e in items] == [("A 社", ""), ("B 社", "")]
+        assert items[1] == {"company": "B 社", "title": "顧問", "added": today_iso(), "ended": ""}
+
+    @pytest.mark.parametrize(
+        ("field", "item"),
+        [("Closeness", {"value": "6"}), ("Interests", {"value": "  "}), ("Company", {"company": "", "title": ""}),
+         ("Hometown", {"value": "福岡"}), ("Followups_JSON", {"value": "x"})],
+    )
+    def test_invalid_adds(self, field, item):
+        anki = PersonAnki([person(1, Display_Name="田中さん")])
+        with pytest.raises(InvalidNoteFieldsError):
+            _act(anki, 1, action="add_history", field=field, item=item)
+        assert anki.updated == []
+
+    def test_end_and_restore_by_fingerprint(self):
+        items = [_entry("登山"), _entry("攝影")]
+        anki = PersonAnki([person(1, Display_Name="田中さん", Interests=json.dumps(items))])
+        fingerprint = item_fingerprint(items[1])
+        # 序號過時（卡片還沒同步）也依指紋找到同一筆
+        _act(anki, 1, action="set_history_status", field="Interests", index=0, fingerprint=fingerprint, ended=True)
+        assert [e["ended"] for e in _list(anki, 1, "Interests")] == ["", today_iso()]
+        _act(anki, 1, action="set_history_status", field="Interests", index=1, fingerprint=fingerprint, ended=False)
+        assert [e["ended"] for e in _list(anki, 1, "Interests")] == ["", ""]
+
+    def test_ending_twice_keeps_the_first_date(self):
+        items = [_entry("攝影", ended="2026-05-01")]
+        anki = PersonAnki([person(1, Display_Name="田中さん", Interests=json.dumps(items))])
+        _act(anki, 1, action="set_history_status", field="Interests", index=0, fingerprint=item_fingerprint(items[0]),
+             ended=True)
+        assert _list(anki, 1, "Interests")[0]["ended"] == "2026-05-01"
+
+    def test_fingerprint_matches_the_card_template(self):
+        """模板 itemFingerprint 在 node 算出的值。"""
+        assert item_fingerprint({"value": "攝影", "added": "2026-11-01", "ended": ""}) == "1ks3weh"
+        assert item_fingerprint({"company": "Geekly", "title": "エンジニア", "added": "", "ended": ""}) == "195wj2i"
+
+    def test_removing_the_last_entry_blanks_the_field(self):
+        items = [_entry("東京")]
+        anki = PersonAnki([person(1, Display_Name="田中さん", Residence=json.dumps(items))])
+        _act(anki, 1, action="remove_item", field="Residence", index=0, fingerprint=item_fingerprint(items[0]))
+        assert anki.value(1, "Residence") == ""
+
+    def test_web_write_of_empty_list_blanks_the_field(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん", Company="[]")])
+        _run(PersonProfileHandler().after_json_update(_card_service(anki), 1, "Company", []))
+        assert anki.value(1, "Company") == ""
+        assert anki.value(1, "Updated_At") == today_iso()
+
+    def test_legacy_text_is_not_overwritten(self):
+        """還沒轉換的舊文字：不覆寫（免得蓋掉資料），訊息說是哪一欄、請先跑轉換腳本。"""
+        from app.core.exceptions import AnkiFieldCorruptedError
+
+        anki = PersonAnki([person(1, Display_Name="田中さん", Interests="登山、攝影")])
+        with pytest.raises(AnkiFieldCorruptedError, match="「興趣」.*migrate_history_fields"):
+            _act(anki, 1, action="add_history", field="Interests", item={"value": "咖啡"})
+        assert anki.updated == []
+
+    def test_malformed_entry_cannot_be_ended(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん", Interests=json.dumps(["登山"]))])
+        with pytest.raises(InvalidNoteFieldsError):
+            _act(anki, 1, action="set_history_status", field="Interests", index=0, ended=True)
+        assert anki.updated == []
+
+    def test_title_can_be_cleared_but_not_written(self):
+        anki = PersonAnki([person(1, Display_Name="田中さん", Title="PM")])
+        with pytest.raises(FieldNotEditableError, match="職位"):
+            _act(anki, 1, action="update_fields", fields={"Title": "部長"})
+        _act(anki, 1, action="update_fields", fields={"Title": ""})
+        assert anki.value(1, "Title") == ""

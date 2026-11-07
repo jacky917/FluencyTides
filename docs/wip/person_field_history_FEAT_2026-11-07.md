@@ -1,6 +1,6 @@
 # 人脈卡：資料附登錄日期與有效狀態、新增按鈕移到各區塊（FEAT）
 
-- 狀態：**需求討論完成，待實作指示**（尚未實作）
+- 狀態：**已實作，待使用者驗收**（分支 `claude/person-field-history-a92427`，未 push、未部署；實作紀錄見 §8）
 - 日期：2026-11-07
 - 相關：`docs/archive/person_profile_card_FEAT_2026-10-23.md`（人脈卡原計畫書）、`docs/archive/json_field_editor_FEAT_2026-10-20.md`（網頁編輯 JSON 欄位）
 
@@ -174,3 +174,79 @@
 ## 7. 實作時一併做
 
 - `docs/wip/backlog.md` 加一項（D9）：口說卡（`speaking_fsm.py`、`voice.py`）的日期用 UTC 記，東京 0–9 點記成前一天；改用 §4.7 的共用「今天」函數。
+
+## 8. 實作紀錄（2026-11-07）
+
+### 8.1 與設計的差異與補充
+
+| 項目 | 設計 | 實作 |
+|---|---|---|
+| 空清單 | 未提 | 會變的欄位清空時寫**空字串**而不是 `[]`：「認人」卡只要正面引用的欄位有值就產生，`Company` 寫 `[]` 會讓每個人都多一張空的認人卡。建卡時沒填的也是空字串 |
+| 卡片正面 | 未提 | 「認人」「見面前複習」正面原本直接印 `{{Company}}・{{Title}}`，改成以 JS 解析清單、只顯示有效的職位；「認人」正面在職位都劃掉時顯示最近一筆並標「（以前）」（認人仍是線索）。正面不再引用 `Title` |
+| 「劃掉」連結的位置 | 每筆旁 | 一般文字的項目在預設畫面就有「劃掉」；顯示成標籤的（興趣、飲食喜好、語言）在點眼睛展開後才有，避免標籤列太擠。長按 3 秒刪除兩種畫面都有 |
+| TG「清單」選單 | 未提 | 改資料拿掉會變的欄位後，它們從「清單」選單進入（22 個清單兩個一排，括號是有效筆數）。刪除確認時提示「不再適用用劃掉，刪除是給打錯的」 |
+| TG 新增可切的欄位 | 只問內容 | 興趣、飲食喜好、語言輸入「登山、攝影」會存成兩筆（與建卡表單同一切法）；與目前有效的某筆相同的略過 |
+| 取消劃掉 | 有 | TG 清單的「取消劃掉 n」按鈕，以及劃掉後回覆的「復原」按鈕；卡片上不放取消劃掉的連結 |
+| 網頁 JSON 編輯器新增一筆 | 未提 | 登錄日欄位在 schema 標 `x-default: today`，前端 `newItem` 預填瀏覽器時區的今天（可改） |
+| `Title` 欄位 | 不再使用但保留 | 經 `update_fields` 寫入非空的 `Title` 會被擋下並說明改到職位（清空可以）；轉換腳本把 `Title` 併進職位後清空 |
+| 指紋 | 未提 | 會變的欄位的項目另外把 `value`、`company`、`title` 接進指紋（項目有這些鍵時才接，原有六種清單的指紋不變）；`ended` 不在指紋裡，劃掉後的連結仍對得上 |
+| 用一段話記錄 | 新增或劃掉 | LLM 輸出新增 `list_updates`（`op: add / end`），劃掉以提示中有效項目的編號 `#n` 指定；文字欄位的建議 `field_updates` 只剩文字欄位。單值欄位新增時系統自動劃掉原本的，提示詞也這樣告訴 LLM |
+| AI 話題 | 失效的也送 | 一行裡先列有效的，再接「以前：X（到 YYYY-MM-DD 為止）」；提示詞加一句說明「以前：」是過去的事。劃掉的敏感話題照樣不送內容，但仍觸發「不要碰敏感話題」的提醒 |
+| 格式壞掉的清單 | 未提 | TG 讀取時當成空的（摘要照常顯示），但摘要的飲食、全部資料、清單頁、清單選單會標「資料格式壞了」，不顯示成「還沒有」；寫入時拒絕並說是哪一欄（會變的欄位提示先跑轉換腳本）。卡片背面的格式不對的單筆（不是物件）另列錯誤，不算有效也不算劃掉；AI 提示不送這些項目 |
+| `requirements.lock` | 重產 | 本機沒有 `uv`，照鎖定檔的格式手動加了 `tzdata==2026.6`（`-r requirements.txt`）；之後有 `uv` 時重產一次確認 |
+
+### 8.2 檔案
+
+| 檔案 | 內容 |
+|---|---|
+| `backend/app/core/config.py`、`backend/app/core/clock.py`（新） | `APP_TIMEZONE`（啟動時檢查是 IANA 名稱）、共用的 `now()`、`today()`、`today_iso()` |
+| `backend/requirements.txt`、`requirements.lock`、`.env.example` | `tzdata`、`APP_TIMEZONE` 說明 |
+| `backend/app/schemas/person_profile.py` | `HistoryEntry`、`HistoryNote`、`ClosenessEntry`、`Position`、`PERSON_HISTORY_FIELDS`（單值、可切）、`history_from_text`、`html_to_text`、`entry_text`、`active_texts`、`legacy_to_history`；指紋加鍵；`append_field_html` 拿掉標籤欄位的特例 |
+| `backend/app/services/task_handlers/person_profile_handler.py` | 會變的欄位併入 `JSON_FIELDS`、`JSON_FIELD_SPECS`；建卡轉清單；動作 `add_history`、`set_history_status`；空清單寫空字串；欄位搜尋按鈕調整 |
+| `backend/app/bot/utils/person_profile_view.py`、`deep_link_parser.py`、`schemas/tg/deep_link.py` | 清單代號、`SECTION_FIELDS`、改資料只剩文字欄位、摘要與全部資料只顯示有效的、清單每筆附日期、格式壞掉的清單標「資料格式壞了」；深連結 `pend`（劃掉）、`psec`（區塊的「+」） |
+| `backend/app/bot/handlers/person_profile.py` | 清單選單、區塊選單、劃掉／取消劃掉、新增走 `add_history`、用一段話記錄的新建議種類；「今天」改用 `clock`（建立新的人那段程式沒改，但經 `_today()` 一樣改用 `APP_TIMEZONE`） |
+| `backend/app/services/person_profile_ingest.py`、`person_profile_topics.py`、`schemas/llm/person_profile.py`、兩份 `.j2` | §4.6 的 AI 部分 |
+| `backend/app/anki_models/Person_Profile_Dark_*` | 背面：`historyRow`（有效的、眼睛展開全部、劃掉、長按刪除、敏感話題模糊）、每個區塊一個「+」、空區塊在有 TG 時顯示、拿掉集中的新增連結；正面：職位改讀清單；CSS |
+| `backend/scripts/local_anki/Person_Profile_Dark/migrate_history_fields.py`（新） | 一次性轉換（預設試跑，`--apply` 寫入並強制同步；開始前同步失敗就中止；可重複執行；不合格式的內容、看起來是壞掉的 JSON、殘留的 Title 列在「要手動處理」） |
+| `frontend/src/lib/jsonItemForm.ts` | `x-default: today` 預填今天 |
+| `docs/wip/backlog.md` | §7 Z1：口說卡日期用 UTC（D9） |
+| 測試 | `tests/test_person_field_history.py`（新）、`tests/test_person_profile_template.py`（新：模板常數與後端一致、用 node 跑模板的指紋與 `entryText` 比對後端）、人脈卡四份測試、`test_note_service.py`；`jsonItemForm.test.ts` |
+
+### 8.3 驗收清單
+
+自動測試（已過）：後端 `pytest tests`、`ruff check .`；前端 `vitest run`、`eslint .`（沒有新增警告）、`npm run build`。
+
+部署前要做（本機 Anki）：
+
+- [ ] 重新匯入模板（`import_model.py`），Anki 同步
+- [ ] 轉換腳本試跑，看輸出合理後 `--apply`
+- [ ] 卡片背面：興趣顯示成標籤、眼睛展開後每筆有登錄日（舊資料「日期不明」）、劃掉的有刪除線與失效日；眼睛與 TG 按鈕列裡的 AI 遮名字開關看得出不同
+- [ ] 每個區塊標題有「+」，空的區塊也在；「見面前必看」的「+」問待追蹤或飲食限制；工作、興趣、個性、聯絡方式、認識脈絡先問新增哪一項
+- [ ] 點「劃掉」→ TG 回覆已劃掉並有「復原」；同步後卡片那筆移到展開畫面、劃線
+- [ ] TG 新增現居地：原本的自動劃掉；新增興趣「a、b」存成兩筆
+- [ ] TG「清單」選單看得到會變的欄位，可劃掉、取消劃掉、刪除；「改資料」只剩文字欄位
+- [ ] 網頁建卡填興趣「登山、攝影」、公司＋職稱：卡片顯示兩個標籤、一筆職位；網頁 JSON 編輯器能改登錄日、失效日
+- [ ] 用一段話記錄說「他離職了，現在在 Sony 當 PM」：建議劃掉舊職位、新增新職位
+- [ ] AI 分析與話題：劃掉的興趣以「以前」出現在話題素材
+
+部署時（正式機）：`.env` 加 `APP_TIMEZONE=Asia/Tokyo`（不加也用預設值 Asia/Tokyo）；重建後端映像（新增 `tzdata`）。
+
+### 8.4 審查（`/multi-review`）
+
+五個面向（一般、錯誤處理、測試、註解、型別）都沒有 Critical；一般審查沒有信心 ≥ 80 的問題。已處理：
+
+- 轉換腳本：開始前同步失敗就中止、最後一次同步強制（寫入前的同步有 10 秒防抖，原本可能被跳過卻顯示「已同步」）；看起來是壞掉的 JSON 不包成文字；不合欄位模型的內容（例如親密度「很熟」）不轉並列出；`Company` 已是清單但 `Title` 有字時列出。
+- TG 不再把格式壞掉的清單默默顯示成空的（見 §8.1）；寫入失敗的訊息帶欄位名稱。
+- 同一次輸入裡重複的值（「登山、登山」）只存一筆。
+- 卡片正面的 `try` 只包 `JSON.parse`；背面格式不對的項目另列。
+- `pp:hx` 按鈕的模式只接受 `e`／`o`；`HistoryField` 不允許同時單值又可切；`PERSON_HISTORY_FIELDS` 打錯欄位名時 import 就失敗；`PERSON_VERBS` 與 `PersonLinkAction.verb` 一致的測試；深連結 start 參數長度的測試。
+- 註解：`APP_TIMEZONE` 與容器 `TZ` 的關係（TZ 仍影響三語口說卡的 `date.today()`，已加進 backlog Z1）、`Title` 的鎖定、指紋用途與 `added`／`ended` 不進指紋的理由、遮名字開關的位置等。
+
+沒處理（留給之後）：
+
+- 轉換前，每次讀到舊文字欄位 `AnkiJsonFieldManager.parse_field_string` 都會記一筆 ERROR log（共用的基礎設施，跑完轉換腳本就沒了）。
+- 新增的內容和現有有效的完全相同時不會寫入，但 TG 仍回「已儲存」。
+- 部署後聊天紀錄裡舊的「改資料」按鈕（以序號指欄位）會指到別的欄位；編輯畫面會先顯示欄位名稱。
+- 型別審查的結構性建議：把「`Company` 是職位、其他是 `value`」的分派收進 `HistoryField`（目前 `field == "Company"` 散在幾個函式）；`ended >= added` 的檢查。
+- 轉換腳本的 `main()` 沒有自動測試（轉換邏輯 `legacy_to_history` 有）。
+

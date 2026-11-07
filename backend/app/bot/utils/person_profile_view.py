@@ -5,10 +5,12 @@ Display and input rules of the person profile card on Telegram: pure
 functions, independent of aiogram.
 
 - 搜尋：用名字找人的 Anki 查詢。
-- 顯示：摘要（見面前必看）、全部資料、清單的每一筆。
+- 顯示：摘要（見面前必看）、全部資料、清單的每一筆。會變的欄位（興趣、職位等）摘要與全部資料只顯示
+  有效的，清單裡列出全部（附登錄日，劃掉的附失效日）。
 - 輸入：新增一筆時各清單要問的步驟、日期的寫法、文字欄位轉成 Anki 的 HTML。
 
-計畫書 ``docs/archive/person_profile_card_FEAT_2026-10-23.md`` §3.13。
+計畫書 ``docs/archive/person_profile_card_FEAT_2026-10-23.md`` §3.13、
+``docs/wip/person_field_history_FEAT_2026-11-07.md`` §4.5。
 """
 
 from __future__ import annotations
@@ -19,9 +21,20 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from app.bot.utils.formatting import anki_field_to_tg_text, escape_tg
+from app.core.exceptions import AnkiFieldCorruptedError
+from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.anki.search import escape_search_value, note_type_term
 from app.schemas.llm.person_profile import LLMPersonTopicsResult
-from app.schemas.person_profile import PERSON_JSON_ITEMS, PERSON_NOTE_TYPE, PersonCreateParams
+from app.schemas.person_profile import (
+    PERSON_HISTORY_FIELDS,
+    PERSON_JSON_ITEMS,
+    PERSON_NOTE_TYPE,
+    RETIRED_FIELDS,
+    PersonCreateParams,
+    active_texts,
+    entry_text,
+    is_active,
+)
 
 #: 用名字找人時比對的欄位。Fields a name search looks at.
 NAME_FIELDS = ("Display_Name", "Name_ZH", "Name_EN", "Name_JA", "Name_JA_Kana", "Name_Romaji")
@@ -29,26 +42,67 @@ NAME_FIELDS = ("Display_Name", "Name_ZH", "Name_EN", "Name_JA", "Name_JA_Kana", 
 #: 一次最多列幾個搜尋結果。Most search results listed as buttons.
 MAX_SEARCH_RESULTS = 10
 
-#: callback data 裡的清單代號（callback data 上限 64 bytes）。Short list codes for callback data.
+#: callback data 裡的清單代號（callback data 上限 64 bytes），順序同「清單」選單。
+#: 前六個是原本的 JSON 清單，其餘是會變的欄位。Short list codes for callback data, in menu order.
 LIST_CODES = {
-    "I": "Interactions_JSON",
     "F": "Followups_JSON",
+    "I": "Interactions_JSON",
     "M": "Family_JSON",
     "G": "Gifts_JSON",
     "D": "Key_Dates_JSON",
     "C": "Contacts_JSON",
+    "IN": "Interests",
+    "FD": "Food_Drink",
+    "DT": "Dietary",
+    "CO": "Company",
+    "WK": "Work_Detail",
+    "ED": "Education",
+    "PV": "Personality_Values",
+    "PR": "Praise",
+    "AA": "Ask_Advice",
+    "CP": "Comm_Prefs",
+    "RS": "Residence",
+    "LG": "Languages",
+    "TZ": "Timezone",
+    "RL": "Relationship",
+    "CL": "Closeness",
+    "SN": "Sensitive",
 }
 CODE_OF_LIST = {name: code for code, name in LIST_CODES.items()}
 
-#: 一般欄位（能經 TG 改的），順序同建立參數；callback data 以序號指欄位。Editable fields, by index.
-EDITABLE_FIELDS: tuple[str, ...] = tuple(PersonCreateParams.model_fields)
+#: 卡片背面區塊的「+」（深連結 ``psec``）對應的欄位：多個時 TG 先問新增哪一項（登錄日計畫書 §4.4）。
+#: 鍵要與模板 ``addLink({ section: ... })`` 的代號相同。
+#: 只對應一個欄位的區塊（家庭、互動等）直接用 ``padd``。The fields behind each section's "+".
+SECTION_FIELDS: dict[str, tuple[str, ...]] = {
+    "must": ("Followups_JSON", "Dietary"),
+    "interests": ("Interests", "Food_Drink"),
+    "work": ("Company", "Work_Detail", "Education"),
+    "personality": ("Personality_Values", "Praise", "Ask_Advice"),
+    "contacts": ("Contacts_JSON", "Comm_Prefs"),
+    "context": ("Residence", "Languages", "Timezone", "Relationship", "Closeness"),
+}
 
-#: 改資料的分組。Field groups of the edit menu.
+#: 一般欄位（能經 TG「改資料」改的）：會變的欄位走清單操作，``Title`` 已不使用；順序同建立參數，
+#: callback data 以序號指欄位——增刪或調整順序會讓聊天紀錄裡舊的「改資料」按鈕指到別的欄位
+#: （編輯畫面會先顯示欄位名稱，看得出來）。Editable text fields, by index.
+EDITABLE_FIELDS: tuple[str, ...] = tuple(
+    name for name in PersonCreateParams.model_fields if name not in PERSON_HISTORY_FIELDS and name not in RETIRED_FIELDS
+)
+
+#: 改資料的分組（只有文字欄位）。Field groups of the edit menu (text fields only).
 FIELD_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("姓名", ("Display_Name", "Name_ZH", "Name_EN", "Name_JA", "Name_JA_Kana", "Name_Romaji", "Honorific", "Name_Memo")),
+    ("外貌與基本資料", ("Appearance", "Birthday", "Hometown")),
+    ("認識", ("Met_Date", "Met_Where", "Met_Via", "Introducer_Note_ID", "First_Impression")),
+    ("聯絡與其他", ("Notes", "Last_Contact", "Contact_Cadence")),
+)
+
+#: 「全部資料」的分組：文字欄位與會變的欄位（只列有效的）。Groups of the full view.
+DISPLAY_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    FIELD_GROUPS[0],
     ("外貌與基本資料", ("Appearance", "Birthday", "Hometown", "Residence", "Languages", "Timezone")),
     ("認識", ("Met_Date", "Met_Where", "Met_Via", "Introducer_Note_ID", "Relationship", "Closeness", "First_Impression")),
-    ("工作", ("Company", "Title", "Work_Detail", "Education")),
+    ("工作", ("Company", "Work_Detail", "Education")),
     ("興趣與飲食", ("Interests", "Food_Drink", "Dietary")),
     ("個性與價值觀", ("Personality_Values", "Praise", "Ask_Advice", "Sensitive")),
     ("聯絡與其他", ("Comm_Prefs", "Notes", "Last_Contact", "Contact_Cadence")),
@@ -61,9 +115,43 @@ MESSAGE_LIMIT = 3800
 
 
 def field_title(name: str) -> str:
-    """一般欄位的中文名稱（取自建立參數）。The display title of a plain field."""
+    """欄位的中文名稱：會變的欄位取它的標題（``Company`` 是「職位」），其他取自建立參數。
+
+    The display title of a field.
+    """
+    if name in PERSON_HISTORY_FIELDS:
+        return PERSON_HISTORY_FIELDS[name].title
     info = PersonCreateParams.model_fields.get(name)
     return info.title if info and info.title else name
+
+
+def list_title(name: str) -> str:
+    """清單（JSON 清單或會變的欄位）的中文名稱。The title of a list."""
+    return PERSON_JSON_ITEMS[name][1] if name in PERSON_JSON_ITEMS else field_title(name)
+
+
+def is_history(name: str) -> bool:
+    """會變的欄位（每筆附登錄日與失效日）。Whether a list is a history field."""
+    return name in PERSON_HISTORY_FIELDS
+
+
+#: 清單格式壞了時的說明（不要顯示成「還沒有」）。Shown for a broken list.
+BROKEN_NOTE = "⚠️ 資料格式壞了（可能是還沒轉換的舊文字），請在網頁或 Anki 修正"
+
+
+def broken_lists(fields: dict[str, str]) -> frozenset[str]:
+    """格式壞掉、解析不了的清單（六種 JSON 清單與會變的欄位）。The lists that fail to parse.
+
+    TG 讀取時把它們當成空清單（摘要等照常顯示），顯示的地方用這個標出來，免得看起來像沒有資料
+    ——例如還沒跑轉換腳本的舊文字，飲食限制不能就這樣從「見面前必看」消失。
+    """
+    broken = set()
+    for name in (*PERSON_JSON_ITEMS, *PERSON_HISTORY_FIELDS):
+        try:
+            AnkiJsonFieldManager.parse_field_string(fields.get(name, ""))
+        except AnkiFieldCorruptedError:
+            broken.add(name)
+    return frozenset(broken)
 
 
 def is_multiline(name: str) -> bool:
@@ -151,15 +239,14 @@ def summary_text(fields: dict[str, str], lists: dict[str, list[object]], today: 
 
     Args:
         fields: 筆記的欄位值。The note's field values.
-        lists: 解析好的 JSON 清單（解析失敗的欄位不放）。Parsed JSON lists.
+        lists: 解析好的清單（解析失敗的欄位是空清單，另以 :func:`broken_lists` 標出）。Parsed lists.
         today: 今天。Today.
 
     Returns:
         TG HTML 訊息。The Telegram HTML message.
     """
     lines = [name_line(fields)]
-    meta = [x for x in ("・".join(filter(None, [_plain(fields, "Company", 40), _plain(fields, "Title", 40)])),
-                        _plain(fields, "Relationship", 20)) if x]
+    meta = [x for x in (_active(lists, "Company", "／", 80), _active(lists, "Relationship", "・", 20)) if x]
     last = parse_date(fields.get("Last_Contact", ""))
     if last and last[0] is not None:
         days = (today - date(last[0], last[1], last[2])).days
@@ -173,8 +260,10 @@ def summary_text(fields: dict[str, str], lists: dict[str, list[object]], today: 
         open_items = [f for f in followups if (f.get("type") or "ask") == kind and f.get("status", "open") != "done"]
         if open_items:
             must.append(f"<b>{label}</b>：" + "；".join(escape_tg(str(f.get("item", "")), 80) for f in open_items))
-    dietary = _plain(fields, "Dietary", 120)
-    if dietary:
+    dietary = _active(lists, "Dietary", "；", 160)
+    if "Dietary" in broken_lists(fields):
+        must.append(f"<b>飲食</b>：{BROKEN_NOTE}")
+    elif dietary:
         must.append(f"<b>飲食</b>：{dietary}")
     interactions = [i for i in lists.get("Interactions_JSON", []) if isinstance(i, dict)]
     if interactions:
@@ -201,11 +290,22 @@ def summary_text(fields: dict[str, str], lists: dict[str, list[object]], today: 
     return "\n".join(lines)
 
 
+def _active(lists: dict[str, list[object]], name: str, separator: str, limit: int) -> str:
+    """會變的欄位目前有效的內容（已轉義）。The current entries of a history field, escaped."""
+    return escape_tg(separator.join(active_texts(name, lists.get(name, []))), limit)
+
+
 def full_text(fields: dict[str, str], lists: dict[str, list[object]]) -> str:
-    """全部資料：所有有值的一般欄位與各清單的筆數。Every non-empty field and list counts."""
+    """全部資料：所有有值的一般欄位、會變的欄位（有效的）與各清單的筆數。Every non-empty field and list counts."""
     lines = [name_line(fields), ""]
-    for group, names in FIELD_GROUPS:
-        rows = [f"• {field_title(name)}：{_plain(fields, name, 300)}" for name in names if _plain(fields, name, 300)]
+    broken = broken_lists(fields)
+    for group, names in DISPLAY_GROUPS:
+        values = {
+            name: (BROKEN_NOTE if name in broken else _active(lists, name, "、", 300))
+            if is_history(name) else _plain(fields, name, 300)
+            for name in names
+        }
+        rows = [f"• {field_title(name)}：{value}" for name, value in values.items() if value]
         if rows:
             lines.append(f"<b>{group}</b>")
             lines.extend(rows)
@@ -216,9 +316,16 @@ def full_text(fields: dict[str, str], lists: dict[str, list[object]]) -> str:
 
 
 def item_line(field_name: str, item: object) -> str:
-    """清單裡一筆的一行文字（已轉義）。One item as an escaped line."""
+    """清單裡一筆的一行文字（已轉義）；會變的欄位附登錄日，劃掉的加刪除線與失效日。One item as an escaped line."""
     if not isinstance(item, dict):
         return escape_tg(str(item), 80)
+    if is_history(field_name):
+        text = escape_tg(entry_text(field_name, item), 200)
+        added = str(item.get("added") or "")
+        dates = f"{escape_tg(added, 10)} 登錄" if added else "日期不明"
+        if not is_active(item):
+            return f"<s>{text}</s>（{dates}，{escape_tg(str(item.get('ended')), 10)} 劃掉）"
+        return f"{text}（{dates}）"
     get = lambda key: escape_tg(str(item.get(key, "") or ""), 120)  # noqa: E731
     if field_name == "Interactions_JSON":
         return f"{get('date')}：{get('topics') or get('place')}" + (f"｜{get('updates')}" if item.get("updates") else "")
@@ -314,6 +421,27 @@ ADD_STEPS: dict[str, tuple[Step, ...]] = {
 }
 
 
+def _history_steps(name: str) -> tuple[Step, ...]:
+    """會變的欄位新增時要問的：只問內容（日期由系統填）。The steps of a history field."""
+    title = field_title(name)
+    if name == "Company":
+        return (Step("company", "公司？（沒有就略過）"), Step("title", "職稱？（沒有就略過）"))
+    if name == "Closeness":
+        return (Step("value", "親密度？（1 最生疏、5 最親近）", kind="choice", required=True,
+                     choices=tuple((str(n), str(n)) for n in range(1, 6))),)
+    if name == "Relationship":
+        return (Step("value", "關係？（可以點建議，或直接輸入）", required=True,
+                     choices=tuple((x, x) for x in ("客戶", "朋友", "同事", "前同事", "同學", "語言交換"))),)
+    if name == "Timezone":
+        return (Step("value", "時區？（例如 Asia/Tokyo）", required=True,
+                     choices=(("Asia/Tokyo", "Asia/Tokyo"), ("Asia/Taipei", "Asia/Taipei"))),)
+    hint = "（多個用頓號或逗號分開，會存成多筆）" if PERSON_HISTORY_FIELDS[name].split else ""
+    return (Step("value", f"{title}？{hint}", required=True),)
+
+
+ADD_STEPS.update({name: _history_steps(name) for name in PERSON_HISTORY_FIELDS})
+
+
 def parse_date_input(text: str, today: date) -> str | None:
     """使用者輸入的日期 → ``YYYY-MM-DD``：接受 ``2026-10-01``、``2026/10/1``、``10-01``、``10/1``（今年）。
 
@@ -357,7 +485,12 @@ def text_to_field_html(text: str) -> str:
 
 def preview_item(field_name: str, item: dict[str, object]) -> str:
     """儲存前的預覽。The preview before saving."""
-    title = PERSON_JSON_ITEMS[field_name][1]
+    title = list_title(field_name)
+    if is_history(field_name):
+        lines = [f"<b>新增{title}</b>", escape_tg(entry_text(field_name, item), 300), "<i>登錄日：今天</i>"]
+        if PERSON_HISTORY_FIELDS[field_name].single:
+            lines.append("<i>原本有效的那筆會自動劃掉（失效日＝今天）。</i>")
+        return "\n".join(lines)
     lines = [f"<b>新增{title}</b>", item_line(field_name, {k: v for k, v in item.items() if not k.startswith("_")})]
     extra = item.get("_followups")
     if isinstance(extra, list) and extra:
@@ -386,9 +519,18 @@ def proposal_line(kind: str, data: dict[str, object]) -> str:
     if kind == "followup":
         label = FOLLOWUP_TYPES.get(str(data.get("type") or "ask"), "下次要問")
         return f"<b>{label}</b>：{get('item')}" + (f"（期限 {get('due')}）" if data.get("due") else "")
+    reason = f"\n    <i>（{get('reason', 120)}）</i>" if data.get("reason") else ""
+    if kind in ("history_add", "history_end"):
+        name = str(data.get("field", ""))
+        title = escape_tg(field_title(name))
+        text = escape_tg(str(data.get("text", "") or ""), 300)
+        if kind == "history_end":
+            return f"<b>{title}</b> 劃掉：<s>{text}</s>" + reason
+        single = PERSON_HISTORY_FIELDS.get(name)
+        extra = "（原本的會劃掉）" if single and single.single else ""
+        return f"<b>{title}</b> 新增：{text}{extra}" + reason
     mode = "接在後面" if data.get("mode") == "append" else "改成"
-    line = f"<b>{escape_tg(field_title(str(data.get('field', ''))))}</b> {mode}：{get('value', 300)}"
-    return line + (f"\n    <i>（{get('reason', 120)}）</i>" if data.get("reason") else "")
+    return f"<b>{escape_tg(field_title(str(data.get('field', ''))))}</b> {mode}：{get('value', 300)}" + reason
 
 
 #: 預覽與按鈕上的勾選記號（文字，不用 emoji）。Check marks used in the preview and buttons.

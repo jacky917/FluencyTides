@@ -26,8 +26,8 @@ from app.schemas.tg.deep_link import (
 logger = logging.getLogger(__name__)
 
 #: 人脈卡深連結的動作前綴 → PersonLinkAction.verb。Person link prefixes.
-PERSON_VERBS = {"pview": "view", "padd": "add", "pdel": "del", "pdone": "done", "pphoto": "photo", "ptopic": "topic",
-                "pmask": "mask"}
+PERSON_VERBS = {"pview": "view", "padd": "add", "pdel": "del", "pdone": "done", "pend": "end", "psec": "section",
+                "pphoto": "photo", "ptopic": "topic", "pmask": "mask"}
 
 
 class DeepLinkParser:
@@ -43,8 +43,8 @@ class DeepLinkParser:
         Parse a deep link payload.
 
         支援的格式：{Action}-{FieldName}-{Index}-{Card_ID}
-        - Action: rec, del, addaudio, ttsaudio, gen；人脈卡為 pview、padd、pdel、pdone、pphoto
-        - FieldName: 對應 Anki 的欄位名稱 (例如 Recordings)
+        - Action: rec, del, addaudio, ttsaudio, gen；人脈卡為 pview、padd、pdel、pdone、pend、psec、pphoto、ptopic、pmask
+        - FieldName: 對應 Anki 的欄位名稱 (例如 Recordings)；人脈卡的格式見 PersonLinkAction
         - Index: 數字或 'last'，如果不適用則為 'none'
         - Card_ID: 卡片的唯一識別碼
 

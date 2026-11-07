@@ -25,6 +25,7 @@ pydantic-settings>=2.14.2,<3
 python-dotenv>=1.2.2,<2
 loguru>=0.7.3,<1.0
 jsonschema>=4.26.0,<5
+tzdata>=2026.6                      # zoneinfo 的時區資料（Windows 沒有系統時區資料；APP_TIMEZONE 用）
 
 # ─── Database & ORM ──────────────────────────────────────────────────
 # SQLAlchemy 直接被 app / scripts / alembic import，且用的是 async 引擎

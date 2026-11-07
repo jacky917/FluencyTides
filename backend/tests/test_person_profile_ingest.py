@@ -1,10 +1,12 @@
-"""人脈卡「用一段話記錄」的測試（人脈卡計畫書 §3.13 P5）：整理結果的過濾、提示內容與 TG 流程。
+"""人脈卡「用一段話記錄」的測試（人脈卡計畫書 §3.13 P5；登錄日計畫書 §4.6）：整理結果的過濾、提示內容與 TG 流程。
 
 Tests for the person profile "record in one paragraph" flow.
 """
 
 from datetime import date
 from unittest import mock
+
+import json
 
 import pytest
 
@@ -21,6 +23,7 @@ from app.core.exceptions import (
 from app.core.template_engine import TemplateEngineError
 from app.infrastructure.anki.client import AnkiConnectError
 from app.schemas.llm.person_profile import LLMPersonIngestResult
+from app.schemas.person_profile import item_fingerprint
 from app.services import person_profile_ingest as ingest
 from tests.test_bot_replies import NASTY, _assert_tg_html, _callback, _fsm, _message, _run, _sent
 from tests.test_person_profile_bot import _card_service, _note, _note_service
@@ -35,7 +38,8 @@ def _result(**overrides) -> LLMPersonIngestResult:
             {"item": "N1 考得如何？", "type": "ask", "due": "2026-12-07"},
             {"item": "介紹 Ken 給他", "type": "my_promise", "due": ""},
         ],
-        "field_updates": [{"field": "Interests", "value": "登山", "mode": "append", "reason": "週末都去爬山"}],
+        "field_updates": [{"field": "Notes", "value": "很健談", "mode": "append", "reason": "聊了兩小時"}],
+        "list_updates": [{"field": "Interests", "op": "add", "value": "登山", "reason": "週末都去爬山"}],
     }
     data.update(overrides)
     return LLMPersonIngestResult.model_validate(data)
@@ -48,51 +52,81 @@ def _result(**overrides) -> LLMPersonIngestResult:
 
 class TestProposals:
     def test_all_kinds_in_order(self):
-        proposals = ingest.proposals_from(_result(), {"Display_Name": "田中さん"}, TODAY)
+        proposals = ingest.proposals_from(_result(), {"Display_Name": "田中さん"}, {}, TODAY)
 
-        assert [p.kind for p in proposals] == ["interaction", "followup", "followup", "field"]
+        assert [p.kind for p in proposals] == ["interaction", "followup", "followup", "field", "history_add"]
         assert proposals[0].data == {"date": "2026-10-23", "topics": "轉職、京都", "updates": "下個月考 N1", "place": "中野"}
         assert proposals[1].data == {"item": "N1 考得如何？", "type": "ask", "due": "2026-12-07"}
         assert proposals[2].data == {"item": "介紹 Ken 給他", "type": "my_promise"}
-        assert proposals[3].data == {"field": "Interests", "value": "登山", "mode": "append", "reason": "週末都去爬山"}
+        assert proposals[3].data == {"field": "Notes", "value": "很健談", "mode": "append", "reason": "聊了兩小時"}
+        assert proposals[4].data == {"field": "Interests", "item": {"value": "登山"}, "text": "登山", "reason": "週末都去爬山"}
 
     def test_bad_interaction_date_becomes_today(self):
         result = _result(interaction={"date": "昨天", "topics": "轉職"})
-        (first, *_) = ingest.proposals_from(result, {}, TODAY)
+        (first, *_) = ingest.proposals_from(result, {}, {}, TODAY)
         assert first.data["date"] == "2026-10-24"
 
     def test_interaction_without_content_is_skipped(self):
-        result = _result(interaction={"date": "2026-10-24", "topics": "", "place": "中野"}, followups=[], field_updates=[])
-        assert ingest.proposals_from(result, {}, TODAY) == []
+        result = _result(interaction={"date": "2026-10-24", "topics": "", "place": "中野"}, followups=[], field_updates=[],
+                         list_updates=[])
+        assert ingest.proposals_from(result, {}, {}, TODAY) == []
 
     def test_followup_with_bad_due_is_dropped(self):
         result = _result(followups=[{"item": "問考試", "type": "ask", "due": "下個月"}])
-        assert [p.kind for p in ingest.proposals_from(result, {}, TODAY)] == ["interaction", "field"]
+        assert [p.kind for p in ingest.proposals_from(result, {}, {}, TODAY)] == ["interaction", "field", "history_add"]
 
     def test_field_filters(self):
         result = _result(field_updates=[
             {"field": "Display_Name", "value": "田中", "mode": "replace", "reason": ""},  # 不開放
             {"field": "Nope", "value": "x", "mode": "replace", "reason": ""},  # 不存在
-            {"field": "Company", "value": "Geekly", "mode": "replace", "reason": ""},  # 和目前相同
-            {"field": "Interests", "value": "登山", "mode": "append", "reason": ""},  # 已經有了
+            {"field": "Hometown", "value": "福岡", "mode": "replace", "reason": ""},  # 和目前相同
+            {"field": "Notes", "value": "登山", "mode": "append", "reason": ""},  # 已經有了
             {"field": "Birthday", "value": "五月", "mode": "replace", "reason": ""},  # 格式不對
-            {"field": "Title", "value": "部長", "mode": "append", "reason": ""},  # 單一值：改成取代
+            {"field": "Met_Where", "value": "讀書會", "mode": "append", "reason": ""},  # 單一值：改成取代
+            {"field": "Interests", "value": "登山", "mode": "append", "reason": ""},  # 會變的欄位要走 list_updates
+            {"field": "Title", "value": "部長", "mode": "replace", "reason": ""},  # 不再使用
             {"field": "Hometown", "value": "  ", "mode": "replace", "reason": ""},  # 空的
         ])
-        fields = {"Company": "Geekly", "Interests": "攝影<br>登山"}
-        fields_proposed = [p.data for p in ingest.proposals_from(result, fields, TODAY) if p.kind == "field"]
-        assert fields_proposed == [{"field": "Title", "value": "部長", "mode": "replace", "reason": ""}]
+        fields = {"Hometown": "福岡", "Notes": "攝影<br>登山"}
+        fields_proposed = [p.data for p in ingest.proposals_from(result, fields, {}, TODAY) if p.kind == "field"]
+        assert fields_proposed == [{"field": "Met_Where", "value": "讀書會", "mode": "replace", "reason": ""}]
 
     def test_field_html(self):
         assert ingest.field_html("Notes", "攝影", "登山 & <露營>", "append") == "攝影<br>登山 &amp; &lt;露營&gt;"
         assert ingest.field_html("Notes", "", "登山", "append") == "登山"
-        assert ingest.field_html("Company", "A 社", "B 社\n新創", "replace") == "B 社<br>新創"
+        assert ingest.field_html("Hometown", "大阪", "福岡\n博多", "replace") == "福岡<br>博多"
 
-    def test_tag_fields_are_joined_with_commas(self):
-        """興趣、飲食在卡片上顯示成標籤：接在後面用「、」，換行會讓標籤變成一段文字。"""
-        assert ingest.field_html("Interests", "攝影, 精釀啤酒、", "登山\n露營", "append") == "攝影, 精釀啤酒、登山、露營"
-        # 原本已經是一段文字（含換行）時照常換行
-        assert ingest.field_html("Interests", "攝影<br>精釀啤酒", "登山", "append") == "攝影<br>精釀啤酒<br>登山"
+    def test_history_fields_are_not_text_updates(self):
+        assert not {"Interests", "Company", "Residence", "Title"} & set(ingest.UPDATABLE_FIELDS)
+
+    def test_list_updates(self):
+        lists = {
+            "Interests": [{"value": "攝影", "added": "", "ended": ""}, {"value": "釣魚", "added": "", "ended": "2026-01-01"}],
+            "Company": [{"company": "Geekly", "title": "エンジニア", "added": "", "ended": ""}],
+        }
+        result = _result(followups=[], field_updates=[], list_updates=[
+            {"field": "Interests", "op": "add", "value": "攝影", "reason": ""},  # 已經有效
+            {"field": "Interests", "op": "add", "value": "釣魚", "reason": "又開始釣魚"},  # 劃掉的可以再加
+            {"field": "Interests", "op": "end", "entry": 1, "reason": "不玩攝影了"},
+            {"field": "Interests", "op": "end", "entry": 1, "reason": "重複"},  # 同一筆只劃一次
+            {"field": "Interests", "op": "end", "entry": 2, "reason": ""},  # 已經劃掉
+            {"field": "Interests", "op": "end", "entry": 9, "reason": ""},  # 不存在
+            {"field": "Company", "op": "end", "entry": 1, "reason": "離職"},
+            {"field": "Company", "op": "add", "value": "Sony", "job_title": "PM", "reason": "轉職"},
+            {"field": "Closeness", "op": "add", "value": "6", "reason": ""},  # 格式不對
+            {"field": "Notes", "op": "add", "value": "x", "reason": ""},  # 不是會變的欄位
+            {"field": "Residence", "op": "add", "value": " ", "reason": ""},  # 空的
+        ])
+        proposals = [p for p in ingest.proposals_from(result, {}, lists, TODAY) if p.kind.startswith("history")]
+        assert [(p.kind, p.data["field"], p.data["text"]) for p in proposals] == [
+            ("history_add", "Interests", "釣魚"),
+            ("history_end", "Interests", "攝影"),
+            ("history_end", "Company", "Geekly・エンジニア"),
+            ("history_add", "Company", "Sony・PM"),
+        ]
+        assert proposals[1].data["index"] == 0
+        assert proposals[1].data["fingerprint"] == item_fingerprint(lists["Interests"][0])
+        assert proposals[3].data["item"] == {"company": "Sony", "title": "PM"}
 
     def test_introducer_is_not_suggested(self):
         """介紹人是另一筆筆記的 ID，LLM 無從得知。"""
@@ -106,22 +140,27 @@ class TestPrompt:
 
     def test_prompt_contains_context(self):
         prompt = ingest.build_prompt(
-            {"Display_Name": "田中さん", "Company": "Geekly", "Interests": ""},
+            {"Display_Name": "田中さん", "Hometown": "福岡", "Notes": ""},
             {
                 "Followups_JSON": [{"item": "N1 考得如何？", "status": "open"}, {"item": "寄履歷", "status": "done"}],
                 "Interactions_JSON": [{"date": f"2026-0{m}-01", "topics": f"話題{m}"} for m in range(1, 6)],
+                "Company": [{"company": "舊公司", "ended": "2025-01-01"},
+                            {"company": "Geekly", "title": "PM", "added": "2026-03-01", "ended": ""}],
+                "Interests": [],
             },
             "今天喝咖啡",
             TODAY,
         )
         assert "2026-10-24（星期六）" in prompt
-        assert "公司（Company）：Geekly" in prompt and "（Interests）：" not in prompt
+        assert "出身地（Hometown）：福岡" in prompt and "（Notes）：" not in prompt and "（Interests）：" not in prompt
+        # 會變的欄位：有效的附編號（劃掉時用），劃掉的標成過去
+        assert "職位（Company）：#2 Geekly・PM（2026-03-01 起）｜已劃掉（過去的）：舊公司" in prompt
         assert "N1 考得如何？" in prompt and "寄履歷" not in prompt
         assert "話題5" in prompt and "話題3" in prompt and "話題2" not in prompt
         assert "今天喝咖啡" in prompt
-        for name in ingest.UPDATABLE_FIELDS:
+        for name in (*ingest.UPDATABLE_FIELDS, *ingest.PERSON_HISTORY_FIELDS):
             assert f"`{name}`" in prompt
-        assert "`Display_Name`" not in prompt
+        assert "`Display_Name`" not in prompt and "`Title`" not in prompt
 
     def test_route_declares_llm_and_stt(self):
         assert ingest.INGEST_ROUTE.key == "person_profile"
@@ -133,13 +172,18 @@ class TestPreview:
         proposals = [
             {"kind": "interaction", "data": {"date": "2026-10-24", "topics": NASTY, "quote": NASTY}},
             {"kind": "followup", "data": {"item": NASTY, "type": "their_promise", "due": "2026-11-01"}},
-            {"kind": "field", "data": {"field": "Interests", "value": NASTY, "mode": "append", "reason": NASTY}},
+            {"kind": "field", "data": {"field": "Notes", "value": NASTY, "mode": "append", "reason": NASTY}},
+            {"kind": "history_add", "data": {"field": "Residence", "item": {"value": NASTY}, "text": NASTY, "reason": NASTY}},
+            {"kind": "history_end", "data": {"field": "Company", "index": 0, "fingerprint": "x", "text": NASTY,
+                                             "reason": NASTY}},
         ]
-        text = view.ingest_preview(proposals, [True, False, True])
+        text = view.ingest_preview(proposals, [True, False, True, True, True])
         _assert_tg_html(text)
         assert NASTY not in text
         assert "－ 2. <b>對方答應的</b>" in text and "（期限 2026-11-01）" in text
-        assert "<b>興趣</b> 接在後面" in text
+        assert "<b>備註</b> 接在後面" in text
+        assert "<b>現居地</b> 新增：" in text and "（原本的會劃掉）" in text
+        assert "<b>職位</b> 劃掉：<s>" in text
 
 
 # =============================================================================
@@ -173,14 +217,14 @@ class TestIngestFlow:
 
     def test_preview_toggle_and_save(self):
         state, note_service = _fsm(), _note_service()
-        card_service = _card_service(_note(Interests="攝影"))
+        card_service = _card_service(_note(Notes="第一次見面", Interests=json.dumps([{"value": "攝影"}])))
         message, status, llm = _ingested(state, card_service)
 
         assert llm.await_args.args[2] == "今天跟他喝咖啡"
         assert _run(state.get_state()) == PersonStates.ingest_confirm.state
         status.delete.assert_awaited_once()
         (preview,) = _sent(message.answer)
-        assert "✓ 1." in preview and "✓ 4." in preview
+        assert "✓ 1." in preview and "✓ 5." in preview
 
         # 取消勾選第二項（N1 的待追蹤）
         query = _press("pp:ig:1", state)
@@ -191,25 +235,40 @@ class TestIngestFlow:
         assert actions == [
             ("add_interaction", {"item": {"date": "2026-10-23", "topics": "轉職、京都", "updates": "下個月考 N1", "place": "中野"}}),
             ("add_followup", {"item": {"item": "介紹 Ken 給他", "type": "my_promise"}}),
+            ("add_history", {"field": "Interests", "item": {"value": "登山"}}),
         ]
-        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Interests": "攝影、登山"})
+        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Notes": "第一次見面<br>很健談"})
         assert _run(state.get_state()) is None
 
     def test_two_appends_to_one_field_are_combined(self):
         state, note_service = _fsm(), _note_service()
-        card_service = _card_service(_note(Interests="攝影"))
-        result = _result(followups=[], field_updates=[
-            {"field": "Interests", "value": "登山", "mode": "append", "reason": ""},
-            {"field": "Interests", "value": "露營", "mode": "append", "reason": ""},
+        card_service = _card_service(_note(Notes="攝影"))
+        result = _result(followups=[], list_updates=[], field_updates=[
+            {"field": "Notes", "value": "登山", "mode": "append", "reason": ""},
+            {"field": "Notes", "value": "露營", "mode": "append", "reason": ""},
         ])
         _ingested(state, card_service, result)
         _press("pp:igsave", state, note_service, card_service)
-        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Interests": "攝影、登山、露營"})
+        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Notes": "攝影<br>登山<br>露營"})
+
+    def test_end_proposal_is_saved_as_set_history_status(self):
+        items = [{"company": "Geekly", "title": "", "added": "", "ended": ""}]
+        state, note_service = _fsm(), _note_service()
+        card_service = _card_service(_note(Company=json.dumps(items)))
+        result = _result(followups=[], field_updates=[], list_updates=[
+            {"field": "Company", "op": "end", "entry": 1, "reason": "離職"},
+        ])
+        _ingested(state, card_service, result)
+        _press("pp:igsave", state, note_service, card_service)
+        assert note_service.run_action.await_args_list[-1].args == (
+            5, "set_history_status",
+            {"field": "Company", "index": 0, "fingerprint": item_fingerprint(items[0]), "ended": True},
+        )
 
     def test_save_with_nothing_picked(self):
         state, note_service = _fsm(), _note_service()
         card_service = _card_service()
-        _ingested(state, card_service, _result(followups=[], field_updates=[]))
+        _ingested(state, card_service, _result(followups=[], field_updates=[], list_updates=[]))
         _press("pp:ig:0", state)
         query = _press("pp:igsave", state, note_service, card_service)
         assert "沒有勾選" in _sent(query.message.answer)[0]
@@ -236,7 +295,8 @@ class TestIngestFlow:
 
     def test_nothing_found(self):
         state, card_service = _fsm(), _card_service()
-        result = _result(interaction={"date": "2026-10-24", "topics": ""}, followups=[], field_updates=[])
+        result = _result(interaction={"date": "2026-10-24", "topics": ""}, followups=[], field_updates=[],
+                         list_updates=[])
         _, status, _ = _ingested(state, card_service, result)
         assert "沒有整理出" in _sent(status.edit_text)[0]
         assert _run(state.get_state()) == PersonStates.ingest_text.state
@@ -302,7 +362,7 @@ class TestPreviewFits:
     def test_overflow_is_not_offered_or_written(self):
         state, note_service = _fsm(), _note_service()
         card_service = _card_service()
-        result = _result(followups=[], field_updates=_long_fields(15))
+        result = _result(followups=[], field_updates=_long_fields(15), list_updates=[])
         message, _, _ = _ingested(state, card_service, result)
 
         data = _run(state.get_data())
@@ -322,7 +382,7 @@ class TestPreviewFits:
 class TestPartialSave:
     def test_failure_keeps_state_and_retry_writes_only_the_rest(self):
         state, note_service = _fsm(), _note_service()
-        card_service = _card_service(_note(Interests="攝影"))
+        card_service = _card_service(_note(Notes="攝影"))
         note_service.run_action = mock.AsyncMock(side_effect=[None, AnkiConnectError("連線中斷 <x>")])
         _ingested(state, card_service)
 
@@ -342,10 +402,10 @@ class TestPartialSave:
         note_service.run_action = mock.AsyncMock(return_value=None)
         query = _press("pp:igsave", state, note_service, card_service)
         actions = [c.args[1] for c in note_service.run_action.await_args_list]
-        assert actions == ["add_followup", "add_followup"]  # 互動不重複寫
+        assert actions == ["add_followup", "add_followup", "add_history"]  # 互動不重複寫
         note_service.update_fields.assert_awaited_once()
         assert _run(state.get_state()) is None
-        assert "已記下 4 項" in _sent(query.message.answer)[-1]
+        assert "已記下 5 項" in _sent(query.message.answer)[-1]
 
     def test_second_press_while_saving_is_ignored(self):
         state, note_service = _fsm(), _note_service()
@@ -369,7 +429,7 @@ class TestPartialSave:
     def test_written_but_summary_unreadable(self):
         state, note_service = _fsm(), _note_service()
         card_service = _card_service()
-        _ingested(state, card_service, _result(followups=[], field_updates=[]))
+        _ingested(state, card_service, _result(followups=[], field_updates=[], list_updates=[]))
         card_service.get_note = mock.AsyncMock(side_effect=AnkiConnectError("timeout"))
         query = _press("pp:igsave", state, note_service, card_service)
         (text,) = _sent(query.message.answer)

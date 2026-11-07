@@ -107,3 +107,9 @@
 | W3 | 低 | 網頁開放具名動作前，動作參數錯誤改回 4xx | handler 的 `execute_update` 參數錯誤拋 `ValueError`，會變成 500 並發 TG 當機警報；目前動作只從 TG 呼叫。網頁要開放動作（例如 media_upload 的 `add_audio`）時一併改成 `FluencyTidesError` 子類 |
 | W4 | 低 | 能力路由的 503 拆成兩個錯誤代碼 | 寫入前讀不到 DB（確定沒寫入）與寫入時異常（結果未知）共用 `ROUTE_STORE_UNAVAILABLE`，網頁只能用不斷言的措辭 |
 
+
+## 7. 日期與時區（來源：`docs/wip/person_field_history_FEAT_2026-11-07.md` §2.3、D9）
+
+| # | 優先 | 項目 | 內容 |
+|---|---|---|---|
+| Z1 | 中 | 口說卡的日期改用 `APP_TIMEZONE` | `bot/handlers/fsm/speaking_fsm.py`（建卡時的參考範本 `date`）與 `bot/handlers/voice.py`（錄音紀錄的 `date`）用 `datetime.now(timezone.utc)` 記日期：東京 0–9 點記成前一天。三語口說卡的 `services/task_handlers/speaking_trilingual_handler.py`（參考範本的 `date`）用 `date.today()`，依容器的 `TZ`，本機不經 docker 時跟著電腦時區。都改用 `app/core/clock.py` 的 `today()`（人脈卡已改用）。檔名、`Card_ID` 裡的 UTC 時間戳不影響顯示，可以一併改成 `clock.now()` 或維持 |

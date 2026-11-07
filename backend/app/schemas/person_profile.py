@@ -13,10 +13,14 @@ models keep unknown keys.
 
 from __future__ import annotations
 
+import html
+import json
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 #: 筆記類型。The note type.
 PERSON_NOTE_TYPE = "Person_Profile_Dark"
@@ -51,7 +55,11 @@ class PersonCreateParams(BaseModel):
     """網頁與 TG 建立人脈卡的參數：稱呼必填，其餘選填；JSON、照片、``Card_ID``、``TG_Bot``、
     ``Updated_At`` 由系統填（§3.11）。
 
+    會變的欄位（:data:`PERSON_HISTORY_FIELDS`）在這裡仍是文字輸入，建立時轉成清單、登錄日填今天
+    （:func:`history_from_text`）；公司與職稱合成一筆職位，``Title`` 欄位不再寫入。
+
     Parameters for creating a person card; only the display name is required.
+    History fields are typed as text here and turned into lists on creation.
     """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -68,7 +76,7 @@ class PersonCreateParams(BaseModel):
     Birthday: str = _text("生日", "YYYY-MM-DD；不知年份寫 --MM-DD", pattern=BIRTHDAY)
     Hometown: str = _text("出身地")
     Residence: str = _text("現居地")
-    Languages: str = _text("語言", "逗號分隔")
+    Languages: str = _text("語言", "逗號、頓號分隔的會存成多筆")
     Timezone: str = _text("時區", "例如 Asia/Tokyo")
     Met_Date: str = _text("認識日期", "YYYY-MM-DD", pattern=OPTIONAL_DATE)
     Met_Where: str = _text("認識場合", "例如「Geekly 面談」")
@@ -77,12 +85,12 @@ class PersonCreateParams(BaseModel):
     Relationship: str = _text("關係", "例如「客戶」「朋友」「同事」")
     Closeness: str = _text("親密度", "1–5", pattern=r"^$|^[1-5]$")
     First_Impression: str = _text("第一印象", multiline=True)
-    Company: str = _text("公司")
-    Title: str = _text("職稱")
+    Company: str = _text("公司", "與職稱合成一筆職位")
+    Title: str = _text("職稱", "與公司合成一筆職位")
     Work_Detail: str = _text("工作內容", "工作內容、目前的專案、職涯經歷", multiline=True)
     Education: str = _text("學歷")
-    Interests: str = _text("興趣", "短項目用逗號分隔會顯示成標籤", multiline=True)
-    Food_Drink: str = _text("飲食喜好", "喜歡吃喝的東西、愛去的店", multiline=True)
+    Interests: str = _text("興趣", "逗號、頓號分隔的會存成多筆，背面顯示成標籤", multiline=True)
+    Food_Drink: str = _text("飲食喜好", "喜歡吃喝的東西、愛去的店；逗號、頓號分隔的會存成多筆", multiline=True)
     Dietary: str = _text("飲食限制", "過敏、不吃的東西；背面用紅框提醒", multiline=True)
     Personality_Values: str = _text("個性與價值觀", "個性、價值觀、夢想、煩惱", multiline=True)
     Praise: str = _text("讚美素材", "具體、真實的成就或優點", multiline=True)
@@ -161,30 +169,22 @@ class Contact(_Item):
     preferred: bool = Field(False, title="偏好")
 
 
-#: 卡片背面把逗號、頓號分隔的內容顯示成標籤的欄位（模板的 ``chips``）。Fields shown as tags on the card.
-CHIP_FIELDS = ("Interests", "Food_Drink")
+def append_field_html(current: str, addition: str) -> str:
+    """把新的內容（已轉義的 HTML）接在文字欄位原本的內容後面，以換行（``<br>``）分隔。
 
-# 與模板 chips() 的判斷相同：含這些標籤時視為一段文字，不顯示成標籤
-_BLOCK_HTML = re.compile(r"<(ul|ol|li|div|br|p)\b", re.IGNORECASE)
-
-
-def append_field_html(field: str, current: str, addition: str) -> str:
-    """把新的內容（已轉義的 HTML）接在欄位原本的內容後面。
-
-    Append (escaped) HTML to a field's current content.
-
-    一般欄位以換行（``<br>``）分隔；顯示成標籤的欄位（:data:`CHIP_FIELDS`）在原本還是短項目時改用「、」，
-    換行會讓卡片背面的標籤變成一段文字。
+    Append (escaped) HTML to a text field's content on a new line.
     """
     if not current.strip():
         return addition
-    if field in CHIP_FIELDS and not _BLOCK_HTML.search(current):
-        return f"{current.rstrip(' 、,，')}、{addition.replace('<br>', '、')}"
     return f"{current}<br>{addition}"
 
 
 #: 指紋用的鍵：每種項目的主要文字欄位（與模板 itemFingerprint 相同）。Keys the fingerprint reads.
 FINGERPRINT_KEYS = ("date", "item", "topics", "name", "label", "handle", "relation", "channel")
+#: 會變的欄位的項目另外加進指紋的鍵：只在項目有這個鍵時才接上（原有六種清單的指紋不變）。``added``、
+#: ``ended`` 刻意不放：劃掉、取消劃掉後同一筆的指紋不變，TG 的「復原」按鈕與卡片上的舊連結才對得上。
+#: Extra keys of history items, appended only when present; the dates stay out so ending keeps the fingerprint.
+FINGERPRINT_EXTRA_KEYS = ("value", "company", "title")
 
 
 def item_fingerprint(item: object) -> str:
@@ -192,9 +192,10 @@ def item_fingerprint(item: object) -> str:
 
     The fingerprint of a JSON item, identical to the card template's
     ``itemFingerprint``: djb2 over the UTF-16 code units of the main text
-    fields joined by ``|``, in base 36.
+    fields joined by ``|`` (plus the extra keys present), in base 36.
 
-    卡片上的刪除、標成完成連結在序號後面附上它，用來確認要動的還是同一筆（序號可能過時）。
+    卡片上的刪除、標成完成、劃掉連結與 TG 的按鈕在序號後面附上它，用來確認要動的還是同一筆（序號可能過時）。
+    會變的欄位的項目另外接上 :data:`FINGERPRINT_EXTRA_KEYS` 裡有的鍵。
 
     Args:
         item: 一筆項目（通常是 dict；其他型別視為沒有欄位）。The item.
@@ -204,6 +205,7 @@ def item_fingerprint(item: object) -> str:
     """
     values = item if isinstance(item, dict) else {}
     key = "|".join("" if values.get(k) is None else _js_string(values[k]) for k in FINGERPRINT_KEYS)
+    key += "".join("|" + _js_string(values[k]) for k in FINGERPRINT_EXTRA_KEYS if values.get(k) is not None)
     h = 5381
     data = key.encode("utf-16-le")
     for i in range(0, len(data), 2):
@@ -241,3 +243,224 @@ PERSON_JSON_ITEMS: dict[str, tuple[type[_Item], str]] = {
     "Key_Dates_JSON": (KeyDate, "重要日期"),
     "Contacts_JSON": (Contact, "聯絡方式"),
 }
+
+
+# =============================================================================
+# 會變的資料：每筆附登錄日與失效日（人脈卡登錄日計畫書 §4.1、§4.2）
+# =============================================================================
+
+#: 新增一筆時網頁表單預填今天（前端 ``newItem`` 認這個標記）。Prefill today in the web form.
+_TODAY = {"x-default": "today"}
+
+
+def _added_field():
+    return Field("", title="登錄日", description="新增時系統填今天；空白表示日期不明", pattern=OPTIONAL_DATE,
+                 json_schema_extra=_TODAY)
+
+
+def _ended_field():
+    return Field("", title="失效日", description="空白表示目前有效；劃掉時系統填今天", pattern=OPTIONAL_DATE)
+
+
+class HistoryEntry(_Item):
+    """會變的資料的一筆：內容、登錄日、失效日（空字串＝目前有效）。One history entry."""
+
+    value: str = Field(min_length=1, title="內容")
+    added: str = _added_field()
+    ended: str = _ended_field()
+
+
+class HistoryNote(HistoryEntry):
+    """多行的一筆（一筆一段）。A multi-line history entry."""
+
+    value: str = Field(min_length=1, title="內容", json_schema_extra=_TEXTAREA)
+
+
+class ClosenessEntry(HistoryEntry):
+    """親密度的一筆（1–5）。A closeness entry."""
+
+    value: str = Field(title="親密度", description="1–5", pattern=r"^[1-5]$")
+
+
+class Position(_Item):
+    """一份職位：公司與職稱（至少一個）、登錄日、失效日。A position."""
+
+    company: str = Field("", title="公司")
+    title: str = Field("", title="職稱")
+    added: str = _added_field()
+    ended: str = _ended_field()
+
+    @model_validator(mode="after")
+    def _company_or_title(self) -> Position:
+        if not (self.company or self.title):
+            raise ValueError("公司與職稱至少要填一個")
+        return self
+
+
+@dataclass(frozen=True)
+class HistoryField:
+    """一個會變的欄位的設定。The settings of one history field.
+
+    Attributes:
+        model: 一筆的模型。The item model.
+        title: 中文名稱。The display title.
+        single: 單值欄位：新增時自動把原本有效的劃掉（登錄日計畫書 D5）。Ending the active one on add.
+        split: 文字輸入時以逗號、頓號、換行切成多筆。Split typed text into several entries.
+    """
+
+    model: type[_Item]
+    title: str
+    single: bool = False
+    split: bool = False
+
+    def __post_init__(self) -> None:
+        # 單值欄位一次只有一筆有效；切成多筆會在新增時互相劃掉
+        if self.single and self.split:
+            raise ValueError(f"{self.title}：單值欄位不能切成多筆")
+
+
+#: 改成清單的欄位（登錄日計畫書 D4），大致依卡片背面的區塊（``Dietary`` 在見面前必看）。The history fields.
+PERSON_HISTORY_FIELDS: dict[str, HistoryField] = {
+    "Interests": HistoryField(HistoryEntry, "興趣", split=True),
+    "Food_Drink": HistoryField(HistoryEntry, "飲食喜好", split=True),
+    "Dietary": HistoryField(HistoryNote, "飲食限制"),
+    "Company": HistoryField(Position, "職位"),
+    "Work_Detail": HistoryField(HistoryNote, "工作內容"),
+    "Education": HistoryField(HistoryEntry, "學歷"),
+    "Personality_Values": HistoryField(HistoryNote, "個性與價值觀"),
+    "Praise": HistoryField(HistoryNote, "讚美素材"),
+    "Ask_Advice": HistoryField(HistoryNote, "可以請教的事"),
+    "Comm_Prefs": HistoryField(HistoryNote, "溝通偏好"),
+    "Residence": HistoryField(HistoryEntry, "現居地", single=True),
+    "Languages": HistoryField(HistoryEntry, "語言", split=True),
+    "Timezone": HistoryField(HistoryEntry, "時區", single=True),
+    "Relationship": HistoryField(HistoryEntry, "關係", single=True),
+    "Closeness": HistoryField(ClosenessEntry, "親密度", single=True),
+    "Sensitive": HistoryField(HistoryNote, "敏感話題"),
+}
+
+#: 不再使用的欄位：職稱併進 ``Company`` 的職位（筆記類型的欄位保留，刪欄位要完整同步）。
+#: The retired field; the note type keeps it.
+RETIRED_FIELDS = ("Title",)
+
+# 會變的欄位必須是建立參數裡的文字欄位，而且不能和原本的 JSON 清單重名（打錯欄位名時 import 就失敗）
+assert set(PERSON_HISTORY_FIELDS) <= set(PersonCreateParams.model_fields), "PERSON_HISTORY_FIELDS 有不存在的欄位"
+assert set(PERSON_HISTORY_FIELDS).isdisjoint(PERSON_JSON_ITEMS), "PERSON_HISTORY_FIELDS 與 PERSON_JSON_ITEMS 重複"
+
+_SPLIT = re.compile(r"[,，、\n]+")
+
+
+def is_active(item: object) -> bool:
+    """這一筆目前有效（``ended`` 是空的）。Whether an entry is current."""
+    return isinstance(item, dict) and not str(item.get("ended") or "").strip()
+
+
+def entry_text(field: str, item: object) -> str:
+    """一筆的文字：職位是「公司・職稱」，其他是內容。The text of an entry."""
+    if not isinstance(item, dict):
+        return str(item)
+    if field == "Company":
+        parts = (str(item.get(key) or "").strip() for key in ("company", "title"))
+        return "・".join(part for part in parts if part)
+    return str(item.get("value") or "").strip()
+
+
+def active_texts(field: str, items: list[object]) -> list[str]:
+    """目前有效的每一筆的文字（空的不列）。The texts of the current entries."""
+    return [text for item in items if is_active(item) and (text := entry_text(field, item))]
+
+
+def history_from_text(field: str, text: str, added: str, *, title: str = "") -> list[dict[str, str]]:
+    """文字輸入（建卡表單、舊資料）轉成清單：可切的欄位以逗號、頓號、換行切成多筆，其他整段一筆。
+
+    Turn typed text into entries; splittable fields split on commas and line breaks.
+
+    Args:
+        field: 會變的欄位。The history field.
+        text: 純文字（不是 HTML）。Plain text.
+        added: 登錄日（建卡時是今天；舊資料轉換時空字串＝日期不明）。The added date.
+        title: 職位的職稱（只有 ``Company`` 用）。The job title, for ``Company`` only.
+
+    Returns:
+        項目（沒有內容時為空）。The entries.
+    """
+    text = text.strip()
+    if field == "Company":
+        title = title.strip()
+        return [{"company": text, "title": title, "added": added, "ended": ""}] if text or title else []
+    values = [part.strip() for part in _SPLIT.split(text)] if PERSON_HISTORY_FIELDS[field].split else [text]
+    # 同一次輸入裡重複的（「登山、登山」）只留一筆
+    return [{"value": value, "added": added, "ended": ""} for value in dict.fromkeys(values) if value]
+
+
+_BREAK = re.compile(r"<\s*(br|/div|/p|/li)\s*/?\s*>", re.IGNORECASE)
+_TAG = re.compile(r"<[^>]+>")
+
+
+def html_to_text(value: str) -> str:
+    """Anki 欄位的 HTML 轉成多行純文字（``<br>``、段落結尾換行，其他標籤去掉）。Field HTML as text."""
+    text = html.unescape(_TAG.sub("", _BREAK.sub("\n", value or ""))).replace("\xa0", " ")
+    return "\n".join(line.strip() for line in text.splitlines() if line.strip())
+
+
+@dataclass
+class LegacyConversion:
+    """一張筆記的舊資料轉換結果。The legacy conversion of one note.
+
+    Attributes:
+        changes: 欄位 → 新的值；不用轉時為空。Field to new value.
+        dropped: 不合格式、沒有轉進去的內容 (欄位, 文字)，例如親密度寫「很熟」。Entries left out.
+        skipped: 看起來是壞掉的 JSON、沒有轉換的欄位（包成文字會蓋掉還能手動修的資料）。Broken JSON fields.
+        leftover_title: ``Company`` 已經是清單、``Title`` 卻還有字（不再顯示，要手動併進職位）。
+            A title left behind.
+    """
+
+    changes: dict[str, str]
+    dropped: list[tuple[str, str]]
+    skipped: list[str]
+    leftover_title: str = ""
+
+
+def legacy_to_history(fields: dict[str, str], is_list: Callable[[str], bool]) -> LegacyConversion:
+    """舊資料（會變的欄位還是文字）轉成清單（一次性轉換腳本用，登錄日計畫書 D2：不保證無損）。
+
+    Convert one note's legacy text fields into lists.
+
+    切法同網頁建卡表單（:func:`history_from_text`）；登錄日留空（日期不明）、全部有效；不合欄位模型的
+    內容不轉（列在 ``dropped``）。公司與職稱合成一筆職位，``Title`` 清空。已經是清單的欄位不動，所以可以
+    重複執行；以 ``[``、``{`` 開頭卻解析不了的視為壞掉的 JSON，不轉（列在 ``skipped``）。
+
+    Args:
+        fields: 欄位原始值（HTML）。The raw field values.
+        is_list: 判斷欄位原始值是否已經是 JSON 清單的函式。Tells whether a raw value is already a list.
+
+    Returns:
+        轉換結果。The conversion.
+    """
+    result = LegacyConversion(changes={}, dropped=[], skipped=[])
+    title = html_to_text(fields.get("Title", ""))
+    for name, spec in PERSON_HISTORY_FIELDS.items():
+        raw = fields.get(name, "")
+        has_title = name == "Company" and bool(title)
+        if raw.strip() and is_list(raw):
+            if has_title:
+                result.leftover_title = title
+            continue
+        if not raw.strip() and not has_title:
+            continue
+        text = html_to_text(raw)
+        if text.lstrip().startswith(("[", "{")):
+            result.skipped.append(name)
+            continue
+        items = []
+        for item in history_from_text(name, text, "", title=title if name == "Company" else ""):
+            try:
+                spec.model.model_validate(item)
+            except ValueError:
+                result.dropped.append((name, entry_text(name, item)))
+                continue
+            items.append(item)
+        result.changes[name] = html.escape(json.dumps(items, ensure_ascii=False)) if items else ""
+    if "Company" in result.changes and fields.get("Title", "").strip():
+        result.changes["Title"] = ""
+    return result

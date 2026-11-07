@@ -28,6 +28,8 @@ interface SchemaProperty {
   enum?: unknown[]
   anyOf?: SchemaProperty[]
   'x-ui'?: string
+  /** `today`：新增一筆時預填今天（人脈卡會變的欄位的登錄日）。Prefill today on a new item. */
+  'x-default'?: 'today'
 }
 
 interface ItemSchema {
@@ -84,17 +86,32 @@ export function itemFields(schema: Record<string, unknown>): ItemField[] {
 }
 
 /**
- * 新增的一筆：有預設值的用預設值，其餘字串為空、選單取第一個、勾選框為否。
- * A new item with the schema defaults.
+ * 瀏覽器所在時區的今天（`YYYY-MM-DD`）。只是表單的預填值（使用者可以改），所以不必和後端的
+ * `APP_TIMEZONE` 一致；TG 新增時的日期由後端依 `APP_TIMEZONE` 填。
+ * Today in the browser's time zone; only a prefill the user can edit.
+ * @param now - 現在（測試用）。Now, for tests.
+ * @returns 日期字串。The date.
+ */
+export function localToday(now: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+}
+
+/**
+ * 新增的一筆：標了 `x-default: today` 的填今天；有預設值的用預設值，其餘字串為空、選單取第一個、
+ * 勾選框為否。
+ * A new item with the schema defaults; `x-default: today` fields get today.
  * @param schema - 每一筆的 JSON Schema。The item schema.
+ * @param now - 現在（測試用）。Now, for tests.
  * @returns 新的一筆。The new item.
  */
-export function newItem(schema: Record<string, unknown>): Record<string, unknown> {
+export function newItem(schema: Record<string, unknown>, now: Date = new Date()): Record<string, unknown> {
   const { properties = {} } = schema as ItemSchema
   const item: Record<string, unknown> = {}
   for (const field of itemFields(schema)) {
     const fallback = properties[field.key]?.default
-    if (fallback !== undefined) item[field.key] = fallback
+    if (properties[field.key]?.['x-default'] === 'today') item[field.key] = localToday(now)
+    else if (fallback !== undefined) item[field.key] = fallback
     else if (field.kind === 'select') item[field.key] = field.options?.[0]?.value ?? ''
     else if (field.kind === 'boolean') item[field.key] = false
     else if (field.kind === 'number' || field.nullable) item[field.key] = null
