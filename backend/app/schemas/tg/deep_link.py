@@ -78,14 +78,15 @@ class TTSAudioAction(DeepLinkAction):
 
 class PersonLinkAction(DeepLinkAction):
     """人脈卡的深連結：卡面的「+」（``add`` 新增到一個欄位；``section`` 是區塊的「+」，field_name 為區塊代號，
-    TG 先問新增哪一項）、長按刪除、完成、劃掉（``end``）、改資料、照片、AI 分析與話題、AI 遮名字開關
+    TG 先問新增哪一項）、長按刪除、長按修改文字欄位（``edit``）、完成、劃掉（``end``）、改資料、照片、
+    AI 分析與話題、AI 遮名字開關
     （index 為 on／off：切換後的狀態）（人脈卡計畫書 §3.8、登錄日計畫書 §4.4）。
 
-    A person profile card link: add, section add, delete, mark done, end, view, photo, topics or mask.
+    A person profile card link: add, section add, delete, edit, mark done, end, view, photo, topics or mask.
     """
 
     action_type: Literal["person"] = "person"
-    verb: Literal["view", "add", "section", "del", "done", "end", "photo", "topic", "mask"] = Field(
+    verb: Literal["view", "add", "section", "del", "done", "end", "edit", "photo", "topic", "mask"] = Field(
         ..., description="要做什麼"
     )
     field_name: str = Field(..., description="對象欄位（例如 Followups_JSON）；section 時為區塊代號（例如 work）")

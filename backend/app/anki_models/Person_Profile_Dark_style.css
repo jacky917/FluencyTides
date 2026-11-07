@@ -442,6 +442,11 @@ html, body {
     background-color: #e74c3c;
 }
 
+/* 長按修改（文字欄位）的進度條用藍色，和刪除的紅色區分 */
+.lp-target.lp-edit::after {
+    background-color: #5dade2;
+}
+
 .lp-target.lp-active::after {
     width: 100%;
     transition: width 3s linear;

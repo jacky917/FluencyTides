@@ -35,6 +35,12 @@ class TestConstants:
         fields = set(re.findall(r"\{ field: '(\w+)' \}", SOURCE))
         assert fields and fields <= set(view.CODE_OF_LIST)
 
+    def test_edit_targets_are_text_fields(self):
+        """長按修改（pedit）只指向 TG「改資料」認得的文字欄位。"""
+        fields = set(re.findall(r"longPressEdit\(.*?, '(\w+)'\)", SOURCE))
+        assert {"Hometown", "Notes", "Met_Date", "Met_Where", "Birthday"} <= fields
+        assert fields <= set(view.EDITABLE_FIELDS)
+
     def test_history_rows_cover_every_history_field(self):
         """每個會變的欄位都在卡片上有一列（Dietary 在見面前必看）。"""
         rows = set(re.findall(r"historyRow\('[^']*', '(\w+)'", SOURCE))

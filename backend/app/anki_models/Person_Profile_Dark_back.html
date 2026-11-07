@@ -2,7 +2,8 @@
      版面：頭部（頭像、姓名與讀音、徽章）→ 見面前必看（一律展開）→ TG 按鈕 → 可收合區段（<details>）。
      欄位都放在隱藏的 div，由下方的 JS 讀取後畫出；JSON 欄位解析失敗時該區段顯示「資料格式錯誤」與原文，
      不會默默消失。模板只顯示、不寫資料：寫入交給網頁與 TG——有 Card_ID 與 TG_Bot 時，每個區塊標題的
-     「+」開啟 TG 新增（區塊有多個欄位時 TG 先問新增哪一項），長按項目 3 秒開啟 TG 刪除（TG 會再確認一次），
+     「+」開啟 TG 新增（區塊有多個欄位時 TG 先問新增哪一項），長按清單項目 3 秒開啟 TG 刪除（TG 會再確認一次）、
+     長按文字欄位（出身、備註等）3 秒開啟 TG 修改那個欄位，
      「劃掉」開啟 TG 把那筆標成失效。沒有內容的區段只在有 TG 時顯示（才有「+」可按）。
      會變的欄位（興趣、職位、現居地等）是 JSON 清單，每筆 {value, added, ended}（職位是 {company, title, …}）：
      預設只顯示有效的，欄位旁的眼睛（與 TG 按鈕列裡的 AI 遮名字開關不同）展開全部紀錄。 -->
@@ -306,16 +307,28 @@
     var LONG_PRESS_MS = 3000;
 
     /**
-     * 長按 3 秒刪除：按住時下緣出現進度條，放開、移動或捲動就取消；滿 3 秒開啟 TG 確認刪除，
-     * 並在項目旁留一個「在 TG 刪除」連結（有些 App 不允許程式自動開連結，這時點它）。
-     * 沒有 TG 連結時什麼都不做。
+     * 長按 3 秒刪除清單的一筆：開啟 TG 確認刪除（見 longPress）。沒有 TG 連結時什麼都不做。
      */
     function longPressDelete(node, field, index, item) {
-        if (!tgEnabled) return node;
-        var url = tgUrl('pdel', field, itemRef(index, item));
-        node.className += ' lp-target';
+        return longPress(node, tgUrl('pdel', field, itemRef(index, item)), '長按 3 秒刪除', '在 TG 刪除這筆', '');
+    }
+
+    /**
+     * 長按 3 秒修改文字欄位（出身、備註等）：開啟 TG 的「改資料」直接到這個欄位。沒有 TG 連結時什麼都不做。
+     */
+    function longPressEdit(node, field) {
+        return longPress(node, tgUrl('pedit', field, 'none'), '長按 3 秒在 TG 修改', '在 TG 修改', ' lp-edit');
+    }
+
+    /**
+     * 長按 3 秒開啟 TG：按住時下緣出現進度條，放開、移動或捲動就取消；滿 3 秒開啟 url，
+     * 並在旁邊留一個連結（有些 App 不允許程式自動開連結，這時點它）。extraClass 決定進度條的顏色。
+     */
+    function longPress(node, url, title, revealText, extraClass) {
+        if (!tgEnabled || !node) return node;
+        node.className += ' lp-target' + extraClass;
         node.setAttribute('role', 'button');
-        node.setAttribute('title', '長按 3 秒刪除');
+        node.setAttribute('title', title);
         var timer = null;
         var fired = false;
         var startX = 0;
@@ -339,7 +352,7 @@
                 if (navigator.vibrate) {
                     try { navigator.vibrate(30); } catch (err) { /* 不支援震動 */ }
                 }
-                if (!node.querySelector('.lp-reveal')) node.appendChild(tgLink('在 TG 刪除這筆', url, 'lp-reveal'));
+                if (!node.querySelector('.lp-reveal')) node.appendChild(tgLink(revealText, url, 'lp-reveal'));
                 openUrl(url);
             }, LONG_PRESS_MS);
         });
@@ -646,7 +659,7 @@
         if (alt.length) names.appendChild(el('div', 'person-alt', alt.join(' · ')));
 
         var memo = readField('Name_Memo');
-        if (memo) names.appendChild(el('div', 'person-memo', '名字記法：' + memo));
+        if (memo) names.appendChild(longPressEdit(el('div', 'person-memo', '名字記法：' + memo), 'Name_Memo'));
 
         var work = activeText('Company', '／');
         if (work) names.appendChild(el('div', 'person-work', work));
@@ -790,7 +803,7 @@
         wrap.appendChild(tgLink('照片', tgUrl('pphoto', 'Photo', 'none')));
         wrap.appendChild(tgLink('AI 分析與話題', tgUrl('ptopic', 'Display_Name', 'none')));
         wrap.appendChild(maskToggle());
-        wrap.appendChild(el('span', 'tg-hint', '長按項目 3 秒可刪除'));
+        wrap.appendChild(el('span', 'tg-hint', '長按 3 秒：清單項目刪除、文字欄位修改'));
         document.getElementById('person-tg').appendChild(wrap);
     })();
 
@@ -894,10 +907,10 @@
         var birthdayDate = parseDate(birthdayText);
         if (birthdayDate) {
             var birthdayAge = age(birthdayDate);
-            dateNodes.push(row('生日', (birthdayDate.year !== null ? birthdayText : pad2(birthdayDate.month) + '/' + pad2(birthdayDate.day)) +
-                (birthdayAge !== null ? '（' + birthdayAge + ' 歲）' : '') + '・還有 ' + daysUntilNext(birthdayDate) + ' 天'));
+            dateNodes.push(longPressEdit(row('生日', (birthdayDate.year !== null ? birthdayText : pad2(birthdayDate.month) + '/' + pad2(birthdayDate.day)) +
+                (birthdayAge !== null ? '（' + birthdayAge + ' 歲）' : '') + '・還有 ' + daysUntilNext(birthdayDate) + ' 天'), 'Birthday'));
         } else if (birthdayText) {
-            dateNodes.push(row('生日', birthdayText));
+            dateNodes.push(longPressEdit(row('生日', birthdayText), 'Birthday'));
         }
         if (isError(keyDates)) {
             dateNodes.push(errorNode(keyDates));
@@ -934,12 +947,14 @@
             });
         }
         sections.push(section('context', '認識脈絡與基本資料', '#95a5a6', [
-            row('認識', [readField('Met_Date'), readField('Met_Where')].filter(Boolean).join('・')),
-            row('管道', readField('Met_Via')),
-            introducerNode ? row('介紹人', introducerNode) : null,
-            htmlRow('第一印象', 'First_Impression'),
-            htmlRow('外貌特徵', 'Appearance'),
-            row('出身', readField('Hometown')),
+            // 文字欄位：長按開 TG 修改（認識日期與場合分成兩列，各自對應一個欄位）
+            longPressEdit(row('認識日期', readField('Met_Date')), 'Met_Date'),
+            longPressEdit(row('認識場合', readField('Met_Where')), 'Met_Where'),
+            longPressEdit(row('管道', readField('Met_Via')), 'Met_Via'),
+            introducerNode ? longPressEdit(row('介紹人', introducerNode), 'Introducer_Note_ID') : null,
+            longPressEdit(htmlRow('第一印象', 'First_Impression'), 'First_Impression'),
+            longPressEdit(htmlRow('外貌特徵', 'Appearance'), 'Appearance'),
+            longPressEdit(row('出身', readField('Hometown')), 'Hometown'),
             historyRow('現居', 'Residence'),
             historyRow('語言', 'Languages', { chips: true }),
             historyRow('時區', 'Timezone'),
@@ -949,7 +964,7 @@
 
         // 備註
         sections.push(section('notes', '備註', '#7f8c8d', [
-            htmlRow(null, 'Notes'),
+            longPressEdit(htmlRow(null, 'Notes'), 'Notes'),
             row('資料更新', readField('Updated_At'))
         ]));
 

@@ -186,7 +186,7 @@ class TestView:
         from app.services.task_handlers.person_profile_handler import new_card_id
 
         longest = max([*view.CODE_OF_LIST, *view.SECTION_FIELDS], key=len)
-        for verb in ("pdel", "pend", "pdone", "padd", "psec"):
+        for verb in ("pdel", "pend", "pdone", "padd", "psec", "pedit"):
             payload = f"{verb}-{longest}-999_zzzzzzz-{new_card_id()}"
             assert len(payload) <= 64, payload
             assert isinstance(DeepLinkParser.parse(payload), PersonLinkAction)
@@ -256,6 +256,28 @@ class TestDeepLinks:
         rows = message.answer.await_args.kwargs["reply_markup"].inline_keyboard
         assert [r[0].callback_data for r in rows[:-1]] == ["pp:add:5:CO", "pp:add:5:WK", "pp:add:5:ED"]
         assert rows[0][0].text == "+ 職位"
+
+    def test_edit_link_opens_the_text_field(self):
+        """長按文字欄位（出身等）：直接問那個欄位的新內容。"""
+        message, _ = _message("/start pedit-Hometown-none-PP_1")
+        state = _fsm()
+        _run(commands.command_start_handler(
+            message, _anki(), mock.MagicMock(), _card_service(_note(Hometown="福岡")), state=state,
+            note_service=_note_service(),
+        ))
+        (text,) = _sent(message.answer)
+        _assert_tg_html(text)
+        assert "<b>出身地</b>" in text and "福岡" in text
+        assert _run(state.get_state()) == PersonStates.edit_value.state
+        assert _run(state.get_data())["field"] == "Hometown"
+
+    @pytest.mark.parametrize("field", ["Interests", "Card_ID", "Title", "Nope"])
+    def test_edit_link_only_for_text_fields(self, field):
+        message, _ = _message(f"/start pedit-{field}-none-PP_1")
+        _run(commands.command_start_handler(
+            message, _anki(), mock.MagicMock(), _card_service(), state=_fsm(), note_service=_note_service()
+        ))
+        assert "不支援" in _sent(message.answer)[0]
 
     def test_unknown_section_link(self):
         message, _ = _message("/start psec-nope-none-PP_1")

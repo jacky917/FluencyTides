@@ -309,6 +309,12 @@ async def handle_person_link(
                 await message.answer("❌ 這個連結不支援，請回 Anki 重新點。")
                 return
             await start_add(message, state, note_id, action.field_name)
+        elif action.verb == "edit":
+            # 長按文字欄位：直接進「改資料」的那個欄位（會變的欄位走清單，不在這裡）
+            if action.field_name not in view.EDITABLE_FIELDS:
+                await message.answer("❌ 這個連結不支援，請回 Anki 重新點。")
+                return
+            await _start_edit(message, state, card_service, note_id, action.field_name)
         elif action.verb == "section":
             if action.field_name not in view.SECTION_FIELDS:
                 await message.answer("❌ 這個連結不支援，請回 Anki 重新點。")
