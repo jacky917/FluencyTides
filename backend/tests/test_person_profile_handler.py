@@ -111,6 +111,9 @@ class TestDeclarations:
         assert rows == set(PERSON_HISTORY_FIELDS) - single
         assert properties["Languages"]["x-quick"] == ["中文", "日文", "英文"]
         assert properties["Work_Detail"]["x-item"] == "textarea"
+        # 標籤欄位就是會用頓號、逗號切開的那幾個（每筆本來就是短值）
+        tags = {name for name, prop in properties.items() if prop.get("x-item") == "tag"}
+        assert tags == {name for name, spec in PERSON_HISTORY_FIELDS.items() if spec.split}
         assert "x-ui" not in properties["Residence"]
 
 

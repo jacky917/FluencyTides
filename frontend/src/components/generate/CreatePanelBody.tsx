@@ -45,7 +45,7 @@ import type { CreateNoteResponse, HandlerInfo } from '../../types/api'
 import { ErrorNote } from '../shared/ErrorNote'
 import { Button } from '../ui/button'
 import { Skeleton } from '../ui/skeleton'
-import { CollapsibleSection, CreatedNotice, DeckRequiredNotice, DeckSummary, RowsFieldInput, SchemaFieldInput } from './formParts'
+import { CollapsibleSection, CreatedNotice, DeckRequiredNotice, DeckSummary, RowsFieldInput, SchemaFieldInput, TagsFieldInput } from './formParts'
 import { PreviewCreate } from './PreviewCreate'
 import { TagInput } from './TagInput'
 
@@ -317,7 +317,17 @@ function CreateForm({
       {fields.map((field) => {
         const value = values[field.name]
         const onChange = (next: FormValue) => setStoredValues((prev) => ({ ...prev, [field.name]: next }))
-        return field.rows ? (
+        return field.rows?.tags ? (
+          <TagsFieldInput
+            key={field.name}
+            id={`${formId}-${field.name}`}
+            field={field}
+            value={Array.isArray(value) ? (value as string[]) : []}
+            error={errors?.fields[field.name]}
+            disabled={mutation.isPending}
+            onChange={onChange}
+          />
+        ) : field.rows ? (
           <RowsFieldInput
             key={field.name}
             id={`${formId}-${field.name}`}

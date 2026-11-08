@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   addQuickPick,
+  addTags,
   deckBlockedReason,
   deckBlocksForm,
   formErrorsFrom,
@@ -157,6 +158,7 @@ const personSchema = {
       default: '',
       title: '語言',
       'x-ui': 'list',
+      'x-item': 'tag',
       'x-quick': ['中文', '日文', '英文'],
     },
     Company: {
@@ -182,12 +184,12 @@ describe('rows fields', () => {
 
   it('reads list fields, their cells and quick picks', () => {
     expect(byName.Residence.rows).toBeNull()
-    expect(byName.Languages.rows).toEqual({ cells: null, multiline: false, quick: ['中文', '日文', '英文'] })
+    expect(byName.Languages.rows).toEqual({ cells: null, multiline: false, tags: true, quick: ['中文', '日文', '英文'] })
     expect(byName.Company.rows?.cells).toEqual([
       { key: 'company', title: '公司' },
       { key: 'title', title: '職稱' },
     ])
-    expect(byName.Work_Detail.rows?.multiline).toBe(true)
+    expect(byName.Work_Detail.rows).toMatchObject({ multiline: true, tags: false })
   })
 
   it('starts list fields empty', () => {
@@ -216,7 +218,7 @@ describe('rows fields', () => {
 
   it('turns text left by the old form into a visible row', () => {
     expect(normalizeRows(fields, { Languages: '中文、日文', Company: 'Geekly', Work_Detail: ' ', Residence: '東京' })).toEqual({
-      Languages: ['中文、日文'],
+      Languages: ['中文', '日文'],
       Company: [{ company: 'Geekly', title: '' }],
       Work_Detail: [],
       Residence: '東京',
@@ -227,6 +229,12 @@ describe('rows fields', () => {
     expect(addQuickPick([], '中文')).toEqual(['中文'])
     expect(addQuickPick(['日文', ''], '中文')).toEqual(['日文', '中文'])
     expect(addQuickPick(['中文'], '中文')).toEqual(['中文'])
+  })
+
+  it('adds typed tags split like the backend, without duplicates', () => {
+    expect(addTags([], ' 韓文 ')).toEqual(['韓文'])
+    expect(addTags(['中文', ' '], '日文、韓文, 中文，法文')).toEqual(['中文', '日文', '韓文', '法文'])
+    expect(addTags(['中文'], ' 、 ')).toEqual(['中文'])
   })
 
   it('maps row errors onto the field', () => {

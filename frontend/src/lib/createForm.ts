@@ -8,7 +8,8 @@
  * 支援的 schema 寫法：`title`、`description`、`required`、`default`、`examples`（可輸入的下拉）、
  * `enum`（只能選的下拉）、`pattern`、`x-ui: textarea`（多行）；不認得的 `x-ui` 值當一般文字欄位。
  * `x-ui: list` 是一列一筆的欄位（人脈卡會變的欄位）：值是字串清單，或物件清單（`items` 指到 `$defs`
- * 裡的物件時，每列一格一個屬性，例如職位的公司＋職稱）；`x-item: textarea` 每列多行，`x-quick` 是快速選項。
+ * 裡的物件時，每列一格一個屬性，例如職位的公司＋職稱）；`x-item: textarea` 每列多行，`x-item: tag` 畫成
+ * 一個一個小標籤（語言、興趣這種短值），`x-quick` 是快速選項。
  * 只畫字串與一列一筆的欄位：其他型別的參數（例如外語糾錯預覽流程的 LLM 結果）不會出現在網頁表單。
  */
 
@@ -26,6 +27,8 @@ export interface RowsSpec {
   cells: { key: string; title: string }[] | null
   /** 每列多行。Multi-line rows. */
   multiline: boolean
+  /** 畫成一個一個小標籤（短值的欄位）。Shown as removable tags. */
+  tags: boolean
   /** 快速選項：點一下加一列（已有的不重複）。Quick picks. */
   quick: string[]
 }
@@ -84,6 +87,7 @@ function rowsSpec(prop: SchemaProperty, defs: Record<string, SchemaObject>): Row
   return {
     cells,
     multiline: prop['x-item'] === 'textarea',
+    tags: !cells && prop['x-item'] === 'tag',
     quick: (prop['x-quick'] ?? []).filter((option): option is string => typeof option === 'string'),
   }
 }
@@ -138,7 +142,7 @@ export function initialRows(fields: FormField[]): Record<string, RowsValue> {
 
 /**
  * 把存著的值整理成表單的值：一列一筆的欄位若存的是一段文字（舊版表單留在 sessionStorage 的），轉成一列，
- * 不讓看不到的內容被送出；物件列的欄位放進第一格。
+ * 不讓看不到的內容被送出；物件列的欄位放進第一格，標籤欄位照頓號、逗號切成一個一個標籤。
  * Normalizes stored values; text left in a list field becomes one visible row.
  * @param fields - 欄位。The fields.
  * @param values - 存著的值。The stored values.
@@ -151,6 +155,7 @@ export function normalizeRows(fields: FormField[], values: Record<string, FormVa
     if (!field.rows || typeof value !== 'string') continue
     const cells = field.rows.cells
     if (!value.trim()) result[field.name] = []
+    else if (field.rows.tags) result[field.name] = addTags([], value)
     else result[field.name] = cells ? [{ ...Object.fromEntries(cells.map((c) => [c.key, ''])), [cells[0].key]: value }] : [value]
   }
   return result
@@ -200,6 +205,22 @@ export function addQuickPick(rows: string[], option: string): string[] {
   if (rows.some((row) => row.trim() === option)) return rows
   const empty = rows.findIndex((row) => !row.trim())
   return empty >= 0 ? rows.map((row, i) => (i === empty ? option : row)) : [...rows, option]
+}
+
+/**
+ * 加標籤：輸入的文字照頓號、逗號、換行切開（和後端切這幾個欄位的方式一樣），去掉空白與已經有的，
+ * 順便清掉空的項目。Adds tags typed as text, split on 、 , ， and newlines, without duplicates.
+ * @param tags - 目前的標籤。The current tags.
+ * @param text - 輸入的文字。The typed text.
+ * @returns 新的標籤。The new tags.
+ */
+export function addTags(tags: string[], text: string): string[] {
+  const result = tags.map((tag) => tag.trim()).filter((tag) => tag !== '')
+  for (const part of text.split(/[、,，\r\n]/)) {
+    const tag = part.trim()
+    if (tag && !result.includes(tag)) result.push(tag)
+  }
+  return result
 }
 
 /**

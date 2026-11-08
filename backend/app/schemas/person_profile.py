@@ -52,18 +52,30 @@ def _text(title: str, description: str | None = None, *, multiline: bool = False
     )
 
 
-def _rows(title: str, description: str | None = None, *, multiline: bool = False, quick: tuple[str, ...] = ()):
+def _rows(
+    title: str,
+    description: str | None = None,
+    *,
+    multiline: bool = False,
+    tags: bool = False,
+    quick: tuple[str, ...] = (),
+):
     """可以一筆一筆輸入的欄位（會變的欄位裡不是單值的）：網頁表單畫成一列一列、可「+」新增。
 
     A field typed one entry per row; the web form shows rows with a "+".
 
     JSON Schema 的標記（前端 ``createForm`` 認得）：``x-ui: list``；``x-item: textarea`` 每列是多行；
-    ``x-quick`` 快速選項（點一下加一列，已有的不重複）。值可以是一段文字（舊的寫法，照 :func:`history_from_text`
-    切）或每列一個值的清單。
+    ``x-item: tag`` 畫成一個一個小標籤（短值的欄位：語言、興趣這種，橫向排、輸入後按 Enter 加入）；
+    ``x-quick`` 快速選項（點一下加一筆，已有的不重複）。值可以是一段文字（舊的寫法，照
+    :func:`history_from_text` 切）或每列一個值的清單。
     """
+    if multiline and tags:
+        raise ValueError("標籤欄位不能多行")
     extra: dict[str, object] = {"x-ui": "list"}
     if multiline:
         extra["x-item"] = "textarea"
+    elif tags:
+        extra["x-item"] = "tag"
     if quick:
         extra["x-quick"] = list(quick)
     return Field(default="", title=title, description=description, json_schema_extra=extra)
@@ -104,7 +116,7 @@ class PersonCreateParams(BaseModel):
     Birthday: str = _text("生日", "例如 1994-03-15；不知年份只寫月日，例如 3/15", pattern=BIRTHDAY)
     Hometown: str = _text("出身地")
     Residence: str = _text("現居地")
-    Languages: str | list[str] = _rows("語言", "一個語言一列", quick=("中文", "日文", "英文"))
+    Languages: str | list[str] = _rows("語言", "點選或輸入後按 Enter 加入", tags=True, quick=("中文", "日文", "英文"))
     Timezone: str = _text("時區", "例如 Asia/Tokyo")
     Met_Date: str = _text("認識日期", "YYYY-MM-DD", pattern=OPTIONAL_DATE)
     Met_Where: str = _text("認識場合", "例如「Geekly 面談」")
@@ -116,8 +128,8 @@ class PersonCreateParams(BaseModel):
     Company: str | list[PositionInput] = _rows("職位", "一份工作一列：公司與職稱至少填一個")
     Work_Detail: str | list[str] = _rows("工作內容", "工作內容、目前的專案、職涯經歷；一件一列", multiline=True)
     Education: str | list[str] = _rows("學歷", "一個學歷一列")
-    Interests: str | list[str] = _rows("興趣", "一個興趣一列，背面顯示成標籤")
-    Food_Drink: str | list[str] = _rows("飲食喜好", "喜歡吃喝的東西、愛去的店；一項一列")
+    Interests: str | list[str] = _rows("興趣", "輸入後按 Enter 加入；背面也顯示成標籤", tags=True)
+    Food_Drink: str | list[str] = _rows("飲食喜好", "喜歡吃喝的東西、愛去的店；輸入後按 Enter 加入", tags=True)
     Dietary: str | list[str] = _rows("飲食限制", "過敏、不吃的東西；背面用紅框提醒", multiline=True)
     Personality_Values: str | list[str] = _rows("個性與價值觀", "個性、價值觀、夢想、煩惱", multiline=True)
     Praise: str | list[str] = _rows("讚美素材", "具體、真實的成就或優點", multiline=True)
