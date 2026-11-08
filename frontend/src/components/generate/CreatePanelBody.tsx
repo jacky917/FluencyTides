@@ -28,9 +28,15 @@ import {
   deckBlockedReason,
   deckBlocksForm,
   formErrorsFrom,
+  hasInput,
+  initialRows,
   initialValues,
   missingRequired,
+  normalizeRows,
   schemaFields,
+  submittedParams,
+  type FormValue,
+  type RowsValue,
   type FormErrors,
 } from '../../lib/createForm'
 import { createAvailability, type CreateAvailability } from '../../lib/handlerCapabilities'
@@ -39,7 +45,7 @@ import type { CreateNoteResponse, HandlerInfo } from '../../types/api'
 import { ErrorNote } from '../shared/ErrorNote'
 import { Button } from '../ui/button'
 import { Skeleton } from '../ui/skeleton'
-import { CollapsibleSection, CreatedNotice, DeckRequiredNotice, DeckSummary, SchemaFieldInput } from './formParts'
+import { CollapsibleSection, CreatedNotice, DeckRequiredNotice, DeckSummary, RowsFieldInput, SchemaFieldInput } from './formParts'
 import { PreviewCreate } from './PreviewCreate'
 import { TagInput } from './TagInput'
 
@@ -222,10 +228,13 @@ function CreateForm({
   // 填到一半的內容存在這個分頁的 sessionStorage：切換頁面、重新整理都還在，建立成功或按「清除」才清掉
   const formKey = `generate_form:${handler.name}`
   const tagsKey = `generate_tags:${handler.name}`
-  const [storedValues, setStoredValues] = useSessionStorage<Record<string, string>>(formKey, {})
+  const [storedValues, setStoredValues] = useSessionStorage<Record<string, FormValue>>(formKey, {})
   const [tags, setTags] = useSessionStorage<string[]>(tagsKey, [])
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const values = useMemo(() => ({ ...initialValues(fields), ...storedValues }), [storedValues])
+  const values = useMemo<Record<string, FormValue>>(
+    () => normalizeRows(fields, { ...initialValues(fields), ...initialRows(fields), ...storedValues }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [storedValues],
+  )
   const [errors, setErrors] = useState<FormErrors | null>(null)
   const [result, setResult] = useCreatedNotice(handler.name, onViewCreated !== undefined)
 
@@ -236,7 +245,12 @@ function CreateForm({
 
   const mutation = useMutation({
     mutationFn: () =>
-      FluencyTidesAPI.createNote(handler.name, { deck: deck!, note_type: create.note_type!, params: values, tags }),
+      FluencyTidesAPI.createNote(handler.name, {
+        deck: deck!,
+        note_type: create.note_type!,
+        params: submittedParams(fields, values),
+        tags,
+      }),
     onSuccess: (data) => {
       setResult(data)
       setErrors(null)
@@ -277,11 +291,11 @@ function CreateForm({
 
   // 牌組不能用：一開始就不顯示表單（建立進行中照常顯示）。填到一半的內容還在 sessionStorage
   if (formReady && !mutation.isPending && deckBlocksForm(fixedDeck, selectedDeck, deckStatus)) {
-    const hasInput = Object.values(storedValues).some((value) => value.trim() !== '') || tags.length > 0
+    const kept = Object.values(storedValues).some(hasInput) || tags.length > 0
     return (
       <DeckRequiredNotice
         reason={deckBlockedReason(fixedDeck, selectedDeck, deckStatus) ?? ''}
-        kept={hasInput ? '填到一半的內容還在，選好牌組就會出現。' : null}
+        kept={kept ? '填到一半的內容還在，選好牌組就會出現。' : null}
       />
     )
   }
@@ -300,17 +314,31 @@ function CreateForm({
         <ErrorNote title="暫時無法建立" error={{ error_code: 'UNAVAILABLE', message: create.reason ?? '沒有建卡表單' }} />
       )}
 
-      {fields.map((field) => (
-        <SchemaFieldInput
-          key={field.name}
-          id={`${formId}-${field.name}`}
-          field={field}
-          value={values[field.name] ?? ''}
-          error={errors?.fields[field.name]}
-          disabled={mutation.isPending}
-          onChange={(value) => setStoredValues((prev) => ({ ...prev, [field.name]: value }))}
-        />
-      ))}
+      {fields.map((field) => {
+        const value = values[field.name]
+        const onChange = (next: FormValue) => setStoredValues((prev) => ({ ...prev, [field.name]: next }))
+        return field.rows ? (
+          <RowsFieldInput
+            key={field.name}
+            id={`${formId}-${field.name}`}
+            field={field}
+            value={Array.isArray(value) ? (value as RowsValue) : []}
+            error={errors?.fields[field.name]}
+            disabled={mutation.isPending}
+            onChange={onChange}
+          />
+        ) : (
+          <SchemaFieldInput
+            key={field.name}
+            id={`${formId}-${field.name}`}
+            field={field}
+            value={typeof value === 'string' ? value : ''}
+            error={errors?.fields[field.name]}
+            disabled={mutation.isPending}
+            onChange={onChange}
+          />
+        )
+      })}
 
       <TagInput handlerName={handler.name} tags={tags} onChange={setTags} disabled={mutation.isPending} />
 
@@ -339,7 +367,7 @@ function CreateForm({
           type="button"
           variant="ghost"
           disabled={
-            mutation.isPending || (!Object.values(storedValues).some((value) => value.trim() !== '') && tags.length === 0)
+            mutation.isPending || (!Object.values(storedValues).some(hasInput) && tags.length === 0)
           }
           onClick={() => {
             removeStored('session', formKey)

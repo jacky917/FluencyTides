@@ -32,6 +32,7 @@ from app.schemas.person_profile import (
     RETIRED_FIELDS,
     PersonCreateParams,
     entry_text,
+    history_from_input,
     history_from_text,
     is_active,
     item_fingerprint,
@@ -262,8 +263,8 @@ class PersonProfileHandler(BaseHandler):
             relation_service: 關聯服務（不用）。Relation service (unused).
             deck_name: 目標牌組。Target deck.
             model_name: 筆記類型（服務層已確認）。The note type.
-            parameters: ``PersonCreateParams`` 驗證過的值，加上服務層補的 ``tg_bot``。會變的欄位是
-                文字，在這裡轉成清單（公司與職稱合成一筆職位）。
+            parameters: ``PersonCreateParams`` 驗證過的值，加上服務層補的 ``tg_bot``。會變的欄位在這裡
+                轉成清單（文字照規則切、清單每列一筆；職位一列是公司＋職稱）。
                 The validated parameters plus ``tg_bot``.
 
         Returns:
@@ -272,14 +273,13 @@ class PersonProfileHandler(BaseHandler):
         values = dict(parameters)
         tg_bot = str(values.pop("tg_bot", "") or "")
         today = today_iso()
-        title = str(values.pop("Title", "") or "")
         fields = {
             name: str(value)
             for name, value in values.items()
             if value not in (None, "") and name not in PERSON_HISTORY_FIELDS
         }
         for name in HISTORY_FIELDS:
-            items = history_from_text(name, str(values.get(name) or ""), today, title=title if name == "Company" else "")
+            items = history_from_input(name, values.get(name), today)
             if items:
                 fields[name] = AnkiJsonFieldManager.serialize([_validate_item(name, item) for item in items])
         fields.update({name: "[]" for name in PERSON_JSON_ITEMS})

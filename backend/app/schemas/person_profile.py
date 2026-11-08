@@ -52,15 +52,42 @@ def _text(title: str, description: str | None = None, *, multiline: bool = False
     )
 
 
+def _rows(title: str, description: str | None = None, *, multiline: bool = False, quick: tuple[str, ...] = ()):
+    """可以一筆一筆輸入的欄位（會變的欄位裡不是單值的）：網頁表單畫成一列一列、可「+」新增。
+
+    A field typed one entry per row; the web form shows rows with a "+".
+
+    JSON Schema 的標記（前端 ``createForm`` 認得）：``x-ui: list``；``x-item: textarea`` 每列是多行；
+    ``x-quick`` 快速選項（點一下加一列，已有的不重複）。值可以是一段文字（舊的寫法，照 :func:`history_from_text`
+    切）或每列一個值的清單。
+    """
+    extra: dict[str, object] = {"x-ui": "list"}
+    if multiline:
+        extra["x-item"] = "textarea"
+    if quick:
+        extra["x-quick"] = list(quick)
+    return Field(default="", title=title, description=description, json_schema_extra=extra)
+
+
+class PositionInput(BaseModel):
+    """建卡表單上職位的一列：公司與職稱（都空的那列略過）。One position row of the create form."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    company: str = Field("", title="公司")
+    title: str = Field("", title="職稱")
+
+
 class PersonCreateParams(BaseModel):
     """網頁與 TG 建立人脈卡的參數：稱呼必填，其餘選填；JSON、照片、``Card_ID``、``TG_Bot``、
     ``Updated_At`` 由系統填（§3.11）。
 
-    會變的欄位（:data:`PERSON_HISTORY_FIELDS`）在這裡仍是文字輸入，建立時轉成清單、登錄日填今天
-    （:func:`history_from_text`）；公司與職稱合成一筆職位，``Title`` 欄位不再寫入。
+    會變的欄位（:data:`PERSON_HISTORY_FIELDS`）建立時轉成清單、登錄日填今天（:func:`history_from_input`）：
+    單值欄位（現居地、時區、關係、親密度）是一段文字；其他的可以一列一筆（``_rows``），也接受一段文字。
+    職位一列是公司＋職稱；``Title`` 欄位已停用，不在建立參數裡。
 
     Parameters for creating a person card; only the display name is required.
-    History fields are typed as text here and turned into lists on creation.
+    History fields become lists on creation; multi-entry ones take one value per row.
     """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -77,7 +104,7 @@ class PersonCreateParams(BaseModel):
     Birthday: str = _text("生日", "例如 1994-03-15；不知年份只寫月日，例如 3/15", pattern=BIRTHDAY)
     Hometown: str = _text("出身地")
     Residence: str = _text("現居地")
-    Languages: str = _text("語言", "逗號、頓號分隔的會存成多筆")
+    Languages: str | list[str] = _rows("語言", "一個語言一列", quick=("中文", "日文", "英文"))
     Timezone: str = _text("時區", "例如 Asia/Tokyo")
     Met_Date: str = _text("認識日期", "YYYY-MM-DD", pattern=OPTIONAL_DATE)
     Met_Where: str = _text("認識場合", "例如「Geekly 面談」")
@@ -86,18 +113,17 @@ class PersonCreateParams(BaseModel):
     Relationship: str = _text("關係", "例如「客戶」「朋友」「同事」")
     Closeness: str = _text("親密度", "1–5", pattern=r"^$|^[1-5]$")
     First_Impression: str = _text("第一印象", multiline=True)
-    Company: str = _text("公司", "與職稱合成一筆職位")
-    Title: str = _text("職稱", "與公司合成一筆職位")
-    Work_Detail: str = _text("工作內容", "工作內容、目前的專案、職涯經歷", multiline=True)
-    Education: str = _text("學歷")
-    Interests: str = _text("興趣", "逗號、頓號分隔的會存成多筆，背面顯示成標籤", multiline=True)
-    Food_Drink: str = _text("飲食喜好", "喜歡吃喝的東西、愛去的店；逗號、頓號分隔的會存成多筆", multiline=True)
-    Dietary: str = _text("飲食限制", "過敏、不吃的東西；背面用紅框提醒", multiline=True)
-    Personality_Values: str = _text("個性與價值觀", "個性、價值觀、夢想、煩惱", multiline=True)
-    Praise: str = _text("讚美素材", "具體、真實的成就或優點", multiline=True)
-    Ask_Advice: str = _text("可以請教的事", multiline=True)
-    Sensitive: str = _text("敏感話題", "不要主動提的事；背面預設模糊", multiline=True)
-    Comm_Prefs: str = _text("溝通偏好", "偏好的聯絡管道、時段、風格", multiline=True)
+    Company: str | list[PositionInput] = _rows("職位", "一份工作一列：公司與職稱至少填一個")
+    Work_Detail: str | list[str] = _rows("工作內容", "工作內容、目前的專案、職涯經歷；一件一列", multiline=True)
+    Education: str | list[str] = _rows("學歷", "一個學歷一列")
+    Interests: str | list[str] = _rows("興趣", "一個興趣一列，背面顯示成標籤")
+    Food_Drink: str | list[str] = _rows("飲食喜好", "喜歡吃喝的東西、愛去的店；一項一列")
+    Dietary: str | list[str] = _rows("飲食限制", "過敏、不吃的東西；背面用紅框提醒", multiline=True)
+    Personality_Values: str | list[str] = _rows("個性與價值觀", "個性、價值觀、夢想、煩惱", multiline=True)
+    Praise: str | list[str] = _rows("讚美素材", "具體、真實的成就或優點", multiline=True)
+    Ask_Advice: str | list[str] = _rows("可以請教的事", multiline=True)
+    Sensitive: str | list[str] = _rows("敏感話題", "不要主動提的事；背面預設模糊", multiline=True)
+    Comm_Prefs: str | list[str] = _rows("溝通偏好", "偏好的聯絡管道、時段、風格", multiline=True)
     Notes: str = _text("備註", multiline=True)
     Last_Contact: str = _text("上次聯絡", "YYYY-MM-DD", pattern=OPTIONAL_DATE)
     Contact_Cadence: str = _text("聯絡間隔（天）", "超過時背面的「N 天前」變紅", pattern=r"^$|^[1-9]\d{0,3}$")
@@ -422,6 +448,37 @@ def history_from_text(field: str, text: str, added: str, *, title: str = "") -> 
     values = [part.strip() for part in _SPLIT.split(text)] if PERSON_HISTORY_FIELDS[field].split else [text]
     # 同一次輸入裡重複的（「登山、登山」）只留一筆
     return [{"value": value, "added": added, "ended": ""} for value in dict.fromkeys(values) if value]
+
+
+def history_from_input(field: str, value: object, added: str) -> list[dict[str, str]]:
+    """建立參數的值轉成清單：一段文字照 :func:`history_from_text` 切；清單每列一筆（可切的欄位一列裡的
+    逗號、頓號照樣切開）。職位一列是 ``{"company", "title"}``；重複的只留一筆，空的列略過。
+
+    Turn a create parameter into entries: text is split as usual; a list gives one entry per row.
+
+    Args:
+        field: 會變的欄位。The history field.
+        value: 一段文字，或每列一個值的清單（職位的列是 dict 或 :class:`PositionInput`）。The value.
+        added: 登錄日。The added date.
+
+    Returns:
+        項目。The entries.
+    """
+    rows = value if isinstance(value, list) else [value]
+    entries: list[dict[str, str]] = []
+    for row in rows:
+        if isinstance(row, BaseModel):
+            row = row.model_dump()
+        if field == "Company" and isinstance(row, dict):
+            entries += history_from_text(field, str(row.get("company") or ""), added, title=str(row.get("title") or ""))
+        elif row not in (None, ""):
+            entries += history_from_text(field, str(row), added)
+    # 去重看內容本身（職位看公司與職稱兩格：只有公司「A」和只有職稱「A」是不同的兩筆）
+    unique: dict[tuple[str, ...], dict[str, str]] = {}
+    for entry in entries:
+        key = (entry.get("company", ""), entry.get("title", "")) if field == "Company" else (entry["value"],)
+        unique.setdefault(key, entry)
+    return list(unique.values())
 
 
 _BREAK = re.compile(r"<\s*(br|/div|/p|/li)\s*/?\s*>", re.IGNORECASE)

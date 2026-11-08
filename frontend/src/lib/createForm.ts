@@ -7,10 +7,28 @@
  *
  * 支援的 schema 寫法：`title`、`description`、`required`、`default`、`examples`（可輸入的下拉）、
  * `enum`（只能選的下拉）、`pattern`、`x-ui: textarea`（多行）；不認得的 `x-ui` 值當一般文字欄位。
- * 只畫字串欄位：其他型別的參數（例如外語糾錯預覽流程的 LLM 結果）不會出現在網頁表單。
+ * `x-ui: list` 是一列一筆的欄位（人脈卡會變的欄位）：值是字串清單，或物件清單（`items` 指到 `$defs`
+ * 裡的物件時，每列一格一個屬性，例如職位的公司＋職稱）；`x-item: textarea` 每列多行，`x-quick` 是快速選項。
+ * 只畫字串與一列一筆的欄位：其他型別的參數（例如外語糾錯預覽流程的 LLM 結果）不會出現在網頁表單。
  */
 
 import type { DeckStatus } from '../hooks/useDeckStatus'
+
+/** 一列一筆的欄位的值：每列一個字串，或每列一個物件（每格一個屬性）。The rows of a list field. */
+export type RowsValue = string[] | Record<string, string>[]
+
+/** 表單上一個欄位的值。A form value. */
+export type FormValue = string | RowsValue
+
+/** 一列一筆的欄位的設定。The settings of a list field. */
+export interface RowsSpec {
+  /** 每列是物件時的格子（屬性鍵與顯示名稱）；每列是字串時為 null。The cells of object rows. */
+  cells: { key: string; title: string }[] | null
+  /** 每列多行。Multi-line rows. */
+  multiline: boolean
+  /** 快速選項：點一下加一列（已有的不重複）。Quick picks. */
+  quick: string[]
+}
 
 /** 表單的一個欄位。One form field. */
 export interface FormField {
@@ -28,12 +46,14 @@ export interface FormField {
   multiline: boolean
   /** 格式（正規表示式），用來提示；實際驗證由後端負責。A format hint. */
   pattern: string | null
+  /** 一列一筆的欄位（`x-ui: list`）；一般文字欄位為 null。The list settings, or null. */
+  rows: RowsSpec | null
 }
 
 /** schema 的一個屬性（只列用到的鍵）。A schema property. */
 interface SchemaProperty {
   type?: string
-  anyOf?: { type?: string }[]
+  anyOf?: { type?: string; items?: { type?: string; $ref?: string } }[]
   title?: string
   description?: string
   default?: unknown
@@ -41,6 +61,31 @@ interface SchemaProperty {
   enum?: unknown[]
   pattern?: string
   'x-ui'?: string
+  'x-item'?: string
+  'x-quick'?: unknown[]
+}
+
+/** `$defs` 裡的物件（只列用到的鍵）。An object in `$defs`. */
+interface SchemaObject {
+  properties?: Record<string, { title?: string }>
+}
+
+/**
+ * 一列一筆的欄位的設定：`items` 指到物件時取它的屬性當每列的格子。
+ * The settings of an `x-ui: list` field.
+ */
+function rowsSpec(prop: SchemaProperty, defs: Record<string, SchemaObject>): RowsSpec {
+  const array = (prop.anyOf ?? []).find((option) => option.type === 'array')
+  const ref = array?.items?.$ref?.replace('#/$defs/', '')
+  const object = ref ? defs[ref] : undefined
+  const cells = object?.properties
+    ? Object.entries(object.properties).map(([key, cell]) => ({ key, title: cell.title || key }))
+    : null
+  return {
+    cells,
+    multiline: prop['x-item'] === 'textarea',
+    quick: (prop['x-quick'] ?? []).filter((option): option is string => typeof option === 'string'),
+  }
 }
 
 /** 是否為字串欄位（含可為 null 的字串）。Whether a property holds a string. */
@@ -57,6 +102,7 @@ function isStringProperty(prop: SchemaProperty): boolean {
  */
 export function schemaFields(schema: Record<string, unknown> | null): { fields: FormField[]; skipped: string[] } {
   const properties = (schema?.properties ?? {}) as Record<string, SchemaProperty>
+  const defs = (schema?.$defs ?? {}) as Record<string, SchemaObject>
   const required = new Set(Array.isArray(schema?.required) ? (schema.required as string[]) : [])
   const fields: FormField[] = []
   const skipped: string[] = []
@@ -75,9 +121,85 @@ export function schemaFields(schema: Record<string, unknown> | null): { fields: 
       options: (prop.enum ?? []).filter((option): option is string => typeof option === 'string'),
       multiline: prop['x-ui'] === 'textarea',
       pattern: prop.pattern ?? null,
+      rows: prop['x-ui'] === 'list' ? rowsSpec(prop, defs) : null,
     })
   }
   return { fields, skipped }
+}
+
+/**
+ * 一列一筆的欄位的初始值（空清單）。Initial values of the list fields.
+ * @param fields - 欄位。The fields.
+ * @returns 參數名 → 空清單。Name to an empty list.
+ */
+export function initialRows(fields: FormField[]): Record<string, RowsValue> {
+  return Object.fromEntries(fields.filter((field) => field.rows).map((field) => [field.name, []]))
+}
+
+/**
+ * 把存著的值整理成表單的值：一列一筆的欄位若存的是一段文字（舊版表單留在 sessionStorage 的），轉成一列，
+ * 不讓看不到的內容被送出；物件列的欄位放進第一格。
+ * Normalizes stored values; text left in a list field becomes one visible row.
+ * @param fields - 欄位。The fields.
+ * @param values - 存著的值。The stored values.
+ * @returns 整理後的值。The normalized values.
+ */
+export function normalizeRows(fields: FormField[], values: Record<string, FormValue>): Record<string, FormValue> {
+  const result = { ...values }
+  for (const field of fields) {
+    const value = result[field.name]
+    if (!field.rows || typeof value !== 'string') continue
+    const cells = field.rows.cells
+    if (!value.trim()) result[field.name] = []
+    else result[field.name] = cells ? [{ ...Object.fromEntries(cells.map((c) => [c.key, ''])), [cells[0].key]: value }] : [value]
+  }
+  return result
+}
+
+/** 一列是不是空的（字串空白，或物件每格都空白）。Whether a row is empty. */
+function isEmptyRow(row: string | Record<string, string>): boolean {
+  if (typeof row === 'string') return !row.trim()
+  return Object.values(row).every((cell) => !String(cell ?? '').trim())
+}
+
+/**
+ * 有沒有填東西（文字不是空白，或清單裡有不是空的列）。Whether a value holds any input.
+ * @param value - 欄位的值。The value.
+ * @returns 有沒有內容。Whether it is filled.
+ */
+export function hasInput(value: FormValue | undefined): boolean {
+  if (value === undefined) return false
+  if (typeof value === 'string') return value.trim() !== ''
+  return (value as (string | Record<string, string>)[]).some((row) => !isEmptyRow(row))
+}
+
+/**
+ * 送出的參數：只送表單上有的欄位（sessionStorage 可能留著已經拿掉的欄位，例如以前的「職稱」，送出會被
+ * 後端拒絕），一列一筆的欄位去掉空的列。The parameters to send: the form's fields only, empty rows dropped.
+ * @param fields - 表單的欄位。The form's fields.
+ * @param values - 表單的值。The form values.
+ * @returns 送出的參數。The parameters.
+ */
+export function submittedParams(fields: FormField[], values: Record<string, FormValue>): Record<string, FormValue> {
+  const known = new Set(fields.map((field) => field.name))
+  return Object.fromEntries(
+    Object.entries(values).filter(([name]) => known.has(name)).map(([name, value]) => [
+      name,
+      typeof value === 'string' ? value : ((value as (string | Record<string, string>)[]).filter((row) => !isEmptyRow(row)) as RowsValue),
+    ]),
+  )
+}
+
+/**
+ * 點快速選項：還沒有這個值時加一列（先填進空的列）；已經有了就不動。Adds a quick pick once.
+ * @param rows - 目前的列（字串）。The rows.
+ * @param option - 選項。The option.
+ * @returns 新的列。The new rows.
+ */
+export function addQuickPick(rows: string[], option: string): string[] {
+  if (rows.some((row) => row.trim() === option)) return rows
+  const empty = rows.findIndex((row) => !row.trim())
+  return empty >= 0 ? rows.map((row, i) => (i === empty ? option : row)) : [...rows, option]
 }
 
 /**
@@ -95,8 +217,8 @@ export function initialValues(fields: FormField[]): Record<string, string> {
  * @param values - 目前的值。Current values.
  * @returns 參數名。The names.
  */
-export function missingRequired(fields: FormField[], values: Record<string, string>): string[] {
-  return fields.filter((field) => field.required && !(values[field.name] ?? '').trim()).map((field) => field.name)
+export function missingRequired(fields: FormField[], values: Record<string, FormValue>): string[] {
+  return fields.filter((field) => field.required && !hasInput(values[field.name])).map((field) => field.name)
 }
 
 /**
@@ -162,7 +284,8 @@ export function formErrorsFrom(error: unknown, fieldNames: string[]): FormErrors
   for (const item of detail as ValidationItem[]) {
     const loc = Array.isArray(item.loc) ? item.loc : []
     const msg = item.msg ?? '格式不符'
-    const name = loc.length === 3 && loc[0] === 'body' && loc[1] === 'params' ? String(loc[2]) : null
+    // 一列一筆的欄位的錯誤指到第幾列（["body", "params", 欄位, 第幾列, …]）：一樣顯示在那個欄位下
+    const name = loc.length >= 3 && loc[0] === 'body' && loc[1] === 'params' ? String(loc[2]) : null
     if (name !== null && known.has(name)) {
       result.fields[name] = result.fields[name] ? `${result.fields[name]}；${msg}` : msg
     } else {

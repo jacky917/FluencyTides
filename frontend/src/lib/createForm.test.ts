@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { deckBlockedReason, deckBlocksForm, formErrorsFrom, initialValues, missingRequired, schemaFields } from './createForm'
+import {
+  addQuickPick,
+  deckBlockedReason,
+  deckBlocksForm,
+  formErrorsFrom,
+  hasInput,
+  initialRows,
+  initialValues,
+  missingRequired,
+  normalizeRows,
+  schemaFields,
+  submittedParams,
+} from './createForm'
 
 /** 後端標準建立產生的 schema（向 Anki 查欄位，第一個欄位必填）。 */
 const standardSchema = {
@@ -125,5 +137,105 @@ describe('deckBlocksForm', () => {
     expect(deckBlocksForm(null, 'Default', 'loading')).toBe(false)
     expect(deckBlocksForm(null, 'Default', 'ok')).toBe(false)
     expect(deckBlocksForm('固定', null, 'all')).toBe(false)
+  })
+})
+
+
+/** 人脈卡建立參數的節錄（Pydantic 的 model_json_schema）：一列一筆的欄位。 */
+const personSchema = {
+  $defs: {
+    PositionInput: {
+      properties: { company: { title: '公司', type: 'string' }, title: { title: '職稱', type: 'string' } },
+      type: 'object',
+    },
+  },
+  properties: {
+    Display_Name: { title: '稱呼', type: 'string', minLength: 1 },
+    Residence: { default: '', title: '現居地', type: 'string' },
+    Languages: {
+      anyOf: [{ type: 'string' }, { items: { type: 'string' }, type: 'array' }],
+      default: '',
+      title: '語言',
+      'x-ui': 'list',
+      'x-quick': ['中文', '日文', '英文'],
+    },
+    Company: {
+      anyOf: [{ type: 'string' }, { items: { $ref: '#/$defs/PositionInput' }, type: 'array' }],
+      default: '',
+      title: '職位',
+      'x-ui': 'list',
+    },
+    Work_Detail: {
+      anyOf: [{ type: 'string' }, { items: { type: 'string' }, type: 'array' }],
+      default: '',
+      title: '工作內容',
+      'x-ui': 'list',
+      'x-item': 'textarea',
+    },
+  },
+  required: ['Display_Name'],
+}
+
+describe('rows fields', () => {
+  const { fields } = schemaFields(personSchema)
+  const byName = Object.fromEntries(fields.map((field) => [field.name, field]))
+
+  it('reads list fields, their cells and quick picks', () => {
+    expect(byName.Residence.rows).toBeNull()
+    expect(byName.Languages.rows).toEqual({ cells: null, multiline: false, quick: ['中文', '日文', '英文'] })
+    expect(byName.Company.rows?.cells).toEqual([
+      { key: 'company', title: '公司' },
+      { key: 'title', title: '職稱' },
+    ])
+    expect(byName.Work_Detail.rows?.multiline).toBe(true)
+  })
+
+  it('starts list fields empty', () => {
+    expect(initialRows(fields)).toEqual({ Languages: [], Company: [], Work_Detail: [] })
+  })
+
+  it('drops empty rows and stale keys when submitting', () => {
+    expect(
+      submittedParams(fields, {
+        Title: '社長',
+        Display_Name: '田中さん',
+        Languages: ['中文', ' ', ''],
+        Company: [{ company: 'Geekly', title: '' }, { company: ' ', title: '' }],
+      }),
+    ).toEqual({ Display_Name: '田中さん', Languages: ['中文'], Company: [{ company: 'Geekly', title: '' }] })
+  })
+
+  it('knows whether a value holds input', () => {
+    expect(hasInput(undefined)).toBe(false)
+    expect(hasInput(' ')).toBe(false)
+    expect(hasInput([' ', ''])).toBe(false)
+    expect(hasInput([{ company: '', title: ' ' }])).toBe(false)
+    expect(hasInput([{ company: '', title: 'PM' }])).toBe(true)
+    expect(missingRequired(fields, { Display_Name: '', Languages: ['中文'] })).toEqual(['Display_Name'])
+  })
+
+  it('turns text left by the old form into a visible row', () => {
+    expect(normalizeRows(fields, { Languages: '中文、日文', Company: 'Geekly', Work_Detail: ' ', Residence: '東京' })).toEqual({
+      Languages: ['中文、日文'],
+      Company: [{ company: 'Geekly', title: '' }],
+      Work_Detail: [],
+      Residence: '東京',
+    })
+  })
+
+  it('adds a quick pick once, filling an empty row first', () => {
+    expect(addQuickPick([], '中文')).toEqual(['中文'])
+    expect(addQuickPick(['日文', ''], '中文')).toEqual(['日文', '中文'])
+    expect(addQuickPick(['中文'], '中文')).toEqual(['中文'])
+  })
+
+  it('maps row errors onto the field', () => {
+    const error = {
+      response: {
+        status: 422,
+        data: { detail: [{ loc: ['body', 'params', 'Company', 'list[PositionInput]', 0], msg: '公司與職稱至少要填一個' }] },
+      },
+    }
+    expect(formErrorsFrom(error, ['Company'])?.fields.Company).toBe('公司與職稱至少要填一個')
   })
 })

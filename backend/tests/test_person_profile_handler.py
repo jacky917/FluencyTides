@@ -96,11 +96,22 @@ class TestDeclarations:
 
     def test_create_form_has_no_system_or_locked_fields(self):
         properties = PersonCreateParams.model_json_schema()["properties"]
-        for name in [*JSON_FIELDS, "Photo", "Card_ID", "TG_Bot", "Updated_At"]:
+        locked = {*JSON_FIELDS, "Photo", "Card_ID", "TG_Bot", "Updated_At", "Title"}
+        for name in locked:
             assert name not in properties
-        # 其餘欄位都在表單上，順序與筆記類型相同
-        expected = [n for n in PERSON_FIELDS if n not in {*JSON_FIELDS, "Photo", "Card_ID", "TG_Bot", "Updated_At"}]
+        # 其餘欄位都在表單上，順序與筆記類型相同（Title 已停用：職稱在職位的列裡）
+        expected = [n for n in PERSON_FIELDS if n not in locked]
         assert list(properties) == expected
+
+    def test_multi_entry_fields_are_rows_in_the_form(self):
+        """會變的欄位裡不是單值的：網頁表單一列一筆（x-ui: list）；單值欄位維持一格文字。"""
+        properties = PersonCreateParams.model_json_schema()["properties"]
+        rows = {name for name, prop in properties.items() if prop.get("x-ui") == "list"}
+        single = {name for name, spec in PERSON_HISTORY_FIELDS.items() if spec.single}
+        assert rows == set(PERSON_HISTORY_FIELDS) - single
+        assert properties["Languages"]["x-quick"] == ["中文", "日文", "英文"]
+        assert properties["Work_Detail"]["x-item"] == "textarea"
+        assert "x-ui" not in properties["Residence"]
 
 
 class TestCreateParams:
@@ -155,7 +166,7 @@ class TestCreate:
     def test_history_fields_become_lists_dated_today(self):
         """D6：建卡時文字轉成清單、登錄日填今天；興趣等以逗號、頓號切成多筆，其他整段一筆。"""
         anki = PersonAnki()
-        fields = _create(anki, Display_Name="田中さん", Company="Geekly", Title="エンジニア",
+        fields = _create(anki, Display_Name="田中さん", Company=[{"company": "Geekly", "title": "エンジニア"}],
                          Interests="登山, 精釀啤酒、攝影", Work_Detail="後端開發，負責 API", Closeness="4")
         today = today_iso()
         assert AnkiJsonFieldManager.parse_field_string(fields["Interests"]) == [
@@ -168,13 +179,37 @@ class TestCreate:
             {"company": "Geekly", "title": "エンジニア", "added": today, "ended": ""}
         ]
         assert AnkiJsonFieldManager.parse_field_string(fields["Closeness"])[0]["value"] == "4"
-        # 職稱併進職位，Title 不再寫入
+        # 職稱在職位的列裡，Title 不再寫入
         assert fields["Title"] == ""
 
-    def test_title_alone_becomes_a_position(self):
+    def test_rows_become_one_entry_each(self):
+        """網頁表單一列一筆：多份工作、多段工作內容；空的列略過、重複的只留一筆。"""
         anki = PersonAnki()
-        fields = _create(anki, Display_Name="田中さん", Title="社長")
-        assert AnkiJsonFieldManager.parse_field_string(fields["Company"])[0]["title"] == "社長"
+        fields = _create(
+            anki, Display_Name="田中さん",
+            Company=[{"company": "Geekly", "title": "PM"}, {"company": "", "title": "顧問"}, {"company": " ", "title": ""}],
+            Work_Detail=["後端、API", "帶新人\n面試", "", "後端、API"],
+            Languages=["中文", "日文、英文"],
+        )
+        today = today_iso()
+        assert AnkiJsonFieldManager.parse_field_string(fields["Company"]) == [
+            {"company": "Geekly", "title": "PM", "added": today, "ended": ""},
+            {"company": "", "title": "顧問", "added": today, "ended": ""},
+        ]
+        # 不切的欄位一列就是一筆（列裡的頓號、換行保留）
+        assert [e["value"] for e in AnkiJsonFieldManager.parse_field_string(fields["Work_Detail"])] == [
+            "後端、API", "帶新人\n面試",
+        ]
+        # 可切的欄位一列裡的頓號照樣切開
+        assert [e["value"] for e in AnkiJsonFieldManager.parse_field_string(fields["Languages"])] == ["中文", "日文", "英文"]
+
+    def test_title_is_not_a_create_parameter(self):
+        with pytest.raises(ValidationError):
+            PersonCreateParams.model_validate({"Display_Name": "田中さん", "Title": "社長"})
+
+    def test_position_rows_reject_unknown_keys(self):
+        with pytest.raises(ValidationError):
+            PersonCreateParams.model_validate({"Display_Name": "田中さん", "Company": [{"company": "A", "dept": "x"}]})
 
     def test_allows_duplicate_display_names(self):
         """不同的人可以都叫「田中さん」：建立時不擋首欄位重複。"""

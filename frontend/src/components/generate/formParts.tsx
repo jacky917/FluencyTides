@@ -5,10 +5,11 @@
 
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, Plus, X } from 'lucide-react'
+import { Button } from '../ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible'
 import { Input } from '../ui/input'
-import type { FormField } from '../../lib/createForm'
+import { addQuickPick, type FormField, type RowsValue } from '../../lib/createForm'
 import { cn } from '../../lib/utils'
 import type { CreateNoteResponse } from '../../types/api'
 import type { DeckStatus } from '../../hooks/useDeckStatus'
@@ -168,6 +169,154 @@ export function SchemaFieldInput({
           ))}
         </datalist>
       )}
+      {field.description && !error && (
+        <p id={`${id}-desc`} className="text-xs text-muted-foreground">
+          {field.description}
+        </p>
+      )}
+      {error && (
+        <p id={`${id}-error`} role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * 一列一筆的欄位（`x-ui: list`）：每列一個輸入框（職位這種物件列每格一個），右邊可刪除，下面「+ 新增一列」；
+ * 有快速選項時列在上面，點一下加一列（已有的不重複）。還沒有任何列時顯示一列空白，打字就成為第一筆。
+ * A field typed one entry per row, with "+" to add rows and quick picks.
+ * @param props.id - 第一個輸入框的 id（label 指向它）。The first input's id.
+ * @param props.field - 欄位（`rows` 不是 null）。The field.
+ * @param props.value - 目前的列。The rows.
+ * @param props.error - 錯誤訊息。The error.
+ * @param props.disabled - 停用。Disabled.
+ * @param props.onChange - 列有變動時。Called with the new rows.
+ * @returns 欄位 JSX。The field JSX.
+ */
+export function RowsFieldInput({
+  id,
+  field,
+  value,
+  error,
+  disabled,
+  onChange,
+}: {
+  id: string
+  field: FormField
+  value: RowsValue
+  error?: string
+  disabled: boolean
+  onChange: (value: RowsValue) => void
+}) {
+  const spec = field.rows!
+  const cells = spec.cells
+  const empty = (): string | Record<string, string> =>
+    cells ? Object.fromEntries(cells.map((cell) => [cell.key, ''])) : ''
+  // 沒有任何列時先給一列空白，不必先按「+」
+  const rows = ((value as unknown[]).length > 0 ? value : [empty()]) as (string | Record<string, string>)[]
+  const set = (next: (string | Record<string, string>)[]) => onChange(next as RowsValue)
+  const describedBy = error ? `${id}-error` : field.description ? `${id}-desc` : undefined
+
+  return (
+    <div className="space-y-1" role="group" aria-labelledby={`${id}-label`}>
+      <label id={`${id}-label`} htmlFor={id} className="text-sm font-medium">
+        {field.title}
+        {field.required && <span className="ml-1 text-destructive">*</span>}
+      </label>
+      {spec.quick.length > 0 && !cells && (
+        <div className="flex flex-wrap gap-1">
+          {spec.quick.map((option) => {
+            const added = (rows as string[]).some((row) => row.trim() === option)
+            return (
+              <Button
+                key={option}
+                type="button"
+                size="sm"
+                variant={added ? 'secondary' : 'outline'}
+                className="h-7 px-2 text-xs"
+                disabled={disabled || added}
+                aria-pressed={added}
+                onClick={() => set(addQuickPick(rows as string[], option))}
+              >
+                {added ? option : `+ ${option}`}
+              </Button>
+            )
+          })}
+        </div>
+      )}
+      <ol className="space-y-1">
+        {rows.map((row, index) => {
+          const rowId = index === 0 ? id : `${id}-${index}`
+          const update = (next: string | Record<string, string>) => set(rows.map((r, i) => (i === index ? next : r)))
+          return (
+            <li key={index} className="flex items-start gap-1">
+              {cells ? (
+                <div className="grid flex-1 gap-1 sm:grid-cols-2">
+                  {cells.map((cell, cellIndex) => (
+                    <Input
+                      key={cell.key}
+                      id={cellIndex === 0 ? rowId : `${rowId}-${cell.key}`}
+                      value={(row as Record<string, string>)[cell.key] ?? ''}
+                      placeholder={cell.title}
+                      aria-label={`${field.title} ${index + 1} 的${cell.title}`}
+                      aria-invalid={error ? true : undefined}
+                      aria-describedby={describedBy}
+                      disabled={disabled}
+                      onChange={(e) => update({ ...(row as Record<string, string>), [cell.key]: e.target.value })}
+                    />
+                  ))}
+                </div>
+              ) : spec.multiline ? (
+                <textarea
+                  id={rowId}
+                  value={row as string}
+                  aria-label={`${field.title} ${index + 1}`}
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={describedBy}
+                  disabled={disabled}
+                  className={cn(TEXTAREA_CLASS, 'min-h-[60px] flex-1', error && 'border-destructive')}
+                  onChange={(e) => update(e.target.value)}
+                />
+              ) : (
+                <Input
+                  id={rowId}
+                  value={row as string}
+                  aria-label={`${field.title} ${index + 1}`}
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={describedBy}
+                  disabled={disabled}
+                  className={cn('flex-1', error && 'border-destructive')}
+                  onChange={(e) => update(e.target.value)}
+                />
+              )}
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-9 w-9 shrink-0 text-muted-foreground"
+                aria-label={`刪除${field.title}第 ${index + 1} 列`}
+                disabled={disabled}
+                onClick={() => set(rows.filter((_, i) => i !== index))}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </li>
+          )
+        })}
+      </ol>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="h-7 px-2 text-xs"
+        disabled={disabled}
+        onClick={() => set([...rows, empty()])}
+      >
+        <Plus className="mr-1 h-3.5 w-3.5" />
+        新增一列
+      </Button>
       {field.description && !error && (
         <p id={`${id}-desc`} className="text-xs text-muted-foreground">
           {field.description}

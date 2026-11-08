@@ -82,6 +82,21 @@ class TestHistoryFromText:
         }
 
 
+class TestHistoryFromInput:
+    def test_text_and_rows(self):
+        from app.schemas.person_profile import PositionInput, history_from_input
+
+        assert [e["value"] for e in history_from_input("Interests", "登山、攝影", "")] == ["登山", "攝影"]
+        assert [e["value"] for e in history_from_input("Interests", ["登山", "攝影、登山", " "], "")] == ["登山", "攝影"]
+        assert history_from_input("Company", [PositionInput(company="A", title="B"), {"company": "", "title": ""}], "d") == [
+            {"company": "A", "title": "B", "added": "d", "ended": ""}
+        ]
+        assert history_from_input("Company", "Geekly", "")[0]["company"] == "Geekly"
+        # 只有公司「A」與只有職稱「A」是兩筆
+        assert len(history_from_input("Company", [{"company": "A"}, {"title": "A"}], "")) == 2
+        assert history_from_input("Praise", None, "") == []
+
+
 class TestEntries:
     def test_entry_text_and_active(self):
         items = [
