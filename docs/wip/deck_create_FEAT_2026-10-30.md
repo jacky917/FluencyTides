@@ -1,6 +1,6 @@
 # 網頁新增牌組
 
-日期：2026-10-30　分支：未定（原寫於 `feat/person-profile`，該分支已合併）　狀態：設計中（未實作）
+日期：2026-10-30　分支：`feat/deck-create`　狀態：🚧 實作完成（2026-11-13），待連真實 Anki 驗收；實作紀錄見 §9
 
 ## 1. 目的
 
@@ -119,3 +119,80 @@ POST /decks
 | 刪除牌組 | AnkiConnect 刪牌組一定連卡片一起刪，無法復原；在 Anki 裡操作比較安全。若之後要做，只開放刪除空牌組並要確認 |
 | 搬移卡片 | 需要在卡片列表多選卡片，另開需求 |
 | 牌組設定（每日新卡數等） | 在 Anki 裡調整 |
+
+## 9. 實作紀錄（2026-11-12～13）
+
+### 9.1 與設計的差異與補充
+
+| 項目 | 設計（§3～§6） | 實作 |
+|---|---|---|
+| 已存在的判斷 | 名稱已存在回 409 | 分兩層。建立前：名稱不分大小寫、不分 Unicode 的組合寫法（`é` 與 `e`＋重音符號）視為同名。建立後：AnkiConnect 的 `createDeck` 遇到已存在的牌組不報錯、直接回傳舊 id，所以再看回傳的 id 是不是原本就有的，是的話也回 409。第二層擋住「我們的比對和 Anki 的規則有出入」與「檢查和建立之間別處建了同名牌組」 |
+| 回傳的 `deck_name` | 正規化後的名稱 | Anki 裡實際的名稱（建立後依 id 查回來）。查詢失敗或查不到時改用送出的名稱並記 warning，不當成建立失敗：牌組此時已經建好 |
+| 建卡頁的牌組狀態 | 只說提示要改寫 | `useDeckStatus` 多一個 `category` 狀態（Anki 裡沒有、但底下有牌組），和 `missing`（真的不存在）分開；Knowledge Graph 頁對分類節點不再顯示「已不存在」 |
+| 輸入列的按鈕 | Enter 建立、Esc 取消 | 另有「✓」「×」兩個按鈕（手機沒有 Esc）；補建分類節點時預填的名稱會全選 |
+| 建立中 | 輸入框停用並顯示轉圈 | 另外鎖住所有「＋」與「建立這一層」：換到別的輸入列會把建立中的那一列卸載，結果就沒地方顯示 |
+| 失敗訊息 | 400、409 在輸入列下方，其他用 toast | 其他錯誤的標題照 `failureTitle` 的規則：只有 4xx 能確定沒寫入，其餘寫「未完成或結果未知，請重新整理查看」，並重抓牌組清單（牌組可能其實已建好）。失敗後焦點回到輸入框 |
+| 牌組清單重抓失敗 | 未提 | 牌組已建好但清單重抓失敗時，另外提示「請按牌組旁的重新整理」，不回報成建立失敗 |
+| 長度上限 | 全名最長 200 字 | 前後端都以 Unicode 字元計數（表情符號算一個字），訊息相同 |
+
+### 9.2 檔案
+
+- 後端
+  - `app/services/deck_service.py`（新）：`normalize_deck_name`、`DeckService.create`
+  - `app/core/exceptions/services.py`、`__init__.py`：`DeckNameInvalidError`（400）、`DeckExistsError`（409）
+  - `app/schemas/notes.py`：`CreateDeckRequest`、`CreateDeckResponse`
+  - `app/api/notes.py`：`POST /decks`
+  - `tests/test_deck_service.py`（新）、`tests/test_handlers_api.py`
+- 前端
+  - `lib/deckTree.ts`：`DeckNode.exists`、`isCategoryDeck`、`joinDeckName`、`validateDeckName`、`deckCreateErrorPlacement`
+  - `hooks/useDeckStatus.ts`：`category` 狀態
+  - `lib/createForm.ts`、`components/generate/formParts.tsx`：分類節點的提示（`categoryDeckNotice`）
+  - `components/shared/DeckTreePanel.tsx`：「＋」、輸入列（`DeckNameInput`）、分類節點的顯示與「建立這一層」
+  - `api/client.ts`、`types/api.ts`：`createDeck`、`CreateDeckResponse`
+  - `lib/deckTree.test.ts`、`lib/createForm.test.ts`
+
+### 9.3 驗收
+
+自動檢查（2026-11-13，全部通過）：
+
+```bash
+cd backend && python -m ruff check app scripts tests && python -m pytest tests -q
+```
+
+```bash
+cd frontend && npm run lint && npm test && npm run build
+```
+
+- 後端：ruff 通過；pytest 1,920 通過、7 略過。
+- 前端：lint 0 錯誤（15 個既有警告）、`tsc --noEmit` 通過、370 個測試通過、build 成功。
+
+瀏覽器實測（2026-11-12～13）：正式的後端程式，只把 Anki 換成假的（`tests/test_handlers_api.py` 的 `ApiAnki`），沒有連真的 Anki、沒有建立任何真的牌組。
+
+- [x] 標題列「＋」新增最上層牌組；建好後選取新牌組、出現提示
+- [x] 節點「＋」新增子牌組；輸入 `面接 :: 二次` 一次建兩層，上層自動展開，名稱的空白被整理掉
+- [x] 分類節點淡色斜體、滑鼠移上去有說明；「建立這一層」預填並全選它的名稱，Enter 補建後變成一般牌組
+- [x] 選到分類節點時，建卡頁顯示「在 Anki 裡不是牌組（只是分類）…」
+- [x] 名稱不合格（`a::`）與已存在（`English::TOEIC`）的訊息在輸入列下方；失敗後焦點回到輸入框
+- [x] Anki 回傳既有牌組的 id 時回 409「牌組「…」已存在」
+- [x] Anki 拒絕（502）時 toast「新增牌組未完成或結果未知，請重新整理查看」
+- [x] 同步失敗：牌組已建立，另有同步提醒
+- [x] 牌組清單重抓失敗：提示「請按牌組旁的重新整理」
+- [x] 建立中轉圈、輸入框停用、其他「＋」都被鎖住
+- [x] Esc 取消；空白時失焦取消；有內容時失焦不取消
+- [x] 手機寬度（375px）：「＋」一直顯示，24×24px
+- [x] Cards、Card Generator、Knowledge Graph 三頁的牌組樹都有新增入口（完整流程只在 Card Generator 走過）
+- [ ] **連真實 Anki**：實際建立牌組、Anki 自動補上層、同步 AnkiWeb 後手機看得到。測試建的牌組事後要刪除
+- [ ] Anki 對特殊字元（例如 `"`）的處理：會拒絕還是改名，沒有實測
+- [ ] Knowledge Graph 頁選到分類節點時，圖譜有沒有包含它底下子牌組的卡片，沒有確認（原本顯示「已不存在」，現在當成一般牌組）
+
+### 9.4 審查（`/multi-review`，2026-11-12）
+
+五個面向（一般、測試、註解、錯誤處理、型別）都沒有 Critical。六項 Important 已修（就是 §9.1 表格裡「已存在的判斷」第二層、`deck_name` 查詢失敗、失敗訊息、建立中鎖定、清單重抓失敗這幾列，以及把輸入列的狀態改成三種情況的聯集型別、拿掉兩個沒被讀取的欄位）。
+
+沒做的建議：
+
+- `deckBlocksForm` 改白名單、`deckBlockedReason` 加窮舉檢查：下次再加牌組狀態時漏補會編譯失敗。
+- 後端 `CreateDeckResponse.sync_warning` 拿掉預設值，和同檔其他回應一致。
+- `buildDeckTree` 的說明補上 `exists`；`useDeckStatus` 的英文說明同步；409 的 API 說明補上「比對不分大小寫」。
+- 「建好後要展開哪些上層」抽成純函式並補測試。
+- 前端的 `trim()` 與後端的 `strip()` 認定的空白字元有極少數不同（例如 U+FEFF）；前端先擋、後端為準，只會讓少數字元的訊息不同。

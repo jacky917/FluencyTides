@@ -9,11 +9,20 @@ export interface DeckNode {
   name: string
   /** 完整名稱，例如 `日本語::外語糾錯`，查詢卡片用。Full deck name. */
   fullName: string
+  /**
+   * Anki 裡有沒有這個牌組。清單裡沒有、只是因為底下有牌組才補上的中間節點為 false（「分類節點」，
+   * 不能建卡，可以在牌組樹補建）。
+   * Whether the deck exists in Anki; false for an intermediate level added only because a deck below it exists.
+   */
+  exists: boolean
   children: DeckNode[]
 }
 
 /** Anki 牌組名的分層符號。Anki's deck level separator. */
 export const DECK_SEPARATOR = '::'
+
+/** 牌組全名的長度上限（與後端 `MAX_DECK_NAME_LENGTH` 相同）。Maximum length of a full deck name. */
+export const MAX_DECK_NAME_LENGTH = 200
 
 /**
  * 組成牌組樹。Anki 的清單通常已含每一層的父牌組，但即使缺了也會補上中間節點；
@@ -28,6 +37,7 @@ export const DECK_SEPARATOR = '::'
 export function buildDeckTree(deckNames: string[]): DeckNode[] {
   const roots: DeckNode[] = []
   const byFullName = new Map<string, DeckNode>()
+  const listed = new Set(deckNames)
 
   for (const deckName of deckNames) {
     const parts = deckName.split(DECK_SEPARATOR)
@@ -36,7 +46,7 @@ export function buildDeckTree(deckNames: string[]): DeckNode[] {
       const fullName = parts.slice(0, depth + 1).join(DECK_SEPARATOR)
       let node = byFullName.get(fullName)
       if (!node) {
-        node = { name: parts[depth], fullName, children: [] }
+        node = { name: parts[depth], fullName, exists: listed.has(fullName), children: [] }
         byFullName.set(fullName, node)
         siblings.push(node)
       }
@@ -66,6 +76,60 @@ export function buildDeckTree(deckNames: string[]): DeckNode[] {
 export function deckAncestors(fullName: string): string[] {
   const parts = fullName.split(DECK_SEPARATOR)
   return parts.map((_, index) => parts.slice(0, index + 1).join(DECK_SEPARATOR))
+}
+
+/**
+ * 牌組名是不是「分類節點」：Anki 裡沒有這個牌組，但有牌組在它底下（牌組樹為了分層補上的中間節點）。
+ * Whether a name is only a category: not a deck in Anki, but a deck exists below it.
+ * @param deckNames - Anki 的牌組完整名稱清單。Full deck names in Anki.
+ * @param fullName - 要判斷的名稱。The name to check.
+ * @returns 是否為分類節點。Whether it is a category node.
+ */
+export function isCategoryDeck(deckNames: string[], fullName: string): boolean {
+  if (deckNames.includes(fullName)) return false
+  const prefix = fullName + DECK_SEPARATOR
+  return deckNames.some((name) => name.startsWith(prefix))
+}
+
+/**
+ * 接出子牌組的完整名稱；`parent` 為 null 時就是最上層。
+ * Joins a parent and what was typed into a full deck name; a null parent means the top level.
+ * @param parent - 上層牌組的完整名稱。The parent's full name.
+ * @param typed - 輸入的名稱（可含 `::` 一次建多層）。The typed name.
+ * @returns 完整名稱（未整理空白）。The full name, not yet trimmed.
+ */
+export function joinDeckName(parent: string | null, typed: string): string {
+  return parent === null ? typed : parent + DECK_SEPARATOR + typed
+}
+
+/**
+ * 檢查新牌組的完整名稱，規則與訊息和後端的 `normalize_deck_name` 相同（deck_create 計畫書 §4）：
+ * 以 `::` 分層，每一層去掉前後空白後不能是空的；整理後的全名不超過長度上限。其他字元交給 Anki 判斷。
+ * Validates a new deck's full name with the same rules and messages as the backend.
+ * @param fullName - 完整名稱。The full name.
+ * @returns 錯誤訊息；合格時為 null。The error message, or null when valid.
+ */
+export function validateDeckName(fullName: string): string | null {
+  if (!fullName.trim()) return '牌組名稱不能是空的'
+  const levels = fullName.split(DECK_SEPARATOR).map((level) => level.trim())
+  const empty = levels.findIndex((level) => level === '')
+  if (empty >= 0) return `牌組名稱的第 ${empty + 1} 層是空的`
+  // 與後端同樣以 Unicode 字元（code point）計數，表情符號等不會被算成兩個
+  const length = Array.from(levels.join(DECK_SEPARATOR)).length
+  if (length > MAX_DECK_NAME_LENGTH) return `牌組名稱最長 ${MAX_DECK_NAME_LENGTH} 字（目前 ${length} 字）`
+  return null
+}
+
+/**
+ * 新增牌組失敗時訊息放哪裡：後端回 400（名稱不合格）、409（已存在）是使用者改名稱就能解決的，顯示在
+ * 輸入列下方（`inline`）；其他（Anki 連不上、閘道逾時、網路中斷）用 toast，而且牌組可能其實已經建好。
+ * Where a failed create is reported: a backend 400 or 409 goes under the input, anything else to a toast.
+ * @param status - HTTP 狀態碼；沒有回應時為 undefined。The HTTP status, if any.
+ * @param backendError - 是不是後端的業務錯誤（`isBackendError`）。Whether it is a backend business error.
+ * @returns `inline` 或 `toast`。Where to show it.
+ */
+export function deckCreateErrorPlacement(status: number | undefined, backendError: boolean): 'inline' | 'toast' {
+  return backendError && (status === 400 || status === 409) ? 'inline' : 'toast'
 }
 
 /**

@@ -314,13 +314,22 @@ export interface DeleteNoteResponse {
 }
 
 // ============================================================================
-// 牌組（GET /decks）
+// 牌組（GET /decks、POST /decks）
 // ============================================================================
 
 /** Anki 牌組基本資訊。Basic Anki deck information. */
 export interface AnkiDeckInfo {
   deck_name: string;
   deck_id: number;
+}
+
+/** `POST /decks` 的回應（deck_create 計畫書 §5.3）。The create-deck response. */
+export interface CreateDeckResponse {
+  /** Anki 裡實際的牌組名稱（後端整理過空白），用它選取新牌組。The name as stored in Anki. */
+  deck_name: string;
+  deck_id: number;
+  /** 同步 AnkiWeb 失敗時的提醒；牌組仍已建立。A warning when the sync failed. */
+  sync_warning: string | null;
 }
 
 // ============================================================================
