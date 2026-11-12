@@ -9,9 +9,9 @@ database and writes a build package (docs/wip/story_flowchart_FEAT_2026-10-31.md
 用法 / Usage::
 
     python backend/scripts/story/extractors/sabbat_of_the_witch.py --out build/sabbat_of_the_witch \\
-        --template "C:/Users/forip/Desktop/WorkSpace/game/SW_calib/quick_template.jpg" \\
-        --thumbs "C:/Users/forip/Desktop/WorkSpace/game/SW_calib/thumbs" \\
-        --voices "C:/Users/forip/Desktop/WorkSpace/material/voice/yuzusoft/SabbatOfTheWitch"
+        --template "Y:/material/yuzusoft/SabbatOfTheWitch/templates/quick.jpg" \\
+        --thumbs "Y:/material/yuzusoft/SabbatOfTheWitch/thumbs" \\
+        --voices "Y:/material/yuzusoft/SabbatOfTheWitch/voice"
 
 ``--voices`` 是語音資料夾（``<game_lines.voice_file>.mp3``，即 ``GAME_ASSETS_ROOT`` 接上
 ``game_profiles.voice_dir``）。只記在 manifest，不算進 ``source_hash``；匯入時只上傳台詞用到的檔案。

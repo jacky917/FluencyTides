@@ -1,4 +1,4 @@
-"""將語料庫的台詞（``game_lines``）全量同步至 Elasticsearch 索引。
+"""將語料庫的台詞（``game_lines``）同步至 Elasticsearch 索引（全量重建，或 ``--game`` 只更新一款）。
 
 Full sync of the corpus lines (``game_lines``) into the Elasticsearch
 index, recreating the index first and bulk-writing cleaned dialogue
@@ -34,6 +34,7 @@ from app.infrastructure.database.elasticsearch_client import get_elasticsearch_c
 from scripts.common.database.corpus_repository import get_game_profile, iter_lines, list_game_ids
 
 BATCH_SIZE = 5000  # 每 5000 筆批次寫入一次
+INDEX = "fluencytides_dialogue"
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ def build_action(line_id: int, source: str, dialogue: str | None) -> dict | None
     if not clean_dialogue:
         return None
     return {
-        "_index": "fluencytides_dialogue",
+        "_index": INDEX,
         "_id": line_id,
         "_source": {
             "script_id": line_id,
@@ -72,7 +73,7 @@ def build_action(line_id: int, source: str, dialogue: str | None) -> dict | None
     }
 
 
-async def sync_mysql_to_es():
+async def sync_mysql_to_es(game_id: str | None = None):
     """重建 ES 索引並從語料庫逐款遊戲流式讀取台詞批次寫入。
 
     Recreate the ES index, stream every game's corpus lines, and bulk
@@ -85,15 +86,30 @@ async def sync_mysql_to_es():
     configured or ``game_profiles`` has no games, so the index is never left
     empty. Failures are logged with a traceback and re-raised (non-zero exit).
 
+    指定 ``game_id`` 時只同步這一款（新增遊戲時用，2026-11-08）：索引必須已經存在（不重建，
+    Sudachi 的 mapping 只在全量重建時建立）；先以台詞 id 為 ``_id`` 覆寫這款遊戲的文件，再刪掉
+    索引裡這款遊戲、這次沒寫到的舊文件，所以過程中搜尋不會出現這款遊戲沒資料的空窗；
+    其他遊戲的文件不受影響。
+    With ``game_id``, sync only that game: the index must already exist; the
+    game's documents are upserted first and stale ones deleted afterwards, so
+    searches never see the game empty; other games are untouched.
+
+    Args:
+        game_id: 只同步這款遊戲；None 表示全量重建。Sync only this game; None
+            rebuilds the whole index.
+
     Raises:
-        RuntimeError: 語料庫未設定或 ``game_profiles`` 沒有遊戲。The corpus is not
-            configured or has no games.
+        RuntimeError: 語料庫未設定、``game_profiles`` 沒有遊戲、``--game`` 時索引不存在，或刪除舊
+            文件不完整。The corpus is not configured or has no games, the index is
+            missing in single-game mode, or stale-document deletion was incomplete.
     """
     print(f"🔌 連線至遠端資料庫 ({settings.MYSQL_HOST}:{settings.MYSQL_PORT}/{settings.MYSQL_DATABASE})...")
 
     total_processed = 0
     total_indexed = 0
     batch_actions = []
+    written: set[int] = set()
+    mode = f"同步 {game_id}" if game_id else "全量同步"
 
     start_time = time.time()
 
@@ -101,18 +117,23 @@ async def sync_mysql_to_es():
         if corpus_async_session_factory is None:
             raise RuntimeError("語料庫連線未設定（corpus_async_session_factory 是 None），請檢查 .env 的 MYSQL_* 設定")
         async with corpus_async_session_factory() as session:
-            games = [await get_game_profile(session, game_id) for game_id in await list_game_ids(session)]
+            ids = [game_id] if game_id else await list_game_ids(session)
+            games = [await get_game_profile(session, g) for g in ids]
         if not games:
             raise RuntimeError(
                 f"{settings.MYSQL_DATABASE}.game_profiles 沒有任何遊戲，拒絕重建索引"
                 "（請確認 MYSQL_DATABASE 指向語料庫、且語料庫已匯入）"
             )
 
-        # 1. 確認有資料可寫之後，才刪除舊索引並重建 Elasticsearch Index
-        print("🔌 連線至 Elasticsearch 並重建 Index...")
-        await recreate_index()
         es_client = get_elasticsearch_client()
-        print("📥 開始從語料庫讀取 game_lines 資料 (全量同步)...")
+        if game_id:
+            if not await es_client.indices.exists(index=INDEX):
+                raise RuntimeError(f"索引 {INDEX} 不存在；--game 只更新既有索引，請先不帶 --game 全量重建")
+        else:
+            # 1. 確認有資料可寫之後，才刪除舊索引並重建 Elasticsearch Index
+            print("🔌 連線至 Elasticsearch 並重建 Index...")
+            await recreate_index()
+        print(f"📥 開始從語料庫讀取 game_lines 資料（{mode}）...")
 
         for game in games:
             print(f"🎮 {game.game_id}（ES source = {game.es_source}）")
@@ -124,6 +145,7 @@ async def sync_mysql_to_es():
                     if action is None:
                         continue
                     batch_actions.append(action)
+                    written.add(int(line.id))
                     total_indexed += 1
 
                     # 批次寫入
@@ -138,17 +160,37 @@ async def sync_mysql_to_es():
             await helpers.async_bulk(es_client, batch_actions)
             batch_actions.clear()
 
+        if game_id:
+            # 2. 新文件都寫好之後，才刪掉這款遊戲這次沒寫到的舊文件（已從語料庫移除的台詞）
+            source = games[0].es_source
+            stale = [hit["_id"] async for hit in helpers.async_scan(
+                es_client, index=INDEX, query={"query": {"term": {"source": source}}}, _source=False)
+                if int(hit["_id"]) not in written]
+            if stale:
+                ok, errors = await helpers.async_bulk(
+                    es_client, ({"_op_type": "delete", "_index": INDEX, "_id": i} for i in stale),
+                    raise_on_error=False)
+                if errors:
+                    raise RuntimeError(f"刪除 {source} 的舊文件不完整：成功 {ok}、失敗 {len(errors)}，例 {errors[:3]}")
+            print(f"🧹 刪除 {source} 已不在語料庫的舊文件 {len(stale)} 筆（其他遊戲不動）")
+
     except Exception:
-        logger.exception(
-            "❌ 同步失敗（已掃描 %d 筆、寫入 %d 筆）；索引可能不完整，修正後請重跑", total_processed, total_indexed
-        )
+        if game_id:
+            logger.exception(
+                "❌ %s 同步失敗（已掃描 %d 筆、寫入 %d 筆）。已寫入的文件是新內容，這款遊戲的舊文件尚未清理，"
+                "搜尋仍可用；修正後請重跑：python scripts/database/Elasticsearch/sync_mysql_to_es.py --game %s",
+                game_id, total_processed, total_indexed, game_id)
+        else:
+            logger.exception(
+                "❌ 同步失敗（已掃描 %d 筆、寫入 %d 筆）；索引可能不完整，修正後請重跑", total_processed, total_indexed
+            )
         raise
     finally:
         await dispose_corpus_engine()
         await dispose_elasticsearch_client()
 
     elapsed = time.time() - start_time
-    print(f"🎉 全量同步完成！共花費 {elapsed:.2f} 秒。")
+    print(f"🎉 {mode}完成！共花費 {elapsed:.2f} 秒。")
     print(f"總共掃描 {total_processed} 筆台詞，並成功同步 {total_indexed} 筆至 Elasticsearch。")
 
 
@@ -158,7 +200,13 @@ if __name__ == "__main__":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
+    import argparse
+
+    parser = argparse.ArgumentParser(description="語料庫台詞同步到 Elasticsearch / sync corpus lines to ES")
+    parser.add_argument("--game", default=None,
+                        help="只同步這款遊戲（game_profiles.game_id），不重建索引；不指定時全量重建")
+    args = parser.parse_args()
     try:
-        asyncio.run(sync_mysql_to_es())
+        asyncio.run(sync_mysql_to_es(args.game))
     except Exception:
         sys.exit(1)

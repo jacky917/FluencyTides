@@ -1,0 +1,20 @@
+/* 穗織之櫻：和紙色底、墨色文字、朱紅（鳥居）選取路徑、櫻色分歧。只覆寫 .sf-* 的外觀，元件程式碼不用改。 */
+.sf-root[data-theme='senren-hoori'] .sf-node--option,
+.sf-root[data-theme='senren-hoori'] .sf-node--merge {
+  border-image: linear-gradient(135deg, #e5809b, #b5322b) 1;
+}
+/* 只給一般狀態的節點加柔和陰影，不蓋掉選取、路徑、搜尋命中的外框 */
+.sf-root[data-theme='senren-hoori'] .sf-node[data-state='normal']:not([data-selected]):not([data-on-path]) {
+  box-shadow: 0 1px 6px rgba(107, 58, 46, 0.18);
+}
+.sf-root[data-theme='senren-hoori'] .sf-node--ending {
+  color: #8f241e;
+}
+.sf-root[data-theme='senren-hoori'] .sf-band__label {
+  letter-spacing: 0.12em;
+  text-shadow: 0 0 10px rgba(245, 238, 226, 0.9);
+}
+.sf-root[data-theme='senren-hoori'] .sf-edge__label,
+.sf-root[data-theme='senren-hoori'] .sf-back__label {
+  stroke: #f5eee2;
+}

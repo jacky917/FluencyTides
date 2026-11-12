@@ -455,6 +455,8 @@ class PackinOneSaveWriter:
     """``kirikiri_packinone`` 引擎的存檔寫入器。Save writer for the PackinOne engine."""
 
     engine = "kirikiri_packinone"
+    #: 能嵌入存檔的縮圖格式。The thumbnail format it embeds.
+    thumb_format = "jpeg"
 
     def write(self, template: bytes, position: dict[str, Any], variables: dict[str, Any], meta: SaveMeta) -> bytes:
         """以樣板產生一個欄位存檔。Write a slot save from the template.
