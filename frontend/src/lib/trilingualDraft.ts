@@ -121,3 +121,18 @@ export function selectedParams(
     references_en: pick('references_en'),
   }
 }
+
+/**
+ * 三語對話卡預覽的編輯狀態（存回後端的 `state`，是 JSON 物件，所以用 type 而不是 interface）。
+ * The trilingual preview's editing state.
+ */
+export type TrilingualDraftState = {
+  draft: TrilingualCreateParams
+  selection: DraftSelection
+  /** 卡面情境（可修改）。The prompt. */
+  prompt: string
+  /** 補充（可修改）。The context. */
+  context: string
+  /** 要加的標籤。The tags to add. */
+  tags: string[]
+}

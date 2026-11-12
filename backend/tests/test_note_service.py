@@ -134,8 +134,8 @@ class TestCreate:
             _run(_service(SyncingAnki()).create("vocabulary_mining", "D", "TOEIC_Coach_Dark", {"Expression": "x"}))
 
     def test_closed_create_gives_reason(self):
-        with pytest.raises(HandlerOperationUnsupportedError, match="網頁建卡尚未開放"):
-            _run(_service(SyncingAnki()).create("speaking_coach", "D", "Speaking_Coach_Dark", {"prompt": "x"}))
+        with pytest.raises(HandlerOperationUnsupportedError, match="generate_child_cards.py"):
+            _run(_service(SyncingAnki()).create("jp_core_verb", "D", "JP_CoreVerb_Master_Dark", {}))
 
     def test_unknown_handler(self):
         with pytest.raises(HandlerNotFoundError):
@@ -382,8 +382,11 @@ class TestListHandlers:
         assert vocab["json_fields"] == ["Word_Family_JSON", "Synonyms_JSON", "Collocations_JSON"]
         assert vocab["media_fields"] == ["Word_Audio", "Target_Example_Audio"]
         # 不開放、或不是表單流程的沒有表單
-        for name in ("expression_correction", "speaking_coach", "speaking_trilingual", "jp_verb_pair", "jp_core_verb"):
+        for name in ("expression_correction", "speaking_trilingual", "jp_verb_pair", "jp_core_verb"):
             assert handlers[name]["create_schema"] is None, name
+        # 對話卡是填表流程（D10.1）；預覽流程的改給 draft_schema
+        assert handlers["speaking_coach"]["create_schema"]["required"] == ["prompt"]
+        assert handlers["expression_correction"]["draft_schema"]["required"] == ["original_text"]
 
     def test_anki_unreachable_keeps_other_capabilities(self):
         anki = SyncingAnki(fields_error=AnkiConnectError("connection refused"))

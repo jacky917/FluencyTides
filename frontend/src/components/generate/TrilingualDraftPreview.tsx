@@ -15,10 +15,12 @@ import {
   familiarityOrder,
   type DraftSelection,
   type ReferenceKey,
+  type TrilingualDraftState,
 } from '../../lib/trilingualDraft'
 import { cn } from '../../lib/utils'
 import type { TrilingualCreateParams } from '../../types/api'
 import { CollapsibleSection, TEXTAREA_CLASS } from './formParts'
+import type { PreviewBodyProps } from './previewTypes'
 
 /**
  * 熟識度刻度條：十格，熟識度 N 填滿 N+1 格，右邊是數字（配色同卡片背面）。
@@ -175,5 +177,28 @@ export function TrilingualDraftPreview({
         )
       })}
     </div>
+  )
+}
+
+/**
+ * 預覽流程用的三語預覽（`PreviewKind.Body`）：編輯狀態整份進出。
+ * The trilingual preview as a preview-flow body.
+ * @param props.state - 編輯狀態。The editing state.
+ * @param props.onChange - 修改時。Called with the new state.
+ * @param props.disabled - 建立中時停用。Disabled while busy.
+ * @returns 預覽 JSX。The preview JSX.
+ */
+export function TrilingualPreviewBody({ state, onChange, disabled }: PreviewBodyProps<TrilingualDraftState>) {
+  return (
+    <TrilingualDraftPreview
+      draft={state.draft}
+      selection={state.selection}
+      onSelectionChange={(selection) => onChange({ ...state, selection })}
+      prompt={state.prompt}
+      onPromptChange={(prompt) => onChange({ ...state, prompt })}
+      context={state.context}
+      onContextChange={(context) => onChange({ ...state, context })}
+      disabled={disabled}
+    />
   )
 }

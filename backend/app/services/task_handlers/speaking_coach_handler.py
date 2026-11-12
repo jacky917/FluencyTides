@@ -13,9 +13,10 @@ References, and Prompt_Audios.
 import json
 import logging
 import uuid
-from typing import TYPE_CHECKING, override
+from datetime import date
+from typing import TYPE_CHECKING, Annotated, override
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from app.core.config import settings
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
@@ -37,6 +38,13 @@ logger = logging.getLogger(__name__)
 
 #: 口說卡（對話卡、三語對話卡）共用的具名動作，TG 的錄音與上傳音檔在用。
 SPEAKING_ACTIONS = ("add_audio", "add_recording", "delete_recording")
+
+# 參考回答的上限：只防前端 bug 或手動呼叫 API 寫進超大內容，與三語對話卡相同
+MAX_REFERENCES = 100
+MAX_REFERENCE_LENGTH = 2000
+
+#: 一筆參考回答（去掉前後空白後不能是空的）。One reference answer.
+ReferenceText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_REFERENCE_LENGTH)]
 
 
 class SpeakingCoachCreateParams(BaseModel):
@@ -62,6 +70,21 @@ class SpeakingCoachCreateParams(BaseModel):
         pattern=LANG_CODE_PATTERN,
         examples=[TargetLanguage.EN_US.value, TargetLanguage.JA_JP.value, TargetLanguage.ZH_TW.value],
     )
+    references: list[ReferenceText] = Field(
+        default_factory=list,
+        max_length=MAX_REFERENCES,
+        title="參考回答",
+        description="一行一筆（選填）；之後在 TG 錄音評分時可以對照",
+        json_schema_extra={"x-ui": "lines"},
+    )
+
+    @field_validator("references", mode="before")
+    @classmethod
+    def _drop_blank(cls, value: object) -> object:
+        """去掉空白的一筆（網頁一行一筆，空行不算）。Drops blank entries."""
+        if isinstance(value, list):
+            return [item for item in value if not (isinstance(item, str) and not item.strip())]
+        return value
 
     @field_validator("target_language")
     @classmethod
@@ -87,13 +110,20 @@ class SpeakingCoachHandler(BaseHandler):
     """
 
     CAPABILITIES = HandlerCapabilities(
-        create=CreateCapability(channels=("tg",), reason="網頁建卡尚未開放；可在 TG 建立"),
+        create=CreateCapability(
+            supported=True,
+            channels=("web", "tg"),
+            flow="form",
+            deck="selected",
+            note_type="Speaking_Coach_Dark",
+        ),
         update_fields=Operation(reason="對話卡的欄位修改尚未開放"),
         delete=Operation(reason="對話卡的刪除尚未開放"),
         actions=SPEAKING_ACTIONS,
         graph=GraphCapability(reason="口說卡沒有知識圖譜"),
     )
     CREATE_PARAMS = SpeakingCoachCreateParams
+    CREATE_TAGS = ("Speaking_Coach", "HandlerGenerated")
 
     @property
     @override
@@ -128,23 +158,21 @@ class SpeakingCoachHandler(BaseHandler):
         model_name: str,
         parameters: dict
     ) -> list[int]:
-        """建立一張空的口說卡片。
+        """建立一張口說卡片：參考回答依參數寫入（補上今天、啟用、沒有音檔），錄音與題目音檔為空陣列。
 
-        Create an empty speaking card.
+        Create a speaking card with the given reference answers.
 
         Args:
             card_service: 卡片服務。Card service.
             relation_service: 關聯服務。Relation service.
             deck_name: 目標牌組。Target deck.
             model_name: 目標模型。Target model.
-            parameters: 需含 prompt，可選 context / target_language /
-                tg_bot。Requires 'prompt'; optional 'context',
-                'target_language', 'tg_bot'.
+            parameters: ``SpeakingCoachCreateParams`` 驗證後的參數與 tg_bot。The
+                validated parameters plus 'tg_bot'.
 
         Returns:
             建立成功的 Note ID（單元素陣列）。The created note ID, as a list.
         """
-        # 口說卡片一開始建立時，錄音與參考答案通常是空的，由後續流程或前端補上
         prompt_text = parameters.get("prompt", "")
         context_text = parameters.get("context", "")
         target_language = parameters.get("target_language", "en-US")
@@ -155,6 +183,13 @@ class SpeakingCoachHandler(BaseHandler):
 
         # 預設的空 JSON 陣列字串
         empty_json_array = json.dumps([], ensure_ascii=False)
+        # 每筆的形狀與 TG 建卡相同（app/schemas/speaking.py 的 ReferenceItem）；寫入方式與三語對話卡相同，
+        # 經 HTML 轉義（內容可能含 <、&；TG 舊流程沒轉義，卡片與 TG 的讀取兩種都吃）
+        today = date.today().isoformat()
+        references = [
+            {"date": today, "content": content, "status": 1, "audios": []}
+            for content in parameters.get("references") or []
+        ]
 
         fields = {
             "Card_ID": card_id,
@@ -162,7 +197,7 @@ class SpeakingCoachHandler(BaseHandler):
             "Context": context_text,
             "Prompt_Audios": empty_json_array,
             "Recordings": empty_json_array,
-            "References": empty_json_array,
+            "References": AnkiJsonFieldManager.serialize(references),
             "Target_Language": target_language,
             "TG_Bot": tg_bot
         }
@@ -173,7 +208,7 @@ class SpeakingCoachHandler(BaseHandler):
             deck_name=deck_name,
             model_name=model_name,
             fields=fields,
-            tags=["Speaking_Coach", "HandlerGenerated"]
+            tags=list(self.CREATE_TAGS),
         )
         return [note_id]
 

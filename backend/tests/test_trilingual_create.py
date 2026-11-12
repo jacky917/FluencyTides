@@ -261,33 +261,7 @@ def test_list_handlers_exposes_draft_schema(client):
     assert handlers["vocabulary_mining"]["draft_schema"] is None
 
 
-def test_draft_endpoint(client, anki):
-    with mock.patch.object(generate_service, "generate", mock.AsyncMock(return_value=_draft())):
-        response = client.post("/api/v1/handlers/speaking_trilingual/draft", json={"params": {"background": "爬山"}})
-    assert response.status_code == 200
-    params = response.json()["params"]
-    assert params["references_zh"][0]["familiarity"] == 8
-    assert anki.added == []  # 草稿不寫入
-
-
-def test_draft_requires_background(client):
-    response = client.post("/api/v1/handlers/speaking_trilingual/draft", json={"params": {"background": ""}})
-    assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["body", "params", "background"]
-
-
-@pytest.mark.parametrize("handler", ["vocabulary_mining", "expression_correction"])
-def test_draft_refused_without_web_preview(client, handler):
-    response = client.post(f"/api/v1/handlers/{handler}/draft", json={"params": {}})
-    assert _error(response) == (400, "HANDLER_OPERATION_UNSUPPORTED")
-
-
-def test_llm_failure_is_reported(client):
-    failing = mock.AsyncMock(side_effect=LLMGenerationError("模型 m 回傳的格式不對，請再試一次。"))
-    with mock.patch.object(generate_service, "generate", failing):
-        response = client.post("/api/v1/handlers/speaking_trilingual/draft", json={"params": {"background": "x"}})
-    assert response.status_code >= 400
-    assert "回傳的格式不對" in response.json()["message"]
+# 草稿端點（POST /handlers/{name}/drafts 與 /drafts/*）的測試在 tests/test_drafts.py
 
 
 def test_create_writes_chosen_references(client, anki):

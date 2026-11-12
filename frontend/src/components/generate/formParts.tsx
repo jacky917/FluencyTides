@@ -157,7 +157,11 @@ export function SchemaFieldInput({
           ))}
         </select>
       ) : field.multiline ? (
-        <textarea {...common} className={cn(TEXTAREA_CLASS, error && 'border-destructive')} />
+        <textarea
+          {...common}
+          placeholder={field.lines ? '一行一筆' : undefined}
+          className={cn(TEXTAREA_CLASS, error && 'border-destructive')}
+        />
       ) : (
         <Input {...common} list={listId} className={cn(error && 'border-destructive')} />
       )}
@@ -214,7 +218,7 @@ export function CreatedNotice({ result, onView }: { result: CreateNoteResponse; 
       <p className="font-medium">
         已建立 {result.note_ids.length} 張筆記（牌組：{result.deck}）
       </p>
-      {/* 加標籤失敗與同步失敗可能同時發生，後端以換行分開 */}
+      {/* 加標籤、建立後的後續處理（例如刪舊卡）、同步的提醒可能同時發生，後端以換行分開 */}
       {result.sync_warning && <p className="whitespace-pre-line text-amber-900">{result.sync_warning}</p>}
       {onView ? (
         <button type="button" className="text-primary underline" onClick={onView}>
