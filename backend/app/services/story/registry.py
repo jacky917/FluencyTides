@@ -37,6 +37,7 @@ def get_story_game(game_id: str) -> StoryGame:
 
 def _load_builtin_games() -> None:
     from app.services.story.games import sabbat_of_the_witch  # noqa: F401 - 註冊副作用
+    from app.services.story.games import senren_banka  # noqa: F401 - 註冊副作用
 
 
 _load_builtin_games()

@@ -1,0 +1,51 @@
+{
+  "id": "senren-hoori",
+  "label": "穗織之櫻",
+  "extends": "default",
+  "colors": {
+    "canvas": "#f5eee2",
+    "canvas-text": "#2b2320",
+    "node-bg": "#fffaf2",
+    "node-text": "#3a2a25",
+    "node-border": "#d8c2a6",
+    "node-border-strong": "#b5322b",
+    "node-hover": "#ffffff",
+    "node-selected": "#b5322b",
+    "node-dim-bg": "#ebe2d4",
+    "node-dim-text": "#a8998a",
+    "node-highlight": "#e5809b",
+    "ending-bg": "#fbe4e2",
+    "ending-border": "#b5322b",
+    "condition-bg": "#fffaf2",
+    "condition-line": "#c9a77c",
+    "edge": "#b9a68f",
+    "edge-path": "#c0392b",
+    "edge-branch-path": "#e5809b",
+    "edge-casing": "#f5eee2",
+    "edge-label": "#7a6656",
+    "band-text": "#6b3a2e",
+    "band-line": "#e2ceb2",
+    "band-accent": "#c0392b",
+    "tab-bg": "#fffaf2",
+    "tab-text": "#3a2a25",
+    "tab-active-bg": "#b5322b",
+    "tab-active-text": "#fffaf2",
+    "badge-bg": "#e5809b",
+    "badge-text": "#3a1f25",
+    "minimap-bg": "rgba(255,250,242,0.78)",
+    "minimap-node": "#b08a6e",
+    "minimap-edge": "#d6c4ad",
+    "minimap-view": "rgba(192,57,43,0.16)",
+    "scroll-button-bg": "#fffaf2",
+    "scroll-button-text": "#b5322b"
+  },
+  "fonts": {
+    "band": "\"Shippori Mincho\", \"Yu Mincho\", \"YuMincho\", \"Noto Serif JP\", serif",
+    "title": "\"Shippori Mincho\", \"Yu Mincho\", \"YuMincho\", \"Noto Serif JP\", serif"
+  },
+  "assets": {
+    "background": "background.svg",
+    "chapterIcon": "sakura.svg"
+  },
+  "css": "theme.css"
+}
