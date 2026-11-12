@@ -8,7 +8,8 @@
     {{^Photo}}<div class="avatar-lg avatar-initial" id="review-avatar-initial"></div>{{/Photo}}
 
     <div class="front-name" id="review-name">{{Display_Name}}</div>
-    {{#Company}}<div class="front-sub">{{Company}}{{#Title}}・{{Title}}{{/Title}}</div>{{/Company}}
+    <div class="front-sub" id="review-work" style="display:none;"></div>
+    <div id="review-company" style="display:none;">{{Company}}</div>
 
     <div class="front-question">上次聊了什麼？這次要問什麼？</div>
 </div>
@@ -23,5 +24,30 @@
         for (var i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) % 360;
         avatar.style.backgroundColor = 'hsl(' + hash + ', 45%, 32%)';
         avatar.textContent = name ? name.charAt(0) : '?';
+    })();
+
+    (function () {
+        // 職位（Company）是 JSON 清單：只顯示目前有效的（與背面的 entryText 相同）；都劃掉了就不顯示
+        // （複習看現況，與「認人」不同）；還沒轉換的舊文字照原文顯示
+        var raw = (document.getElementById('review-company').textContent || '').trim();
+        if (!raw) return;
+        var text = '';
+        var items = null;
+        try {
+            items = JSON.parse(raw);
+        } catch (e) {
+            text = raw;
+        }
+        if (items !== null && Object.prototype.toString.call(items) !== '[object Array]') items = [];
+        if (items) {
+            text = items.filter(function (p) { return p && !String(p.ended || '').trim(); })
+                .map(function (p) {
+                    return [p.company, p.title].map(function (s) { return String(s || '').trim(); })
+                        .filter(Boolean).join('・');
+                }).filter(Boolean).join('／');
+        }
+        var work = document.getElementById('review-work');
+        work.textContent = text;
+        work.style.display = text ? '' : 'none';
     })();
 </script>

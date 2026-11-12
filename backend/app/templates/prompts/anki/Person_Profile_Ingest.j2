@@ -4,7 +4,7 @@
 
 1. **這次的互動**（一筆）：日期、聊了什麼、對方的近況、在哪裡、對方說過值得記住的一句話。
 2. **之後要追蹤的事**（零到多筆）：下次見面要問對方的事、我答應對方的事、對方答應我的事。
-3. **建議更新的人物資料**（零到多筆）：文中透露的、能長期記住的資訊，例如興趣、家人、工作變動、飲食限制、生日。
+3. **建議更新的人物資料**（零到多筆）：文中透露的、能長期記住的資訊，例如興趣、工作變動、搬家、飲食限制、生日。
 
 目的：下次見面前，使用者只要看卡片就能想起上次聊了什麼、該問什麼、答應過什麼，讓對方覺得被記得、被重視。
 
@@ -14,9 +14,13 @@
 
 ## 這個人目前已知的資料
 
-{% if known_fields %}
+{% if known_fields or known_lists %}
 {% for name, title, value in known_fields %}
 - {{ title }}（{{ name }}）：{{ value }}
+{% endfor %}
+{% for name, title, current, past in known_lists %}
+- {{ title }}（{{ name }}）：{% if current %}{{ current | join("；") }}{% else %}（目前沒有有效的）{% endif %}{% if past %}｜已劃掉（過去的）：{{ past | join("、") }}{% endif %}
+
 {% endfor %}
 {% else %}
 （幾乎還沒有資料）
@@ -50,16 +54,28 @@
    - 對方提到即將發生、結果未知的事（考試、面試、旅行、搬家、家人住院）→ `ask`，例如「N1 考得如何？」，期限填那件事的日期（有的話）。
    - 「我說要介紹、要寄、要分享給他」→ `my_promise`；「他說要給我、要介紹我」→ `their_promise`。
    - 不要和「目前還沒完成的待追蹤」重複。
-4. **人物資料只建議能長期記住的事**，不要把一次性的閒聊放進去（那些放在互動的「聊了什麼」）。可以建議的欄位只限下表，`field` 必須是表中的英文名稱：
+4. **人物資料只建議能長期記住的事**，不要把一次性的閒聊放進去（那些放在互動的「聊了什麼」）。人物資料分兩種，`field` 必須是下面列出的英文名稱：
+
+   **清單欄位**（放在 `list_updates`）：會隨時間改變的資料，一筆一筆記，每筆系統自動記下登錄日；不再適用的不刪除，而是「劃掉」保留成過去的紀錄（之後還能當聊天素材，例如「你以前不是在玩攝影嗎？」）。
+
+{% for name, title, single, split in list_fields %}
+   - `{{ name }}`：{{ title }}{% if single %}（同時只有一個有效：新增時系統會自動劃掉原本的，不必另外 `end`）{% elif split %}（短項目，一筆一個，例如一個興趣）{% endif %}
+
+{% endfor %}
+   - `add`：新增一筆，`value` 只寫新的那一項。職位（`Company`）的 `value` 是公司名稱、`job_title` 是職稱，知道其中一個就好。已經是有效的內容不要重複新增。
+   - `end`：文中明確表示某筆已經不再適用（離職、搬走、不玩了、改吃素以前的偏好等）時才用，`entry` 填上面已知資料裡那筆的編號（`#` 後面的數字），`value` 留空。換工作的話：舊的職位 `end`、新的 `add`。不確定是否不再適用時不要 `end`。
+   - 親密度是 1–5 的數字（1 最生疏、5 最親近）。
+   - 健康、宗教、政治、財務等敏感資訊：只有在使用者明顯想記下、而且對之後的相處有幫助時才建議，並放在 `Sensitive`。
+
+   **文字欄位**（放在 `field_updates`）：
 
 {% for name, title, description in updatable_fields %}
    - `{{ name }}`：{{ title }}{% if description %}（{{ description }}）{% endif %}
 
 {% endfor %}
    - 已知資料裡已經有的內容不要重複建議；要補充時用 `append` 只寫新的部分。
-   - 單一值的欄位（公司、職稱、生日、出身地、現居地、關係、親密度等）用 `replace`；描述性的欄位（興趣、飲食、個性、讚美素材、可以請教的事、備註等）用 `append`。
-   - 格式：生日 `YYYY-MM-DD`，不知年份時 `--MM-DD`；親密度 1–5 的數字。
-   - 健康、宗教、政治、財務等敏感資訊：只有在使用者明顯想記下、而且對之後的相處有幫助時才建議，並放在 `Sensitive`。
+   - 單一值的欄位（生日、出身地、認識日期等）用 `replace`；描述性的欄位（第一印象、外貌、備註等）用 `append`。
+   - 格式：生日 `YYYY-MM-DD`，不知年份時 `--MM-DD`。
 5. 文字用使用者的語言（繁體中文為主；人名、專有名詞、對方的原話保留原文）。簡潔，不要客套話。
 
 ## 輸出格式
@@ -74,7 +90,12 @@
     {"item": "介紹 Ken 給他", "type": "my_promise", "due": ""}
   ],
   "field_updates": [
-    {"field": "Interests", "value": "登山", "mode": "append", "reason": "說週末都去爬山"}
+    {"field": "Hometown", "value": "福岡", "mode": "replace", "reason": "說老家在福岡"}
+  ],
+  "list_updates": [
+    {"field": "Interests", "op": "add", "value": "登山", "job_title": "", "entry": 0, "reason": "說週末都去爬山"},
+    {"field": "Company", "op": "end", "value": "", "job_title": "", "entry": 1, "reason": "說上個月離職了"},
+    {"field": "Company", "op": "add", "value": "Sony", "job_title": "PM", "entry": 0, "reason": "說現在在 Sony 當 PM"}
   ]
 }
 ```

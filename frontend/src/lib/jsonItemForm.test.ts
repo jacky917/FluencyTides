@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { inputValue, itemErrors, itemFields, itemSummary, newItem } from './jsonItemForm'
+import { inputValue, itemErrors, itemFields, itemSummary, localToday, newItem } from './jsonItemForm'
 
 /** 後端 Followup 模型產生的 schema（節錄自 Pydantic 的 model_json_schema）。 */
 const FOLLOWUP = {
@@ -57,11 +57,31 @@ describe('itemFields', () => {
   })
 })
 
+/** 後端 HistoryEntry（人脈卡會變的欄位）的 schema 節錄：登錄日標了 `x-default: today`。 */
+const HISTORY = {
+  properties: {
+    value: { minLength: 1, title: '內容', type: 'string' },
+    added: { default: '', title: '登錄日', type: 'string', 'x-default': 'today' },
+    ended: { default: '', title: '失效日', type: 'string' },
+  },
+  required: ['value'],
+}
+
 describe('newItem', () => {
   it('uses schema defaults', () => {
     expect(newItem(FOLLOWUP)).toEqual({ item: '', type: 'ask', added: '' })
     expect(newItem(FAMILY)).toEqual({ relation: '', birth_year: null, note: '' })
     expect(newItem(KEY_DATE)).toEqual({ label: '', yearly: false })
+  })
+
+  it('prefills today where the schema asks for it', () => {
+    expect(newItem(HISTORY, new Date(2026, 10, 7, 23, 30))).toEqual({ value: '', added: '2026-11-07', ended: '' })
+  })
+})
+
+describe('localToday', () => {
+  it('pads month and day', () => {
+    expect(localToday(new Date(2026, 0, 5))).toBe('2026-01-05')
   })
 })
 

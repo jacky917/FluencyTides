@@ -2,7 +2,9 @@
 人脈卡任務處理器 (Person Profile Handler) 模組。
 
 負責 Person_Profile_Dark：網頁與 TG 建立、修改一般欄位、刪除；JSON 清單與照片經由具名動作寫入
-（計畫書 ``docs/archive/person_profile_card_FEAT_2026-10-23.md`` §3.11、§3.12）。
+（計畫書 ``docs/archive/person_profile_card_FEAT_2026-10-23.md`` §3.11、§3.12）。會變的欄位
+（興趣、職位、現居地等，``PERSON_HISTORY_FIELDS``）也是 JSON 清單，每筆附登錄日與失效日
+（``docs/wip/person_field_history_FEAT_2026-11-07.md``）。
 
 Person profile handler module: owns Person_Profile_Dark; JSON lists and the
 photo are written through named actions, not as plain text.
@@ -11,17 +13,28 @@ photo are written through named actions, not as plain text.
 import html
 import re
 import secrets
-from datetime import date, datetime
 from typing import TypeVar, override
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.core.exceptions import FieldNotEditableError, InvalidNoteFieldsError, JsonItemChangedError
+from app.core import clock
+from app.core.exceptions import (
+    AnkiFieldCorruptedError,
+    FieldNotEditableError,
+    InvalidNoteFieldsError,
+    JsonItemChangedError,
+)
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.person_profile import (
+    PERSON_HISTORY_FIELDS,
     PERSON_JSON_ITEMS,
     PERSON_NOTE_TYPE,
+    RETIRED_FIELDS,
     PersonCreateParams,
+    entry_text,
+    history_from_input,
+    history_from_text,
+    is_active,
     item_fingerprint,
 )
 from app.services.card_service import CardService
@@ -46,12 +59,24 @@ GENERIC_LISTS = ("Family_JSON", "Gifts_JSON", "Key_Dates_JSON", "Contacts_JSON")
 #: 照片檔名：Anki 媒體資料夾裡的檔名，只允許安全的字元。A safe media file name.
 _MEDIA_NAME = re.compile(r"^[\w.\-]{1,120}$")
 
-ACTIONS = ("add_interaction", "add_followup", "set_followup_status", "add_item", "remove_item", "set_photo")
+#: 會變的欄位名（固定順序的 tuple，接在 ``JSON_FIELDS`` 後面用）。The history field names.
+HISTORY_FIELDS = tuple(PERSON_HISTORY_FIELDS)
+
+ACTIONS = (
+    "add_interaction",
+    "add_followup",
+    "set_followup_status",
+    "add_item",
+    "add_history",
+    "set_history_status",
+    "remove_item",
+    "set_photo",
+)
 
 
 def today_iso() -> str:
-    """今天（伺服器時區；正式機容器設 ``TZ=Asia/Tokyo``）。Today in the server's time zone."""
-    return date.today().isoformat()
+    """今天（``APP_TIMEZONE``，見 :mod:`app.core.clock`）。Today in the configured time zone."""
+    return clock.today_iso()
 
 
 def new_card_id() -> str:
@@ -60,7 +85,7 @@ def new_card_id() -> str:
     A new ``Card_ID``; the random suffix keeps same-second creations apart.
     只含英數字與底線，能放進 TG 深連結（``{動作}-{欄位}-{序號}-{Card_ID}``）。
     """
-    return f"PP_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(2)}"
+    return f"PP_{clock.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(2)}"
 
 
 def resolve_index(items: list[object], index: int, fingerprint: str | None) -> int:
@@ -118,6 +143,18 @@ class _AddItem(_ActionParams):
     item: dict[str, object]
 
 
+class _AddHistory(_ActionParams):
+    field: str
+    item: dict[str, object]
+
+
+class _SetHistoryStatus(_ActionParams):
+    field: str
+    index: int = Field(ge=0)
+    fingerprint: str | None = None
+    ended: bool
+
+
 class _RemoveItem(_ActionParams):
     field: str
     index: int = Field(ge=0)
@@ -135,11 +172,17 @@ class PersonProfileHandler(BaseHandler):
     Person profile card task handler.
 
     - 建立（網頁、TG）：參數是 ``PersonCreateParams``；自動產生 ``Card_ID``、寫入 ``TG_Bot`` 與
-      ``Updated_At``、六個 JSON 欄位填 ``[]``。允許稱呼重複（不同的人可以都叫「田中さん」）。
-    - 修改一般欄位：JSON、照片與 ``Card_ID`` 不能直接改；有改動時更新 ``Updated_At``。
+      ``Updated_At``、六個 JSON 欄位填 ``[]``（會變的欄位沒填時留空，見下）。允許稱呼重複（不同的人
+      可以都叫「田中さん」）。
+    - 修改一般欄位：JSON、照片與 ``Card_ID`` 不能直接改，非空的 ``Title`` 也不行（已併進 ``Company``
+      的職位，清空可以）；有改動時更新 ``Updated_At``。
     - 具名動作（``ACTIONS``）：追加互動紀錄（同時更新 ``Last_Contact``）、新增待追蹤、改待追蹤狀態、
-      在其他清單新增一筆、刪除一筆、設定照片。項目以 §3.3 的模型驗證；刪除與改狀態以指紋確認
+      在其他清單新增一筆、在會變的欄位新增一筆（``add_history``）或劃掉／取消劃掉
+      （``set_history_status``）、刪除一筆、設定照片。項目以 §3.3 的模型驗證；刪除與改狀態以指紋確認
       要動的是同一筆。每次寫入都更新 ``Updated_At``。
+    - 會變的欄位：建立時把文字轉成清單（登錄日＝今天）；新增時登錄日、劃掉時失效日都由系統填今天；
+      單值欄位（現居地、時區、關係、親密度）新增時把原本有效的那筆劃掉。清單空了時欄位寫空字串
+      （``Company`` 有值才產生「認人」卡，``[]`` 也算有值）。
     - 網頁整欄編輯 JSON 欄位（``JSON_FIELD_SPECS``）：寫入後更新 ``Updated_At``；互動紀錄有更新的日期時
       一併更新 ``Last_Contact``。
     - 刪除：標準刪除。
@@ -155,8 +198,11 @@ class PersonProfileHandler(BaseHandler):
         actions=ACTIONS,
         search=Operation(supported=True),
     )
-    JSON_FIELDS = tuple(PERSON_JSON_ITEMS)
-    JSON_FIELD_SPECS = {name: JsonFieldSpec(item=model, title=title) for name, (model, title) in PERSON_JSON_ITEMS.items()}
+    JSON_FIELDS = (*PERSON_JSON_ITEMS, *HISTORY_FIELDS)
+    JSON_FIELD_SPECS = {
+        **{name: JsonFieldSpec(item=model, title=title) for name, (model, title) in PERSON_JSON_ITEMS.items()},
+        **{name: JsonFieldSpec(item=spec.model, title=spec.title) for name, spec in PERSON_HISTORY_FIELDS.items()},
+    }
     MEDIA_FIELDS = ("Photo",)
     CREATE_TAGS = ("PersonProfile", "HandlerGenerated")
     CREATE_PARAMS = PersonCreateParams
@@ -164,12 +210,12 @@ class PersonProfileHandler(BaseHandler):
     SEARCH_FIELDS = (
         SearchField("name", "名字", ("Display_Name", "Name_ZH", "Name_EN", "Name_JA", "Name_JA_Kana", "Name_Romaji")),
         SearchField("relationship", "關係", ("Relationship",)),
-        SearchField("company", "公司", ("Company",)),
-        SearchField("title", "職稱", ("Title",)),
-        SearchField("work", "工作", ("Work_Detail",)),
+        SearchField("company", "公司・職稱", ("Company",)),
+        SearchField("work", "工作", ("Work_Detail", "Education")),
         SearchField("interests", "興趣", ("Interests",)),
         SearchField("food", "飲食", ("Food_Drink", "Dietary")),
         SearchField("personality", "個性", ("Personality_Values", "First_Impression", "Praise", "Ask_Advice")),
+        SearchField("languages", "語言", ("Languages",)),
         SearchField("met", "認識", ("Met_Where", "Met_Via", "Met_Date")),
         SearchField("place", "出身／現居", ("Hometown", "Residence")),
         SearchField("interactions", "互動", ("Interactions_JSON",)),
@@ -177,7 +223,7 @@ class PersonProfileHandler(BaseHandler):
         SearchField("family", "家人", ("Family_JSON",)),
         SearchField("gifts", "禮物", ("Gifts_JSON",)),
         SearchField("dates", "重要日期", ("Key_Dates_JSON",)),
-        SearchField("contacts", "聯絡方式", ("Contacts_JSON",)),
+        SearchField("contacts", "聯絡方式", ("Contacts_JSON", "Comm_Prefs")),
         SearchField("notes", "備註", ("Notes",)),
     )
 
@@ -217,7 +263,8 @@ class PersonProfileHandler(BaseHandler):
             relation_service: 關聯服務（不用）。Relation service (unused).
             deck_name: 目標牌組。Target deck.
             model_name: 筆記類型（服務層已確認）。The note type.
-            parameters: ``PersonCreateParams`` 驗證過的值，加上服務層補的 ``tg_bot``。
+            parameters: ``PersonCreateParams`` 驗證過的值，加上服務層補的 ``tg_bot``。會變的欄位在這裡
+                轉成清單（文字照規則切、清單每列一筆；職位一列是公司＋職稱）。
                 The validated parameters plus ``tg_bot``.
 
         Returns:
@@ -225,9 +272,18 @@ class PersonProfileHandler(BaseHandler):
         """
         values = dict(parameters)
         tg_bot = str(values.pop("tg_bot", "") or "")
-        fields = {name: str(value) for name, value in values.items() if value not in (None, "")}
-        fields.update({name: "[]" for name in self.JSON_FIELDS})
-        fields.update({"Card_ID": new_card_id(), "TG_Bot": tg_bot, "Updated_At": today_iso()})
+        today = today_iso()
+        fields = {
+            name: str(value)
+            for name, value in values.items()
+            if value not in (None, "") and name not in PERSON_HISTORY_FIELDS
+        }
+        for name in HISTORY_FIELDS:
+            items = history_from_input(name, values.get(name), today)
+            if items:
+                fields[name] = AnkiJsonFieldManager.serialize([_validate_item(name, item) for item in items])
+        fields.update({name: "[]" for name in PERSON_JSON_ITEMS})
+        fields.update({"Card_ID": new_card_id(), "TG_Bot": tg_bot, "Updated_At": today})
         note_id = await card_service.create_note(
             deck_name=deck_name,
             model_name=model_name,
@@ -256,9 +312,11 @@ class PersonProfileHandler(BaseHandler):
             parameters: ``{"action": ..., ...}``；``update_fields`` 同基底，其他見 ``ACTIONS``。
 
         Raises:
-            FieldNotEditableError: ``update_fields`` 改了 JSON、照片或 ``Card_ID``。A locked field.
+            FieldNotEditableError: ``update_fields`` 改了 JSON、照片、``Card_ID`` 或寫入非空的 ``Title``。
+                A locked field.
             InvalidNoteFieldsError: 動作參數或項目內容不符格式。Invalid parameters or items.
             JsonItemChangedError: 要刪除或改狀態的那一筆已經變了。The item changed.
+            AnkiFieldCorruptedError: 要改的清單格式壞了（不覆寫）。When the list is broken.
             HandlerOperationUnsupportedError: 不認得的動作。An unknown action.
         """
         action = parameters.get("action")
@@ -295,6 +353,26 @@ class PersonProfileHandler(BaseHandler):
             item = _validate_item(params.field, params.item)
             items = _list(await _read(card_service, note_id), params.field) + [item]
             await _write(card_service, note_id, {params.field: AnkiJsonFieldManager.serialize(items)})
+        elif action == "add_history":
+            params = _parse(_AddHistory, parameters)
+            _require_history(params.field)
+            items = _list(await _read(card_service, note_id), params.field)
+            items = add_history(params.field, items, params.item)
+            await _write(card_service, note_id, {params.field: _serialize(params.field, items)})
+        elif action == "set_history_status":
+            params = _parse(_SetHistoryStatus, parameters)
+            _require_history(params.field)
+            items = _list(await _read(card_service, note_id), params.field)
+            index = resolve_index(items, params.index, params.fingerprint)
+            if not isinstance(items[index], dict):
+                raise InvalidNoteFieldsError(f"這一筆{PERSON_HISTORY_FIELDS[params.field].title}的格式不對，請在網頁修正。")
+            entry = items[index]
+            # 已經劃掉的再劃一次不改失效日；取消劃掉不會把其他有效的劃掉（D5 只管新增）
+            if params.ended and is_active(entry):
+                entry["ended"] = today_iso()
+            elif not params.ended:
+                entry["ended"] = ""
+            await _write(card_service, note_id, {params.field: _serialize(params.field, items)})
         elif action == "remove_item":
             params = _parse(_RemoveItem, parameters)
             if params.field not in self.JSON_FIELDS:
@@ -302,7 +380,7 @@ class PersonProfileHandler(BaseHandler):
             items = _list(await _read(card_service, note_id), params.field)
             index = resolve_index(items, params.index, params.fingerprint)
             items.pop(index)
-            await _write(card_service, note_id, {params.field: AnkiJsonFieldManager.serialize(items)})
+            await _write(card_service, note_id, {params.field: _serialize(params.field, items)})
         elif action == "set_photo":
             params = _parse(_SetPhoto, parameters)
             if params.filename and not _MEDIA_NAME.fullmatch(params.filename):
@@ -316,11 +394,15 @@ class PersonProfileHandler(BaseHandler):
     async def after_json_update(
         self, card_service: CardService, note_id: int, field_name: str, items: list[object]
     ) -> None:
-        """網頁整欄寫入之後：互動紀錄的最新日期推進 ``Last_Contact``，並更新 ``Updated_At``。
+        """網頁整欄寫入之後：互動紀錄的最新日期推進 ``Last_Contact``；會變的欄位清空時寫空字串
+        （``[]`` 也算有值，``Company`` 會因此產生空的「認人」卡）；並更新 ``Updated_At``。
 
-        After the web writes a whole field: move ``Last_Contact`` forward and stamp ``Updated_At``.
+        After the web writes a whole field: move ``Last_Contact`` forward,
+        blank emptied history fields, and stamp ``Updated_At``.
         """
         changes: dict[str, str] = {}
+        if field_name in PERSON_HISTORY_FIELDS and not items:
+            changes[field_name] = ""
         if field_name == "Interactions_JSON":
             dates = [str(item.get("date", "")) for item in items if isinstance(item, dict)]
             if dates:
@@ -334,7 +416,7 @@ class PersonProfileHandler(BaseHandler):
         note_id: int,
         parameters: dict[str, object],
     ) -> None:
-        """修改一般欄位（標準實作）：``Card_ID`` 不能改；真的有改動時更新 ``Updated_At``。
+        """修改一般欄位（標準實作）：``Card_ID`` 不能改、非空的 ``Title`` 不能寫；真的有改動時更新 ``Updated_At``。
 
         Plain field update; ``Card_ID`` is locked; ``Updated_At`` follows changes.
         """
@@ -344,6 +426,9 @@ class PersonProfileHandler(BaseHandler):
             locked = [name for name in fields if name in SYSTEM_FIELDS]
             if locked:
                 raise FieldNotEditableError(f"這些欄位由系統維護，不能直接修改：{'、'.join(locked)}")
+            retired = [name for name in fields if name in RETIRED_FIELDS and field_text(fields[name]).strip()]
+            if retired:
+                raise FieldNotEditableError("「職稱」已併進「職位」（Company 欄位）：請在職位的清單裡改。")
             current = note_field_values(await card_service.get_note(note_id))
             changed = any(field_text(value) != current.get(name) for name, value in fields.items())
         await super().execute_update(card_service, relation_service, note_id, parameters)
@@ -360,9 +445,78 @@ def _list(values: dict[str, str], field: str) -> list[object]:
     """解析一個 JSON 清單欄位。Parse one JSON list field.
 
     Raises:
-        AnkiFieldCorruptedError: 欄位格式壞了（不覆寫，免得蓋掉原本的資料）。When the field is broken.
+        AnkiFieldCorruptedError: 欄位格式壞了（不覆寫，免得蓋掉原本的資料）；訊息帶欄位名稱，
+            會變的欄位另外提示可能是還沒轉換的舊文字。When the field is broken.
     """
-    return AnkiJsonFieldManager.parse_field_string(values.get(field, ""))
+    try:
+        return AnkiJsonFieldManager.parse_field_string(values.get(field, ""))
+    except AnkiFieldCorruptedError as e:
+        if field in PERSON_HISTORY_FIELDS:
+            title = PERSON_HISTORY_FIELDS[field].title
+            hint = "可能是還沒轉換的舊文字，請先執行 migrate_history_fields.py，或在網頁修正。"
+        else:
+            title = PERSON_JSON_ITEMS[field][1] if field in PERSON_JSON_ITEMS else field
+            hint = "請在網頁或 Anki 修正。"
+        raise AnkiFieldCorruptedError(f"「{title}」的資料格式壞了，為避免覆寫已中止：{hint}") from e
+
+
+def _require_history(field: str) -> None:
+    """確認是會變的欄位。Check the field is a history field.
+
+    Raises:
+        InvalidNoteFieldsError: 不是。When it is not.
+    """
+    if field not in PERSON_HISTORY_FIELDS:
+        raise InvalidNoteFieldsError(f"{field} 不是人脈卡會變的欄位")
+
+
+def add_history(field: str, items: list[object], item: dict[str, object], today: str | None = None) -> list[object]:
+    """在會變的欄位新增：登錄日填今天、失效日空白；可切的欄位內容以逗號、頓號、換行切成多筆；與目前有效的
+    某筆相同的略過；單值欄位真的新增了一筆時才把原本有效的劃掉（登錄日計畫書 D5、D6）。
+
+    Add entries to a history field: dates by the system, splittable values
+    split, current duplicates skipped, single-value fields end the old one.
+
+    Args:
+        field: 會變的欄位。The history field.
+        items: 目前的清單（會被修改）。The current list, modified in place.
+        item: ``{"value": ...}``；職位為 ``{"company", "title"}``。日期鍵會被系統的值蓋掉。
+            The entry; date keys are overwritten.
+        today: 今天（預設 :func:`today_iso`）。Today.
+
+    Returns:
+        新的清單（就是 ``items``）。The list.
+
+    Raises:
+        InvalidNoteFieldsError: 內容不符格式（例如空的、親密度不是 1–5）。On an invalid entry.
+    """
+    today = today or today_iso()
+    data = {key: value for key, value in item.items() if key not in ("added", "ended")}
+    if field == "Company":
+        candidates = [{**data, "added": today, "ended": ""}]
+    else:
+        value = str(data.pop("value", "") or "")
+        texts = history_from_text(field, value, today) or [{"value": value, "added": today, "ended": ""}]
+        candidates = [{**data, **text} for text in texts]
+    new = [_validate_item(field, candidate) for candidate in candidates]
+    current = {entry_text(field, entry) for entry in items if is_active(entry)}
+    new = [entry for entry in new if entry_text(field, entry) not in current]
+    if new and PERSON_HISTORY_FIELDS[field].single:
+        for entry in items:
+            if is_active(entry):
+                entry["ended"] = today  # type: ignore[index]
+    items.extend(new)
+    return items
+
+
+def _serialize(field: str, items: list[object]) -> str:
+    """清單寫回欄位的字串；會變的欄位清空時寫空字串（``Company`` 的 ``[]`` 會產生空的「認人」卡）。
+
+    The field string of a list; emptied history fields become blank.
+    """
+    if field in PERSON_HISTORY_FIELDS and not items:
+        return ""
+    return AnkiJsonFieldManager.serialize(items)
 
 
 def _last_contact(values: dict[str, str], contact_date: str) -> dict[str, str]:
@@ -396,16 +550,22 @@ def _validate_item(field: str, item: dict[str, object]) -> dict[str, object]:
     """以該清單的模型驗證一筆項目，回傳要寫入的 dict（保留多餘的鍵、去掉空值的選填鍵）。
 
     Validate one item with the list's model; returns the dict to store.
+    會變的欄位的項目所有鍵都保留（``{value, added, ended}`` 形狀固定，``ended`` 空白＝有效）。
 
     Raises:
         InvalidNoteFieldsError: 格式不對。On an invalid item.
     """
-    model = PERSON_JSON_ITEMS[field][0]
+    if field in PERSON_HISTORY_FIELDS:
+        model, title = PERSON_HISTORY_FIELDS[field].model, PERSON_HISTORY_FIELDS[field].title
+    else:
+        model, title = PERSON_JSON_ITEMS[field]
     try:
         validated = model.model_validate(item)
     except ValidationError as e:
-        raise InvalidNoteFieldsError(f"{PERSON_JSON_ITEMS[field][1]}的內容不正確：{_first_error(e)}") from e
+        raise InvalidNoteFieldsError(f"{title}的內容不正確：{_first_error(e)}") from e
     data = validated.model_dump()
+    if field in PERSON_HISTORY_FIELDS:
+        return data
     # 選填的空字串、None、False 不存（卡片也不顯示），清單比較乾淨；必要的鍵與種類、狀態、方向一律保留
     keep = {name for name, info in model.model_fields.items() if info.is_required()} | {"type", "status", "direction"}
     # 用 is False 比對：0 == False，用 in 會把數值 0 當成空值丟掉

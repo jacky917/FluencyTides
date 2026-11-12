@@ -3,12 +3,13 @@
  * Form parts shared by the form and preview create flows.
  */
 
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, Plus, X } from 'lucide-react'
+import { Button } from '../ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible'
 import { Input } from '../ui/input'
-import type { FormField } from '../../lib/createForm'
+import { addQuickPick, addTags, type FormField, type RowsValue } from '../../lib/createForm'
 import { cn } from '../../lib/utils'
 import type { CreateNoteResponse } from '../../types/api'
 import type { DeckStatus } from '../../hooks/useDeckStatus'
@@ -172,6 +173,268 @@ export function SchemaFieldInput({
           ))}
         </datalist>
       )}
+      {field.description && !error && (
+        <p id={`${id}-desc`} className="text-xs text-muted-foreground">
+          {field.description}
+        </p>
+      )}
+      {error && (
+        <p id={`${id}-error`} role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * 一列一筆的欄位（`x-ui: list`）：每列一個輸入框（職位這種物件列每格一個），右邊可刪除，下面「+ 新增一列」；
+ * 有快速選項時列在上面，點一下加一列（已有的不重複）。還沒有任何列時顯示一列空白，打字就成為第一筆。
+ * A field typed one entry per row, with "+" to add rows and quick picks.
+ * @param props.id - 第一個輸入框的 id（label 指向它）。The first input's id.
+ * @param props.field - 欄位（`rows` 不是 null）。The field.
+ * @param props.value - 目前的列。The rows.
+ * @param props.error - 錯誤訊息。The error.
+ * @param props.disabled - 停用。Disabled.
+ * @param props.onChange - 列有變動時。Called with the new rows.
+ * @returns 欄位 JSX。The field JSX.
+ */
+export function RowsFieldInput({
+  id,
+  field,
+  value,
+  error,
+  disabled,
+  onChange,
+}: {
+  id: string
+  field: FormField
+  value: RowsValue
+  error?: string
+  disabled: boolean
+  onChange: (value: RowsValue) => void
+}) {
+  const spec = field.rows!
+  const cells = spec.cells
+  const empty = (): string | Record<string, string> =>
+    cells ? Object.fromEntries(cells.map((cell) => [cell.key, ''])) : ''
+  // 沒有任何列時先給一列空白，不必先按「+」
+  const rows = ((value as unknown[]).length > 0 ? value : [empty()]) as (string | Record<string, string>)[]
+  const set = (next: (string | Record<string, string>)[]) => onChange(next as RowsValue)
+  const describedBy = error ? `${id}-error` : field.description ? `${id}-desc` : undefined
+
+  return (
+    <div className="space-y-1" role="group" aria-labelledby={`${id}-label`}>
+      <label id={`${id}-label`} htmlFor={id} className="text-sm font-medium">
+        {field.title}
+        {field.required && <span className="ml-1 text-destructive">*</span>}
+      </label>
+      {spec.quick.length > 0 && !cells && (
+        <div className="flex flex-wrap gap-1">
+          {spec.quick.map((option) => {
+            const added = (rows as string[]).some((row) => row.trim() === option)
+            return (
+              <Button
+                key={option}
+                type="button"
+                size="sm"
+                variant={added ? 'secondary' : 'outline'}
+                className="h-7 px-2 text-xs"
+                disabled={disabled || added}
+                aria-pressed={added}
+                onClick={() => set(addQuickPick(rows as string[], option))}
+              >
+                {added ? option : `+ ${option}`}
+              </Button>
+            )
+          })}
+        </div>
+      )}
+      <ol className="space-y-1">
+        {rows.map((row, index) => {
+          const rowId = index === 0 ? id : `${id}-${index}`
+          const update = (next: string | Record<string, string>) => set(rows.map((r, i) => (i === index ? next : r)))
+          return (
+            <li key={index} className="flex items-start gap-1">
+              {cells ? (
+                <div className="grid flex-1 gap-1 sm:grid-cols-2">
+                  {cells.map((cell, cellIndex) => (
+                    <Input
+                      key={cell.key}
+                      id={cellIndex === 0 ? rowId : `${rowId}-${cell.key}`}
+                      value={(row as Record<string, string>)[cell.key] ?? ''}
+                      placeholder={cell.title}
+                      aria-label={`${field.title} ${index + 1} 的${cell.title}`}
+                      aria-invalid={error ? true : undefined}
+                      aria-describedby={describedBy}
+                      disabled={disabled}
+                      onChange={(e) => update({ ...(row as Record<string, string>), [cell.key]: e.target.value })}
+                    />
+                  ))}
+                </div>
+              ) : spec.multiline ? (
+                <textarea
+                  id={rowId}
+                  value={row as string}
+                  aria-label={`${field.title} ${index + 1}`}
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={describedBy}
+                  disabled={disabled}
+                  className={cn(TEXTAREA_CLASS, 'min-h-[60px] flex-1', error && 'border-destructive')}
+                  onChange={(e) => update(e.target.value)}
+                />
+              ) : (
+                <Input
+                  id={rowId}
+                  value={row as string}
+                  aria-label={`${field.title} ${index + 1}`}
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={describedBy}
+                  disabled={disabled}
+                  className={cn('flex-1', error && 'border-destructive')}
+                  onChange={(e) => update(e.target.value)}
+                />
+              )}
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-9 w-9 shrink-0 text-muted-foreground"
+                aria-label={`刪除${field.title}第 ${index + 1} 列`}
+                disabled={disabled}
+                onClick={() => set(rows.filter((_, i) => i !== index))}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </li>
+          )
+        })}
+      </ol>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="h-7 px-2 text-xs"
+        disabled={disabled}
+        onClick={() => set([...rows, empty()])}
+      >
+        <Plus className="mr-1 h-3.5 w-3.5" />
+        新增一列
+      </Button>
+      {field.description && !error && (
+        <p id={`${id}-desc`} className="text-xs text-muted-foreground">
+          {field.description}
+        </p>
+      )}
+      {error && (
+        <p id={`${id}-error`} role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * 短值的一列一筆欄位（`x-item: tag`，語言、興趣這種）畫成一個一個小標籤：已加入的橫向排、可換行，每個
+ * 有 × 可移除；還沒加入的快速選項是同一排的小按鈕；最後一個小輸入框打其他的，按 Enter 或打逗號加入
+ * （頓號、逗號分隔的一次切成多個），離開輸入框時也加入，打了沒按 Enter 就送出也不會漏掉。
+ * A short-value list field shown as removable tags, quick picks and a small input.
+ * @param props.id - 輸入框的 id（label 指向它）。The input id.
+ * @param props.field - 欄位（`rows.tags` 為 true）。The field.
+ * @param props.value - 目前的標籤。The tags.
+ * @param props.error - 錯誤訊息。The error.
+ * @param props.disabled - 停用。Disabled.
+ * @param props.onChange - 標籤有變動時。Called with the new tags.
+ * @returns 欄位 JSX。The field JSX.
+ */
+export function TagsFieldInput({
+  id,
+  field,
+  value,
+  error,
+  disabled,
+  onChange,
+}: {
+  id: string
+  field: FormField
+  value: string[]
+  error?: string
+  disabled: boolean
+  onChange: (value: string[]) => void
+}) {
+  const [text, setText] = useState('')
+  const tags = value.filter((tag) => tag.trim() !== '')
+  const quick = field.rows!.quick.filter((option) => !tags.includes(option))
+  const describedBy = error ? `${id}-error` : field.description ? `${id}-desc` : undefined
+  const commit = (typed: string) => {
+    const next = addTags(tags, typed)
+    if (next.length !== tags.length) onChange(next)
+    setText('')
+  }
+
+  return (
+    <div className="space-y-1" role="group" aria-labelledby={`${id}-label`}>
+      <label id={`${id}-label`} htmlFor={id} className="text-sm font-medium">
+        {field.title}
+        {field.required && <span className="ml-1 text-destructive">*</span>}
+      </label>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {tags.length > 0 && (
+          <ul role="list" className="contents" aria-label={`已加入的${field.title}`}>
+            {tags.map((tag) => (
+              <li key={tag} className="inline-flex items-center gap-1 rounded-full border bg-secondary px-2.5 py-0.5 text-xs">
+                {tag}
+                <button
+                  type="button"
+                  className="rounded-full p-0.5 hover:bg-accent disabled:opacity-50"
+                  disabled={disabled}
+                  aria-label={`移除${field.title} ${tag}`}
+                  onClick={() => onChange(tags.filter((t) => t !== tag))}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {quick.map((option) => (
+          <button
+            key={option}
+            type="button"
+            className="inline-flex items-center rounded-full border border-dashed px-2.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+            disabled={disabled}
+            aria-label={`加入${field.title} ${option}`}
+            onClick={() => onChange(addTags(tags, option))}
+          >
+            <Plus className="mr-0.5 h-3 w-3" />
+            {option}
+          </button>
+        ))}
+        <Input
+          id={id}
+          value={text}
+          disabled={disabled}
+          placeholder={quick.length > 0 ? '其他…' : '輸入後按 Enter'}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
+          className={cn('h-7 w-32 rounded-full px-2.5 text-xs', error && 'border-destructive')}
+          onChange={(e) => {
+            const typed = e.target.value
+            // 打出逗號、頓號時把前面的加入
+            if (/[、,，]$/.test(typed)) commit(typed)
+            else setText(typed)
+          }}
+          onKeyDown={(e) => {
+            // 輸入法選字中的 Enter 不算；Enter 不送出整張表單
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+              e.preventDefault()
+              commit(text)
+            }
+          }}
+          onBlur={() => commit(text)}
+        />
+      </div>
       {field.description && !error && (
         <p id={`${id}-desc`} className="text-xs text-muted-foreground">
           {field.description}

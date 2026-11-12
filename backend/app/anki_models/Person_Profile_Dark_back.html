@@ -1,8 +1,12 @@
 <!-- 人脈卡共用背面（「認人」與「見面前複習」兩張卡都用這份）。
      版面：頭部（頭像、姓名與讀音、徽章）→ 見面前必看（一律展開）→ TG 按鈕 → 可收合區段（<details>）。
-     沒有內容的區段整段不顯示。欄位都放在隱藏的 div，由下方的 JS 讀取後畫出；JSON 欄位解析失敗時
-     該區段顯示「資料格式錯誤」與原文，不會默默消失。模板只顯示、不寫資料：寫入交給網頁與 TG——
-     有 Card_ID 與 TG_Bot 時，「+」開啟 TG 新增一筆，長按項目 3 秒開啟 TG 刪除（TG 會再確認一次）。 -->
+     欄位都放在隱藏的 div，由下方的 JS 讀取後畫出；JSON 欄位解析失敗時該區段顯示「資料格式錯誤」與原文，
+     不會默默消失。模板只顯示、不寫資料：寫入交給網頁與 TG——有 Card_ID 與 TG_Bot 時，每個區塊標題的
+     「+」開啟 TG 新增（區塊有多個欄位時 TG 先問新增哪一項），長按清單項目 3 秒開啟 TG 刪除（TG 會再確認一次）、
+     長按文字欄位（出身、備註等）3 秒開啟 TG 修改那個欄位，
+     「劃掉」開啟 TG 把那筆標成失效。沒有內容的區段只在有 TG 時顯示（才有「+」可按）。
+     會變的欄位（興趣、職位、現居地等）是 JSON 清單，每筆 {value, added, ended}（職位是 {company, title, …}）：
+     預設只顯示有效的，欄位旁的眼睛（與 TG 按鈕列裡的 AI 遮名字開關不同）展開全部紀錄。 -->
 <div class="card person-card" id="person-root">
     <div class="card-kind" id="person-kind"></div>
     <div id="person-header"></div>
@@ -207,16 +211,6 @@
         return wrap;
     }
 
-    /** 逗號、頓號分隔的短項目變成標籤；看起來是一段文字（含 HTML 或很長）時回傳 null。 */
-    function chips(html, text) {
-        if (/<(ul|ol|li|div|br|p)\b/i.test(html) || text.length > 120) return null;
-        var items = text.split(/[,，、]/).map(function (s) { return s.trim(); }).filter(Boolean);
-        if (items.length < 2) return null;
-        var row = el('div', 'chip-row');
-        items.forEach(function (item) { row.appendChild(el('span', 'chip', item)); });
-        return row;
-    }
-
     /** 以 AnkiConnect 打開另一張筆記（桌面版開瀏覽器；網頁版在網頁裡切換過去）。 */
     function browseNote(noteId) {
         fetch('http://127.0.0.1:8765', {
@@ -240,14 +234,18 @@
 
     /**
      * 一筆 JSON 項目的指紋（djb2，UTF-16 碼元，36 進位），與後端 item_fingerprint 相同算法。
-     * 刪除、標成完成時附在序號後面：卡片上的序號可能過時（別處新增或刪除、尚未同步），TG 據此確認
-     * 要動的還是同一筆。
+     * 刪除、標成完成、劃掉時附在序號後面：卡片上的序號可能過時（別處新增或刪除、尚未同步），TG 據此確認
+     * 要動的還是同一筆。added、ended 不放進指紋：劃掉後同一筆的指紋不變。
      */
     function itemFingerprint(item) {
         var keys = ['date', 'item', 'topics', 'name', 'label', 'handle', 'relation', 'channel'];
         var key = keys.map(function (k) {
             return item && item[k] !== undefined && item[k] !== null ? String(item[k]) : '';
         }).join('|');
+        // 會變的欄位的項目：有這些鍵時才接上（與後端 FINGERPRINT_EXTRA_KEYS 相同）
+        ['value', 'company', 'title'].forEach(function (k) {
+            if (item && item[k] !== undefined && item[k] !== null) key += '|' + String(item[k]);
+        });
         var h = 5381;
         for (var i = 0; i < key.length; i++) h = ((h * 33) ^ key.charCodeAt(i)) >>> 0;
         return h.toString(36);
@@ -285,9 +283,13 @@
         return a;
     }
 
-    /** 「+」：開啟 TG 新增一筆。放在 summary 裡時，點它不會展開或收合區段（連結是互動元素）。 */
-    function addLink(field, label) {
-        var a = tgLink('+', tgUrl('padd', field, 'none'), 'add-link');
+    /**
+     * 區塊標題的「+」：target.field 直接開 TG 新增到那個欄位；target.section 是有多個欄位的區塊，
+     * TG 先問新增哪一項（後端 SECTION_FIELDS）。放在 summary 裡時，點它不會展開或收合區段。
+     */
+    function addLink(target, label) {
+        var url = target.section ? tgUrl('psec', target.section, 'none') : tgUrl('padd', target.field, 'none');
+        var a = tgLink('+', url, 'add-link');
         a.title = '在 TG 新增' + (label || '');
         return a;
     }
@@ -305,16 +307,28 @@
     var LONG_PRESS_MS = 3000;
 
     /**
-     * 長按 3 秒刪除：按住時下緣出現進度條，放開、移動或捲動就取消；滿 3 秒開啟 TG 確認刪除，
-     * 並在項目旁留一個「在 TG 刪除」連結（有些 App 不允許程式自動開連結，這時點它）。
-     * 沒有 TG 連結時什麼都不做。
+     * 長按 3 秒刪除清單的一筆：開啟 TG 確認刪除（見 longPress）。沒有 TG 連結時什麼都不做。
      */
     function longPressDelete(node, field, index, item) {
-        if (!tgEnabled) return node;
-        var url = tgUrl('pdel', field, itemRef(index, item));
-        node.className += ' lp-target';
+        return longPress(node, tgUrl('pdel', field, itemRef(index, item)), '長按 3 秒刪除', '在 TG 刪除這筆', '');
+    }
+
+    /**
+     * 長按 3 秒修改文字欄位（出身、備註等）：開啟 TG 的「改資料」直接到這個欄位。沒有 TG 連結時什麼都不做。
+     */
+    function longPressEdit(node, field) {
+        return longPress(node, tgUrl('pedit', field, 'none'), '長按 3 秒在 TG 修改', '在 TG 修改', ' lp-edit');
+    }
+
+    /**
+     * 長按 3 秒開啟 TG：按住時下緣出現進度條，放開、移動或捲動就取消；滿 3 秒開啟 url，
+     * 並在旁邊留一個連結（有些 App 不允許程式自動開連結，這時點它）。extraClass 決定進度條的顏色。
+     */
+    function longPress(node, url, title, revealText, extraClass) {
+        if (!tgEnabled || !node) return node;
+        node.className += ' lp-target' + extraClass;
         node.setAttribute('role', 'button');
-        node.setAttribute('title', '長按 3 秒刪除');
+        node.setAttribute('title', title);
         var timer = null;
         var fired = false;
         var startX = 0;
@@ -338,7 +352,7 @@
                 if (navigator.vibrate) {
                     try { navigator.vibrate(30); } catch (err) { /* 不支援震動 */ }
                 }
-                if (!node.querySelector('.lp-reveal')) node.appendChild(tgLink('在 TG 刪除這筆', url, 'lp-reveal'));
+                if (!node.querySelector('.lp-reveal')) node.appendChild(tgLink(revealText, url, 'lp-reveal'));
                 openUrl(url);
             }, LONG_PRESS_MS);
         });
@@ -387,17 +401,24 @@
         }
     }
 
-    /** 產生一個可收合區段；沒有內容（nodes 為空）時回傳 null。addField：summary 上的「+」新增到哪個 JSON 欄位。 */
-    function section(key, title, color, nodes, count, addField) {
+    /**
+     * 產生一個可收合區段。addTarget：summary 上的「+」（見 addLink）。沒有內容時：有 TG 而且有「+」就顯示
+     * 「還沒有資料」（才有地方按「+」），否則回傳 null。
+     */
+    function section(key, title, color, nodes, count, addTarget) {
         nodes = nodes.filter(Boolean);
-        if (nodes.length === 0) return null;
+        var canAdd = Boolean(addTarget) && tgEnabled;
+        if (nodes.length === 0) {
+            if (!canAdd) return null;
+            nodes = [el('div', 'empty-hint', '還沒有資料，按標題的「+」新增')];
+        }
         var details = el('details', 'p-section');
         details.style.borderLeftColor = color;
         details.open = storedOpen(key, false);
         var summary = el('summary');
         summary.appendChild(el('span', null, title));
         if (count) summary.appendChild(el('span', 'p-section-count', count));
-        if (addField && tgEnabled) summary.appendChild(addLink(addField, title));
+        if (canAdd) summary.appendChild(addLink(addTarget, title));
         summary.appendChild(el('span', 'accordion-arrow', '▸'));
         details.appendChild(summary);
         var body = el('div', 'p-section-body');
@@ -419,12 +440,167 @@
         return r;
     }
 
-    /** 文字區段欄位的一列：能變成標籤就顯示標籤，否則照 HTML 顯示。 */
-    function htmlRow(label, name, asChips) {
+    /** 文字區段欄位的一列，照 HTML 顯示。 */
+    function htmlRow(label, name) {
         var html = readHtml(name);
         if (!html) return null;
-        var node = asChips ? chips(html, readField(name)) : null;
-        return row(label, node || htmlNode('div', null, html));
+        return row(label, htmlNode('div', null, html));
+    }
+
+    // ============================
+    // 會變的欄位：每筆 {value, added, ended}；職位 {company, title, added, ended}
+    // ============================
+
+    // 與後端 PERSON_HISTORY_FIELDS 相同（tests/test_person_profile_template.py 比對）
+    var HISTORY_FIELDS = ['Interests', 'Food_Drink', 'Dietary', 'Company', 'Work_Detail', 'Education',
+        'Personality_Values', 'Praise', 'Ask_Advice', 'Comm_Prefs', 'Residence', 'Languages', 'Timezone',
+        'Relationship', 'Closeness', 'Sensitive'];
+    var historyLists = {};
+    HISTORY_FIELDS.forEach(function (name) { historyLists[name] = readJsonList(name); });
+
+    function isActiveEntry(item) {
+        return Boolean(item) && typeof item === 'object' && !String(item.ended || '').trim();
+    }
+
+    /** 一筆的文字：職位是「公司・職稱」，其他是內容（與後端 entry_text 相同）。 */
+    function entryText(name, item) {
+        if (!item || typeof item !== 'object') return String(item === null || item === undefined ? '' : item);
+        if (name === 'Company') {
+            return [item.company, item.title].map(function (s) { return String(s || '').trim(); })
+                .filter(Boolean).join('・');
+        }
+        return String(item.value || '').trim();
+    }
+
+    /** 物件且有內容的每一筆（附序號）；清單格式壞掉時為空。 */
+    function historyEntries(name) {
+        var list = historyLists[name];
+        if (isError(list)) return [];
+        return withIndex(list).filter(function (e) { return isEntry(e.item) && entryText(name, e.item); });
+    }
+
+    function isEntry(item) {
+        return Boolean(item) && typeof item === 'object' && Object.prototype.toString.call(item) !== '[object Array]';
+    }
+
+    /** 格式不對的項目（不是物件、或沒有內容）：不算有效也不算劃掉，另外列出。 */
+    function malformedEntries(name) {
+        var list = historyLists[name];
+        if (isError(list)) return [];
+        return withIndex(list).filter(function (e) { return !isEntry(e.item) || !entryText(name, e.item); });
+    }
+
+    function activeEntries(name) {
+        return historyEntries(name).filter(function (e) { return isActiveEntry(e.item); });
+    }
+
+    function activeText(name, separator) {
+        return activeEntries(name).map(function (e) { return entryText(name, e.item); }).join(separator);
+    }
+
+    /** 「劃掉」：開 TG 把這筆標成失效（失效日＝今天，保留紀錄）。 */
+    function endLink(name, entry) {
+        var a = tgLink('劃掉', tgUrl('pend', name, itemRef(entry.index, entry.item)), 'done-link');
+        a.title = '在 TG 劃掉（不再適用，保留成過去的紀錄）';
+        return a;
+    }
+
+    /** 歷史紀錄的眼睛：小圖示＋筆數（TG 按鈕列裡的 AI 遮名字開關是有框的大圖示，兩者不同）。 */
+    function historyToggle(count) {
+        var t = el('span', 'hist-toggle');
+        t.setAttribute('role', 'button');
+        t.title = '看全部紀錄（含登錄日與劃掉的）';
+        t.setAttribute('aria-label', t.title);
+        t.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" '
+            + 'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'
+            + '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+        t.appendChild(el('span', null, String(count)));
+        return t;
+    }
+
+    /**
+     * 會變的欄位的一列：預設只顯示有效的（opts.chips 顯示成標籤），眼睛展開全部紀錄——每筆附登錄日，
+     * 劃掉的加刪除線與失效日。有 TG 時有效的那筆旁有「劃掉」（標籤在展開後才有），每筆都能長按刪除。
+     * opts.blur：內容模糊，點了才清楚（敏感話題）。沒有任何紀錄時回傳 null。
+     */
+    function historyRow(label, name, opts) {
+        opts = opts || {};
+        var list = historyLists[name];
+        if (isError(list)) return row(label, errorNode(list));
+        var entries = historyEntries(name);
+        var malformed = malformedEntries(name);
+        if (!entries.length && !malformed.length) return null;
+        var active = entries.filter(function (e) { return isActiveEntry(e.item); });
+
+        var r = el('div', 'p-row');
+        var head = el('div', 'p-label hist-label');
+        if (label) head.appendChild(el('span', null, label));
+        var toggle = historyToggle(entries.length + malformed.length);
+        head.appendChild(toggle);
+        r.appendChild(head);
+
+        var content = el('div', 'p-value');
+        var current = el('div', 'hist-current');
+        if (!active.length) {
+            current.appendChild(el('span', 'empty-hint', '目前沒有有效的（點眼睛看過去的紀錄）'));
+        } else if (opts.chips) {
+            var chipRow = el('div', 'chip-row');
+            active.forEach(function (e) {
+                chipRow.appendChild(longPressDelete(el('span', 'chip', entryText(name, e.item)), name, e.index, e.item));
+            });
+            current.appendChild(chipRow);
+        } else {
+            active.forEach(function (e) {
+                var line = el('div', 'hist-line');
+                line.appendChild(el('span', 'hist-text', entryText(name, e.item)));
+                if (tgEnabled) line.appendChild(endLink(name, e));
+                current.appendChild(longPressDelete(line, name, e.index, e.item));
+            });
+        }
+        // 格式不對的項目兩種畫面都列出（不要假裝成已劃掉），長按可刪除
+        malformed.forEach(function (e) {
+            var bad = el('div', 'json-error', '這筆格式不對（請在網頁修正）：' + JSON.stringify(e.item));
+            current.appendChild(longPressDelete(bad, name, e.index, e.item));
+        });
+        content.appendChild(current);
+
+        var all = el('div', 'hist-all');
+        all.style.display = 'none';
+        entries.forEach(function (e) {
+            var ended = !isActiveEntry(e.item);
+            var line = el('div', 'hist-line' + (ended ? ' is-ended' : ''));
+            line.appendChild(el('span', 'hist-text', entryText(name, e.item)));
+            var added = String(e.item.added || '');
+            var note = (added ? added + ' 登錄' : '日期不明') + (ended ? '・' + String(e.item.ended || '') + ' 劃掉' : '');
+            line.appendChild(el('span', 'hist-date', note));
+            if (!ended && tgEnabled) line.appendChild(endLink(name, e));
+            all.appendChild(longPressDelete(line, name, e.index, e.item));
+        });
+        malformed.forEach(function (e) {
+            all.appendChild(el('div', 'json-error', '這筆格式不對（請在網頁修正）：' + JSON.stringify(e.item)));
+        });
+        content.appendChild(all);
+
+        toggle.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            var open = all.style.display === 'none';
+            all.style.display = open ? '' : 'none';
+            current.style.display = open ? 'none' : '';
+            toggle.className = 'hist-toggle' + (open ? ' is-open' : '');
+        });
+
+        if (opts.blur) {
+            content.className += ' blur-reveal';
+            content.setAttribute('role', 'button');
+            content.addEventListener('click', function (ev) {
+                if (content.className.indexOf('blur-reveal') < 0) return;
+                ev.stopPropagation();
+                ev.preventDefault();
+                content.className = content.className.replace(/\s*blur-reveal/, ' revealed');
+            }, true);
+        }
+        r.appendChild(content);
+        return r;
     }
 
     function errorNode(list) {
@@ -483,17 +659,20 @@
         if (alt.length) names.appendChild(el('div', 'person-alt', alt.join(' · ')));
 
         var memo = readField('Name_Memo');
-        if (memo) names.appendChild(el('div', 'person-memo', '名字記法：' + memo));
+        if (memo) names.appendChild(longPressEdit(el('div', 'person-memo', '名字記法：' + memo), 'Name_Memo'));
 
-        var company = readField('Company');
-        var title = readField('Title');
-        if (company || title) names.appendChild(el('div', 'person-work', [company, title].filter(Boolean).join('・')));
+        var work = activeText('Company', '／');
+        if (work) names.appendChild(el('div', 'person-work', work));
 
         var badges = el('div', 'badge-row');
-        var relationship = readField('Relationship');
-        if (relationship) badges.appendChild(el('span', 'pane-badge badge-blue', relationship));
+        activeEntries('Relationship').forEach(function (e) {
+            badges.appendChild(el('span', 'pane-badge badge-blue', entryText('Relationship', e.item)));
+        });
 
-        var closeness = parseInt(readField('Closeness'), 10);
+        // 理論上只有一筆有效；取消劃掉或網頁編輯可能留下多筆，取最後新增的
+        var closenessEntries = activeEntries('Closeness');
+        var closeness = closenessEntries.length
+            ? parseInt(entryText('Closeness', closenessEntries[closenessEntries.length - 1].item), 10) : NaN;
         if (closeness >= 1 && closeness <= 5) {
             var dots = '';
             for (var i = 1; i <= 5; i++) dots += i <= closeness ? '●' : '○';
@@ -528,13 +707,14 @@
     (function renderMustSee() {
         var box = el('div', 'must-see');
         var title = el('div', 'must-see-title', '見面前必看');
-        if (tgEnabled) title.appendChild(tgLink('+ 待追蹤', tgUrl('padd', 'Followups_JSON', 'none'), 'add-chip'));
+        if (tgEnabled) title.appendChild(addLink({ section: 'must' }, '待追蹤或飲食限制'));
         box.appendChild(title);
         var any = false;
 
+        // 一列：小字標題在上、內容在下（與下面各區塊的「標籤：內容」同一種樣式）
         function mustRow(label, content) {
             var r = el('div', 'must-row');
-            r.appendChild(el('span', 'must-label', label));
+            r.appendChild(el('div', 'p-label', label));
             r.appendChild(content);
             box.appendChild(r);
             any = true;
@@ -560,21 +740,29 @@
                     var li = el('li', null, f.item || '');
                     var note = f.due ? '期限 ' + shortDate(f.due) : f.added ? shortDate(f.added) + ' 記' : '';
                     if (note) li.appendChild(el('span', 'followup-date', note));
-                    if (tgEnabled) {
-                        var done = tgLink('完成', tgUrl('pdone', 'Followups_JSON', itemRef(entry.index, f)), 'done-link');
-                        done.title = '在 TG 標成完成';
-                        li.appendChild(done);
-                    }
                     list.appendChild(longPressDelete(li, 'Followups_JSON', entry.index, f));
+                    if (tgEnabled) {
+                        // 點一下開 TG，TG 先問要不要標成完成（不直接標）；長按 3 秒仍是刪除。
+                        // 在 longPressDelete 之後註冊：長按觸發後的那次點擊已被它 preventDefault，這裡就不開
+                        var doneUrl = tgUrl('pdone', 'Followups_JSON', itemRef(entry.index, f));
+                        li.className += ' tap-target';
+                        li.setAttribute('title', '點一下在 TG 標成完成（會先確認）；長按 3 秒刪除');
+                        li.addEventListener('click', function (e) {
+                            if (e.defaultPrevented) return;
+                            e.stopPropagation();
+                            openUrl(doneUrl);
+                        });
+                    }
                 });
                 mustRow(group[1], list);
             });
         }
 
-        var dietary = readHtml('Dietary');
-        if (dietary) {
-            box.appendChild(htmlNode('div', 'warn-box', '飲食：' + dietary));
-            any = true;
+        if (isError(historyLists.Dietary)) {
+            mustRow('飲食', errorNode(historyLists.Dietary));
+        } else {
+            var dietary = activeText('Dietary', '；');
+            if (dietary) mustRow('飲食限制', el('div', 'warn-box hist-text', dietary));
         }
 
         if (isError(interactions)) {
@@ -614,21 +802,13 @@
     // ============================
     (function renderTgLinks() {
         if (!tgEnabled) return;
+        // 新增一律從各區塊標題的「+」；這裡只留不屬於某個區塊的操作
         var wrap = el('div', 'tg-actions');
-        wrap.appendChild(tgLink('+ 記一筆互動', tgUrl('padd', 'Interactions_JSON', 'none')));
-        [
-            ['Family_JSON', '家人'],
-            ['Gifts_JSON', '禮物'],
-            ['Key_Dates_JSON', '日期'],
-            ['Contacts_JSON', '聯絡'],
-        ].forEach(function (link) {
-            wrap.appendChild(tgLink('+ ' + link[1], tgUrl('padd', link[0], 'none')));
-        });
         wrap.appendChild(tgLink('改資料', tgUrl('pview', 'Display_Name', 'none')));
         wrap.appendChild(tgLink('照片', tgUrl('pphoto', 'Photo', 'none')));
         wrap.appendChild(tgLink('AI 分析與話題', tgUrl('ptopic', 'Display_Name', 'none')));
         wrap.appendChild(maskToggle());
-        wrap.appendChild(el('span', 'tg-hint', '長按項目 3 秒可刪除'));
+        wrap.appendChild(el('span', 'tg-hint', '點待追蹤：在 TG 標成完成｜長按 3 秒：清單項目刪除、文字欄位修改'));
         document.getElementById('person-tg').appendChild(wrap);
     })();
 
@@ -641,17 +821,16 @@
 
         // 興趣與喜好
         sections.push(section('interests', '興趣與喜好', '#2ecc71', [
-            htmlRow('興趣', 'Interests', true),
-            htmlRow('飲食', 'Food_Drink', true)
-        ]));
+            historyRow('興趣', 'Interests', { chips: true }),
+            historyRow('飲食', 'Food_Drink', { chips: true })
+        ], '', { section: 'interests' }));
 
         // 工作
-        var workLine = [readField('Company'), readField('Title')].filter(Boolean).join('・');
         sections.push(section('work', '工作', '#3498db', [
-            row('公司・職稱', workLine),
-            htmlRow('工作內容', 'Work_Detail'),
-            row('學歷', readField('Education'))
-        ]));
+            historyRow('職位', 'Company'),
+            historyRow('工作內容', 'Work_Detail'),
+            historyRow('學歷', 'Education')
+        ], '', { section: 'work' }));
 
         // 家庭
         var familyNodes = [];
@@ -665,14 +844,15 @@
                 familyNodes.push(longPressDelete(r, 'Family_JSON', index, m));
             });
         }
-        sections.push(section('family', '家庭', '#e91e63', familyNodes, isError(family) ? '' : family.length || '', 'Family_JSON'));
+        sections.push(section('family', '家庭', '#e91e63', familyNodes, isError(family) ? '' : family.length || '',
+            { field: 'Family_JSON' }));
 
         // 個性與價值觀
         sections.push(section('personality', '個性與價值觀', '#9b59b6', [
-            htmlRow('個性・價值觀・夢想・煩惱', 'Personality_Values'),
-            htmlRow('讚美素材', 'Praise'),
-            htmlRow('可以請教的事', 'Ask_Advice')
-        ]));
+            historyRow('個性・價值觀・夢想・煩惱', 'Personality_Values'),
+            historyRow('讚美素材', 'Praise'),
+            historyRow('可以請教的事', 'Ask_Advice')
+        ], '', { section: 'personality' }));
 
         // 互動紀錄（時間軸，最新一筆展開）與已完成的待追蹤
         var interactionNodes = [];
@@ -709,7 +889,7 @@
             }
         }
         sections.push(section('interactions', '互動紀錄', '#e67e22', interactionNodes,
-            isError(interactions) ? '' : interactions.length || '', 'Interactions_JSON'));
+            isError(interactions) ? '' : interactions.length || '', { field: 'Interactions_JSON' }));
 
         // 禮物
         var giftNodes = [];
@@ -723,7 +903,8 @@
                 giftNodes.push(longPressDelete(r, 'Gifts_JSON', entry.index, g));
             });
         }
-        sections.push(section('gifts', '禮物', '#f1c40f', giftNodes, isError(gifts) ? '' : gifts.length || '', 'Gifts_JSON'));
+        sections.push(section('gifts', '禮物', '#f1c40f', giftNodes, isError(gifts) ? '' : gifts.length || '',
+            { field: 'Gifts_JSON' }));
 
         // 重要日期（含生日）
         var dateNodes = [];
@@ -731,10 +912,10 @@
         var birthdayDate = parseDate(birthdayText);
         if (birthdayDate) {
             var birthdayAge = age(birthdayDate);
-            dateNodes.push(row('生日', (birthdayDate.year !== null ? birthdayText : pad2(birthdayDate.month) + '/' + pad2(birthdayDate.day)) +
-                (birthdayAge !== null ? '（' + birthdayAge + ' 歲）' : '') + '・還有 ' + daysUntilNext(birthdayDate) + ' 天'));
+            dateNodes.push(longPressEdit(row('生日', (birthdayDate.year !== null ? birthdayText : pad2(birthdayDate.month) + '/' + pad2(birthdayDate.day)) +
+                (birthdayAge !== null ? '（' + birthdayAge + ' 歲）' : '') + '・還有 ' + daysUntilNext(birthdayDate) + ' 天'), 'Birthday'));
         } else if (birthdayText) {
-            dateNodes.push(row('生日', birthdayText));
+            dateNodes.push(longPressEdit(row('生日', birthdayText), 'Birthday'));
         }
         if (isError(keyDates)) {
             dateNodes.push(errorNode(keyDates));
@@ -744,7 +925,8 @@
                 dateNodes.push(longPressDelete(r, 'Key_Dates_JSON', index, k));
             });
         }
-        sections.push(section('dates', '重要日期', '#1abc9c', dateNodes, '', 'Key_Dates_JSON'));
+        // 「+」可新增生日（沒填時卡片上沒有那一列可以長按）或重要日期
+        sections.push(section('dates', '重要日期', '#1abc9c', dateNodes, '', { section: 'dates' }));
 
         // 聯絡方式
         var contactNodes = [];
@@ -756,8 +938,8 @@
                 contactNodes.push(longPressDelete(r, 'Contacts_JSON', index, c));
             });
         }
-        contactNodes.push(htmlRow('溝通偏好', 'Comm_Prefs'));
-        sections.push(section('contacts', '聯絡方式', '#5dade2', contactNodes, '', 'Contacts_JSON'));
+        contactNodes.push(historyRow('溝通偏好', 'Comm_Prefs'));
+        sections.push(section('contacts', '聯絡方式', '#5dade2', contactNodes, '', { section: 'contacts' }));
 
         // 認識脈絡與基本資料
         var introducer = readField('Introducer_Note_ID');
@@ -771,34 +953,31 @@
             });
         }
         sections.push(section('context', '認識脈絡與基本資料', '#95a5a6', [
-            row('認識', [readField('Met_Date'), readField('Met_Where')].filter(Boolean).join('・')),
-            row('管道', readField('Met_Via')),
-            introducerNode ? row('介紹人', introducerNode) : null,
-            htmlRow('第一印象', 'First_Impression'),
-            htmlRow('外貌特徵', 'Appearance'),
-            row('出身', readField('Hometown')),
-            row('現居', readField('Residence')),
-            row('語言', readField('Languages')),
-            row('時區', readField('Timezone'))
-        ]));
+            // 文字欄位：長按開 TG 修改（認識日期與場合分成兩列，各自對應一個欄位）
+            longPressEdit(row('認識日期', readField('Met_Date')), 'Met_Date'),
+            longPressEdit(row('認識場合', readField('Met_Where')), 'Met_Where'),
+            longPressEdit(row('管道', readField('Met_Via')), 'Met_Via'),
+            introducerNode ? longPressEdit(row('介紹人', introducerNode), 'Introducer_Note_ID') : null,
+            longPressEdit(htmlRow('第一印象', 'First_Impression'), 'First_Impression'),
+            longPressEdit(htmlRow('外貌特徵', 'Appearance'), 'Appearance'),
+            longPressEdit(row('出身', readField('Hometown')), 'Hometown'),
+            historyRow('現居', 'Residence'),
+            historyRow('語言', 'Languages', { chips: true }),
+            historyRow('時區', 'Timezone'),
+            historyRow('關係', 'Relationship'),
+            historyRow('親密度（1–5）', 'Closeness')
+        ], '', { section: 'context' }));
 
         // 備註
         sections.push(section('notes', '備註', '#7f8c8d', [
-            htmlRow(null, 'Notes'),
+            longPressEdit(htmlRow(null, 'Notes'), 'Notes'),
             row('資料更新', readField('Updated_At'))
         ]));
 
         // 敏感話題（模糊顯示，點了才清楚）
-        var sensitive = readHtml('Sensitive');
-        if (sensitive) {
-            var blurred = htmlNode('div', 'blur-reveal', sensitive);
-            blurred.setAttribute('role', 'button');
-            blurred.addEventListener('click', function (e) {
-                e.stopPropagation();
-                blurred.className = 'revealed';
-            });
-            sections.push(section('sensitive', '敏感話題', '#c0392b', [row('不要主動提', blurred)]));
-        }
+        sections.push(section('sensitive', '敏感話題', '#c0392b', [
+            historyRow('不要主動提', 'Sensitive', { blur: true })
+        ], '', { field: 'Sensitive' }));
 
         sections.forEach(function (s) { if (s) mount.appendChild(s); });
     })();

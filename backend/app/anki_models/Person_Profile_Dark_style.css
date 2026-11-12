@@ -267,18 +267,23 @@ html, body {
     margin-bottom: 8px;
 }
 
+/* 一列：小字標題（.p-label）在上、內容在下，與各區塊的列同一種樣式 */
 .must-row {
-    display: flex;
-    gap: 8px;
-    align-items: baseline;
-    padding: 4px 0;
+    padding: 6px 0;
     font-size: 16px;
 }
 
-.must-label {
-    flex-shrink: 0;
-    color: #bdc3c7;
-    font-size: 14px;
+.must-row .warn-box {
+    margin: 2px 0 0;
+}
+
+/* 點一下開 TG（待追蹤：TG 先確認要不要標成完成） */
+.tap-target {
+    cursor: pointer;
+}
+
+.tap-target:hover {
+    color: #ffffff;
 }
 
 .followup-list {
@@ -442,6 +447,11 @@ html, body {
     background-color: #e74c3c;
 }
 
+/* 長按修改（文字欄位）的進度條用藍色，和刪除的紅色區分 */
+.lp-target.lp-edit::after {
+    background-color: #5dade2;
+}
+
 .lp-target.lp-active::after {
     width: 100%;
     transition: width 3s linear;
@@ -554,6 +564,58 @@ details[open] > summary .accordion-arrow {
     border-radius: 999px;
     background-color: #2f3b45;
     color: #d6e4ee;
+}
+
+/* ============================
+   會變的欄位：預設只顯示有效的，眼睛展開全部紀錄
+   ============================ */
+/* 歷史紀錄的眼睛：無框的小圖示＋筆數，與 TG 按鈕列裡有框的 AI 遮名字開關（.mask-toggle）區分 */
+.hist-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.hist-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 0 4px;
+    border-radius: 4px;
+    color: #666;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.hist-toggle:hover {
+    color: #bdc3c7;
+}
+
+.hist-toggle.is-open {
+    color: #5dade2;
+    background-color: rgba(93, 173, 226, 0.12);
+}
+
+.hist-line {
+    padding: 2px 0;
+}
+
+.hist-text {
+    white-space: pre-wrap;
+}
+
+.hist-date {
+    color: #7f8c8d;
+    font-size: 12px;
+    margin-left: 6px;
+}
+
+.hist-line.is-ended .hist-text {
+    color: #7f8c8d;
+    text-decoration: line-through;
 }
 
 .mini-action-btn {

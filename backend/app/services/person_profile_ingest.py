@@ -8,6 +8,8 @@ the user picks them.
 
 - LLM 與語音轉文字走能力路由的用途鍵 ``person_profile``（``/setconfig`` 可設定）。
 - LLM 的建議在這裡先過一次格式檢查（不合格的丟掉），寫入時 handler 還會再驗證一次。
+- 文字欄位的建議是取代或接在後面；會變的欄位（興趣、職位等）的建議是「新增一筆」或「劃掉某筆」，
+  日期都由系統填（登錄日計畫書 §4.6）。
 """
 
 from __future__ import annotations
@@ -24,7 +26,18 @@ from app.core.dependencies import get_template_engine
 from app.core.exceptions import LLMGenerationError
 from app.infrastructure.llm.routing import route
 from app.schemas.llm.person_profile import LLMPersonIngestResult
-from app.schemas.person_profile import Followup, Interaction, PersonCreateParams, append_field_html
+from app.schemas.person_profile import (
+    PERSON_HISTORY_FIELDS,
+    RETIRED_FIELDS,
+    Followup,
+    Interaction,
+    PersonCreateParams,
+    append_field_html,
+    entry_text,
+    history_from_text,
+    is_active,
+    item_fingerprint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +45,14 @@ INGEST_ROUTE = route("person_profile", "人脈卡：整理一段話", capabiliti
 
 WEEKDAYS = "一二三四五六日"
 
-#: LLM 可以建議更新的欄位：一般欄位。稱呼與聯絡日由使用者或系統維護；介紹人是另一筆筆記的 ID，LLM 無從得知。
-#: Fields the LLM may suggest.
+#: LLM 可以建議取代或接在後面的文字欄位。稱呼與聯絡日由使用者或系統維護；介紹人是另一筆筆記的 ID，
+#: LLM 無從得知；會變的欄位走 :data:`PERSON_HISTORY_FIELDS` 的新增、劃掉。Text fields the LLM may suggest.
 UPDATABLE_FIELDS: tuple[str, ...] = tuple(
     name
     for name in PersonCreateParams.model_fields
     if name not in ("Display_Name", "Last_Contact", "Contact_Cadence", "Introducer_Note_ID")
+    and name not in PERSON_HISTORY_FIELDS
+    and name not in RETIRED_FIELDS
 )
 
 _BREAK = re.compile(r"<\s*(br|/div|/p|/li)\s*/?\s*>", re.IGNORECASE)
@@ -49,8 +64,10 @@ class Proposal:
     """一項建議。One suggestion.
 
     Attributes:
-        kind: ``interaction``、``followup`` 或 ``field``。The kind.
-        data: 互動或待追蹤的項目（已驗證）；欄位建議為 ``{"field", "value", "mode", "reason"}``。
+        kind: ``interaction``、``followup``、``field``、``history_add`` 或 ``history_end``。The kind.
+        data: 互動或待追蹤的項目（已驗證）；文字欄位的建議為 ``{"field", "value", "mode", "reason"}``；
+            新增一筆為 ``{"field", "item", "text", "reason"}``（``item`` 交給 ``add_history``）；
+            劃掉一筆為 ``{"field", "index", "fingerprint", "text", "reason"}``。
     """
 
     kind: str
@@ -70,6 +87,25 @@ def _multiline(name: str) -> bool:
     return isinstance(extra, dict) and extra.get("x-ui") == "textarea"
 
 
+def _history_lines(name: str, items: list[object]) -> tuple[list[str], list[str]]:
+    """會變的欄位給 LLM 看的：有效的每筆附編號（``#序號+1``，劃掉時用），以及過去的（劃掉的）。
+
+    The current entries numbered for "end" proposals, and the past ones.
+    """
+    current, past = [], []
+    for index, item in enumerate(items):
+        text = plain_text(entry_text(name, item), 200)
+        # 不是物件的項目是格式壞掉的：不列（也不能被劃掉）
+        if not text or not isinstance(item, dict):
+            continue
+        if is_active(item):
+            added = str(item.get("added") or "")
+            current.append(f"#{index + 1} {text}" + (f"（{added} 起）" if added else ""))
+        else:
+            past.append(text)
+    return current, past
+
+
 def build_prompt(fields: dict[str, str], lists: dict[str, list[object]], text: str, today: date) -> str:
     """組出提示：今天、這個人目前已知的資料（避免重複建議）、使用者記下的話、可更新的欄位。
 
@@ -78,8 +114,13 @@ def build_prompt(fields: dict[str, str], lists: dict[str, list[object]], text: s
     known = [
         (name, PersonCreateParams.model_fields[name].title or name, plain_text(fields.get(name, "")))
         for name in PersonCreateParams.model_fields
-        if plain_text(fields.get(name, ""))
+        if name not in PERSON_HISTORY_FIELDS and name not in RETIRED_FIELDS and plain_text(fields.get(name, ""))
     ]
+    known_lists = []
+    for name, spec in PERSON_HISTORY_FIELDS.items():
+        current, past = _history_lines(name, lists.get(name, []))
+        if current or past:
+            known_lists.append((name, spec.title, current, past))
     open_followups = [
         str(f.get("item", ""))
         for f in lists.get("Followups_JSON", [])
@@ -94,15 +135,18 @@ def build_prompt(fields: dict[str, str], lists: dict[str, list[object]], text: s
         (name, PersonCreateParams.model_fields[name].title or name, PersonCreateParams.model_fields[name].description)
         for name in UPDATABLE_FIELDS
     ]
+    list_fields = [(name, spec.title, spec.single, spec.split) for name, spec in PERSON_HISTORY_FIELDS.items()]
     return get_template_engine().render(
         "prompts/anki/Person_Profile_Ingest.j2",
         display_name=plain_text(fields.get("Display_Name", "")),
         today=today.isoformat(),
         weekday=WEEKDAYS[today.weekday()],
         known_fields=known,
+        known_lists=known_lists,
         open_followups=open_followups,
         recent_interactions=[f"{i.get('date', '')}：{i.get('topics', '')}" for i in recent],
         updatable_fields=updatable,
+        list_fields=list_fields,
         text=text,
     )
 
@@ -145,18 +189,21 @@ async def transcribe(audio: bytes, filename: str) -> str:
     return await build_whisper(resolved.provider, resolved.model).transcribe(audio, filename)
 
 
-def proposals_from(result: LLMPersonIngestResult, fields: dict[str, str], today: date) -> list[Proposal]:
+def proposals_from(
+    result: LLMPersonIngestResult, fields: dict[str, str], lists: dict[str, list[object]], today: date
+) -> list[Proposal]:
     """把 LLM 的結果整理成可勾選的建議：格式不對的丟掉（日期不對的互動改成今天）。
 
     Turn the LLM result into proposals, dropping malformed ones.
 
     Args:
         result: LLM 的結果。The LLM result.
-        fields: 這個人目前的欄位（判斷欄位建議是否重複）。The current fields.
+        fields: 這個人目前的欄位（判斷文字欄位的建議是否重複）。The current fields.
+        lists: 解析好的清單（會變的欄位：找出要劃掉的那筆、判斷新增是否重複）。The parsed lists.
         today: 今天。Today.
 
     Returns:
-        建議，依互動、待追蹤、欄位的順序。The proposals.
+        建議，依互動、待追蹤、文字欄位、會變的欄位的順序。The proposals.
     """
     proposals: list[Proposal] = []
     interaction = result.interaction.model_dump()
@@ -188,17 +235,73 @@ def proposals_from(result: LLMPersonIngestResult, fields: dict[str, str], today:
             if value == current:
                 continue
             try:
-                PersonCreateParams.model_validate({"Display_Name": "x", name: value})
+                validated = PersonCreateParams.model_validate({"Display_Name": "x", name: value})
             except ValidationError:
                 logger.info("略過格式不對的欄位建議: %s=%s", name, value)
+                continue
+            # 存整理過的寫法（例如生日 3/15 → --03-15）
+            value = str(getattr(validated, name))
+            if value == current:
                 continue
         elif value in current:
             continue
         proposals.append(Proposal("field", {"field": name, "value": value, "mode": mode, "reason": update.reason}))
+
+    ended: set[tuple[str, int]] = set()
+    for change in result.list_updates:
+        name = change.field
+        if name not in PERSON_HISTORY_FIELDS:
+            logger.warning("略過不認得的清單欄位建議: %s（%s）", name, change.reason)
+            continue
+        items = lists.get(name, [])
+        if change.op == "end":
+            index = change.entry - 1
+            if not (0 <= index < len(items)) or not is_active(items[index]) or (name, index) in ended:
+                # 換工作時 end 對不上、add 卻留著，新舊職位會同時有效：記下有效的編號方便調提示詞
+                logger.warning(
+                    "略過對不上的劃掉建議: %s #%s（有效的編號 %s；理由：%s）",
+                    name, change.entry, [i + 1 for i, item in enumerate(items) if is_active(item)], change.reason,
+                )
+                continue
+            ended.add((name, index))
+            proposals.append(Proposal("history_end", {
+                "field": name, "index": index, "fingerprint": item_fingerprint(items[index]),
+                "text": entry_text(name, items[index]), "reason": change.reason,
+            }))
+            continue
+        item = _history_item(name, change.value, change.job_title, today)
+        if item is None:
+            logger.warning("略過格式不對的新增建議: %s=%r（職稱 %r；理由：%s）", name, change.value, change.job_title,
+                           change.reason)
+            continue
+        current = {entry_text(name, entry) for entry in items if is_active(entry)}
+        if entry_text(name, item) in current:
+            continue
+        proposals.append(Proposal("history_add", {
+            "field": name, "item": {k: v for k, v in item.items() if k not in ("added", "ended")},
+            "text": entry_text(name, item), "reason": change.reason,
+        }))
     return proposals
+
+
+def _history_item(name: str, value: str, job_title: str, today: date) -> dict[str, object] | None:
+    """新增建議的一筆（以該欄位的模型檢查，日期由系統填）；格式不對時為 None。The entry, or None."""
+    entries = history_from_text(name, value, today.isoformat(), title=job_title)
+    if not entries:
+        return None
+    model = PERSON_HISTORY_FIELDS[name].model
+    try:
+        for entry in entries:
+            model.model_validate(entry)
+    except ValidationError:
+        return None
+    if name == "Company":
+        return dict(entries[0])
+    # 可切的欄位寫入時 handler 會再切成多筆；這裡保留原文，預覽才看得出是一起建議的
+    return {"value": value.strip(), "added": today.isoformat(), "ended": ""}
 
 
 def field_html(field: str, current: str, value: str, mode: str) -> str:
     """欄位建議要寫入的 HTML（接在後面的分隔見 :func:`append_field_html`）。The field HTML to write."""
     new = html.escape(value.strip()).replace("\n", "<br>")
-    return append_field_html(field, current, new) if mode == "append" else new
+    return append_field_html(current, new) if mode == "append" else new

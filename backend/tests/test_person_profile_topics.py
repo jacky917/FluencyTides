@@ -61,8 +61,9 @@ def _result(text: str = "〔本人〕") -> dict:
 class TestMask:
     def test_prompt_contains_no_registered_names(self):
         prompt, mask = topics.build_prompt(
-            _fields(Notes="上次跟田中先生、Yuki Tanaka 和美咲一起吃飯，Momo 也在", Work_Detail="田中悠希負責 IT"),
-            _lists(Interactions_JSON=[{"date": "2026-10-01", "topics": "田中 悠希的轉職", "quote": "たなか ゆうき です"}]),
+            _fields(Notes="上次跟田中先生、Yuki Tanaka 和美咲一起吃飯，Momo 也在"),
+            _lists(Interactions_JSON=[{"date": "2026-10-01", "topics": "田中 悠希的轉職", "quote": "たなか ゆうき です"}],
+                   Work_Detail=[{"value": "田中悠希負責 IT", "added": "", "ended": ""}]),
             TODAY,
         )
         for name in ("田中", "悠希", "たなか ゆうき", "Yuki Tanaka", "Tanaka Yūki", "美咲", "Momo"):
@@ -93,6 +94,31 @@ class TestMask:
         for secret in ("離婚中", "黑框眼鏡", "123456789", "tanaka_line_id", "LINE："):
             assert secret not in prompt, secret
         assert "不想被主動提起的話題" in prompt
+
+    def test_history_fields_send_current_and_past(self):
+        """會變的欄位：有效的照常送，劃掉的也送並標明是過去的事（登錄日計畫書 §4.6）。"""
+        prompt, _ = topics.build_prompt(
+            _fields(),
+            _lists(
+                Interests=[{"value": "登山", "added": "", "ended": ""},
+                           {"value": "攝影", "added": "2024-01-01", "ended": "2026-05-01"}],
+                Company=[{"company": "Geekly", "title": "PM", "added": "", "ended": ""}],
+                Residence=[{"value": "大阪", "added": "", "ended": "2025-03-01"}],
+                Sensitive=[{"value": "離婚中", "added": "", "ended": "2026-01-01"}],
+            ),
+            TODAY,
+        )
+        assert "- 興趣：登山；以前：攝影（到 2026-05-01 為止）" in prompt
+        assert "- 職位：Geekly・PM" in prompt
+        assert "- 現居地：以前：大阪（到 2025-03-01 為止）" in prompt
+        assert "「以前：」後面是過去的事" in prompt
+        # 敏感話題劃掉了也不送內容，但照樣提醒
+        assert "離婚中" not in prompt and "不想被主動提起的話題" in prompt
+
+    def test_history_text(self):
+        assert topics.history_text("Interests", []) == ""
+        # 不是物件的項目是格式壞掉的，不當成過去的事送出
+        assert topics.history_text("Interests", [{"value": "攝影", "ended": ""}, "壞掉的"]) == "攝影"
 
     def test_whole_values_even_short(self):
         """完整值再短也遮；稱呼去掉敬稱的部分也遮。"""

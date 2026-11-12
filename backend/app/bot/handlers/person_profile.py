@@ -4,9 +4,10 @@
 Telegram flows of the person profile card.
 
 - ``/p 名字``：找人，回覆「見面前必看」摘要與操作按鈕。
-- 摘要的按鈕：記一筆互動、待追蹤（標成完成、刪除）、改資料、各清單（新增、刪除）、照片、全部資料。
-- 卡面的深連結（``pview``、``padd``、``pdel``、``pdone``、``pphoto``）由 ``commands.py`` 的 ``/start``
-  轉給 :func:`handle_person_link`。
+- 摘要的按鈕：記一筆互動、待追蹤（標成完成、刪除）、改資料（文字欄位）、各清單（新增、刪除；
+  會變的欄位另可劃掉、取消劃掉）、照片、全部資料。
+- 卡面的深連結（動作見 ``deep_link_parser.PERSON_VERBS``）由 ``commands.py`` 的 ``/start`` 轉給
+  :func:`handle_person_link`。``psec`` 是區塊的「+」：區塊有多個欄位時先問新增哪一項；``pend`` 是「劃掉」。
 - ``/newcard`` 選「人脈卡」時由 :func:`start_person_create` 建立新的人。
 - 「AI 分析與話題」：LLM 以諮商師的角度分析這個人並推薦話題，名字遮起來送出（:mod:`app.services.person_profile_topics`）。
 - 「用一段話記錄」：一段文字或語音經 LLM 整理成互動、待追蹤與欄位建議，勾選後才寫入
@@ -22,7 +23,7 @@ from __future__ import annotations
 
 import base64
 import logging
-from datetime import date, datetime
+from datetime import date
 from io import BytesIO
 
 from aiogram import F, Router, types
@@ -36,6 +37,7 @@ from pydantic import ValidationError
 from app.bot.utils import person_profile_view as view
 from app.bot.utils.formatting import anki_field_to_tg_text, escape_tg
 from app.bot.utils.texts import ANKI_UNREACHABLE, CARD_NOT_FOUND, error_detail, sync_suffix
+from app.core import clock
 from app.core.config import settings
 from app.core.exceptions import (
     AnkiFieldCorruptedError,
@@ -51,11 +53,14 @@ from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.anki import AnkiStoreMediaParams
 from app.schemas.person_profile import (
+    PERSON_HISTORY_FIELDS,
     PERSON_JSON_ITEMS,
     PERSON_NOTE_TYPE,
     TEXT_UNMASKED_TAG,
     PersonCreateParams,
+    active_texts,
     append_field_html,
+    is_active,
     item_fingerprint,
 )
 from app.schemas.tg.deep_link import PersonLinkAction
@@ -98,8 +103,8 @@ CANCEL_ROW = [_button("取消", "pp:cancel")]
 
 
 def _today() -> date:
-    """今天（伺服器時區）。Today in the server's time zone."""
-    return date.today()
+    """今天（``APP_TIMEZONE``）。Today in the configured time zone."""
+    return clock.today()
 
 
 # =============================================================================
@@ -108,9 +113,12 @@ def _today() -> date:
 
 
 async def _load(card_service: CardService, note_id: int) -> tuple[dict[str, str], dict[str, list[object]]] | None:
-    """讀出一個人：一般欄位與解析好的清單；不是人脈卡時為 None。格式壞掉的清單當成空的。
+    """讀出一個人：一般欄位與解析好的清單；不是人脈卡時為 None。
 
     Load a person's fields and parsed lists; None when not a person card.
+    清單含六種 JSON 清單與會變的欄位（:data:`PERSON_HISTORY_FIELDS`）。格式壞掉的清單（包括還沒跑
+    ``migrate_history_fields.py`` 的舊文字）當成空的，記一筆 warning；顯示的地方以
+    ``view.broken_lists`` 標出，寫入時 handler 會拒絕（不覆寫）。
     """
     loaded = await _load_with_tags(card_service, note_id)
     return loaded[:2] if loaded else None
@@ -125,11 +133,15 @@ async def _load_with_tags(
         return None
     fields = note_field_values(note)
     lists: dict[str, list[object]] = {}
-    for name in PERSON_JSON_ITEMS:
+    broken = []
+    for name in (*PERSON_JSON_ITEMS, *PERSON_HISTORY_FIELDS):
         try:
             lists[name] = AnkiJsonFieldManager.parse_field_string(fields.get(name, ""))
         except AnkiFieldCorruptedError:
             lists[name] = []
+            broken.append(name)
+    if broken:
+        logger.warning("人脈卡 note %s 的清單格式壞了（當成空的）: %s", note_id, "、".join(broken))
     return fields, lists, [str(tag) for tag in note.get("tags") or []]
 
 
@@ -257,7 +269,7 @@ async def _search(
         rows = []
         for note in notes:
             fields = {name: str(v.get("value", "")) for name, v in note.fields.items()}
-            label = " ".join(filter(None, [fields.get("Display_Name", ""), fields.get("Company", "")]))
+            label = " ".join(filter(None, [fields.get("Display_Name", ""), _active_company(fields.get("Company", ""))]))
             rows.append([_button(escape_tg(label, 40) or str(note.noteId), f"pp:s:{note.noteId}")])
         await message.answer(f"找到 {len(notes)} 位，要看哪一位？", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     except (FluencyTidesError, AnkiConnectError) as e:
@@ -297,16 +309,32 @@ async def handle_person_link(
                 await message.answer("❌ 這個連結不支援，請回 Anki 重新點。")
                 return
             await start_add(message, state, note_id, action.field_name)
-        elif action.verb in ("del", "done"):
+        elif action.verb == "edit":
+            # 長按文字欄位：直接進「改資料」的那個欄位（會變的欄位走清單，不在這裡）
+            if action.field_name not in view.EDITABLE_FIELDS:
+                await message.answer("❌ 這個連結不支援，請回 Anki 重新點。")
+                return
+            await _start_edit(message, state, card_service, note_id, action.field_name)
+        elif action.verb == "section":
+            if action.field_name not in view.SECTION_FIELDS:
+                await message.answer("❌ 這個連結不支援，請回 Anki 重新點。")
+                return
+            await _send_section_menu(message, note_id, action.field_name)
+        elif action.verb in ("del", "done", "end"):
             index, _, fingerprint = action.index.partition("_")
-            known = view.CODE_OF_LIST if action.verb == "del" else ("Followups_JSON",)
+            known = {"del": view.CODE_OF_LIST, "done": ("Followups_JSON",), "end": PERSON_HISTORY_FIELDS}[action.verb]
             if action.field_name not in known or not index.isdigit() or not fingerprint:
                 await message.answer("❌ 這個連結不支援，請回 Anki 重新點。")
                 return
             if action.verb == "del":
                 await _confirm_delete(message, card_service, note_id, action.field_name, int(index), fingerprint)
+            elif action.verb == "done":
+                # 卡片上點待追蹤：先確認，不直接標成完成（點到不一定是做完了）
+                await _confirm_done(message, card_service, note_id, int(index), fingerprint)
             else:
-                await _set_followup_status(message, note_service, card_service, note_id, int(index), fingerprint, "done")
+                await _set_history_status(
+                    message, note_service, note_id, action.field_name, int(index), fingerprint, ended=True
+                )
         elif action.verb == "photo":
             await _start_photo(message, state, note_id)
         elif action.verb == "topic":
@@ -367,6 +395,17 @@ async def on_person_button(
             )
             await message.edit_reply_markup(reply_markup=None)
             await send_summary(message, card_service, note_id, prefix="已刪除。" + sync_suffix(warning))
+        elif verb == "hx":
+            field_name = _list_arg(parts, 3)
+            if field_name not in PERSON_HISTORY_FIELDS:
+                raise _StaleButton
+            mode = _arg(parts, 6)
+            if mode not in ("e", "o"):
+                raise _StaleButton
+            await _set_history_status(
+                message, note_service, _int_arg(parts, 2), field_name, _int_arg(parts, 4), _arg(parts, 5),
+                ended=mode == "e",
+            )
         elif verb == "st":
             status = "done" if _arg(parts, 5) == "d" else "open"
             await _set_followup_status(
@@ -461,29 +500,56 @@ async def _send_full(message: types.Message, card_service: CardService, note_id:
     )
 
 
+def _active_company(raw: str) -> str:
+    """``Company`` 欄位原始值裡目前有效的職位（搜尋結果的按鈕用；格式壞了時為空）。The current positions."""
+    try:
+        items = AnkiJsonFieldManager.parse_field_string(raw)
+    except AnkiFieldCorruptedError:
+        return ""
+    return "／".join(active_texts("Company", items))
+
+
 async def _send_lists_menu(message: types.Message, card_service: CardService, note_id: int) -> None:
+    """各清單的按鈕（括號是筆數；會變的欄位是有效的筆數），兩個一排。The list buttons."""
     loaded = await _load(card_service, note_id)
     if loaded is None:
         await message.answer(CARD_NOT_FOUND)
         return
-    _, lists = loaded
-    rows = [
-        [_button(f"{PERSON_JSON_ITEMS[name][1]}（{len(lists.get(name, []))}）", f"pp:ls:{note_id}:{code}")]
-        for code, name in view.LIST_CODES.items()
-    ]
+    fields, lists = loaded
+    broken = view.broken_lists(fields)
+    buttons = []
+    for code, name in view.LIST_CODES.items():
+        items = lists.get(name, [])
+        count = sum(1 for item in items if is_active(item)) if view.is_history(name) else len(items)
+        label = "格式壞了" if name in broken else str(count)
+        buttons.append(_button(f"{view.list_title(name)}（{label}）", f"pp:ls:{note_id}:{code}"))
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
     rows.append([_button("回摘要", f"pp:s:{note_id}")])
     await message.answer("要看哪一個清單？", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
+async def _send_section_menu(message: types.Message, note_id: int, section: str) -> None:
+    """卡片區塊的「+」對應多個欄位時：先問要新增哪一項。Ask which field a section's "+" adds to."""
+    rows = []
+    for name in view.SECTION_FIELDS[section]:
+        if name in view.CODE_OF_LIST:
+            rows.append([_button(f"+ {view.list_title(name)}", f"pp:add:{note_id}:{view.CODE_OF_LIST[name]}")])
+        else:
+            # 文字欄位（例如生日）：進改資料的那個欄位
+            rows.append([_button(view.field_title(name), f"pp:ef:{note_id}:{view.EDITABLE_FIELDS.index(name)}")])
+    rows.append(CANCEL_ROW)
+    await message.answer("要新增哪一項？", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
 async def _send_list(message: types.Message, card_service: CardService, note_id: int, field_name: str) -> None:
-    """一個清單的每一筆，附刪除（與待追蹤的完成）按鈕。One list with its item buttons."""
+    """一個清單的每一筆，附刪除（與待追蹤的完成、會變的欄位的劃掉）按鈕。One list with its item buttons."""
     loaded = await _load(card_service, note_id)
     if loaded is None:
         await message.answer(CARD_NOT_FOUND)
         return
     items = loaded[1].get(field_name, [])
     code = view.CODE_OF_LIST[field_name]
-    title = PERSON_JSON_ITEMS[field_name][1]
+    title = view.list_title(field_name)
     lines = [f"<b>{title}</b>"]
     rows: list[list[InlineKeyboardButton]] = []
     shown = list(enumerate(items))[-20:]
@@ -494,8 +560,14 @@ async def _send_list(message: types.Message, card_service: CardService, note_id:
         if field_name == "Followups_JSON" and isinstance(item, dict):
             done = item.get("status") == "done"
             row.append(_button(f"{'復原' if done else '完成'} {index + 1}", f"pp:st:{note_id}:{index}:{fp}:{'o' if done else 'd'}"))
+        elif view.is_history(field_name) and isinstance(item, dict):
+            active = is_active(item)
+            row.append(_button(f"{'劃掉' if active else '取消劃掉'} {index + 1}",
+                               f"pp:hx:{note_id}:{code}:{index}:{fp}:{'e' if active else 'o'}"))
         rows.append(row)
-    if not items:
+    if field_name in view.broken_lists(loaded[0]):
+        lines.append(escape_tg(view.BROKEN_NOTE))
+    elif not items:
         lines.append("（還沒有）")
     elif len(items) > len(shown):
         lines.insert(1, f"<i>只列最近 {len(shown)} 筆</i>")
@@ -521,10 +593,43 @@ async def _confirm_delete(
         index = matches[0]
     code = view.CODE_OF_LIST[field_name]
     await message.answer(
-        f"要刪除這一筆{PERSON_JSON_ITEMS[field_name][1]}嗎？\n\n{view.item_line(field_name, items[index])}",
+        f"要刪除這一筆{view.list_title(field_name)}嗎？\n\n{view.item_line(field_name, items[index])}"
+        + ("\n\n<i>只是不再適用的話，用「劃掉」保留紀錄就好；刪除是給打錯的。</i>" if view.is_history(field_name) else ""),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             _button("確認刪除", f"pp:delok:{note_id}:{code}:{index}:{fingerprint}"),
             _button("取消", f"pp:s:{note_id}"),
+        ]]),
+        parse_mode="HTML",
+    )
+
+
+async def _confirm_done(
+    message: types.Message, card_service: CardService, note_id: int, index: int, fingerprint: str
+) -> None:
+    """卡片上點了待追蹤：顯示那一筆，問要不要標成完成；已經完成或找不到時說明。Confirm marking a follow-up done."""
+    loaded = await _load(card_service, note_id)
+    if loaded is None:
+        await message.answer(CARD_NOT_FOUND)
+        return
+    items = loaded[1].get("Followups_JSON", [])
+    if not (0 <= index < len(items) and item_fingerprint(items[index]) == fingerprint):
+        matches = [i for i, item in enumerate(items) if item_fingerprint(item) == fingerprint]
+        if len(matches) != 1:
+            await message.answer("❌ 這一筆已經變了或不在了（卡片畫面可能還沒更新），請在 Anki 同步後再看。")
+            return
+        index = matches[0]
+    item = items[index]
+    line = view.item_line("Followups_JSON", item)
+    if isinstance(item, dict) and item.get("status") == "done":
+        await message.answer(f"這一筆已經是完成的了。\n\n{line}",
+                             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("回摘要", f"pp:s:{note_id}")]]),
+                             parse_mode="HTML")
+        return
+    await message.answer(
+        f"要把這一筆待追蹤標成完成嗎？\n\n{line}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            _button("標成完成", f"pp:st:{note_id}:{index}:{fingerprint}:d"),
+            _button("還沒，回摘要", f"pp:s:{note_id}"),
         ]]),
         parse_mode="HTML",
     )
@@ -553,6 +658,34 @@ async def _set_followup_status(
     )
 
 
+async def _set_history_status(
+    message: types.Message,
+    note_service: NoteService,
+    note_id: int,
+    field_name: str,
+    index: int,
+    fingerprint: str,
+    *,
+    ended: bool,
+) -> None:
+    """劃掉（失效日＝今天）或取消劃掉會變的欄位的一筆，附反向的按鈕。End or restore a history entry."""
+    warning = await note_service.run_action(
+        note_id, "set_history_status",
+        {"field": field_name, "index": index, "fingerprint": fingerprint, "ended": ended},
+    )
+    code = view.CODE_OF_LIST[field_name]
+    title = escape_tg(view.list_title(field_name))
+    await message.answer(
+        (f"已劃掉這筆{title}（保留在紀錄裡）。" if ended else f"已取消劃掉，這筆{title}恢復有效。") + sync_suffix(warning),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            _button("復原" if ended else "劃掉", f"pp:hx:{note_id}:{code}:{index}:{fingerprint}:{'o' if ended else 'e'}"),
+            _button("看清單", f"pp:ls:{note_id}:{code}"),
+            _button("回摘要", f"pp:s:{note_id}"),
+        ]]),
+        parse_mode="HTML",
+    )
+
+
 # =============================================================================
 # 新增一筆（各清單的問答）
 # =============================================================================
@@ -563,7 +696,7 @@ async def start_add(message: types.Message, state: FSMContext, note_id: int, fie
     await state.clear()
     await state.set_state(PersonStates.add_step)
     await state.update_data(nid=note_id, field=field_name, step=0, item={})
-    await message.answer(f"<b>新增{PERSON_JSON_ITEMS[field_name][1]}</b>", parse_mode="HTML")
+    await message.answer(f"<b>新增{escape_tg(view.list_title(field_name))}</b>", parse_mode="HTML")
     await _ask_step(message, state)
 
 
@@ -682,6 +815,8 @@ async def _save_item(
             warning = await note_service.run_action(note_id, "add_followup", {"item": {"item": line, "type": "ask"}})
     elif field_name == "Followups_JSON":
         warning = await note_service.run_action(note_id, "add_followup", {"item": item})
+    elif view.is_history(field_name):
+        warning = await note_service.run_action(note_id, "add_history", {"field": field_name, "item": item})
     else:
         warning = await note_service.run_action(note_id, "add_item", {"field": field_name, "item": item})
     await send_summary(message, card_service, note_id, prefix="✅ 已儲存。" + sync_suffix(warning))
@@ -739,8 +874,9 @@ async def process_edit_value(
     value = "" if text == "清空" else text
     if value and not view.is_multiline(field_name):
         try:
-            # 格式檢查與建立時相同（日期、親密度等）；稱呼以外的欄位搭配假的稱呼
-            PersonCreateParams.model_validate({"Display_Name": "x", field_name: value})
+            # 格式檢查與建立時相同（日期等）；稱呼以外的欄位搭配假的稱呼。存整理過的寫法（例如生日 3/15 → --03-15）
+            validated = PersonCreateParams.model_validate({"Display_Name": "x", field_name: value})
+            value = str(getattr(validated, field_name))
         except ValidationError as e:
             detail = str(e.errors()[0].get("msg", ""))
             await message.answer(f"❌ 格式不對：{escape_tg(detail, 120)}，請重新輸入。", parse_mode="HTML")
@@ -778,7 +914,7 @@ async def _finish_edit(
     if append:
         loaded = await _load(card_service, note_id)
         current = loaded[0].get(field_name, "") if loaded else ""
-        new_value = append_field_html(field_name, current, new_value)
+        new_value = append_field_html(current, new_value)
     result = await note_service.update_fields(HANDLER_NAME, note_id, {field_name: new_value})
     await send_summary(message, card_service, note_id,
                        prefix=f"✅ 已更新「{escape_tg(view.field_title(field_name))}」。" +
@@ -823,7 +959,7 @@ async def process_photo(
         await bot.download_file(file.file_path, buffer)
         loaded = await _load(card_service, note_id)
         card_id = (loaded[0].get("Card_ID") if loaded else "") or str(note_id)
-        filename = f"person_{card_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+        filename = f"person_{card_id}_{clock.now().strftime('%Y%m%d_%H%M%S')}.jpg"
         await anki_client.store_media_file(
             params=AnkiStoreMediaParams(filename=filename, data=base64.b64encode(buffer.getvalue()).decode("ascii"))
         )
@@ -940,7 +1076,7 @@ async def _run_ingest(
         await status.edit_text(_ingest_failure(e), parse_mode="HTML")
         return
     proposals = [
-        {"kind": p.kind, "data": p.data} for p in ingest_service.proposals_from(result, fields, _today())
+        {"kind": p.kind, "data": p.data} for p in ingest_service.proposals_from(result, fields, lists, _today())
     ]
     if not proposals:
         await status.edit_text("這段話裡沒有整理出可以記下的內容。可以再說具體一點後重傳，或按取消。",
@@ -1097,6 +1233,23 @@ async def _toggle_proposal(message: types.Message, state: FSMContext, index: int
 _PROPOSAL_ACTIONS = {"interaction": "add_interaction", "followup": "add_followup"}
 
 
+def _proposal_action(kind: str, data: dict[str, object]) -> tuple[str, dict[str, object]]:
+    """一項建議（文字欄位以外）要執行的具名動作與參數。The action and parameters of a proposal.
+
+    Raises:
+        ValueError: 不認得的種類（程式錯誤）。On an unknown kind.
+    """
+    if kind in _PROPOSAL_ACTIONS:
+        return _PROPOSAL_ACTIONS[kind], {"item": data}
+    if kind == "history_add":
+        return "add_history", {"field": data["field"], "item": data["item"]}
+    if kind == "history_end":
+        return "set_history_status", {
+            "field": data["field"], "index": data["index"], "fingerprint": data["fingerprint"], "ended": True,
+        }
+    raise ValueError(f"未知的建議種類 {kind!r}")
+
+
 async def _save_proposals(
     message: types.Message, state: FSMContext, note_service: NoteService, card_service: CardService
 ) -> None:
@@ -1126,9 +1279,8 @@ async def _save_proposals(
             kind = proposals[i]["kind"]
             if kind == "field":
                 continue
-            if kind not in _PROPOSAL_ACTIONS:
-                raise ValueError(f"未知的建議種類 {kind!r}")
-            warning = await note_service.run_action(note_id, _PROPOSAL_ACTIONS[kind], {"item": proposals[i]["data"]})
+            action, params = _proposal_action(kind, proposals[i]["data"])
+            warning = await note_service.run_action(note_id, action, params)
             saved.add(i)
         field_indexes = [i for i in pending if proposals[i]["kind"] == "field"]
         if field_indexes:
