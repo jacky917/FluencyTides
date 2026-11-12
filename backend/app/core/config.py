@@ -232,7 +232,7 @@ class Settings(BaseSettings):
         default="",
         description=(
             "遊戲素材（語音、頭像）的根目錄。各遊戲的資料夾存在語料庫 game_profiles 的 "
-            "voice_dir / avatar_dir（相對於這裡），例：<根目錄>/voice/yuzusoft/SabbatOfTheWitch。"
+            "voice_dir / avatar_dir（相對於這裡），例：<根目錄>/yuzusoft/SabbatOfTheWitch/voice。"
             "只有在本機跑建卡管線時需要；正式機不跑管線，可以不設"
         ),
     )

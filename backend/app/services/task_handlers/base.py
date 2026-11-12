@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, ClassVar
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from app.core.exceptions import (
     FieldNotEditableError,
@@ -25,6 +26,64 @@ from app.core.exceptions import (
 )
 from app.infrastructure.anki.search import note_types_query
 from app.services.task_handlers.capabilities import GraphSpec, HandlerCapabilities, JsonFieldSpec, SearchField
+
+#: 生成前發現重複時的決定：``overwrite`` 新卡建好後刪掉舊卡、``allow`` 允許重複。
+#: The decision on a duplicate found before generating.
+DuplicateDecision = Literal["overwrite", "allow"]
+
+# 草稿輸入裡由系統放進去的鍵（不是使用者的輸入，``NoteService.resolve_draft_duplicate`` 寫入、
+# ``execute_draft`` 讀）。草稿只在記憶體，存在輸入裡就跟著草稿走，重試時也還在。
+#: 重複的決定（值見 ``DuplicateDecision``）。The key of the duplicate decision in a draft input.
+DUPLICATE_DECISION_KEY = "duplicate_decision"
+#: 這個決定針對的舊卡 ID。The key of the old card the decision is about.
+DUPLICATE_NOTE_KEY = "duplicate_note_id"
+#: 查重複失敗、略過了檢查時的原因（網頁的預覽顯示提醒）。The key of why the check was skipped.
+DUPLICATE_CHECK_SKIPPED_KEY = "duplicate_check_skipped"
+#: 以上三個系統鍵。All system keys in a draft input.
+DRAFT_SYSTEM_KEYS = (DUPLICATE_DECISION_KEY, DUPLICATE_NOTE_KEY, DUPLICATE_CHECK_SKIPPED_KEY)
+
+
+@dataclass(frozen=True)
+class DuplicateResolution:
+    """使用者對某一張舊卡做的重複決定。決定綁著舊卡：查到的換了一張，就不能沿用。
+
+    The user's decision about one specific existing card.
+
+    Attributes:
+        decision: 覆蓋或允許重複。The decision.
+        note_id: 決定針對的舊卡。The old card it is about.
+    """
+
+    decision: DuplicateDecision
+    note_id: int
+
+    @classmethod
+    def from_input(cls, draft_input: Mapping[str, object] | None) -> DuplicateResolution | None:
+        """草稿輸入裡存的決定；沒有或不完整時為 None。The decision stored in a draft input.
+
+        Args:
+            draft_input: 草稿的輸入。The draft input.
+
+        Returns:
+            決定，或 None。The decision, or None.
+        """
+        values = draft_input or {}
+        decision = values.get(DUPLICATE_DECISION_KEY)
+        note_id = values.get(DUPLICATE_NOTE_KEY)
+        if decision in ("overwrite", "allow") and isinstance(note_id, int):
+            return cls(decision, note_id)  # type: ignore[arg-type]
+        return None
+
+    def into_input(self, draft_input: Mapping[str, object]) -> dict[str, object]:
+        """寫進草稿輸入。Stores the decision in a draft input.
+
+        Args:
+            draft_input: 不含系統鍵的輸入。The input without system keys.
+
+        Returns:
+            新的輸入。The new input.
+        """
+        return {**draft_input, DUPLICATE_DECISION_KEY: self.decision, DUPLICATE_NOTE_KEY: self.note_id}
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -185,6 +244,45 @@ class BaseHandler(ABC):
             建立參數的草稿（可帶 ``tags``）。The draft create parameters, optionally with ``tags``.
         """
         raise NotImplementedError(f"{self.handler_name} 沒有草稿流程")
+
+    async def find_draft_duplicate(
+        self, card_service: CardService, parameters: Mapping[str, object]
+    ) -> dict[str, object] | None:
+        """生成草稿之前查 Anki 有沒有建過同一張卡（呼叫 LLM 之前，省下不必要的生成）。預設不查。
+
+        Look for an existing card before generating a draft; none by default.
+
+        Args:
+            card_service: 卡片服務。Card service.
+            parameters: ``DRAFT_PARAMS`` 驗證後的輸入。The validated draft input.
+
+        Returns:
+            舊卡的摘要（至少有 ``note_id``，其餘給網頁顯示），沒有重複時為 None。The old card, or None.
+
+        Raises:
+            AnkiConnectError: 查詢失敗（呼叫端決定要不要略過）。When the lookup fails.
+        """
+        return None
+
+    async def after_create(
+        self, card_service: CardService, parameters: Mapping[str, object], note_ids: list[int]
+    ) -> str | None:
+        """建卡成功之後、同步之前的後續處理（例如覆蓋時刪掉舊卡），刪除也會在同一次同步推上 AnkiWeb。預設不做事。
+
+        Follow-up after a successful create, before the sync; nothing by default.
+
+        新卡已經建立：這裡失敗時不能拋錯（使用者會以為沒建成而重建），改回傳提醒，接在建卡回應的
+        ``sync_warning``。
+
+        Args:
+            card_service: 卡片服務。Card service.
+            parameters: 建立參數（``CREATE_PARAMS`` 驗證後）。The create parameters.
+            note_ids: 剛建立的筆記。The created notes.
+
+        Returns:
+            給使用者的提醒，沒有時為 None。A warning, or None.
+        """
+        return None
 
     async def execute_read(
         self,

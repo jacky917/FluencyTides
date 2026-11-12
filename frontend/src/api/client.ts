@@ -18,7 +18,8 @@ import type {
   CardRelationCreate,
   CreateNoteRequest,
   CreateNoteResponse,
-  DraftResponse,
+  ServerDraft,
+  DuplicateDecision,
   TagCount,
   DeleteNoteResponse,
   GenericNoteDetail,
@@ -118,14 +119,71 @@ export const FluencyTidesAPI = {
     apiClient.get(`/handlers/${encodeURIComponent(handlerName)}/tags`),
 
   /**
-   * 網頁預覽流程：請 LLM 生成建卡草稿（不寫入 Anki）。
-   * Asks the LLM for a draft in the web preview flow; nothing is written.
+   * 網頁預覽流程：開始在背景生成建卡草稿（不寫入 Anki），立刻回傳生成中的草稿。全站同一時間只有一份，
+   * 已有草稿時回 409 `CREATE_SESSION_BUSY`，錯誤附上目前的草稿 `draft`。Anki 已有同一張卡時（外語糾錯）
+   * 回 409 `DUPLICATE_FOUND`，錯誤附上舊卡 `duplicate`；使用者決定後帶 `duplicateDecision` 重送。
+   * Starts generating a draft in the background; one draft site-wide.
    * @param handlerName - handler 名稱。Handler name.
    * @param params - 草稿輸入（依 `draft_schema`）。The draft input.
-   * @returns 預先填好的建立參數。The draft create parameters.
+   * @param duplicateDecision - 看過舊卡後的決定；第一次送出時省略。The duplicate decision.
+   * @returns 生成中的草稿。The generating draft.
    */
-  createDraft: (handlerName: string, params: Record<string, unknown>): Promise<DraftResponse> =>
-    apiClient.post(`/handlers/${encodeURIComponent(handlerName)}/draft`, { params }),
+  startDraft: (
+    handlerName: string,
+    params: Record<string, unknown>,
+    duplicateDecision?: DuplicateDecision,
+  ): Promise<ServerDraft> =>
+    apiClient.post(`/handlers/${encodeURIComponent(handlerName)}/drafts`, {
+      params,
+      duplicate_decision: duplicateDecision ?? null,
+    }),
+
+  /**
+   * 目前的建卡草稿（全站最多一份）；沒有時為 null。
+   * The current create draft, or null.
+   * @returns 草稿或 null。The draft or null.
+   */
+  getCurrentDraft: (): Promise<ServerDraft | null> => apiClient.get('/drafts/current'),
+
+  /**
+   * 存網頁的編輯狀態；版本不符時回 409 `DRAFT_VERSION_CONFLICT`，錯誤附上最新的草稿。
+   * Saves the web editing state; a stale version is a 409 with the latest draft.
+   * @param draftId - 草稿 ID。The draft.
+   * @param state - 編輯狀態。The editing state.
+   * @param version - 讀到的版本。The version read.
+   * @returns 存好的草稿。The saved draft.
+   */
+  saveDraftState: (draftId: string, state: Record<string, unknown>, version: number): Promise<ServerDraft> =>
+    apiClient.patch(`/drafts/${encodeURIComponent(draftId)}`, { state, version }),
+
+  /**
+   * 生成失敗後重試；帶 `params` 就換成新的輸入。
+   * Retries a failed draft, optionally with new input.
+   * @param draftId - 草稿 ID。The draft.
+   * @param version - 讀到的版本。The version read.
+   * @param params - 新的輸入；省略時沿用原本的。New input.
+   * @param duplicateDecision - 新的輸入在 Anki 已有同一張卡時的決定（同 `startDraft`）。省略時，原本的決定只在
+   *   查到的還是同一張舊卡時沿用，換了一張就回 409 `DUPLICATE_FOUND`。The duplicate decision.
+   * @returns 生成中的草稿。The generating draft.
+   */
+  retryDraft: (
+    draftId: string,
+    version: number,
+    params?: Record<string, unknown>,
+    duplicateDecision?: DuplicateDecision,
+  ): Promise<ServerDraft> =>
+    apiClient.post(`/drafts/${encodeURIComponent(draftId)}/retry`, {
+      version,
+      params,
+      duplicate_decision: duplicateDecision ?? null,
+    }),
+
+  /**
+   * 廢棄草稿（只限可建立、生成失敗的）。
+   * Discards a ready or failed draft.
+   * @param draftId - 草稿 ID。The draft.
+   */
+  discardDraft: (draftId: string): Promise<void> => apiClient.delete(`/drafts/${encodeURIComponent(draftId)}`),
 
   /**
    * 通用讀取：任何筆記類型，附上負責的 handler 與能不能改、刪。

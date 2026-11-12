@@ -149,6 +149,13 @@ class GenericNoteDetail(NoteDetail):
     )
 
 
+class DraftRef(BaseModel):
+    """從草稿建卡時指出是哪一份草稿；ID 與版本一定成對（版本不符回 409）。A draft and the version read."""
+
+    id: str = Field(description="草稿 ID")
+    version: int = Field(description="讀到的草稿版本")
+
+
 class CreateNoteRequest(BaseModel):
     """``POST /handlers/{name}/notes``（§4.2）。"""
 
@@ -161,6 +168,10 @@ class CreateNoteRequest(BaseModel):
     tags: list[str] = Field(
         default_factory=list,
         description="使用者加的標籤（不能有空白、不能是系統標籤、最多 20 個）；建卡後另外加上",
+    )
+    draft: DraftRef | None = Field(
+        default=None,
+        description="從預覽流程的草稿建立時帶上：建立成功後草稿清空；省略時是填表建卡（server_drafts 計畫書 D7）",
     )
 
 
@@ -178,27 +189,15 @@ class SuggestedTag(BaseModel):
     existing: bool = Field(description="這種卡片是否用過這個標籤（false 表示建卡時會新增一個標籤）")
 
 
-class DraftRequest(BaseModel):
-    """``POST /handlers/{name}/draft``：網頁預覽流程的草稿輸入。"""
-
-    params: dict[str, Any] = Field(default_factory=dict, description="草稿輸入，依 draft_schema")
-
-
-class DraftResponse(BaseModel):
-    """草稿：預先填好的建立參數。The draft create parameters."""
-
-    params: dict[str, Any] = Field(description="建立參數的草稿；勾選、修改後原樣送到 POST /handlers/{name}/notes")
-    suggested_tags: list[SuggestedTag] = Field(
-        default_factory=list, description="LLM 建議的標籤（建卡時放進請求的 tags）；沒有建議時為空"
-    )
-
-
 class CreateNoteResponse(BaseModel):
     """建卡結果。The created notes."""
 
     note_ids: list[int] = Field(description="一律是陣列（外語糾錯一次建母卡與多張子卡）")
     deck: str = Field(description="實際建立的牌組")
-    sync_warning: str | None = Field(description="寫入後同步 AnkiWeb 失敗時的提醒；卡片仍已建立")
+    sync_warning: str | None = Field(
+        description="建立後要注意的事（加標籤失敗、建立後的後續處理例如刪舊卡失敗、同步 AnkiWeb 失敗），"
+        "以換行分隔；卡片仍已建立"
+    )
 
 
 class UpdateNoteRequest(BaseModel):

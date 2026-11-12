@@ -5,9 +5,11 @@
  * - 卡片類型依 `capabilities.create.channels` 呈現：含 web 可選；只能在 TG、本機腳本建立的反灰並
  *   顯示原因；沒有任何管道的不顯示。前端不自行判斷，只看宣告（`lib/handlerCapabilities.ts`）。
  * - 填表流程（`flow="form"`）：表單由 `create_schema` 產生（`lib/createForm.ts`），不呼叫 LLM。
- * - 預覽流程（`flow="preview"`，目前只有三語對話卡）：見 `PreviewCreate.tsx`。
- * - 選的卡片類型、選單是否展開記在 localStorage，填到一半的內容存在 sessionStorage；鍵與頁面無關，
+ * - 預覽流程（`flow="preview"`，三語對話卡與外語糾錯）：見 `PreviewCreate.tsx`。
+ * - 選的卡片類型、選單是否展開、填到一半的內容都記在 localStorage（關掉分頁再開還在）；鍵與頁面無關，
  *   兩個入口看到的是同一份。
+ * - 全站同一時間只有一份建卡草稿（`docs/wip/server_drafts_FEAT_2026-11-04.md`）：有別種卡片的草稿時，
+ *   不顯示表單，改顯示那份草稿的提示（前往、廢棄）；填表建卡也要等那份處理完。
  * - 後端寫入後會同步 AnkiWeb 並等它完成，所以送出期間顯示「建立中、同步中」；422 的欄位錯誤標在欄位旁。
  *
  * The body of a create panel: the card type picker and the form for the
@@ -21,32 +23,35 @@ import { Eraser, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../../api/client'
 import { useCreatedNotice } from '../../hooks/useCreatedNotice'
-import { removeStored, useLocalStorage, useSessionStorage } from '../../hooks/useStoredState'
+import { useCurrentDraft, useSetCurrentDraft } from '../../hooks/useServerDraft'
+import { removeStored, useLocalStorage } from '../../hooks/useStoredState'
 import type { DeckStatus } from '../../hooks/useDeckStatus'
 import { describeApiError, failureTitle, isBackendError, retryTransient } from '../../lib/apiError'
 import {
   deckBlockedReason,
   deckBlocksForm,
   formErrorsFrom,
+  formParams,
   hasInput,
   initialRows,
   initialValues,
   missingRequired,
   normalizeRows,
   schemaFields,
-  submittedParams,
   type FormValue,
   type RowsValue,
   type FormErrors,
 } from '../../lib/createForm'
 import { createAvailability, type CreateAvailability } from '../../lib/handlerCapabilities'
+import { CURRENT_DRAFT_QUERY_KEY, draftFromError, timeLabel } from '../../lib/serverDraft'
 import { cn } from '../../lib/utils'
-import type { CreateNoteResponse, HandlerInfo } from '../../types/api'
+import type { CreateNoteResponse, HandlerInfo, ServerDraft } from '../../types/api'
 import { ErrorNote } from '../shared/ErrorNote'
 import { Button } from '../ui/button'
 import { Skeleton } from '../ui/skeleton'
 import { CollapsibleSection, CreatedNotice, DeckRequiredNotice, DeckSummary, RowsFieldInput, SchemaFieldInput, TagsFieldInput } from './formParts'
 import { PreviewCreate } from './PreviewCreate'
+import { useDiscardDraft } from './useDiscardDraft'
 import { TagInput } from './TagInput'
 
 /** 選單上的一種卡片。A handler on the picker. */
@@ -93,6 +98,9 @@ export function CreatePanelBody({ selectedDeck, deckStatus, onViewCreated }: Cre
   const selectable = entries.filter((entry) => entry.availability.kind === 'selectable').map((entry) => entry.handler)
   // 記住的那種還能從網頁建立就用它，否則用第一個可選的
   const current = selectable.find((handler) => handler.name === storedHandler) ?? selectable[0]
+  // 全站唯一的建卡草稿；是別種卡片的就先處理它
+  const { data: draft } = useCurrentDraft()
+  const otherDraft = draft && current && draft.handler !== current.name ? draft : null
 
   if (handlersPending) {
     return (
@@ -122,7 +130,17 @@ export function CreatePanelBody({ selectedDeck, deckStatus, onViewCreated }: Cre
           }}
         />
       </CollapsibleSection>
-      {current ? (
+      {current && otherDraft ? (
+        <OtherDraftNotice
+          draft={otherDraft}
+          title={(handlers ?? []).find((handler) => handler.name === otherDraft.handler)?.title ?? otherDraft.handler}
+          canGo={selectable.some((handler) => handler.name === otherDraft.handler)}
+          onGo={() => {
+            setStoredHandler(otherDraft.handler)
+            setPickerOpen(false)
+          }}
+        />
+      ) : current ? (
         // 換卡片類型時重新掛載，表單內容與錯誤一起重設
         current.capabilities.create.flow === 'preview' ? (
           <PreviewCreate
@@ -145,6 +163,72 @@ export function CreatePanelBody({ selectedDeck, deckStatus, onViewCreated }: Cre
         <p className="text-sm text-muted-foreground">目前沒有能在網頁建立的卡片類型。</p>
       )}
     </>
+  )
+}
+
+/**
+ * 有別種卡片的草稿時，取代表單的提示：網頁可建立的類型都能「前往」；可建立、失敗時可以廢棄。
+ * 填表建卡佔用中（`form_creating`，另一個分頁正在建立）時只說明，等它結束。
+ * Shown instead of the form while another card type's draft exists.
+ * @param props.draft - 那份草稿。The draft.
+ * @param props.title - 那種卡片的名稱。Its card type title.
+ * @param props.canGo - 能不能在這裡切過去（網頁可建立的類型）。Whether it can be switched to.
+ * @param props.onGo - 切到那種卡片。Switches to it.
+ * @returns 提示 JSX。Notice JSX.
+ */
+function OtherDraftNotice({
+  draft,
+  title,
+  canGo,
+  onGo,
+}: {
+  draft: ServerDraft
+  title: string
+  canGo: boolean
+  onGo: () => void
+}) {
+  const discard = useDiscardDraft()
+  if (draft.status === 'form_creating') {
+    return (
+      <p role="status" className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+        正在建立一張「{title}」，請稍候。一次只能建一張卡片。
+      </p>
+    )
+  }
+  const statusText = {
+    generating: `生成中（${timeLabel(draft.generation_started_at)} 開始）`,
+    ready: '已生成，等你建立或廢棄',
+    failed: '生成失敗',
+    creating: '建立中',
+    form_creating: '建立中',
+  }[draft.status]
+  const canDiscard = draft.status === 'ready' || draft.status === 'failed'
+  return (
+    <div role="status" className="space-y-3 rounded-md border px-3 py-3 text-sm">
+      <p>
+        目前有一份「{title}」的草稿（{statusText}）。一次只能建一張卡片：請先建立或廢棄那份草稿，才能建其他卡片。
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {canGo && (
+          <Button type="button" size="sm" onClick={onGo}>
+            前往那份草稿
+          </Button>
+        )}
+        {canDiscard && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={discard.isPending}
+            onClick={() => discard.discard(draft)}
+          >
+            廢棄
+          </Button>
+        )}
+      </div>
+      {discard.dialog}
+    </div>
   )
 }
 
@@ -225,11 +309,12 @@ function CreateForm({
   const queryClient = useQueryClient()
   const create = handler.capabilities.create
   const { fields, skipped } = schemaFields(handler.create_schema)
-  // 填到一半的內容存在這個分頁的 sessionStorage：切換頁面、重新整理都還在，建立成功或按「清除」才清掉
+  // 填到一半的內容存在 localStorage：關掉分頁再開還在，建立成功或按「清除」才清掉
   const formKey = `generate_form:${handler.name}`
   const tagsKey = `generate_tags:${handler.name}`
-  const [storedValues, setStoredValues] = useSessionStorage<Record<string, FormValue>>(formKey, {})
-  const [tags, setTags] = useSessionStorage<string[]>(tagsKey, [])
+  const [storedValues, setStoredValues] = useLocalStorage<Record<string, FormValue>>(formKey, {})
+  const [tags, setTags] = useLocalStorage<string[]>(tagsKey, [])
+  const setCurrentDraft = useSetCurrentDraft()
   const values = useMemo<Record<string, FormValue>>(
     () => normalizeRows(fields, { ...initialValues(fields), ...initialRows(fields), ...storedValues }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -248,20 +333,29 @@ function CreateForm({
       FluencyTidesAPI.createNote(handler.name, {
         deck: deck!,
         note_type: create.note_type!,
-        params: submittedParams(fields, values),
+        params: formParams(fields, values),
         tags,
       }),
     onSuccess: (data) => {
       setResult(data)
       setErrors(null)
-      removeStored('session', formKey)
-      removeStored('session', tagsKey)
+      removeStored('local', formKey)
+      removeStored('local', tagsKey)
       toast.success(`已建立 ${data.note_ids.length} 張筆記`, { description: `牌組：${data.deck}` })
       if (data.sync_warning) toast.warning('同步 AnkiWeb 失敗', { description: data.sync_warning })
       for (const queryKey of [['graph'], ['cards'], ['decks'], ['tags']]) queryClient.invalidateQueries({ queryKey })
     },
+    // 建卡期間佔用了全站的建卡槽位；結束後重讀，其他畫面才不會停在「建立中」
+    onSettled: () => queryClient.invalidateQueries({ queryKey: CURRENT_DRAFT_QUERY_KEY }),
     onError: (err) => {
       setResult(null)
+      // 另一個地方剛開始了一份草稿或正在建卡：放進快取（是別種卡片的就改顯示那份草稿的提示），並說明原因
+      const latest = draftFromError(err)
+      if (latest !== undefined) {
+        setCurrentDraft(latest)
+        toast.error('現在不能建立', { description: describeApiError(err).message })
+        return
+      }
       const mapped = formErrorsFrom(err, fields.map((field) => field.name))
       if (mapped) {
         setErrors(mapped)
@@ -380,8 +474,8 @@ function CreateForm({
             mutation.isPending || (!Object.values(storedValues).some(hasInput) && tags.length === 0)
           }
           onClick={() => {
-            removeStored('session', formKey)
-            removeStored('session', tagsKey)
+            removeStored('local', formKey)
+            removeStored('local', tagsKey)
             setErrors(null)
             setResult(null)
           }}

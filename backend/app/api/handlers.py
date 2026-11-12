@@ -4,8 +4,8 @@ Task Handlers REST API 路由模組（handlers 計畫書 D5、§4）。
 Task handlers REST API router module.
 
 - ``GET    /handlers``                               所有 handler、能力與建卡表單
-- ``POST   /handlers/{name}/draft``                  網頁預覽流程的草稿（LLM 生成，不寫入）
-- ``POST   /handlers/{name}/notes``                  建卡（201），可帶使用者的標籤
+- ``POST   /handlers/{name}/drafts``                 網頁預覽流程：開始在背景生成草稿（202，server_drafts 計畫書）
+- ``POST   /handlers/{name}/notes``                  建卡（201），可帶使用者的標籤與草稿 ID
 - ``GET    /handlers/{name}/tags``                   這種卡片用過的標籤與次數（自動完成、推薦用）
 - ``GET    /handlers/{name}/notes/{note_id}``        handler 讀取
 - ``PATCH  /handlers/{name}/notes/{note_id}``        修改欄位
@@ -16,11 +16,18 @@ Task handlers REST API router module.
 
 全部經過 ``NoteService``（能力檢查、筆記歸屬檢查、寫入後同步），不直接呼叫 handler。業務錯誤由全域
 handler 轉成 ``{"error_code", "message"}``（D6）；建立參數驗證失敗是 FastAPI 標準的 422，``loc`` 為
-``["body", "params", 欄位]``。通用的筆記讀取與牌組清單在 ``app/api/notes.py``。
+``["body", "params", 欄位]``。通用的筆記讀取與牌組清單在 ``app/api/notes.py``，草稿的讀取、修改、
+重試與廢棄在 ``app/api/drafts.py``。
+
+網頁的建卡與生成先經過全站的建卡槽位（``CreateSession``）：同一時間只有一份草稿或一張建立中的卡片。
+TG 與本機腳本不經過這裡（server_drafts 計畫書 D2、D10）。
 
 Every endpoint goes through ``NoteService``; business errors become
 ``{"error_code", "message"}`` and invalid create parameters a standard 422.
 """
+
+import asyncio
+import logging
 
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.exceptions import RequestValidationError
@@ -29,12 +36,11 @@ from pydantic import ValidationError
 from app.core.auth import verify_api_key
 from app.core.dependencies import get_note_service
 from app.schemas.card import ErrorResponse
+from app.schemas.drafts import DraftOut, StartDraftRequest
 from app.schemas.notes import (
     CreateNoteRequest,
     CreateNoteResponse,
     DeleteNoteResponse,
-    DraftRequest,
-    DraftResponse,
     GraphResponse,
     HandlerInfo,
     NoteDetail,
@@ -46,7 +52,10 @@ from app.schemas.notes import (
     UpdateNoteRequest,
     UpdateNoteResponse,
 )
+from app.services.create_session import CreateSession, get_create_session
 from app.services.note_service import NoteService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/handlers",
@@ -57,6 +66,12 @@ router = APIRouter(
 _NOT_FOUND = {404: {"model": ErrorResponse, "description": "handler 或筆記不存在"}}
 _REFUSED = {400: {"model": ErrorResponse, "description": "操作不開放、筆記不歸這個 handler、欄位不能修改或不存在"}}
 _ANKI_ERROR = {502: {"model": ErrorResponse, "description": "AnkiConnect 連不上或回傳錯誤"}}
+_SESSION_BUSY = "已經有一份草稿或一張建立中的卡片（CREATE_SESSION_BUSY）；回應附上目前的草稿 draft"
+_DUPLICATE_FOUND = (
+    "Anki 已有同一張卡（DUPLICATE_FOUND，例如外語糾錯的同一句原文），回應附上舊卡 duplicate；"
+    "帶 duplicate_decision 重送才會生成"
+)
+_DRAFT_STATE = "草稿不能建立（DRAFT_BUSY）或版本不是最新的（DRAFT_VERSION_CONFLICT）；回應附上目前的草稿 draft"
 
 
 @router.get(
@@ -77,8 +92,8 @@ async def list_handlers(note_service: NoteService = Depends(get_note_service)) -
     summary="透過 handler 建卡",
     responses={
         **_REFUSED,
-        **_NOT_FOUND,
-        409: {"model": ErrorResponse, "description": "首欄位重複"},
+        404: {"model": ErrorResponse, "description": "handler 不存在，或帶的草稿已不在（DRAFT_NOT_FOUND）"},
+        409: {"model": ErrorResponse, "description": f"首欄位重複；{_SESSION_BUSY}；{_DRAFT_STATE}"},
         422: {"description": "筆記類型不能建立（ErrorResponse），或參數驗證失敗（detail）"},
         **_ANKI_ERROR,
     },
@@ -87,17 +102,36 @@ async def create_note(
     handler_name: str,
     body: CreateNoteRequest,
     note_service: NoteService = Depends(get_note_service),
+    session: CreateSession = Depends(get_create_session),
 ) -> dict[str, object]:
     """建卡，寫入後同步並等它完成。Create notes and sync afterwards.
+
+    寫入前先佔用全站的建卡槽位：帶 ``draft`` 時把那份草稿改成建立中，否則槽位必須是空的；
+    成功後清空槽位，失敗時草稿退回可建立（server_drafts 計畫書 D2、D7）。``NoteService.create`` 在寫入
+    Anki 之後才拋錯（或請求被取消）也算失敗，草稿會退回可建立（計畫書 §11.4）。
+
+    ``begin_create`` 刻意放在 ``try`` 外面：佔用失敗時不能呼叫 ``finish_create``，否則會動到別人的草稿。
 
     Raises:
         RequestValidationError: 建立參數驗證失敗；``loc`` 前面接上 ``body``、``params``，
             前端可以把錯誤對到表單欄位。On invalid parameters.
+        CreateSessionBusyError、DraftNotFoundError、DraftBusyError、DraftVersionConflictError:
+            建卡槽位不允許（見 ``CreateSession.begin_create``）。The slot is not available.
     """
+    draft_id, version = (body.draft.id, body.draft.version) if body.draft else (None, None)
+    claimed = await session.begin_create(handler_name, draft_id, version)
+    created = False
     try:
-        return await note_service.create(handler_name, body.deck, body.note_type, body.params, tags=body.tags)
+        result = await note_service.create(handler_name, body.deck, body.note_type, body.params, tags=body.tags)
+        created = True
+        return result
     except ValidationError as exc:
         raise RequestValidationError(_params_errors(exc)) from exc
+    except asyncio.CancelledError:
+        logger.warning("建卡請求被取消，Anki 可能已寫入；草稿 %s 退回可建立", claimed)
+        raise
+    finally:
+        await session.finish_create(claimed, created=created)
 
 
 def _params_errors(exc: ValidationError) -> list[dict[str, object]]:
@@ -125,31 +159,43 @@ async def list_tags(handler_name: str, note_service: NoteService = Depends(get_n
 
 
 @router.post(
-    "/{handler_name}/draft",
-    response_model=DraftResponse,
-    summary="網頁預覽流程：請 LLM 生成建卡草稿",
-    description="只生成、不寫入 Anki。回傳預先填好的建立參數，網頁勾選、修改後送到 POST /handlers/{name}/notes。",
+    "/{handler_name}/drafts",
+    response_model=DraftOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="網頁預覽流程：開始在背景生成建卡草稿",
+    description=(
+        "驗證輸入後立刻回 202，LLM 在背景生成；結果用 GET /drafts/current 讀。全站同一時間只有一份草稿，"
+        "已經有草稿時回 409 CREATE_SESSION_BUSY。只生成、不寫入 Anki。"
+    ),
     responses={
         **_REFUSED,
         **_NOT_FOUND,
-        422: {"description": "輸入驗證失敗（detail），或 LLM 回傳的格式不對（ErrorResponse）"},
-        502: {"model": ErrorResponse, "description": "LLM 服務錯誤"},
+        409: {"model": ErrorResponse, "description": f"{_SESSION_BUSY}；{_DUPLICATE_FOUND}"},
+        422: {"description": "輸入驗證失敗（detail）"},
     },
 )
-async def draft_note(
+async def start_draft(
     handler_name: str,
-    body: DraftRequest,
+    body: StartDraftRequest,
     note_service: NoteService = Depends(get_note_service),
+    session: CreateSession = Depends(get_create_session),
 ) -> dict[str, object]:
-    """生成草稿。Generate a draft.
+    """開始生成草稿。Start generating a draft.
+
+    槽位是空的才查重複（例如外語糾錯的同一句原文）：已經有草稿時 ``session.start`` 本來就會回 409，
+    不必先查 Anki。
 
     Raises:
         RequestValidationError: 輸入驗證失敗；``loc`` 前面接上 ``body``、``params``。On invalid input.
+        DuplicateFoundError: Anki 已有同一張卡，還沒決定怎麼處理（D10.2）。A duplicate needs a decision.
     """
     try:
-        return await note_service.draft(handler_name, body.params)
+        parameters = note_service.validate_draft_input(handler_name, body.params)
     except ValidationError as exc:
         raise RequestValidationError(_params_errors(exc)) from exc
+    if session.snapshot() is None:
+        parameters = await note_service.resolve_draft_duplicate(handler_name, parameters, body.duplicate_decision)
+    return await session.start(handler_name, parameters, lambda p: note_service.generate_draft(handler_name, p))
 
 
 @router.get(

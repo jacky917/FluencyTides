@@ -100,10 +100,10 @@
 
 ## 6. 網頁補齊 TG 能力（來源：`docs/archive/web_ui_parity_FEAT_2026-10-18.md` §8）
 
+（原 W1 對話卡、W2 外語糾錯的網頁建卡已併入 `docs/wip/server_drafts_FEAT_2026-11-04.md` D10 並實作，2026-11-07 刪除。）
+
 | # | 優先 | 項目 | 內容 |
 |---|---|---|---|
-| W1 | 中 | 對話卡（單語）網頁建卡 | `speaking_coach` 的 `CreateCapability` 開放 `web`；`bot/handlers/fsm/speaking_fsm.py` 改經 `NoteService` 建卡，不再自己組 note。要先決定 Card_ID 格式：TG 用 `SC_%Y%m%d_%H%M%S`，handler 用 uuid4（原計畫建議統一 uuid4，同一秒建兩張不會撞） |
-| W2 | 中 | 外語糾錯網頁建卡 | 沿用三語卡的預覽流程（`DRAFT_PARAMS` 與 `/draft`），網頁做「輸入 → 預覽 → 勾選子卡 → 寫入」；重複檢查與覆蓋舊卡（先建新卡，成功後才刪舊母卡與子卡）從 `expression_fsm.py` 移進 handler，TG 改呼叫同一份 |
 | W3 | 低 | 網頁開放具名動作前，動作參數錯誤改回 4xx | handler 的 `execute_update` 參數錯誤拋 `ValueError`，會變成 500 並發 TG 當機警報；目前動作只從 TG 呼叫。網頁要開放動作（例如 media_upload 的 `add_audio`）時一併改成 `FluencyTidesError` 子類 |
 | W4 | 低 | 能力路由的 503 拆成兩個錯誤代碼 | 寫入前讀不到 DB（確定沒寫入）與寫入時異常（結果未知）共用 `ROUTE_STORE_UNAVAILABLE`，網頁只能用不斷言的措辭 |
 

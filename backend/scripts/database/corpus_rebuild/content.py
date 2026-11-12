@@ -31,8 +31,8 @@ GAME_PROFILE = {
     "title_zh_hant": "魔女的夜宴",
     "engine": "kirikiri_packinone",
     "languages": ["ja-JP", "zh-Hant"],
-    "voice_dir": "voice/yuzusoft/SabbatOfTheWitch",
-    "avatar_dir": "avatar/yuzusoft/SabbatOfTheWitch",
+    "voice_dir": "yuzusoft/SabbatOfTheWitch/voice",
+    "avatar_dir": "yuzusoft/SabbatOfTheWitch/avatar",
     "legacy_source": "サノバウィッチ",
 }
 # F1：舊表刪掉、要用原 id 還原的 6 句 / ids deleted from the legacy table

@@ -42,12 +42,13 @@ from app.services.story.errors import (
     StoryLocateParamError,
     StoryNodeNotFoundError,
     StorySaveSlotError,
+    StorySaveTemplateError,
     StorySaveUnavailableError,
 )
 from app.services.story.graph_index import GraphIndex
 from app.services.story.registry import get_story_game
 from app.services.story.repository import BuildRecord, LineBgm, LineRecord, StoryRepository
-from app.services.story.saves import SaveMeta, save_writer_for
+from app.services.story.saves import SaveFormatError, SaveMeta, save_writer_for
 
 logger = logging.getLogger(__name__)
 
@@ -295,7 +296,8 @@ class StoryService:
         index = await self._index(build.build_id)
         variables = game.save_variables(index, node_key, config, route_preset)
         thumb = None
-        if line.thumb:
+        # 只讀寫入器能用的縮圖格式：縮圖物件是 JPEG，用 BMP 縮圖的寫入器（千戀＊萬花）讀了也用不上
+        if line.thumb and getattr(writer, "thumb_format", "jpeg") == "jpeg":
             try:
                 thumb = await self.assets.get(self.thumb_key(game_id, line.thumb))
             except StoryAssetUnavailableError:
@@ -303,7 +305,13 @@ class StoryService:
                 thumb = None
         meta = SaveMeta(last_text=game.last_text(line), thumb=thumb,
                         store_time_ms=int(datetime.now(timezone.utc).timestamp() * 1000))
-        data = writer.write(template, position, variables, meta)
+        try:
+            data = writer.write(template, position, variables, meta)
+        except SaveFormatError as exc:
+            logger.exception("產生存檔失敗：game=%s line=%s template=%s", game_id, line_id, config.saves.template)
+            raise StorySaveTemplateError(
+                f"存檔樣板 {config.saves.template} 格式不對，無法產生存檔（{exc}）；請用正確的樣板重新擷取並匯入"
+            ) from exc
         media = "image/jpeg" if data[:2] == b"\xff\xd8" else "application/octet-stream"
         return SaveFile(data, slot.filename, media)
 

@@ -5,13 +5,13 @@ import {
   deckBlockedReason,
   deckBlocksForm,
   formErrorsFrom,
+  formParams,
   hasInput,
   initialRows,
   initialValues,
   missingRequired,
   normalizeRows,
   schemaFields,
-  submittedParams,
 } from './createForm'
 
 /** 後端標準建立產生的 schema（向 Anki 查欄位，第一個欄位必填）。 */
@@ -141,6 +141,46 @@ describe('deckBlocksForm', () => {
   })
 })
 
+describe('一行一筆的陣列欄位（x-ui: lines）', () => {
+  const schema = {
+    properties: {
+      prompt: { type: 'string', title: '目標台詞' },
+      references: { type: 'array', items: { type: 'string' }, title: '參考回答', 'x-ui': 'lines', maxItems: 100 },
+      tags: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['prompt'],
+  }
+
+  it('畫成多行文字框；沒有 x-ui: lines 的陣列照樣略過', () => {
+    const { fields, skipped } = schemaFields(schema)
+    expect(fields.map((f) => f.name)).toEqual(['prompt', 'references'])
+    expect(fields[1]).toMatchObject({ title: '參考回答', multiline: true, lines: true, defaultValue: '' })
+    expect(fields[0].lines).toBe(false)
+    expect(skipped).toEqual(['tags'])
+  })
+
+  it('送出時拆成陣列、去掉前後空白與空行，其餘欄位原樣', () => {
+    const { fields } = schemaFields(schema)
+    expect(formParams(fields, { prompt: ' Hi ', references: ' A \r\n\n  \nB\rC ' })).toEqual({
+      prompt: ' Hi ',
+      references: ['A', 'B', 'C'],
+    })
+    expect(formParams(fields, { prompt: 'x' })).toEqual({ prompt: 'x', references: [] })
+  })
+
+  it('陣列某一筆的 422 標在欄位上，註明第幾筆', () => {
+    const error = {
+      response: {
+        status: 422,
+        data: { detail: [{ loc: ['body', 'params', 'references', 1], msg: '太長' }] },
+      },
+    }
+    expect(formErrorsFrom(error, ['prompt', 'references'])).toEqual({
+      fields: { references: '第 2 筆：太長' },
+      other: [],
+    })
+  })
+})
 
 /** 人脈卡建立參數的節錄（Pydantic 的 model_json_schema）：一列一筆的欄位。 */
 const personSchema = {
@@ -198,7 +238,7 @@ describe('rows fields', () => {
 
   it('drops empty rows and stale keys when submitting', () => {
     expect(
-      submittedParams(fields, {
+      formParams(fields, {
         Title: '社長',
         Display_Name: '田中さん',
         Languages: ['中文', ' ', ''],
@@ -244,6 +284,6 @@ describe('rows fields', () => {
         data: { detail: [{ loc: ['body', 'params', 'Company', 'list[PositionInput]', 0], msg: '公司與職稱至少要填一個' }] },
       },
     }
-    expect(formErrorsFrom(error, ['Company'])?.fields.Company).toBe('公司與職稱至少要填一個')
+    expect(formErrorsFrom(error, ['Company'])?.fields.Company).toBe('第 1 筆：公司與職稱至少要填一個')
   })
 })

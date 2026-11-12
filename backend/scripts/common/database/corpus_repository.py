@@ -502,7 +502,7 @@ def assets_dir(relative: str | None, *, what: str = "素材資料夾") -> Path:
     Join a relative ``game_profiles`` directory onto ``GAME_ASSETS_ROOT``.
 
     Args:
-        relative: 相對路徑（例 ``voice/yuzusoft/SabbatOfTheWitch``）。Relative path.
+        relative: 相對路徑（例 ``yuzusoft/SabbatOfTheWitch/voice``）。Relative path.
         what: 錯誤訊息中的名稱。Name used in error messages.
 
     Returns:

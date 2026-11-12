@@ -67,4 +67,6 @@ ENV APP_GIT_SHA=${GIT_SHA}
 EXPOSE 8000
 
 # 9. 啟動指令 (FastAPI 實例位於 app/main.py)
+#    不能加 --workers：網頁的建卡草稿與全站建卡鎖只存在這個 process 的記憶體
+#    （app/services/create_session.py，docs/wip/server_drafts_FEAT_2026-11-04.md R4），多個 worker 會各有一份
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

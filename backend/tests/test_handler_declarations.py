@@ -74,9 +74,10 @@ class TestInitialCapabilities:
 
     def test_speaking_coach(self):
         assert _caps("speaking_coach") == {
+            # 網頁填表建卡（server_drafts 計畫書 D10.1）；TG 的 /newcard 在 D10.3 才移除
             "create": {
-                "supported": False, "channels": ["tg"], "flow": None, "deck": None,
-                "fixed_deck": None, "note_type": None, "reason": "網頁建卡尚未開放；可在 TG 建立",
+                "supported": True, "channels": ["web", "tg"], "flow": "form", "deck": "selected",
+                "fixed_deck": None, "note_type": "Speaking_Coach_Dark", "reason": None,
             },
             "read": {"supported": True, "reason": None},
             "update_fields": {"supported": False, "reason": "對話卡的欄位修改尚未開放"},
@@ -101,10 +102,10 @@ class TestInitialCapabilities:
 
     def test_expression_correction(self):
         caps = _caps("expression_correction")
+        # 網頁的預覽流程（server_drafts 計畫書 D10.2）；TG 的 /newcard 在 D10.3 才移除
         assert caps["create"] == {
-            "supported": True, "channels": ["tg"], "flow": "preview", "deck": "fixed",
-            "fixed_deck": "日本語::外語糾錯::母卡片", "note_type": "Expression_Master_Dark",
-            "reason": "需要先預覽 LLM 結果再勾選子卡，目前只能在 TG 建立",
+            "supported": True, "channels": ["web", "tg"], "flow": "preview", "deck": "fixed",
+            "fixed_deck": "日本語::外語糾錯::母卡片", "note_type": "Expression_Master_Dark", "reason": None,
         }
         assert caps["update_fields"] == {"supported": False, "reason": "目前只支援新增音檔"}
         assert caps["delete"] == {"supported": False, "reason": "外語糾錯的母子卡刪除尚未開放"}
@@ -129,9 +130,12 @@ class TestInitialCapabilities:
         assert verb_pair.CAPABILITIES.existing_note_ops() == core_verb.CAPABILITIES.existing_note_ops()
 
     def test_web_creatable_handlers(self):
-        """Generate 頁可選單字卡（§6）、人脈卡（人脈卡計畫書 §3.11）與三語對話卡（預覽流程）。"""
+        """Generate 頁可選單字卡（§6）、人脈卡（人脈卡計畫書 §3.11）、三語對話卡（預覽流程），以及
+        對話卡、外語糾錯（server_drafts 計畫書 D10）。"""
         web = [h.handler_name for h in handler_registry.all_handlers() if "web" in h.CAPABILITIES.create.channels]
-        assert sorted(web) == ["person_profile", "speaking_trilingual", "vocabulary_mining"]
+        assert sorted(web) == [
+            "expression_correction", "person_profile", "speaking_coach", "speaking_trilingual", "vocabulary_mining",
+        ]
 
 
 # =============================================================================
@@ -218,8 +222,19 @@ class TestCreateParams:
 
     def test_speaking_language_normalized_like_tg(self):
         params = SpeakingCoachCreateParams.model_validate({"prompt": "Order coffee", "target_language": "ja-jp"})
-        assert params.model_dump() == {"prompt": "Order coffee", "context": "", "target_language": "ja-JP"}
+        assert params.model_dump() == {
+            "prompt": "Order coffee", "context": "", "target_language": "ja-JP", "references": [],
+        }
         assert SpeakingCoachCreateParams(prompt="x").target_language == "en-US"
+
+    def test_speaking_references_drop_blank_and_strip(self):
+        params = SpeakingCoachCreateParams.model_validate({"prompt": "x", "references": [" A ", "", "  ", "B"]})
+        assert params.references == ["A", "B"]
+
+    @pytest.mark.parametrize("references", [["x" * 2001], ["x"] * 101, "not a list"])
+    def test_speaking_references_limits(self, references):
+        with pytest.raises(ValidationError):
+            SpeakingCoachCreateParams.model_validate({"prompt": "x", "references": references})
 
     @pytest.mark.parametrize("bad", [{"prompt": ""}, {}, {"prompt": "x", "target_language": "english"},
                                      {"prompt": "x", "target_language": "other"}])
@@ -232,6 +247,10 @@ class TestCreateParams:
         assert schema["required"] == ["prompt"]
         assert schema["properties"]["prompt"]["x-ui"] == "textarea"
         assert schema["properties"]["target_language"]["examples"] == ["en-US", "ja-JP", "zh-TW"]
+        # 多筆參考回答：網頁以「一行一筆」的多行文字框輸入
+        assert schema["properties"]["references"]["type"] == "array"
+        assert schema["properties"]["references"]["items"]["type"] == "string"
+        assert schema["properties"]["references"]["x-ui"] == "lines"
         assert "tg_bot" not in schema["properties"]
 
     def test_trilingual_prompt_required(self):

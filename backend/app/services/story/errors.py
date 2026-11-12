@@ -82,3 +82,14 @@ class StoryConfigInvalidError(FluencyTidesError):
 
     error_code = "STORY_CONFIG_INVALID"
     status_code = 500
+
+
+class StorySaveTemplateError(FluencyTidesError):
+    """存檔樣板的格式不對，寫入器無法產生存檔（應在擷取或匯入時擋下）。
+
+    The save template is malformed, so the writer cannot produce a save; the
+    extractor should have rejected it.
+    """
+
+    error_code = "STORY_SAVE_TEMPLATE"
+    status_code = 500

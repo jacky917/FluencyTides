@@ -7,10 +7,11 @@
  *
  * 支援的 schema 寫法：`title`、`description`、`required`、`default`、`examples`（可輸入的下拉）、
  * `enum`（只能選的下拉）、`pattern`、`x-ui: textarea`（多行）；不認得的 `x-ui` 值當一般文字欄位。
+ * `x-ui: lines` 是字串陣列、畫成多行文字框，一行一筆（送出時拆成陣列、去掉空行，例如對話卡的多筆參考回答）。
  * `x-ui: list` 是一列一筆的欄位（人脈卡會變的欄位）：值是字串清單，或物件清單（`items` 指到 `$defs`
  * 裡的物件時，每列一格一個屬性，例如職位的公司＋職稱）；`x-item: textarea` 每列多行，`x-item: tag` 畫成
  * 一個一個小標籤（語言、興趣這種短值），`x-quick` 是快速選項。
- * 只畫字串與一列一筆的欄位：其他型別的參數（例如外語糾錯預覽流程的 LLM 結果）不會出現在網頁表單。
+ * 只畫上述欄位：其他型別的參數（例如外語糾錯預覽流程的 LLM 結果）不會出現在網頁表單。
  */
 
 import type { DeckStatus } from '../hooks/useDeckStatus'
@@ -47,6 +48,8 @@ export interface FormField {
   /** 只能從中選一個的值（下拉選單）；空陣列表示自由輸入。Allowed values, or empty. */
   options: string[]
   multiline: boolean
+  /** 一行一筆的陣列欄位（`x-ui: lines`）：送出時拆成字串陣列。A one-entry-per-line list. */
+  lines: boolean
   /** 格式（正規表示式），用來提示；實際驗證由後端負責。A format hint. */
   pattern: string | null
   /** 一列一筆的欄位（`x-ui: list`）；一般文字欄位為 null。The list settings, or null. */
@@ -56,6 +59,7 @@ export interface FormField {
 /** schema 的一個屬性（只列用到的鍵）。A schema property. */
 interface SchemaProperty {
   type?: string
+  items?: { type?: string }
   anyOf?: { type?: string; items?: { type?: string; $ref?: string } }[]
   title?: string
   description?: string
@@ -71,6 +75,11 @@ interface SchemaProperty {
 /** `$defs` 裡的物件（只列用到的鍵）。An object in `$defs`. */
 interface SchemaObject {
   properties?: Record<string, { title?: string }>
+}
+
+/** 是否為一行一筆的字串陣列（`x-ui: lines`）。Whether a property is a one-per-line string list. */
+function isLinesProperty(prop: SchemaProperty): boolean {
+  return prop.type === 'array' && prop.items?.type === 'string' && prop['x-ui'] === 'lines'
 }
 
 /**
@@ -111,7 +120,8 @@ export function schemaFields(schema: Record<string, unknown> | null): { fields: 
   const fields: FormField[] = []
   const skipped: string[] = []
   for (const [name, prop] of Object.entries(properties)) {
-    if (!isStringProperty(prop)) {
+    const lines = isLinesProperty(prop)
+    if (!lines && !isStringProperty(prop)) {
       skipped.push(name)
       continue
     }
@@ -121,9 +131,10 @@ export function schemaFields(schema: Record<string, unknown> | null): { fields: 
       description: prop.description ?? null,
       required: required.has(name),
       defaultValue: typeof prop.default === 'string' ? prop.default : '',
-      examples: (prop.examples ?? []).filter((example): example is string => typeof example === 'string'),
-      options: (prop.enum ?? []).filter((option): option is string => typeof option === 'string'),
-      multiline: prop['x-ui'] === 'textarea',
+      examples: lines ? [] : (prop.examples ?? []).filter((example): example is string => typeof example === 'string'),
+      options: lines ? [] : (prop.enum ?? []).filter((option): option is string => typeof option === 'string'),
+      multiline: lines || prop['x-ui'] === 'textarea',
+      lines,
       pattern: prop.pattern ?? null,
       rows: prop['x-ui'] === 'list' ? rowsSpec(prop, defs) : null,
     })
@@ -141,7 +152,7 @@ export function initialRows(fields: FormField[]): Record<string, RowsValue> {
 }
 
 /**
- * 把存著的值整理成表單的值：一列一筆的欄位若存的是一段文字（舊版表單留在 sessionStorage 的），轉成一列，
+ * 把存著的值整理成表單的值：一列一筆的欄位若存的是一段文字（舊版表單留在瀏覽器暫存的），轉成一列，
  * 不讓看不到的內容被送出；物件列的欄位放進第一格，標籤欄位照頓號、逗號切成一個一個標籤。
  * Normalizes stored values; text left in a list field becomes one visible row.
  * @param fields - 欄位。The fields.
@@ -179,20 +190,32 @@ export function hasInput(value: FormValue | undefined): boolean {
 }
 
 /**
- * 送出的參數：只送表單上有的欄位（sessionStorage 可能留著已經拿掉的欄位，例如以前的「職稱」，送出會被
- * 後端拒絕），一列一筆的欄位去掉空的列。The parameters to send: the form's fields only, empty rows dropped.
+ * 表單的值轉成送出的參數：只送表單上有的欄位（瀏覽器暫存可能留著已經拿掉的欄位，例如以前的「職稱」，
+ * 送出會被後端拒絕）；一行一筆的欄位拆成陣列（去掉前後空白與空行）；一列一筆的欄位去掉空的列。
+ * Turns form values into request parameters: the form's fields only, line fields
+ * split into arrays, empty rows dropped.
  * @param fields - 表單的欄位。The form's fields.
  * @param values - 表單的值。The form values.
- * @returns 送出的參數。The parameters.
+ * @returns 參數。The parameters.
  */
-export function submittedParams(fields: FormField[], values: Record<string, FormValue>): Record<string, FormValue> {
-  const known = new Set(fields.map((field) => field.name))
-  return Object.fromEntries(
-    Object.entries(values).filter(([name]) => known.has(name)).map(([name, value]) => [
-      name,
-      typeof value === 'string' ? value : ((value as (string | Record<string, string>)[]).filter((row) => !isEmptyRow(row)) as RowsValue),
-    ]),
-  )
+export function formParams(fields: FormField[], values: Record<string, FormValue>): Record<string, unknown> {
+  const params: Record<string, unknown> = {}
+  for (const field of fields) {
+    const value = values[field.name]
+    if (field.lines) {
+      params[field.name] = (typeof value === 'string' ? value : '')
+        .split(/\r\n|\r|\n/)
+        .map((line) => line.trim())
+        .filter((line) => line !== '')
+    } else if (value === undefined) {
+      continue
+    } else if (typeof value === 'string') {
+      params[field.name] = value
+    } else {
+      params[field.name] = (value as (string | Record<string, string>)[]).filter((row) => !isEmptyRow(row))
+    }
+  }
+  return params
 }
 
 /**
@@ -304,9 +327,14 @@ export function formErrorsFrom(error: unknown, fieldNames: string[]): FormErrors
   const result: FormErrors = { fields: {}, other: [] }
   for (const item of detail as ValidationItem[]) {
     const loc = Array.isArray(item.loc) ? item.loc : []
-    const msg = item.msg ?? '格式不符'
-    // 一列一筆的欄位的錯誤指到第幾列（["body", "params", 欄位, 第幾列, …]）：一樣顯示在那個欄位下
+    const rawMsg = item.msg ?? '格式不符'
     const name = loc.length >= 3 && loc[0] === 'body' && loc[1] === 'params' ? String(loc[2]) : null
+    // 陣列欄位的某一筆：一行一筆的欄位是 ["body", "params", 欄位, 1]；一列一筆的欄位（str | list 的 union）
+    // 中間多一層型別名，例如 ["body", "params", "Company", "list[PositionInput]", 0, "title"]。標在欄位上並註明第幾筆
+    const rest = loc.slice(3)
+    const position = rest.findIndex((part) => typeof part === 'number')
+    const index = position >= 0 && position <= 1 ? (rest[position] as number) : null
+    const msg = index !== null ? `第 ${index + 1} 筆：${rawMsg}` : rawMsg
     if (name !== null && known.has(name)) {
       result.fields[name] = result.fields[name] ? `${result.fields[name]}；${msg}` : msg
     } else {

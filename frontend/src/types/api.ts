@@ -165,6 +165,11 @@ export interface CreateNoteRequest {
   params: Record<string, unknown>;
   /** 使用者加的標籤（不能有空白、不能是系統標籤）；建卡後另外加上。User tags. */
   tags?: string[];
+  /**
+   * 從預覽流程的草稿建立時帶上（ID 與讀到的版本成對）；成功後後端清空草稿，版本不符時回 409。
+   * The draft being created and the version read.
+   */
+  draft?: { id: string; version: number };
 }
 
 /** 這種卡片用過的一個標籤與次數。A tag and how many notes use it. */
@@ -180,11 +185,41 @@ export interface SuggestedTag {
   existing: boolean;
 }
 
-/** `POST /handlers/{name}/draft` 的回應：預先填好的建立參數。The draft create parameters. */
-export interface DraftResponse {
+/** 草稿的生成結果：預先填好的建立參數。The generated create parameters. */
+export interface DraftResult {
   params: Record<string, unknown>;
   /** LLM 建議的標籤（建卡時放進請求的 `tags`）。Suggested tags. */
   suggested_tags: SuggestedTag[];
+}
+
+/**
+ * 草稿的狀態：生成中、可建立、生成失敗、從草稿建立中，以及填表建卡暫時佔用（沒有輸入與生成結果）。
+ * Draft status; `form_creating` is a form create holding the slot.
+ */
+export type DraftStatus = 'generating' | 'ready' | 'failed' | 'creating' | 'form_creating';
+
+/**
+ * 後端的建卡草稿：全站同一時間最多一份（`docs/wip/server_drafts_FEAT_2026-11-04.md` §4.1）。
+ * The backend create draft; at most one site-wide.
+ */
+export interface ServerDraft {
+  id: string;
+  /** handler 名稱。The handler. */
+  handler: string;
+  status: DraftStatus;
+  /** 生成的輸入；填表建卡佔用時為 null。The generation input. */
+  input: Record<string, unknown> | null;
+  /** 生成結果，只有 ready、creating 時有值（form_creating 沒有）。The result. */
+  result: DraftResult | null;
+  /** 網頁的編輯狀態，第一次存檔前為 null。The web editing state. */
+  state: Record<string, unknown> | null;
+  /** 只有 failed 時有值。Why the generation failed. */
+  error: { error_code: string; message: string } | null;
+  /** 每次轉換加一；修改、重試、建立時帶上。Bumped on every change. */
+  version: number;
+  created_at: string;
+  updated_at: string;
+  generation_started_at: string | null;
 }
 
 /** 三語對話卡的一句參考答案（草稿與建卡參數）。One trilingual reference answer. */
@@ -205,12 +240,66 @@ export interface TrilingualCreateParams {
   references_en: TrilingualReference[];
 }
 
+/**
+ * 生成前發現 Anki 已有同一張卡時的決定：`overwrite` 新卡建好後刪掉舊卡、`allow` 允許重複。
+ * The decision on a duplicate found before generating.
+ */
+export type DuplicateDecision = 'overwrite' | 'allow';
+
+/** 409 `DUPLICATE_FOUND` 附上的舊卡（外語糾錯：同一句原文的母卡，純文字）。The existing card. */
+export interface DuplicateCard {
+  note_id: number;
+  original_text?: string;
+  correct_answer?: string;
+  reorganized_expression?: string;
+}
+
+/** 外語糾錯 LLM 萃取的一個知識點（子卡）。One micro point (a micro card). */
+export interface ExpressionMicroPoint {
+  original_phrase: string;
+  target_phrase: string;
+  native_translation: string;
+  context_hint: string;
+  context_sentence: string;
+  error_hint: string;
+}
+
+/** 外語糾錯的 LLM 結果。The expression correction LLM result. */
+export interface ExpressionCorrectionResult {
+  /** 原文，錯的片段以 `<u>…</u>` 標出。The original with errors marked by `<u>`. */
+  error_comparison: string;
+  grammar_correction: string;
+  reorganized_expression: string;
+  grammar_micro_points: ExpressionMicroPoint[];
+  reorganized_micro_points: ExpressionMicroPoint[];
+}
+
+/** 外語糾錯的建立參數（草稿就是這個形狀）。Expression correction create parameters. */
+export interface ExpressionCreateParams {
+  original_text: string;
+  context: string;
+  source_tag: string;
+  native_language: string;
+  target_language: string;
+  user_grammar_correction: string;
+  user_reorganization: string;
+  llm_result: ExpressionCorrectionResult;
+  /** 要建立的子卡編號（1 起算，文法修正在前）；null 表示全部。Micro cards to create. */
+  selected_indices: number[] | null;
+  allow_duplicate: boolean;
+  /** 覆蓋：新卡建好後刪掉的舊母卡。The old master to replace. */
+  replace_note_id: number | null;
+}
+
 /** 建卡結果。The created notes. */
 export interface CreateNoteResponse {
   note_ids: number[];
   /** 實際建立的牌組。The deck actually used. */
   deck: string;
-  /** 寫入後同步 AnkiWeb 失敗時的提醒；卡片仍已建立。The sync warning, if any. */
+  /**
+   * 建立後要注意的事（加標籤失敗、建立後的後續處理例如刪舊卡失敗、同步 AnkiWeb 失敗），以換行分隔；
+   * 卡片仍已建立。Warnings after creating, if any.
+   */
   sync_warning: string | null;
 }
 

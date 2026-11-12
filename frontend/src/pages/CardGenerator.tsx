@@ -62,7 +62,7 @@ export default function CardGenerator() {
       header={
         <PageHeader
           title="Card Generator"
-          description="在牌組樹選牌組，再選卡片類型建立。三語對話卡由 LLM 生成說法、勾選後建立；其他卡片手動填表。"
+          description="在牌組樹選牌組，再選卡片類型建立。三語對話卡、外語糾錯由 LLM 生成、預覽勾選後建立；其他卡片手動填表。"
         />
       }
       panels={panels}
