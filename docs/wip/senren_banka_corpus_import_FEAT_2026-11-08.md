@@ -19,6 +19,7 @@
   - `game_lines` 53,242 列（id 1～53242；53197～53242 是還原句與選項畫面）
   - 卡片紀錄 `card_gen_log` 6,265 列，和舊庫相同，表示切換後還沒有新的建卡
   - 流程圖 `story_builds`：建置 2 版，第 2 版上線中
+- **2026-11-14 更新**：本機與正式機都已切換，資料庫只由 `.env` 的 `MYSQL_DATABASE` 決定；`STORY_CORPUS_DATABASE` 與腳本的 `--database` 參數已移除，下面提到它們的段落是當時的紀錄。
 - **切換（M3）還沒做**：本機 `backend/.env` 的 `MYSQL_DATABASE` 仍是 `yuzusoft`。main 的程式都改讀新庫，切換前用 `--database fluencytides_corpus` 或 `STORY_CORPUS_DATABASE` 指定。
   - **更正（2026-11-08 部署時查證）**：正式機 2026-11-01 就已經切換，正式機 `.env` 是 `MYSQL_DATABASE=fluencytides_corpus`（備份 `.env.bak-2026-11-01-cutover`）。沒切換的只有本機 `.env`。
   - 本機和正式機連的是**同一台 MySQL**（`192.168.50.172:3306`）。所以本計畫在「本機」匯入的語料與流程圖版本 3，一寫進去就是正式機的資料。

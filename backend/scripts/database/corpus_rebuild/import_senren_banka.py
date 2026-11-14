@@ -427,7 +427,6 @@ def write(c: Content, database: str, drop_story_builds: bool) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--material", type=Path, default=DEFAULT_MATERIAL)
-    ap.add_argument("--database", default="fluencytides_corpus")
     ap.add_argument("--dry-run", action="store_true", help="只輸出報表，不寫資料庫 / report only")
     ap.add_argument("--drop-story-builds", action="store_true", help="一併刪掉這款遊戲的流程圖建置")
     args = ap.parse_args()
@@ -442,7 +441,10 @@ def main() -> None:
     if args.dry_run:
         print("只檢查（--dry-run），未寫入。")
         return
-    print(f"✅ 已寫入 {args.database}：{write(c, args.database, args.drop_story_builds)}")
+    # 資料庫只由 .env 的 MYSQL_DATABASE 決定（和後端相同）
+    from app.core.config import settings
+
+    print(f"✅ 已寫入 {settings.MYSQL_DATABASE}：{write(c, settings.MYSQL_DATABASE, args.drop_story_builds)}")
 
 
 if __name__ == "__main__":

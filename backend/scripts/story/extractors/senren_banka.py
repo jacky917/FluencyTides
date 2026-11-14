@@ -16,7 +16,6 @@ writes a build package (docs/wip/senren_banka_corpus_import_FEAT_2026-11-08.md D
 用法 / Usage::
 
     python backend/scripts/story/extractors/senren_banka.py --out build/senren_banka \\
-        --database fluencytides_corpus \\
         --template "Y:/material/yuzusoft/SenrenBanka/templates/quick.bmp" \\
         --thumbs "Y:/material/yuzusoft/SenrenBanka/thumbs" \\
         --voices "Y:/material/yuzusoft/SenrenBanka/voice" \\
@@ -319,8 +318,6 @@ def main() -> None:
     parser.add_argument("--bgm", type=Path, help="BGM 資料夾（<code>.ogg），匯入時只上傳 game_bgm_tracks 有的代號")
     parser.add_argument("--enable-bgm-audio", action="store_true",
                         help="在設定打開 BGM 播放（capabilities.bgm）；會改變 source_hash，須正常匯入成新版本")
-    parser.add_argument("--database", help="語料庫名稱（預設 backend/.env 的 MYSQL_DATABASE；"
-                                           "語料庫切換前可指定 fluencytides_corpus）")
     parser.add_argument("--note", help="這個版本的備註")
     args = parser.parse_args()
     for p, what in ((args.voices, "語音"), (args.bgm, "BGM"), (args.thumbs, "縮圖")):
@@ -329,7 +326,7 @@ def main() -> None:
     if args.template:
         check_template(args.template)
     load_official_nodes(args.material)  # 連資料庫之前先確認素材讀得到
-    conn = corpus_db.connect(args.database)
+    conn = corpus_db.connect()
     try:
         summary = extract(conn, args.out, args.material, args.template, args.thumbs, args.note, voices=args.voices,
                           bgm=args.bgm, bgm_audio=args.enable_bgm_audio)

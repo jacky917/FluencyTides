@@ -777,6 +777,7 @@ python backend/scripts/story/import_story_build.py build/sabbat_of_the_witch --a
 - 節點徽章改畫在節點層之後的獨立圖層 `.sf-decorations`（總覽則在節點框外）：原本畫在節點框裡，票券形節點的 `mask` 會把它裁掉，`opacity`／`filter` 也會影響它，後面才畫的相鄰節點還可能蓋住它。渲染器的 `decorations` 參數因此移除。
 - 020 的四個檔案檔號相同，節點鍵改用檔名主幹（例 `sw:020.共通－パーティ寧々`）。
 - 資料庫和其他功能一樣讀 `MYSQL_DATABASE`，共用 `corpus_database.py` 的引擎（整個分支和語料庫切換一起上線）。本機的 `MYSQL_DATABASE` 還沒切換時，可用 `STORY_CORPUS_DATABASE` 明確覆寫（只供本機測試，會另建一個連線池）；擷取器與匯入腳本則用 `--database fluencytides_corpus`。本機素材可用 `--assets local:<資料夾>` 與 `STORY_ASSETS_DIR`（兩個 `STORY_*` 都可以寫在 `backend/.env`）。
+  - **2026-11-14 更新**：本機與正式機都已切換，資料庫只由 `.env` 的 `MYSQL_DATABASE` 決定；`STORY_CORPUS_DATABASE` 與腳本的 `--database` 參數已移除，下面提到它們的段落是當時的紀錄。
 
 **BGM 預留（2026-11-01）**
 
