@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-11-01 |
 | **性質** | 稽核：盤點現有的資料庫與儲存體、彼此怎麼互相引用，並逐項評估遷移到 `fluencytides_corpus` 的風險 |
-| **狀態** | 📝 盤點完成，待使用者確認 |
+| **狀態** | 🔨 盤點完成；收尾進行中（2026-11-14，見 §6）：ES 已核對並補上千戀＊萬花、兩個資料庫已傾印到開發機、`rebuild.py` 改成檢查目標資料庫。**還沒做**：切換後的建卡驗收、定期備份與第二份備份的去處 |
 | **範圍** | MySQL `yuzusoft`、`fluencytides_corpus`；網站 SQLite（本機與正式機各一份）；Elasticsearch `fluencytides_dialogue`；Anki；MinIO；本機的校準檔案與設定檔 |
-| **不動** | 本文件只盤點與評估，不改任何資料 |
-| **PR / 進度** | 無 |
+| **不動** | §1–§5 只盤點與評估，不改任何資料；§6 的收尾另外記錄做了什麼 |
+| **PR / 進度** | `rebuild.py` 的保護：分支 `fix/rebuild-guard` |
 | **關聯文件** | `docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md`、`docs/wip/relation_graph_FEAT_draft_2026-11-01.md`、`docs/wip/story_flowchart_FEAT_2026-10-31.md` |
 
 ---
@@ -77,6 +77,7 @@
 1. **遷移腳本不能整庫清空重建**（M2-③）：`corpus_db_rebuild_FEAT` D7 原本寫「每次都先清空新資料庫的表，再從頭建立」，但切換後，卡片相關表與 `rel_links` 會持續有新的寫入。改成兩類：
    - **內容表**（`game_profiles`、`game_script_files`、`game_scenes`、`game_scene_links`、`game_speakers`、`game_lines`、`game_bgm_tracks`、`game_line_bgm`、`game_legacy_scripts`）：切換前可以反覆重建；切換後改為依 id 更新（`INSERT … ON DUPLICATE KEY UPDATE`），不刪除既有列。
    - **紀錄表**（卡片相關 3 張、`rel_links`、`game_line_revisions`）：只在切換時遷移一次；之後只能新增或更新，任何腳本都不得清空。
+   - 2026-11-14：`rebuild.py` 已照這條改成檢查目標資料庫（§6.3）。
 2. **備份**（M13）：不列為遷移的前置步驟（遷移只讀舊庫）；異機備份另案處理。
 3. **正式機 SQLite 先盤點**（M7）：關係圖草案的 R2 之前，先唯讀匯出正式機的 `card_relations`，比對和本機的差異。
 
@@ -87,3 +88,83 @@
 3. 凍結建卡 → 最後一次同步卡片紀錄 → 切換本機與正式機的 `.env` → 重建 ES → 解凍（M2、M4、M5）。
 4. `yuzusoft` 與 SQLite 保留不動（使用者決定），只是程式不再讀寫它們。
 5. 關係圖 R2：盤點並合併兩份 SQLite 的 `card_relations`（M6、M7）。
+
+## 6. 收尾紀錄（2026-11-14）
+
+### 6.1 Elasticsearch（M4）
+
+切換後「重建 ES」一直沒有紀錄，千戀＊萬花匯入後有沒有同步也沒查過。用同步腳本自己的讀法與清洗（`iter_lines`＋`build_action`）算出應有的文件，和索引逐筆比對：
+
+| 遊戲 | 新庫應有 | 同步前 ES | 同步後 ES | 缺／多／內容不同 |
+|---|---|---|---|---|
+| 魔女的夜宴（`サノバウィッチ`） | 53,196 | 53,196 | 53,196 | 0／0／0 |
+| 千戀＊萬花（`千恋＊万花`） | 55,726 | 0 | 55,726 | 0／0／0 |
+
+- 魔女的夜宴在同步前就和新庫完全一致（含還原的 6 句與 9516 的改字），所以**不需要重建整個索引**。
+- 千戀＊萬花用單一遊戲的同步補上，約 11 秒，魔女的夜宴的文件沒有動，搜尋沒有中斷：
+
+```bash
+python scripts/database/Elasticsearch/sync_mysql_to_es.py --game SenrenBanka
+```
+
+- 同步後各搜一次「食べる」：千戀＊萬花 434 筆、魔女的夜宴 371 筆。
+
+### 6.2 備份（M13）
+
+兩個資料庫各傾印一份到開發機（NAS 以外），放在 repo 的 `sql/`（被 git 忽略，6 月那份 `yuzusoft_backup.sql` 也在這裡）：
+
+| 檔案 | 壓縮後 | 解壓後 | 表 | 列數 |
+|---|---|---|---|---|
+| `sql/fluencytides_corpus_20261114_2026.sql.gz` | 12.7 MB | 95.1 MB | 18 | 486,642 |
+| `sql/yuzusoft_20261114_2027.sql.gz` | 4.4 MB | 44.8 MB | 5 | 124,365 |
+
+- 做法：在 NAS 上用 `mysql:5.7.31` 映像開一個用完即刪的臨時容器、走主機網路連線跑 `mysqldump`，gzip 後經 SSH 傳回開發機。只讀資料庫（`--single-transaction`）。帳密放在一個 `[client]` 設定檔，經標準輸入送進臨時容器，不出現在指令列。
+
+```bash
+ssh jacky917@192.168.50.172 "docker run --rm -i --network host --entrypoint bash mysql:5.7.31 -c 'set -o pipefail; umask 077; cat > /tmp/c.cnf; mysqldump --defaults-extra-file=/tmp/c.cnf --single-transaction --no-tablespaces --triggers --hex-blob --skip-extended-insert --default-character-set=utf8mb4 --set-gtid-purged=OFF --databases fluencytides_corpus | gzip -c'" < client.cnf > sql/fluencytides_corpus_YYYYMMDD.sql.gz
+```
+
+- `client.cnf` 的內容（不要放進 repo）：
+
+```ini
+[client]
+user=<MYSQL_USER>
+password="<MYSQL_PASSWORD>"
+host=192.168.50.172
+port=3306
+protocol=tcp
+```
+
+- 為什麼不直接在 MySQL 容器裡跑：從容器內連線時來源是 Docker 內部網段（`172.16.0.0/255.240.0.0`），那個帳號來源只有新庫的權限，傾印 `yuzusoft` 會被拒絕（1044）。走主機網路時來源是 `192.168.%`，和 app 平常連線的帳號來源相同，兩個資料庫都能讀。
+- `--skip-extended-insert`：一列一個 INSERT。檔案大一點、還原慢一點，但能逐表核對列數。
+- 檢查：壓縮檔讀得到檔尾、結尾有 `-- Dump completed`、每張表都在、每張表的 INSERT 列數和線上的 `COUNT(*)` 相同（兩個資料庫都通過）。
+- **沒有做的檢查**：實際還原一次。開發機沒有 MySQL 也沒有 docker，app 的帳號也只能動這兩個資料庫，沒有地方可以還原。
+- 還原（會覆寫同名的表，還原前先確認目標）：
+
+```bash
+gunzip -c sql/fluencytides_corpus_20261114_2026.sql.gz | mysql --defaults-extra-file=client.cnf
+```
+
+- 傾印當下，`card_gen_log` 最後一次寫入是 2026-09-07，和舊庫的 `generated_sentences_log` 相同（6,265 列）：切換後還沒有新的卡片紀錄。
+- **還沒決定**：要不要再放一份到別處（例如雲端硬碟）、要不要定期做。
+
+### 6.3 `rebuild.py` 不再能清掉紀錄表（§4 第 1 點）
+
+- 原本只看本機 `.env` 的 `MYSQL_DATABASE` 是不是新庫；換一份 `.env` 或在別台機器執行就擋不住。
+- 改成刪表前查目標資料庫（`unrecoverable_data`）：`card_gen_log`、`rel_links`、`game_line_revisions`、`nlp_line_terms`、`nlp_line_readings`、`story_builds` 有任何一列，或 `game_profiles` 有其他遊戲，就結束程式、什麼都不刪，沒有略過的選項。開始對齊前查一次，`write` 刪表前在同一個連線再查一次；原本的 `.env` 檢查保留為第一道。
+- 所以 `rebuild.py` 之後只能對空的資料庫執行；要在測試用的資料庫重跑，先自己刪掉那個資料庫再建一個空的。
+- 用真實的 `fluencytides_corpus` 驗證（只查不刪）：回報 `card_gen_log` 6,265、`rel_links` 36,761、`game_line_revisions` 54、`nlp_line_terms` 9,184、`story_builds` 3、其他遊戲 1，拒絕執行。
+- 其他會刪資料的腳本：`import_senren_banka.py` 在紀錄表引用到這款遊戲時本來就拒絕；刪卡工具的「清除整個卡片類型」是使用者明確下指令才執行的正常操作，不在這條的範圍。
+- 測試：`backend/tests/test_corpus_rebuild_guard.py`。
+
+### 6.4 盤點時不知道、這次查到的事
+
+- `yuzusoft.scripts` 現在有 108,916 列：原本的 53,190 列，加上 2026-11-08 誤匯入的千戀＊萬花 55,726 列（`senren_banka_corpus_import_FEAT_2026-11-08.md` §3 有移除用的 SQL）。程式已經不讀寫舊庫，這些列沒有影響，要不要移除另外決定；這次的 `yuzusoft` 備份也包含它們。
+- MySQL 帳號 `jacky917` 有兩個來源：`192.168.%`（兩個資料庫都有全部權限）與 `172.16.0.0/255.240.0.0`（Docker 內部網段，只有新庫）。
+
+### 6.5 還沒做
+
+- 切換後的建卡驗收（`corpus_db_rebuild_FEAT_2026-10-31.md` §8 的兩項 M3）：建一張核心動詞卡、一張自他動詞卡；刪掉本機 `backend/.env` 的 8 個舊 `JP_*` 設定。
+- 備份的第二份去處與定期備份（§6.2）。
+- 兩份 SQLite 的 `card_relations` 合併（M6、M7）：屬於關係圖計畫的 R2。
+
