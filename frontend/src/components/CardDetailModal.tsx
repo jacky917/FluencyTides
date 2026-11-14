@@ -5,9 +5,11 @@ import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../api/client'
 import { describeApiError, failureTitle, isBackendError, retryTransient } from '../lib/apiError'
 import { changedFields, fieldValues, noteEditPolicy } from '../lib/cardFields'
+import { mediaFieldState } from '../lib/mediaUpload'
 import type { GenericNoteDetail } from '../types/api'
 import { JsonFieldEditor } from './JsonFieldEditor'
 import { ConfirmDialog } from './shared/ConfirmDialog'
+import { MediaField } from './shared/MediaField'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 
@@ -49,11 +51,14 @@ function showSyncWarning(warning: string | null) {
  * Card detail modal: view, edit, and delete a single Anki note's fields.
  *
  * 能否編輯、刪除看後端回傳的 `permissions`（不允許時顯示原因）；寫入送給負責的 handler
- * （`note.handler`）；handler 宣告的媒體欄位、沒有格式的 JSON 欄位只顯示不編輯；儲存時只送出有變的欄位。
+ * （`note.handler`）；沒有格式的 JSON 欄位只顯示不編輯；儲存時只送出有變的欄位。
+ * handler 宣告的媒體欄位是上傳／錄音元件（`MediaField`）：只能換成上傳取得的檔案或清空，按「儲存變更」
+ * 才寫進筆記（`docs/wip/media_upload_FEAT_2026-10-20.md` D3）。
  * handler 宣告了格式的 JSON 欄位（`json_field_specs`）改用清單表單編輯，各欄自己儲存（`JsonFieldEditor`）。
  * 後端寫入後會同步 AnkiWeb 並等它完成，所以送出期間顯示「同步中」。
  * Permissions come from the backend; writes go to the owning handler;
- * declared JSON and media fields are read-only; only changed fields are sent.
+ * declared JSON fields are read-only, media fields take uploads; only changed
+ * fields are sent.
  *
  * @param isOpen - 是否開啟彈窗。Whether the modal is open.
  * @param onClose - 關閉彈窗的回呼。Callback to close the modal.
@@ -86,13 +91,25 @@ export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDel
   // JSON 清單有未儲存的修改時，關閉前確認
   const [dirtyJson, setDirtyJson] = useState<ReadonlySet<string>>(new Set())
   const [confirmingClose, setConfirmingClose] = useState(false)
+  // 媒體欄位還沒做完的事（上傳中、等待麥克風授權、錄音中、錄好還沒決定）：欄位名 → 原因；有任何一個就先不能儲存
+  const [mediaBusy, setMediaBusy] = useState<Record<string, string>>({})
   useEffect(() => {
     if (!isOpen) {
       setConfirmingDelete(false)
       setConfirmingClose(false)
       setDirtyJson(new Set())
+      setMediaBusy({})
     }
   }, [isOpen])
+  const onMediaBusy = useCallback((field: string, reason: string | null) => {
+    setMediaBusy((prev) => {
+      if ((prev[field] ?? null) === reason) return prev
+      const next = { ...prev }
+      if (reason === null) delete next[field]
+      else next[field] = reason
+      return next
+    })
+  }, [])
   const onJsonDirty = useCallback((field: string, dirty: boolean) => {
     setDirtyJson((prev) => {
       if (prev.has(field) === dirty) return prev
@@ -165,7 +182,10 @@ export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDel
   }
 
   const busy = updateMutation.isPending || deleteMutation.isPending
-  const canSave = Boolean(target && policy?.canEdit && hasChanges && !busy && !isLoading)
+  const mediaBusyReason = Object.values(mediaBusy)[0] ?? null
+  const canSave = Boolean(
+    target && policy?.canEdit && hasChanges && !busy && !isLoading && mediaBusyReason === null,
+  )
   const canDelete = Boolean(target && policy?.canDelete && !busy && !isLoading)
   const notices = [policy?.editNotice, policy?.deleteNotice && `無法刪除：${policy.deleteNotice}`].filter(
     (notice): notice is string => Boolean(notice),
@@ -221,7 +241,29 @@ export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDel
               )}
               {Object.entries(fields).map(([key, value]) => {
                 if (jsonEditable.includes(key)) return null
-                const locked = policy?.lockedFields.get(key)
+                const mediaKind = policy?.mediaFields.get(key)
+                if (mediaKind && policy?.canEdit) {
+                  const originalValue = original[key] ?? ''
+                  return (
+                    <MediaField
+                      key={key}
+                      id={fieldId(key)}
+                      kind={mediaKind}
+                      label={key}
+                      state={mediaFieldState(mediaKind, originalValue, value)}
+                      disabled={busy}
+                      onUploaded={(filename) => setFields((prev) => ({ ...prev, [key]: filename }))}
+                      onClear={() => setFields((prev) => ({ ...prev, [key]: '' }))}
+                      onRevert={
+                        value !== originalValue
+                          ? () => setFields((prev) => ({ ...prev, [key]: originalValue }))
+                          : undefined
+                      }
+                      onBusyChange={(reason) => onMediaBusy(key, reason)}
+                    />
+                  )
+                }
+                const locked = policy?.lockedFields.get(key) ?? (mediaKind ? '媒體' : undefined)
                 const readOnly = !policy?.canEdit || locked !== undefined
                 const isLongText = locked === 'JSON' || key === 'ExampleSentence' || value.length > 50
                 return (
@@ -286,7 +328,12 @@ export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDel
             )}
             {deleteMutation.isPending ? '刪除並同步中…' : '刪除筆記'}
           </Button>
-          <div className="space-x-2">
+          <div className="flex items-center gap-2">
+            {mediaBusyReason !== null && (
+              <span role="status" className="text-xs text-muted-foreground">
+                {mediaBusyReason}
+              </span>
+            )}
             <Button variant="outline" onClick={requestClose} disabled={busy}>
               取消
             </Button>

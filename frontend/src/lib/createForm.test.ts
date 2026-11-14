@@ -151,6 +151,41 @@ describe('deckBlocksForm', () => {
   })
 })
 
+describe('媒體欄位（x-ui: audio、image）', () => {
+  // 單字卡的標準建立表單：媒體欄位照列，標成上傳元件（media_upload 計畫書 D3）
+  const schema = {
+    properties: {
+      Expression: { type: 'string', title: 'Expression', minLength: 1 },
+      Word_Audio: { type: 'string', title: 'Word_Audio', default: '', 'x-ui': 'audio' },
+      Photo: { type: 'string', title: 'Photo', default: '', 'x-ui': 'image' },
+      Note: { type: 'string', title: 'Note', default: '', 'x-ui': 'textarea' },
+    },
+    required: ['Expression'],
+  }
+
+  it('標出種類；其他欄位為 null', () => {
+    const { fields, skipped } = schemaFields(schema)
+    expect(skipped).toEqual([])
+    expect(Object.fromEntries(fields.map((field) => [field.name, field.media]))).toEqual({
+      Expression: null,
+      Word_Audio: 'audio',
+      Photo: 'image',
+      Note: null,
+    })
+  })
+
+  it('送出的是上傳取得的檔名；沒上傳時是空字串', () => {
+    const { fields } = schemaFields(schema)
+    const values = { ...initialValues(fields), Expression: 'defer', Word_Audio: 'web_audio_20261114_010203_0a1b2c.mp3' }
+    expect(formParams(fields, values)).toEqual({
+      Expression: 'defer',
+      Word_Audio: 'web_audio_20261114_010203_0a1b2c.mp3',
+      Photo: '',
+      Note: '',
+    })
+  })
+})
+
 describe('一行一筆的陣列欄位（x-ui: lines）', () => {
   const schema = {
     properties: {

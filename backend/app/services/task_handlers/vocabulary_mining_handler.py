@@ -34,7 +34,8 @@ class VocabularyMiningHandler(RelationGraphMixin):
 
     只負責 TOEIC_Coach_Dark_v2（舊版 TOEIC_Coach_Dark 已無筆記，不再列入）。
 
-    - 建立：手動填表，表單欄位就是 ``_v2`` 的欄位；JSON 與音檔欄位不列、建出來留空。
+    - 建立：手動填表，表單欄位就是 ``_v2`` 的欄位；JSON 欄位不列、建出來留空，音檔欄位在網頁上傳或錄音
+      （media_upload 計畫書 D5）。
     - 修改 ``Expression`` 時，基底依 ``RELATION_LABEL_FIELD`` 同步關聯表兩端的文字，圖譜不會斷線。
     - 圖譜節點的副標、詞性讀 ``Target_Translation``、``Target_POS``。
 
@@ -53,7 +54,7 @@ class VocabularyMiningHandler(RelationGraphMixin):
     GRAPH = GraphSpec(subtitle="Target_Translation", pos="Target_POS")
     RELATION_LABEL_FIELD = "Expression"
     JSON_FIELDS = ("Word_Family_JSON", "Synonyms_JSON", "Collocations_JSON")
-    MEDIA_FIELDS = ("Word_Audio", "Target_Example_Audio")
+    MEDIA_FIELDS = {"Word_Audio": "audio", "Target_Example_Audio": "audio"}
     CREATE_TAGS = ("VocabularyMining", "HandlerGenerated")
 
     @property

@@ -24,6 +24,7 @@ from app.core.exceptions import (
     HandlerOperationUnsupportedError,
     InvalidNoteFieldsError,
     InvalidNoteQueryError,
+    MediaFieldInvalidError,
     NoteNotFoundError,
 )
 from app.infrastructure.anki.search import note_types_query
@@ -235,7 +236,9 @@ class TestRegistryChecks:
             ({"CAPABILITIES": HandlerCapabilities(actions=("add_audio",))}, "execute_update"),
             ({"CAPABILITIES": HandlerCapabilities(graph=GraphCapability(supported=True, links=True))}, "RelationGraphMixin"),
             ({"JSON_FIELDS": ("Nope_JSON",)}, "Nope_JSON"),
-            ({"MEDIA_FIELDS": ("Nope_Audio",)}, "Nope_Audio"),
+            ({"MEDIA_FIELDS": {"Nope_Audio": "audio"}}, "Nope_Audio"),
+            ({"MEDIA_FIELDS": {"Word_Audio": "video"}}, "種類只能是"),
+            ({"JSON_FIELDS": ("Synonyms_JSON",), "MEDIA_FIELDS": {"Synonyms_JSON": "audio"}}, "同時宣告"),
             ({"GRAPH": GraphSpec(subtitle="Meaning")}, "Meaning"),
             ({"RELATION_LABEL_FIELD": "Word"}, "Word"),
         ],
@@ -287,7 +290,7 @@ class TestRegistryChecks:
             RELATION_LABEL_FIELD="Expression",
             GRAPH=GraphSpec(subtitle="Target_Translation", pos="Target_POS"),
             JSON_FIELDS=("Synonyms_JSON",),
-            MEDIA_FIELDS=("Word_Audio",),
+            MEDIA_FIELDS={"Word_Audio": "audio"},
             CAPABILITIES=HandlerCapabilities(graph=graph),
         ))
 
@@ -357,13 +360,42 @@ class TestStandardCreate:
         assert note.fields["Chunking"] == ""
         assert note.fields["Word_Audio"] == ""  # 沒填的欄位由 CardService 補空字串
 
-    def test_json_and_media_fields_rejected_before_writing(self):
+    def test_json_fields_rejected_before_writing(self):
         anki = FakeAnki()
-        handler = make_handler(JSON_FIELDS=("Synonyms_JSON",), MEDIA_FIELDS=("Word_Audio",))
-        for field in ("Synonyms_JSON", "Word_Audio"):
-            with pytest.raises(FieldNotEditableError, match=field):
-                _run(handler.execute_create(_card_service(anki), _relations(), "D", V2, {"Expression": "x", field: "y"}))
+        handler = make_handler(JSON_FIELDS=("Synonyms_JSON",), MEDIA_FIELDS={"Word_Audio": "audio"})
+        with pytest.raises(FieldNotEditableError, match="Synonyms_JSON"):
+            _run(handler.execute_create(
+                _card_service(anki), _relations(), "D", V2, {"Expression": "x", "Synonyms_JSON": "y"}
+            ))
         assert anki.added == []
+
+    def test_media_field_takes_an_uploaded_name_and_stores_anki_markup(self):
+        """media_upload 計畫書 §4：填 /media 產生的檔名成功，欄位存成 [sound:檔名]。"""
+        anki = FakeAnki()
+        handler = make_handler(MEDIA_FIELDS={"Word_Audio": "audio"})
+        _run(handler.execute_create(
+            _card_service(anki), _relations(), "D", V2, {"Expression": "x", "Word_Audio": "web_audio_20261114_010203_0a1b2c.mp3"}
+        ))
+        (note,) = anki.added
+        assert note.fields["Word_Audio"] == "[sound:web_audio_20261114_010203_0a1b2c.mp3]"
+
+    @pytest.mark.parametrize(
+        "value", ["a.mp3", "[sound:web_audio_20261114_010203_0a1b2c.mp3]", "web_image_20261114_010203_0a1b2c.jpg", "web_audio_20261114_010203_0a1b2c.exe", "../web_audio_20261114_010203_0a1b2c.mp3"]
+    )
+    def test_media_field_rejects_anything_else_before_writing(self, value):
+        anki = FakeAnki()
+        handler = make_handler(MEDIA_FIELDS={"Word_Audio": "audio"})
+        with pytest.raises(MediaFieldInvalidError, match="Word_Audio"):
+            _run(handler.execute_create(
+                _card_service(anki), _relations(), "D", V2, {"Expression": "x", "Word_Audio": value}
+            ))
+        assert anki.added == []
+
+    def test_empty_media_field_stays_empty(self):
+        anki = FakeAnki()
+        handler = make_handler(MEDIA_FIELDS={"Word_Audio": "audio"})
+        _run(handler.execute_create(_card_service(anki), _relations(), "D", V2, {"Expression": "x", "Word_Audio": "  "}))
+        assert anki.added[0].fields["Word_Audio"] == ""
 
     def test_unknown_field_is_field_mismatch(self):
         anki = FakeAnki()
@@ -426,12 +458,38 @@ class TestStandardUpdate:
             self._update(make_handler(), anki, _relations(), {}, action="add_audio")
         assert anki.updated == []
 
-    def test_json_and_media_fields_rejected(self):
+    def test_json_fields_rejected(self):
         anki = FakeAnki([_note(1)])
-        handler = make_handler(JSON_FIELDS=("Synonyms_JSON",), MEDIA_FIELDS=("Word_Audio",))
+        handler = make_handler(JSON_FIELDS=("Synonyms_JSON",), MEDIA_FIELDS={"Word_Audio": "audio"})
         with pytest.raises(FieldNotEditableError):
+            self._update(handler, anki, _relations(), {"Target_POS": "n.", "Synonyms_JSON": "[]"})
+        assert anki.updated == []
+
+    def test_media_field_rejects_typed_names_and_writes_nothing(self):
+        anki = FakeAnki([_note(1)])
+        handler = make_handler(MEDIA_FIELDS={"Word_Audio": "audio"})
+        with pytest.raises(MediaFieldInvalidError):
             self._update(handler, anki, _relations(), {"Target_POS": "n.", "Word_Audio": "[sound:x.mp3]"})
         assert anki.updated == []
+
+    def test_media_field_replaced_with_an_uploaded_name(self):
+        anki = FakeAnki([_note(1, Word_Audio="[sound:old.mp3]")])
+        handler = make_handler(MEDIA_FIELDS={"Word_Audio": "audio"})
+        self._update(handler, anki, _relations(), {"Word_Audio": "web_audio_20261114_010203_0a1b2c.mp3"})
+        assert anki.updated == [(1, {"Word_Audio": "[sound:web_audio_20261114_010203_0a1b2c.mp3]"})]
+
+    def test_media_field_sent_back_unchanged_is_not_written(self):
+        """欄位原本的值（腳本或 TG 寫的，不是 web_ 開頭）原樣送回代表沒動，不檢查也不寫。"""
+        anki = FakeAnki([_note(1, Word_Audio="[sound:old.mp3]")])
+        handler = make_handler(MEDIA_FIELDS={"Word_Audio": "audio"})
+        self._update(handler, anki, _relations(), {"Word_Audio": "[sound:old.mp3]", "Target_POS": "n."})
+        assert anki.updated == [(1, {"Target_POS": "n."})]
+
+    def test_media_field_can_be_cleared(self):
+        anki = FakeAnki([_note(1, Word_Audio="[sound:old.mp3]")])
+        handler = make_handler(MEDIA_FIELDS={"Word_Audio": "audio"})
+        self._update(handler, anki, _relations(), {"Word_Audio": ""})
+        assert anki.updated == [(1, {"Word_Audio": ""})]
 
     def test_unknown_field_is_field_mismatch(self):
         anki = FakeAnki([_note(1)])

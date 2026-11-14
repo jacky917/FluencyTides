@@ -341,10 +341,12 @@ class NoteNotOwnedByHandlerError(ServiceBaseError):
 
 
 class FieldNotEditableError(ServiceBaseError):
-    """這個欄位被 handler 宣告為 JSON 或媒體欄位，不能直接以文字修改或在建卡時填寫。
+    """這個欄位不能直接以文字修改或在建卡時填寫：handler 宣告為 JSON 欄位，或由系統維護。
 
-    The field is declared as a JSON or media field and cannot be written as
-    plain text.
+    The field cannot be written as plain text: a declared JSON field, or one
+    the system maintains.
+
+    媒體欄位另外處理：只能填 ``POST /media`` 命名格式的檔名（``MediaFieldInvalidError``）。
     """
     error_code = "FIELD_NOT_EDITABLE"
     status_code = 400
@@ -367,6 +369,66 @@ class JsonFieldConflictError(ServiceBaseError):
     """
     error_code = "JSON_FIELD_CONFLICT"
     status_code = 409
+
+
+class MediaTypeUnsupportedError(ServiceBaseError):
+    """上傳的檔案不是這個種類接受的格式，或內容無法辨識（media_upload 計畫書 D2）。
+
+    The uploaded file is not an accepted format for its kind.
+
+    依檔案內容判斷，不看副檔名：文字檔改名成 ``.mp3`` 一樣會被擋下。
+    """
+    error_code = "MEDIA_TYPE_UNSUPPORTED"
+    status_code = 415
+
+
+class MediaTooLargeError(ServiceBaseError):
+    """上傳的檔案超過大小上限（media_upload 計畫書 D2）。
+
+    The uploaded file is over the size limit.
+    """
+    error_code = "MEDIA_TOO_LARGE"
+    status_code = 413
+
+
+class MediaConvertFailedError(ServiceBaseError):
+    """音檔轉成 mp3 失敗：檔案損壞、裡面沒有聲音，或轉檔逾時（media_upload 計畫書 D2）。後端沒有 ffmpeg
+    是另一個錯誤（``MediaConverterUnavailableError``）。
+
+    Converting the audio to mp3 failed, most likely because of the file.
+    """
+    error_code = "MEDIA_CONVERT_FAILED"
+    status_code = 422
+
+
+class MediaConverterUnavailableError(ServiceBaseError):
+    """需要轉檔，但後端找不到或無法啟動 ffmpeg（media_upload 計畫書 D2）。這是伺服器的問題，換一個檔案
+    沒有用；不需轉檔的格式（mp3、ogg、wav）不受影響。
+
+    FFmpeg is missing or cannot start; a server problem, not the file's.
+    """
+    error_code = "MEDIA_CONVERTER_UNAVAILABLE"
+    status_code = 503
+
+
+class MediaUploadExpiredError(ServiceBaseError):
+    """建卡或修改用到的上傳檔已經不在暫存區：超過一天、後端重新部署過，或已經用在別張卡上（media_upload
+    計畫書 D1）。檢查在寫入任何東西之前，Anki 不會被動到。
+
+    An uploaded file used by a create or update is no longer staged; nothing was written.
+    """
+    error_code = "MEDIA_UPLOAD_EXPIRED"
+    status_code = 410
+
+
+class MediaFieldInvalidError(ServiceBaseError):
+    """媒體欄位填的不符合 ``POST /media`` 的命名格式，或種類不符（media_upload 計畫書 D3）。只檢查格式，
+    不確認檔案真的在 Anki 裡。
+
+    A media field was given something other than an upload-format name of its kind.
+    """
+    error_code = "MEDIA_FIELD_INVALID"
+    status_code = 422
 
 
 class InvalidNoteQueryError(ServiceBaseError):

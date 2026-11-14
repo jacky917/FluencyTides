@@ -174,8 +174,8 @@ class PersonProfileHandler(BaseHandler):
     - 建立（網頁、TG）：參數是 ``PersonCreateParams``；自動產生 ``Card_ID``、寫入 ``TG_Bot`` 與
       ``Updated_At``、六個 JSON 欄位填 ``[]``（會變的欄位沒填時留空，見下）。允許稱呼重複（不同的人
       可以都叫「田中さん」）。
-    - 修改一般欄位：JSON、照片與 ``Card_ID`` 不能直接改，非空的 ``Title`` 也不行（已併進 ``Company``
-      的職位，清空可以）；有改動時更新 ``Updated_At``。
+    - 修改一般欄位：JSON 與 ``Card_ID`` 不能直接改，非空的 ``Title`` 也不行（已併進 ``Company`` 的職位，
+      清空可以）；照片只能填網頁上傳取得的檔名（media_upload 計畫書 D3）；有改動時更新 ``Updated_At``。
     - 具名動作（``ACTIONS``）：追加互動紀錄（同時更新 ``Last_Contact``）、新增待追蹤、改待追蹤狀態、
       在其他清單新增一筆、在會變的欄位新增一筆（``add_history``）或劃掉／取消劃掉
       （``set_history_status``）、刪除一筆、設定照片。項目以 §3.3 的模型驗證；刪除與改狀態以指紋確認
@@ -203,7 +203,7 @@ class PersonProfileHandler(BaseHandler):
         **{name: JsonFieldSpec(item=model, title=title) for name, (model, title) in PERSON_JSON_ITEMS.items()},
         **{name: JsonFieldSpec(item=spec.model, title=spec.title) for name, spec in PERSON_HISTORY_FIELDS.items()},
     }
-    MEDIA_FIELDS = ("Photo",)
+    MEDIA_FIELDS = {"Photo": "image"}
     CREATE_TAGS = ("PersonProfile", "HandlerGenerated")
     CREATE_PARAMS = PersonCreateParams
     #: 網頁欄位搜尋的按鈕：名字合併各語言的姓名，相近的欄位放在一起。The field-search buttons.
@@ -312,8 +312,10 @@ class PersonProfileHandler(BaseHandler):
             parameters: ``{"action": ..., ...}``；``update_fields`` 同基底，其他見 ``ACTIONS``。
 
         Raises:
-            FieldNotEditableError: ``update_fields`` 改了 JSON、照片、``Card_ID`` 或寫入非空的 ``Title``。
+            FieldNotEditableError: ``update_fields`` 改了 JSON、``Card_ID`` 或寫入非空的 ``Title``。
                 A locked field.
+            MediaFieldInvalidError: ``update_fields`` 的照片不是 ``POST /media`` 命名格式的圖片檔名。
+                An invalid photo name.
             InvalidNoteFieldsError: 動作參數或項目內容不符格式。Invalid parameters or items.
             JsonItemChangedError: 要刪除或改狀態的那一筆已經變了。The item changed.
             AnkiFieldCorruptedError: 要改的清單格式壞了（不覆寫）。When the list is broken.
@@ -382,6 +384,8 @@ class PersonProfileHandler(BaseHandler):
             items.pop(index)
             await _write(card_service, note_id, {params.field: _serialize(params.field, items)})
         elif action == "set_photo":
+            # TG 的頭像流程用：照片檔名是 TG 產生的 avatar_…，所以這裡只擋不安全的字元，不套用網頁
+            # update_fields 的「只收 POST /media 命名格式」（media_names.media_field_text）
             params = _parse(_SetPhoto, parameters)
             if params.filename and not _MEDIA_NAME.fullmatch(params.filename):
                 raise InvalidNoteFieldsError(f"照片檔名不合法：{params.filename}")

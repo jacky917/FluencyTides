@@ -54,7 +54,7 @@ class TestSearchFields:
         handler = make_handler(
             "derived",
             CREATE_PARAMS=Params,
-            MEDIA_FIELDS=("Photo",),
+            MEDIA_FIELDS={"Photo": "image"},
             JSON_FIELDS=("Notes_JSON",),
             JSON_FIELD_SPECS={"Notes_JSON": JsonFieldSpec(item=Item, title="筆記")},
         )

@@ -12,7 +12,12 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.clock import today_iso
-from app.core.exceptions import FieldNotEditableError, InvalidNoteFieldsError, JsonItemChangedError
+from app.core.exceptions import (
+    FieldNotEditableError,
+    InvalidNoteFieldsError,
+    JsonItemChangedError,
+    MediaFieldInvalidError,
+)
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.anki import AnkiNoteInfo
 from app.schemas.person_profile import PERSON_HISTORY_FIELDS, PERSON_NOTE_TYPE, PersonCreateParams, item_fingerprint
@@ -75,10 +80,10 @@ class TestDeclarations:
         assert caps["update_fields"]["supported"] and caps["delete"]["supported"]
         assert handler_registry.handler_for_note_type(PERSON_NOTE_TYPE) is handler
 
-    def test_json_and_photo_fields_are_locked(self):
+    def test_json_fields_are_locked_and_photo_is_an_image(self):
         handler = PersonProfileHandler()
         assert list(handler.JSON_FIELDS) == JSON_FIELDS + HISTORY_FIELDS
-        assert handler.MEDIA_FIELDS == ("Photo",)
+        assert handler.MEDIA_FIELDS == {"Photo": "image"}
 
     def test_history_fields_are_editable_on_the_web(self):
         handler = PersonProfileHandler()
@@ -241,7 +246,22 @@ class TestUpdate:
         assert anki.updated == []
         assert anki.value(1, "Updated_At") == "2026-01-01"
 
-    @pytest.mark.parametrize("field", ["Card_ID", "Photo", "Interactions_JSON", "Interests", "Company", "Title"])
+    def test_photo_takes_an_uploaded_image_only(self):
+        """backlog F6：網頁上傳照片。只能填 /media 產生的圖片檔名，存成 <img>，並更新 Updated_At。"""
+        anki = PersonAnki([person(1, Display_Name="田中さん", Updated_At="2026-01-01")])
+        for bad in ("x.jpg", "web_audio_20261114_010203_0a1b2c.mp3"):
+            with pytest.raises(MediaFieldInvalidError):
+                _run(PersonProfileHandler().execute_update(
+                    _card_service(anki), _relations(), 1, {"action": "update_fields", "fields": {"Photo": bad}}
+                ))
+        assert anki.updated == []
+        _run(PersonProfileHandler().execute_update(
+            _card_service(anki), _relations(), 1, {"action": "update_fields", "fields": {"Photo": "web_image_20261114_010203_0a1b2c.jpg"}}
+        ))
+        assert anki.value(1, "Photo") == '<img src="web_image_20261114_010203_0a1b2c.jpg">'
+        assert anki.value(1, "Updated_At") != "2026-01-01"
+
+    @pytest.mark.parametrize("field", ["Card_ID", "Interactions_JSON", "Interests", "Company", "Title"])
     def test_locked_fields(self, field):
         anki = PersonAnki([person(1, Display_Name="田中さん", Card_ID="PP_x")])
         with pytest.raises(FieldNotEditableError):

@@ -25,6 +25,7 @@ import type {
   DeleteNoteResponse,
   GenericNoteDetail,
   HandlerInfo,
+  MediaUploadResponse,
   NoteDetail,
   SearchCondition,
   UpdateJsonResponse,
@@ -37,6 +38,7 @@ import type {
 } from '../types/api';
 import { readErrorBody } from '../lib/apiError';
 import { encodeRouteKey } from '../lib/capabilityRoutes';
+import type { MediaKind } from '../lib/mediaUpload';
 
 /**
  * Axios 實例，baseURL 對應後端 `/api/v1`。
@@ -404,6 +406,44 @@ export const FluencyTidesAPI = {
    */
   getAnkiMedia: (filename: string): Promise<Blob> =>
     apiClient.get(`/anki-media/${encodeURIComponent(filename)}`, { responseType: 'blob' }),
+
+  /**
+   * 讀回還沒用掉的上傳（暫存區裡的檔案，預覽用）。已經用掉、超過一天或後端重新部署過時回 404。
+   * Reads back a staged upload.
+   * @param filename - 上傳時回傳的檔名。The name returned by the upload.
+   * @returns 檔案內容。The file as a Blob.
+   */
+  getStagedMedia: (filename: string): Promise<Blob> =>
+    apiClient.get(`/media/${encodeURIComponent(filename)}`, { responseType: 'blob' }),
+
+  /**
+   * 上傳一個檔案（`docs/wip/media_upload_FEAT_2026-10-20.md` D1、D2）：只放在後端的暫存區，不寫進 Anki。
+   * 回傳的檔名填進建卡或修改欄位的媒體欄位，那個請求成功時才存進 Anki。格式不符回 415
+   * （`MEDIA_TYPE_UNSUPPORTED`）、太大回 413（`MEDIA_TOO_LARGE`）、轉檔失敗回 422（`MEDIA_CONVERT_FAILED`）、
+   * 後端沒有 ffmpeg 回 503（`MEDIA_CONVERTER_UNAVAILABLE`）。
+   * Uploads (stages) one file; the backend names it.
+   * @param file - 檔案（或錄音的 Blob）。The file.
+   * @param kind - 種類。The kind.
+   * @param options.fileName - 表單裡的檔名；省略時 File 用自己的名字、Blob 用 `upload`（後端不採用）。A form file name.
+   * @param options.onProgress - 上傳進度 0–1；瀏覽器算不出總量時為 null。Upload progress, or null.
+   * @param options.signal - 取消上傳。Aborts the upload.
+   * @returns 檔名、種類與大小（轉檔的是轉檔後的大小）。The staged name, kind and size.
+   */
+  uploadMedia: (
+    file: Blob,
+    kind: MediaKind,
+    options: { fileName?: string; onProgress?: (fraction: number | null) => void; signal?: AbortSignal } = {},
+  ): Promise<MediaUploadResponse> => {
+    const form = new FormData();
+    form.append('kind', kind);
+    form.append('file', file, options.fileName ?? (file instanceof File ? file.name : 'upload'));
+    return apiClient.post('/media', form, {
+      // 蓋掉實例預設的 application/json：axios 看到 FormData 配 JSON 類型會把表單轉成 JSON 字串
+      headers: { 'Content-Type': 'multipart/form-data' },
+      signal: options.signal,
+      onUploadProgress: (event) => options.onProgress?.(event.total ? event.loaded / event.total : null),
+    });
+  },
 
   // ======================================================================
   // 能力路由 (Capability Routes)

@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.core.exceptions import (
     FieldNotEditableError,
     HandlerOperationUnsupportedError,
+    MediaFieldInvalidError,
     NoteNotFoundError,
     NoteNotOwnedByHandlerError,
     NoteTypeNotCreatableError,
@@ -126,6 +127,8 @@ class TestCreate:
         with pytest.raises(FieldMismatchError):
             _run(_service(anki).create("vocabulary_mining", "D", V2, {"Expression": "x", "Meaning": "y"}))
         with pytest.raises(FieldNotEditableError):
+            _run(_service(anki).create("vocabulary_mining", "D", V2, {"Expression": "x", "Synonyms_JSON": "[]"}))
+        with pytest.raises(MediaFieldInvalidError):
             _run(_service(anki).create("vocabulary_mining", "D", V2, {"Expression": "x", "Word_Audio": "a.mp3"}))
         assert anki.added == [] and anki.syncs == []
 
@@ -191,13 +194,17 @@ class TestCreate:
 
 class TestStandardParamsModel:
     def test_schema_lists_editable_fields_with_first_required(self):
-        model = standard_params_model("M", ("Front", "Back Side", "Data_JSON", "Audio"), frozenset({"Data_JSON", "Audio"}))
+        model = standard_params_model(
+            "M", ("Front", "Back Side", "Data_JSON", "Audio"), frozenset({"Data_JSON"}), (("Audio", "audio"),)
+        )
         schema = model.model_json_schema(by_alias=True)
-        assert list(schema["properties"]) == ["Front", "Back Side"]
+        assert list(schema["properties"]) == ["Front", "Back Side", "Audio"]
+        # 媒體欄位照列，標成上傳元件（media_upload 計畫書 D3）
+        assert schema["properties"]["Audio"] == {"default": "", "title": "Audio", "type": "string", "x-ui": "audio"}
         assert schema["properties"]["Back Side"]["title"] == "Back Side"
         assert schema["required"] == ["Front"]
         dumped = model.model_validate({"Front": " x ", "Back Side": "y", "Extra": "z"}).model_dump(by_alias=True)
-        assert dumped == {"Front": "x", "Back Side": "y", "Extra": "z"}
+        assert dumped == {"Front": "x", "Back Side": "y", "Audio": "", "Extra": "z"}
 
 
 # =============================================================================
@@ -378,10 +385,12 @@ class TestListHandlers:
         assert vocab["title"] == "單字卡" and vocab["note_types"] == [V2]
         schema = vocab["create_schema"]
         assert schema["required"] == ["Expression"]
-        assert "Synonyms_JSON" not in schema["properties"] and "Word_Audio" not in schema["properties"]
+        assert "Synonyms_JSON" not in schema["properties"]
+        assert schema["properties"]["Word_Audio"]["x-ui"] == "audio"
         assert schema["properties"]["Target_Translation"] == {"default": "", "title": "Target_Translation", "type": "string"}
         assert vocab["json_fields"] == ["Word_Family_JSON", "Synonyms_JSON", "Collocations_JSON"]
-        assert vocab["media_fields"] == ["Word_Audio", "Target_Example_Audio"]
+        assert vocab["media_fields"] == {"Word_Audio": "audio", "Target_Example_Audio": "audio"}
+        assert handlers["person_profile"]["media_fields"] == {"Photo": "image"}
         # 不開放、或不是表單流程的沒有表單
         for name in ("expression_correction", "speaking_trilingual", "jp_verb_pair", "jp_core_verb"):
             assert handlers[name]["create_schema"] is None, name

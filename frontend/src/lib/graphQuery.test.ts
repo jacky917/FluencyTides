@@ -18,7 +18,7 @@ function handler(name: string, graph: boolean, links = false): HandlerInfo {
     },
     create_schema: null,
     json_fields: [],
-    media_fields: [],
+    media_fields: {},
   }
 }
 

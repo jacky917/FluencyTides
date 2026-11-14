@@ -24,11 +24,28 @@ from tests.test_note_service import SyncingAnki, _model_note
 
 
 class ApiAnki(SyncingAnki):
-    """再加上牌組相關方法（建卡時 ``ensure_deck_exists`` 會查牌組、不存在就建立）。"""
+    """再加上牌組相關方法（建卡時 ``ensure_deck_exists`` 會查牌組、不存在就建立），與媒體資料夾
+    （存檔、刪檔，以及查「哪張筆記的欄位含這個檔名」）。"""
 
     def __init__(self, notes=(), **kwargs):
         super().__init__(notes, **kwargs)
         self.decks = {"Default": 1, "English::TOEIC": 2}
+        self.media: dict[str, str] = {}
+        self.media_deleted: list[str] = []
+
+    async def store_media_file(self, params) -> str:
+        self.media[params.filename] = params.data or ""
+        return params.filename
+
+    async def delete_media_file(self, filename: str) -> None:
+        self.media_deleted.append(filename)
+        self.media.pop(filename, None)
+
+    async def find_notes(self, query: str) -> list[int]:
+        if "note:" in query:
+            return await super().find_notes(query)
+        term = query.strip('"').replace("\\", "")
+        return [n.noteId for n in self.notes.values() if any(term in f["value"] for f in n.fields.values())]
 
     async def get_deck_names(self) -> list[str]:
         return list(self.decks)
@@ -56,6 +73,18 @@ def anki():
         _model_note(7, "JP_Context_Dark"),
         _model_note(3, "Notion_SRS_Dark"),
     ])
+
+
+@pytest.fixture(autouse=True)
+def staging(tmp_path, monkeypatch):
+    """每個測試自己的上傳暫存區（不碰系統暫存目錄）。"""
+    from app.services.media_staging import media_staging
+
+    monkeypatch.setattr(media_staging, "root", tmp_path / "staging")
+    return media_staging
+
+
+AUDIO = "web_audio_20261114_010203_0a1b2c.mp3"
 
 
 @pytest.fixture
@@ -133,6 +162,77 @@ def test_create_in_a_new_deck(client, anki):
     assert "English::New" in anki.decks
 
 
+def _create_with_audio(client, **extra):
+    return client.post("/api/v1/handlers/vocabulary_mining/notes", json={
+        "deck": "English::TOEIC", "note_type": V2, "params": {"Expression": "defer", "Word_Audio": AUDIO, **extra},
+    })
+
+
+def test_create_with_uploaded_audio(client, anki, staging):
+    """media_upload 計畫書 D1：建卡成功時暫存的檔案才存進 Anki，欄位存成 [sound:檔名]，暫存檔刪掉。"""
+    staging.put(AUDIO, "ID3-audio".encode())
+    response = _create_with_audio(client)
+    assert response.status_code == 201
+    (note,) = anki.added
+    assert note.fields["Word_Audio"] == f"[sound:{AUDIO}]"
+    assert note.fields["Target_Example_Audio"] == ""
+    assert list(anki.media) == [AUDIO]
+    assert staging.read(AUDIO) is None
+
+
+def test_failed_create_leaves_anki_as_before(client, anki, staging):
+    """建卡失敗：Anki 沒有筆記也沒有這個音檔（回到送出前）；暫存檔留著，修正後重送就成功。"""
+    staging.put(AUDIO, "ID3-audio".encode())
+    response = _create_with_audio(client, Meaning="不存在的欄位")
+    assert _error(response) == (400, "FIELD_MISMATCH")
+    assert anki.added == [] and anki.media == {} and anki.media_deleted == [AUDIO]
+    assert staging.read(AUDIO) == "ID3-audio".encode()
+
+    assert _create_with_audio(client).status_code == 201
+    assert list(anki.media) == [AUDIO]
+
+
+def test_failed_create_keeps_a_file_a_note_uses(client, anki, staging):
+    """撤回前會查有沒有筆記用到：例如同一個檔案上次其實建成功了，這次重送才撞到重複。"""
+    anki.notes[1].fields["Word_Audio"]["value"] = f"[sound:{AUDIO}]"
+    staging.put(AUDIO, "ID3-audio".encode())
+    assert _error(_create_with_audio(client, Meaning="x"))[0] == 400
+    assert anki.media_deleted == [] and AUDIO in anki.media
+
+
+def test_create_with_an_expired_upload_writes_nothing(client, anki):
+    response = _create_with_audio(client)
+    assert _error(response) == (410, "MEDIA_UPLOAD_EXPIRED")
+    assert anki.added == [] and anki.media == {}
+
+
+def test_create_form_lists_media_fields_as_uploads(client):
+    handlers = {h["name"]: h for h in client.get("/api/v1/handlers").json()}
+    vocab = handlers["vocabulary_mining"]
+    assert vocab["media_fields"] == {"Word_Audio": "audio", "Target_Example_Audio": "audio"}
+    assert vocab["create_schema"]["properties"]["Word_Audio"]["x-ui"] == "audio"
+    assert handlers["speaking_coach"]["media_fields"] == {}
+
+
+def test_patch_media_field(client, anki, staging):
+    url = "/api/v1/handlers/vocabulary_mining/notes/1"
+    assert _error(client.patch(url, json={"fields": {"Word_Audio": "[sound:typed.mp3]"}})) == (422, "MEDIA_FIELD_INVALID")
+    assert anki.updated == []
+    staging.put(AUDIO, "ID3-audio".encode())
+    assert client.patch(url, json={"fields": {"Word_Audio": AUDIO}}).status_code == 200
+    assert anki.updated == [(1, {"Word_Audio": f"[sound:{AUDIO}]"})]
+    assert list(anki.media) == [AUDIO] and staging.read(AUDIO) is None
+
+
+def test_failed_patch_leaves_anki_as_before(client, anki, staging):
+    staging.put(AUDIO, "ID3-audio".encode())
+    url = "/api/v1/handlers/vocabulary_mining/notes/1"
+    response = client.patch(url, json={"fields": {"Word_Audio": AUDIO, "Meaning": "不存在的欄位"}})
+    assert _error(response) == (400, "FIELD_MISMATCH")
+    assert anki.updated == [] and anki.media == {}
+    assert staging.read(AUDIO) is not None
+
+
 def test_invalid_params_are_422_with_field_loc(client, anki):
     response = client.post("/api/v1/handlers/vocabulary_mining/notes", json={
         "deck": "D", "note_type": V2, "params": {"Expression": "  ", "Target_POS": 3},
@@ -155,10 +255,15 @@ def test_invalid_params_are_422_with_field_loc(client, anki):
         ("nope", {"deck": "D", "note_type": V2, "params": {}}, (404, "HANDLER_NOT_FOUND")),
         ("vocabulary_mining", {"deck": "D", "note_type": V2, "params": {"Expression": "x", "Meaning": "y"}},
          (400, "FIELD_MISMATCH")),
-        ("vocabulary_mining", {"deck": "D", "note_type": V2, "params": {"Expression": "x", "Word_Audio": "a.mp3"}},
+        ("vocabulary_mining", {"deck": "D", "note_type": V2, "params": {"Expression": "x", "Synonyms_JSON": "[]"}},
          (400, "FIELD_NOT_EDITABLE")),
+        ("vocabulary_mining", {"deck": "D", "note_type": V2, "params": {"Expression": "x", "Word_Audio": "a.mp3"}},
+         (422, "MEDIA_FIELD_INVALID")),
     ],
-    ids=["wrong-note-type", "script-only", "closed", "unknown-handler", "unknown-field", "media-field"],
+    ids=[
+        "wrong-note-type", "script-only", "closed", "unknown-handler", "unknown-field", "json-field",
+        "media-field-typed-name",
+    ],
 )
 def test_create_errors(client, anki, handler, body, expected):
     response = client.post(f"/api/v1/handlers/{handler}/notes", json=body)
