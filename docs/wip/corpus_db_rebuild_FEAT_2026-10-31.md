@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-10-31 |
 | **性質** | 新增機能設計 + 實作工作項（資料庫遷移與資料修復） |
-| **狀態** | 🔨 實作完成、待切換：M1（新庫已建並驗證）、M2b（D9 程式改寫，含審查修正）完成；M3 切換尚未進行（2026-11-01） |
+| **狀態** | 🔨 實作完成、本機與正式機都已切換：M1（新庫已建並驗證）、M2b（D9 程式改寫，含審查修正）完成並合併進 main。M3 的切換：正式機 2026-11-01（依 `senren_banka_corpus_import_FEAT_2026-11-08.md` §1 的更正；2026-11-12 查證正式機後端容器的 `MYSQL_DATABASE` 是 `fluencytides_corpus`）；本機 `backend/.env` 2026-11-12 切換（備份 `.env.bak_20261112_corpus_cutover`，連線測試回 `fluencytides_corpus`，`rebuild.py` 的拒絕執行條件從此在本機成立）。本機 `.env` 的 8 個舊 `JP_*` 設定 2026-11-14 已刪（備份 `.env.bak_20261114_remove_legacy_jp`；正式機後端容器本來就沒有）。**還沒做**：§8 兩項 M3 驗收裡「實際建一張核心動詞卡、一張自他動詞卡」——2026-11-14 只做了不寫入的試跑（兩條管線 `--limit 1 --dry-run --game SabbatOfTheWitch` 都選得到句子，語音、頭像資料夾由 `GAME_ASSETS_ROOT`＋`game_profiles` 找得到）。ES：2026-11-14 逐筆核對，魔女的夜宴 53,196 筆與新庫完全一致，不需要重建；備份與 `rebuild.py` 的保護見 `data_stores_AUDIT_2026-11-01.md` §6 |
 | **範圍** | 同一台 MySQL（192.168.50.172）新增資料庫 `fluencytides_corpus`；表依用途分成 `game_`（遊戲內容）、`nlp_`（語言標注）、`card_`（卡片帳本）、`rel_`（通用關係）、`story_`（流程圖）五個系列（D0）；從 `yuzusoft` 遷移卡片紀錄、詞彙索引、讀音判定（保留原 id，欄位改成多遊戲）；遊戲設定從 `.env` 移到 `game_profiles`；遷移腳本 `backend/scripts/database/corpus_rebuild/`；切換 `MYSQL_DATABASE`（本機與正式機 `.env`） |
 | **不動** | `yuzusoft` 資料庫與網站的 SQLite（兩者原樣保留，不刪、不改權限，程式不再讀寫）；Elasticsearch 索引的文件格式與 `_id`；Anki 筆記 |
-| **PR / 進度** | 尚未開始 |
+| **PR / 進度** | PR [#33](https://github.com/jacky917/FluencyTides/pull/33)（語料庫重建與劇情流程圖，已合併 2026-11-03）；隨後的 CI 修正 [#34](https://github.com/jacky917/FluencyTides/pull/34)（已合併 2026-11-03） |
 | **關聯文件** | `docs/wip/story_flowchart_FEAT_2026-10-31.md`（流程圖，建在本計畫的新表上）；`game\SW_reverse_notes.md`、`game\SW_calib\README.md`（錨點來源）；`backend/scripts/common/database/init_db.py`（既有表的建表 SQL） |
 
 ---

@@ -1,6 +1,6 @@
 # 人脈卡：資料附登錄日期與有效狀態、新增按鈕移到各區塊（FEAT）
 
-- 狀態：**已實作，待使用者驗收**（分支 `claude/person-field-history-a92427`，未 push、未部署；實作紀錄見 §8）
+- 狀態：**已實作並合併進 main，待使用者驗收**（PR [#39](https://github.com/jacky917/FluencyTides/pull/39)，2026-11-12 合併，之後由 CI 部署 main；合併前 2026-11-07 起先用 SSH 部署在正式機執行。分支 `claude/person-field-history-a92427` 已刪除；實作紀錄見 §8）
 - 日期：2026-11-07
 - 相關：`docs/archive/person_profile_card_FEAT_2026-10-23.md`（人脈卡原計畫書）、`docs/archive/json_field_editor_FEAT_2026-10-20.md`（網頁編輯 JSON 欄位）
 

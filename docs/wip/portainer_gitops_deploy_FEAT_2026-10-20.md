@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-10-20 |
 | **性質** | 部署流程重新設計 + 實作工作項（含 NAS 端手動步驟） |
-| **狀態** | 🚧 實作中（P0～P3 完成，進行 P4） |
+| **狀態** | 🚧 P0～P3 完成，P4 收尾剩兩項。P4 第 1 項（CasaOS 外部連結）2026-10-20 完成；第 2 項（端到端）已由日常部署涵蓋：2026-11-12 PR #38 合併後 CI 自動部署，正式機前後端都回報 `20413d5`。**還沒做**：第 3 項（補驗收結果、本文件移入 `docs/archive/`）；第 4 項（刪除正式機的舊目錄，2026-11-12 查證 `/home/jacky917/FluencyTides` 還在） |
 | **範圍** | `.github/workflows/main.yml`、`.github/scripts/wait_for_deploy.py`、`frontend/nginx.conf.template`、`deploy_local.sh`（退役）、`README.md`；R1 追加：前後端 Dockerfile、`backend/app/api/health.py`；NAS 端：Portainer 掛載、兩個 Portainer Git stack、CasaOS 外部連結；GitHub：secrets 與 workflow 啟用狀態 |
 | **不動** | 後端 / 前端應用程式碼（例外：R1 為 `/api/health` 加 `git_sha` 欄位）；`backend/docker-compose.yml` 與 `frontend/docker-compose.yml` 的服務定義（映像、掛載、網路、`env_file` 路徑全部照舊）；Cloudflare Tunnel 既有 hostname；Portainer 版本升級；資料庫內容 |
-| **PR / 進度** | P0 → [#28](https://github.com/jacky917/FluencyTides/pull/28)（已合併 2026-10-20，034d4de）；P1、P3 完成 2026-10-20；後端 stack 改名 → [#29](https://github.com/jacky917/FluencyTides/pull/29)（已合併 2026-10-20，59151a4）；R1 部署結果驗證 → [#31](https://github.com/jacky917/FluencyTides/pull/31)（待合併） |
+| **PR / 進度** | P0 → [#28](https://github.com/jacky917/FluencyTides/pull/28)（已合併 2026-10-20，034d4de）；P1、P3 完成 2026-10-20；後端 stack 改名 → [#29](https://github.com/jacky917/FluencyTides/pull/29)（已合併 2026-10-20，59151a4）；R1 部署結果驗證 → [#31](https://github.com/jacky917/FluencyTides/pull/31)（已合併 2026-10-20） |
 | **關聯文件** | `docs/bk/05_DevOps_and_Deployment.md`（舊部署說明，F059 即「部署失敗不報錯」）、`docs/archive/claude_cli_in_container_FEAT_2026-08-29.md` §5（記載「CI 已停用」） |
 
 ---

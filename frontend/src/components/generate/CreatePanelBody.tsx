@@ -1,6 +1,6 @@
 /**
  * 建卡面板的內容：卡片類型選單，加上依建卡流程切換的表單（填表或預覽）。Card Generator 頁與卡片
- * 瀏覽頁的建卡畫面共用（`docs/wip/card_list_create_FEAT_2026-10-30.md` D3）。
+ * 瀏覽頁的建卡畫面共用（`docs/archive/card_list_create_FEAT_2026-10-30.md` D3）。
  *
  * - 卡片類型依 `capabilities.create.channels` 呈現：含 web 可選；只能在 TG、本機腳本建立的反灰並
  *   顯示原因；沒有任何管道的不顯示。前端不自行判斷，只看宣告（`lib/handlerCapabilities.ts`）。
