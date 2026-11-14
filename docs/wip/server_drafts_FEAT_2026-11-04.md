@@ -4,11 +4,11 @@
 |---|---|
 | **創建日期** | 2026-11-04（2026-11-07 依使用者決定改寫：只存記憶體、全站一把鎖、TG 建卡移到網頁、腳本例外） |
 | **性質** | 新增機能設計 + 實作工作項 |
-| **狀態** | 🚧 PR 1（P1～P4）、PR 2（P6、P7）實作完成，待部署後在正式站驗收（§9.1、§9.2）；PR 3 等使用者確認網頁沒問題、明確指示後才開始。實作紀錄見 §11、§12 |
+| **狀態** | 🚧 PR 1（P1～P4）、PR 2（P6、P7）已合併進 main 並在正式機執行（PR [#38](https://github.com/jacky917/FluencyTides/pull/38)，2026-11-12 合併；2026-11-07 起先用 SSH 部署），待在正式站驗收（§9.1、§9.2）；PR 3 等使用者確認網頁沒問題、明確指示後才開始。實作紀錄見 §11、§12 |
 | **範圍** | 後端：預覽流程的草稿改為背景生成、存在後端記憶體（新的 `CreateSession`）；全站「建卡工作階段」鎖，網頁的建卡入口都要先通過它；新的 `/drafts` 端點、建卡帶 `draft_id`。前端：`components/generate/PreviewCreate.tsx` 改讀寫後端草稿、全站的生成完成通知、生成中的按鈕狀態、填表內容改存 localStorage。最後兩個階段：網頁補上對話卡（單語）與外語糾錯的建卡；網頁驗收後，依使用者指示移除 TG 的建卡（D10） |
 | **不動** | LLM 呼叫本身（提示詞、模型路由、`execute_draft` 的輸出形狀、`cli_base.py` 的子程序呼叫方式）；建卡的寫入流程（`execute_create`、同步 AnkiWeb）；本機批次腳本的整條路（`/verb-pair/generate-child-cards`、`/core-verb/generate-child-cards`、直接呼叫 AnkiConnect 的腳本）；資料庫（不新增資料表）；TG 的錄音評分、上傳音檔、刪除條目、人脈卡 `/p` 的編輯、`/sync`、`/setconfig`；卡片瀏覽頁與 Card Generator 的版面 |
-| **PR / 進度** | 分支 `feat/server-drafts`；PR 1 已實作並經多面向審查修正（2026-11-07：後端 1663 項、前端 332 項測試與 lint、build 通過；以假 Anki 與假 LLM 在瀏覽器實測，見 §11）；PR 2 同一個分支接著做（後端 1693 項、前端 346 項，見 §12） |
-| **關聯文件** | `docs/archive/trilingual_web_create_FEAT_2026-10-30.md`（預覽流程；當時決定「草稿不存在後端」，本計畫取代該項）；`docs/wip/card_list_create_FEAT_2026-10-30.md`（兩頁共用 `CreatePanelBody`）；`docs/wip/backlog.md` W1、W2（單語對話卡、外語糾錯的網頁建卡，併入本計畫 D10，完成後從 backlog 刪除） |
+| **PR / 進度** | 計畫書的 PR 1、PR 2 一起以 GitHub PR [#38](https://github.com/jacky917/FluencyTides/pull/38) 合併（2026-11-12，merge commit `20413d5`；分支 `feat/server-drafts` 已刪除）；PR 3 未開始。PR 1 已實作並經多面向審查修正（2026-11-07：後端 1663 項、前端 332 項測試與 lint、build 通過；以假 Anki 與假 LLM 在瀏覽器實測，見 §11）；PR 2 同一個分支接著做（後端 1693 項、前端 346 項，見 §12） |
+| **關聯文件** | `docs/archive/trilingual_web_create_FEAT_2026-10-30.md`（預覽流程；當時決定「草稿不存在後端」，本計畫取代該項）；`docs/archive/card_list_create_FEAT_2026-10-30.md`（兩頁共用 `CreatePanelBody`）；`docs/wip/backlog.md` W1、W2（單語對話卡、外語糾錯的網頁建卡，併入本計畫 D10，完成後從 backlog 刪除） |
 
 > **改寫說明（2026-11-07）**：第一版（2026-11-04）把草稿存在網站 SQLite 的新表 `card_drafts`，每種卡片各一份。討論後使用者決定改成最簡單的設計：
 > - 草稿只存在後端記憶體，不新增資料表；後端重啟時草稿遺失，接受這個代價（§8 R1）。

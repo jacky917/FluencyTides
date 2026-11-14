@@ -42,7 +42,7 @@ interface CardListPanelProps {
 
 /**
  * 卡片清單面板（含 Anki 搜尋與分頁）。每張顯示完整文字，放不下兩行時才由 CSS 截斷。標題列右側的「＋」
- * 在右欄打開建卡表單（`docs/wip/card_list_create_FEAT_2026-10-30.md` D6）。
+ * 在右欄打開建卡表單（`docs/archive/card_list_create_FEAT_2026-10-30.md` D6）。
  * The card list panel with Anki search and paging.
  * @returns 面板 JSX。Panel JSX.
  */

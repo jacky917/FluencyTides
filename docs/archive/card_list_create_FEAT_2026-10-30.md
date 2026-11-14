@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-10-30（2026-11-03 依 `main` `863c495` 重寫） |
 | **性質** | 新增機能設計 + 實作工作項 |
-| **狀態** | 🚧 實作完成，待在有 Anki 的環境驗收（2026-11-03） |
+| **狀態** | ✅ 實作完成，已合併進 main 並由 CI 部署（PR [#36](https://github.com/jacky917/FluencyTides/pull/36) 2026-11-03、PR [#37](https://github.com/jacky917/FluencyTides/pull/37) 2026-11-04）；2026-11-12 歸檔。§7 中沒有連真實後端與 Anki 驗過的項目移到 `docs/wip/backlog.md` V6 |
 | **範圍** | `frontend/src/pages/Cards.tsx`、`frontend/src/components/cards/`（清單標題列的「＋」、新的建卡面板）、`frontend/src/hooks/useCardNavigation.ts`、`frontend/src/lib/cardBrowse.ts`、`frontend/src/pages/CardGenerator.tsx`（把建卡表單與卡片類型選單抽成共用元件）、`frontend/src/components/generate/`（表單與預覽流程加「建立後」的回呼） |
 | **不動** | 後端（handler、端點、`create_schema` 都不改）；Card Generator 頁的行為與畫面；各卡片類型的建卡能力；卡片的刪除（見 §8） |
-| **PR / 進度** | 分支 `feat/card-list-create`；P1～P4 完成，瀏覽器實測以攔截 API 的假資料進行（見 §7） |
+| **PR / 進度** | PR [#36](https://github.com/jacky917/FluencyTides/pull/36)（建卡面板）、[#37](https://github.com/jacky917/FluencyTides/pull/37)（牌組不能用時的提示與停用原因）已合併，分支 `feat/card-list-create` 已刪除；P1～P4 完成，瀏覽器實測以攔截 API 的假資料進行（見 §7） |
 | **關聯文件** | `docs/archive/handlers_api_redesign_FEAT_2026-10-20.md`（`create_schema`、建卡能力宣告、Card Generator 頁 §6）；`docs/archive/trilingual_web_create_FEAT_2026-10-30.md`（預覽流程）；`docs/wip/deck_create_FEAT_2026-10-30.md`（牌組樹新增牌組，與本計畫各自獨立） |
 
 > **重寫說明（2026-11-03）**：第一版寫在 2026-10-20 的舊基底（`f00fc09`）上，當時建卡表單一律送 `{ word }`、有筆記類型下拉。之後 PR #32 改成依 handler 宣告產生表單（`create_schema`）、建卡走 `POST /handlers/{name}/notes`、牌組不能是「全部牌組」，還多了三語卡的預覽流程。舊分支 `feat/cards-create-panel` 照搬舊表單，與現在的 `main` 衝突；本計畫改為重用 Card Generator 現有的表單元件，不再另寫一份。

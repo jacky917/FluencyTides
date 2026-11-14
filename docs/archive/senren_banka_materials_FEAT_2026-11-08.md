@@ -4,10 +4,10 @@
 |---|---|
 | **創建日期** | 2026-11-08 |
 | **性質** | 素材結構設計（還不實作） |
-| **狀態** | ✅ 成品已產生並通過驗證（2026-11-08；成品在 `Y:\material\yuzusoft\SenrenBanka`，原始解包不動）。後端匯入（`game_profiles`、語料庫）尚未進行 |
+| **狀態** | ✅ 成品已產生並通過驗證（2026-11-08；成品在 `Y:\material\yuzusoft\SenrenBanka`，原始解包不動）。後端匯入（語料庫、流程圖）已由下一份計畫 `docs/wip/senren_banka_corpus_import_FEAT_2026-11-08.md` 完成（PR [#40](https://github.com/jacky917/FluencyTides/pull/40)，2026-11-12 合併）。本計畫沒有剩餘工作，2026-11-12 歸檔 |
 | **範圍** | 成品素材 `Y:\material\yuzusoft\SenrenBanka\`（NAS `\192.168.50.250\sn640`）的結構與命名；產生腳本 `game\千戀＊萬花\SB_calib\work\build_materials.py`、`build_avatars.py`；`game_profiles` 的 `voice_dir`／`avatar_dir` 值 |
 | **不動** | 校準產出（`SB_point_table`、`SB_flowchart_nodes`、`SB_bgm_titles`，只讀）；FluencyTides 的程式碼與資料庫（語料庫匯入、流程圖擷取器是下一份計畫）；魔女的夜宴的素材；遊戲本體與加密封包 |
-| **PR / 進度** | 尚未開始 |
+| **PR / 進度** | 素材已產生（2026-11-08）。本計畫不改 repo 的程式，產生腳本在 `game\千戀＊萬花\SB_calib\work\`；計畫書本身隨 PR [#40](https://github.com/jacky917/FluencyTides/pull/40) 進 main |
 | **關聯文件** | `docs/wip/story_flowchart_FEAT_2026-10-31.md`（流程圖建置包與素材物件鍵）；`docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md`（`game_*` 資料表）；`game\千戀＊萬花\SB_calib\README.md`（校準，§5.15～5.16 素材核對）；`game\千戀＊萬花\SB_material_check.json` |
 
 > **2026-11-08 定案**（使用者：「就照這個方案，複製一份放到 Y:\material\yuzusoft\SenrenBanka，不要更動原文件」）：

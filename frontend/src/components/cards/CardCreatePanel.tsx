@@ -29,7 +29,7 @@ interface CardCreatePanelProps {
 }
 
 /**
- * 卡片瀏覽頁右欄的建卡面板（`docs/wip/card_list_create_FEAT_2026-10-30.md` D2、D5）：外框、關閉按鈕
+ * 卡片瀏覽頁右欄的建卡面板（`docs/archive/card_list_create_FEAT_2026-10-30.md` D2、D5）：外框、關閉按鈕
  * 與捲動，內容是與 Card Generator 共用的 `CreatePanelBody`。卡片類型與草稿存在瀏覽器儲存空間，
  * 切換版面而重新掛載時都還在。
  *

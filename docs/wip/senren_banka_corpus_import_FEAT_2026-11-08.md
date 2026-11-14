@@ -4,11 +4,11 @@
 |---|---|
 | **創建日期** | 2026-11-08 |
 | **性質** | 新增機能設計 + 實作工作項（第二款遊戲） |
-| **狀態** | 🚀 已用 SSH 部署到正式機（2026-11-08，`deploy_remote.sh all --allow-dirty`，版本 `3858f03`＝正式機原版本 `db22e35`＋本分支未 commit 的改動）；素材放正式機的本機資料夾。**還沒合併進 main**：下一次 CI 部署 main 會蓋掉。ES 同步還沒跑。見 §9.13 |
+| **狀態** | 🚀 已合併進 main（PR [#40](https://github.com/jacky917/FluencyTides/pull/40)，2026-11-12，commit `09f6f92`），之後由 CI 部署 main。合併前先用 SSH 部署在正式機執行（2026-11-08，`deploy_remote.sh all --allow-dirty`，版本 `3858f03`＝當時正式機版本 `db22e35`＋本分支未 commit 的改動，見 §9.13）；素材放正式機的本機資料夾。ES 同步 2026-11-14 完成（`sync_mysql_to_es.py --game SenrenBanka`，55,726 筆，與新庫逐筆一致；魔女的夜宴 53,196 筆不變） |
 | **範圍** | 語料庫：`fluencytides_corpus` 的 `game_*` 表加入 `SenrenBanka`（不動魔女的夜宴的列）。匯入腳本：`backend/scripts/database/corpus_rebuild/` 新增遊戲匯入。流程圖：`backend/scripts/story/extractors/senren_banka.py`、`backend/app/services/story/games/`、`backend/app/infrastructure/krkr/`（新存檔格式）、`frontend/public/story-themes/`。素材：`Y:\material\yuzusoft\SenrenBanka\` |
 | **不動** | 魔女的夜宴在新庫的所有列；舊庫 `yuzusoft`（只讀；P0 的刪除除外）；遊戲本體與加密封包；`SB_calib`（只讀它的產出） |
 | **基準分支** | `main`（`4b99f04`）。**不要在 `feat/cards-create-panel` 上做**：那個分支比 main 落後 80 個 commit，沒有語料庫與流程圖的程式 |
-| **關聯文件** | main 的 `docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md`（語料庫，🔨 待切換）、`docs/wip/story_flowchart_FEAT_2026-10-31.md`（流程圖）；`docs/wip/senren_banka_materials_FEAT_2026-11-08.md`（素材）；`docs/wip/senren_banka_scripts_import_FEAT_2026-11-08.md`（誤匯入舊表，本計畫取代它） |
+| **關聯文件** | `docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md`（語料庫，本機與正式機都已切換）、`docs/wip/story_flowchart_FEAT_2026-10-31.md`（流程圖）；`docs/archive/senren_banka_materials_FEAT_2026-11-08.md`（素材）；`docs/wip/senren_banka_scripts_import_FEAT_2026-11-08.md`（誤匯入舊表，本計畫取代它） |
 
 ## 1. 現況（2026-11-08 對 main 與資料庫查證）
 
@@ -235,7 +235,7 @@ DELETE FROM scripts WHERE source = '千恋＊万花';
 - [ ] 每句台詞的日文、繁中、說話者、語音和素材 `script_lines.jsonl` 一致（沿用 `check_material.py` 的比對）。
 - [ ] 每個有語音的列，`Y:\…\voice\<voice_file>.mp3` 都存在；有頭像的說話者，`avatar_file` 都存在。
 - [ ] 匯入重跑結果相同；已有卡片紀錄引用時拒絕重跑。
-- [ ] ES 中 `千恋＊万花` 的文件數＝`in_corpus=1` 的台詞數，魔女的夜宴的文件數不變。
+- [x] ES 中 `千恋＊万花` 的文件數＝`in_corpus=1` 的台詞數，魔女的夜宴的文件數不變。（2026-11-14：55,726／53,196，逐筆比對沒有缺、多或內容不同）
 - [ ] `--game SenrenBanka` 建出的卡片語音、頭像、前後文正確。
 - [ ] 流程圖：分頁、官方標題、選項分歧和遊戲內流程圖一致；推定的連線有標示。
 - [ ] 下載的存檔在遊戲內讀得到，停在指定的句子。
@@ -473,4 +473,4 @@ tar -C build/story-assets -cf - story/SenrenBanka | ssh jacky917@192.168.50.172 
 ./deploy_remote.sh rollback frontend pre-db22e35
 ```
 
-- **ES 同步還沒跑**：千戀＊萬花的台詞還搜尋不到。跑法見 §9.4。
+- ~~**ES 同步還沒跑**：千戀＊萬花的台詞還搜尋不到。跑法見 §9.4。~~ 2026-11-14 已同步，搜尋得到。

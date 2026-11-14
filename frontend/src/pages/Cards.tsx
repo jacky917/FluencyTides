@@ -4,7 +4,7 @@
  *
  * 左：牌組樹；中：所選牌組（含子牌組）的卡片清單，可加 Anki 搜尋語句；右：Anki 渲染好的卡面
  * 與筆記欄位。清單標題的「＋」把右欄換成建卡表單（與 Card Generator 共用，建在左欄選的牌組），
- * 建好後留在表單（清空）可接著建，成功提示上可打開新卡片（`docs/wip/card_list_create_FEAT_2026-10-30.md`）。
+ * 建好後留在表單（清空）可接著建，成功提示上可打開新卡片（`docs/archive/card_list_create_FEAT_2026-10-30.md`）。
  * 不經過 task handler，任何筆記類型都能看。開放欄位搜尋的筆記類型（handler 宣告 `capabilities.search`）
  * 另有欄位搜尋：點欄位、輸入關鍵字，由後端組成 Anki 查詢（`FieldSearchPanel`）。
  *
