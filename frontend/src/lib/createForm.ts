@@ -278,12 +278,24 @@ export function deckBlockedReason(fixedDeck: string | null, selectedDeck: string
   if (deckStatus === 'all' || selectedDeck === null) return '還沒選牌組：請先在牌組樹選一個牌組（「全部牌組」不能建立）。'
   if (deckStatus === 'loading') return '正在確認牌組是否存在…'
   if (deckStatus === 'error') return `無法載入牌組清單，暫時無法確認「${selectedDeck}」是否存在；請在牌組樹重新整理。`
+  if (deckStatus === 'category') return categoryDeckNotice(selectedDeck)
   if (deckStatus === 'missing') return `牌組「${selectedDeck}」已不存在，請在牌組樹重新選擇。`
   return null
 }
 
 /**
- * 牌組不能用（沒選、已不存在、清單載入失敗）而且卡片要建在所選牌組：表單整個不顯示，改顯示原因，
+ * 選到牌組樹的分類節點（Anki 裡沒有這個牌組，只是底下有牌組）時的說明：和「已不存在」分開講，
+ * 並指出可以在牌組樹補建（deck_create 計畫書 §6）。
+ * The notice for a category node: not a deck in Anki, but it can be created from the tree.
+ * @param deck - 分類節點的完整名稱。The category's full name.
+ * @returns 說明文字。The notice.
+ */
+export function categoryDeckNotice(deck: string): string {
+  return `「${deck}」在 Anki 裡不是牌組（只是分類），請選它底下的牌組，或在牌組樹按 ＋ 建立它。`
+}
+
+/**
+ * 牌組不能用（沒選、只是分類、已不存在、清單載入失敗）而且卡片要建在所選牌組：表單整個不顯示，改顯示原因，
  * 免得填完、生成完才發現不能建立。清單載入中是一瞬間的事，不擋（按鈕旁會寫「正在確認」）。
  * Whether the deck rules out creating at all, so the form is replaced by a notice.
  * @param fixedDeck - 卡片固定建在的牌組。The fixed deck.
@@ -293,7 +305,13 @@ export function deckBlockedReason(fixedDeck: string | null, selectedDeck: string
  */
 export function deckBlocksForm(fixedDeck: string | null, selectedDeck: string | null, deckStatus: DeckStatus): boolean {
   if (fixedDeck) return false
-  return selectedDeck === null || deckStatus === 'all' || deckStatus === 'missing' || deckStatus === 'error'
+  return (
+    selectedDeck === null ||
+    deckStatus === 'all' ||
+    deckStatus === 'category' ||
+    deckStatus === 'missing' ||
+    deckStatus === 'error'
+  )
 }
 
 /** 422 錯誤對回表單的結果。A 422 error mapped onto the form. */

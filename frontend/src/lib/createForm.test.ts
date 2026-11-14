@@ -128,11 +128,21 @@ describe('deckBlockedReason', () => {
     expect(deckBlockedReason(null, 'Default', 'error')).toContain('無法載入牌組清單')
     expect(deckBlockedReason(null, 'Old', 'missing')).toContain('「Old」已不存在')
   })
+
+  it('分類節點和「已不存在」分開說明，並指出可以在牌組樹補建', () => {
+    const reason = deckBlockedReason(null, 'FluencyTides::Speaking_Trilingual', 'category')
+    expect(reason).toBe(
+      '「FluencyTides::Speaking_Trilingual」在 Anki 裡不是牌組（只是分類），請選它底下的牌組，或在牌組樹按 ＋ 建立它。',
+    )
+    expect(reason).not.toContain('已不存在')
+    expect(deckBlockedReason('固定', 'FluencyTides', 'category')).toBeNull()
+  })
 })
 
 describe('deckBlocksForm', () => {
-  it('沒選、已不存在、清單載入失敗時擋住；載入中與固定牌組不擋', () => {
+  it('沒選、只是分類、已不存在、清單載入失敗時擋住；載入中與固定牌組不擋', () => {
     expect(deckBlocksForm(null, null, 'all')).toBe(true)
+    expect(deckBlocksForm(null, 'FluencyTides', 'category')).toBe(true)
     expect(deckBlocksForm(null, 'Old', 'missing')).toBe(true)
     expect(deckBlocksForm(null, 'Default', 'error')).toBe(true)
     expect(deckBlocksForm(null, 'Default', 'loading')).toBe(false)

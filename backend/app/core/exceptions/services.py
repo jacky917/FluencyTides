@@ -65,6 +65,34 @@ class DeckNotFoundError(ServiceBaseError):
     status_code = 404
 
 
+class DeckNameInvalidError(ServiceBaseError):
+    """牌組名稱不合格（deck_create 計畫書 §4）。
+
+    Invalid deck name.
+
+    新增牌組時名稱是空的、``::`` 分出的某一層是空的，或全名太長時拋出。
+
+    Raised when a new deck's name is empty, has an empty ``::`` level, or is
+    too long.
+    """
+    error_code = "DECK_NAME_INVALID"
+    status_code = 400
+
+
+class DeckExistsError(ServiceBaseError):
+    """牌組已存在（deck_create 計畫書 §3）。
+
+    Deck already exists.
+
+    新增牌組時 Anki 已有同名的牌組：不當成成功，讓使用者知道名稱打成既有的牌組了。
+
+    Raised when a deck with the same name already exists; not treated as a
+    success so that a mistyped name does not go unnoticed.
+    """
+    error_code = "DECK_EXISTS"
+    status_code = 409
+
+
 class ModelFileNotFoundError(ServiceBaseError):
     """模型定義檔不存在錯誤。
 

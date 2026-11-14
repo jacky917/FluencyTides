@@ -16,6 +16,7 @@ import type {
   CardPage,
   CardView,
   CardRelationCreate,
+  CreateDeckResponse,
   CreateNoteRequest,
   CreateNoteResponse,
   ServerDraft,
@@ -344,6 +345,16 @@ export const FluencyTidesAPI = {
    */
   listDecks: (): Promise<AnkiDeckInfo[]> =>
     apiClient.get('/decks'),
+
+  /**
+   * 新增牌組（`a::b::c` 會連上層一起建立），建好後後端同步 AnkiWeb 並等它完成。名稱不合格回 400、
+   * 同名牌組已存在回 409；同步失敗時牌組仍已建立，回應帶 `sync_warning`。
+   * Creates a deck (parents included) and syncs; 400 for an invalid name, 409 when it exists.
+   * @param name - 牌組完整名稱。The full deck name.
+   * @returns 新牌組在 Anki 裡的名稱與 ID。The created deck.
+   */
+  createDeck: (name: string): Promise<CreateDeckResponse> =>
+    apiClient.post('/decks', { name }),
 
   /**
    * 讓 Anki 立即與 AnkiWeb 同步並等它完成（最久約 60 秒）；失敗時後端回 502（含同步衝突的說明）。

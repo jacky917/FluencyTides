@@ -288,6 +288,66 @@ def test_decks(client):
     assert response.json() == [{"deck_name": "Default", "deck_id": 1}, {"deck_name": "English::TOEIC", "deck_id": 2}]
 
 
+# =============================================================================
+# POST /decks（deck_create 計畫書 §5.3）
+# =============================================================================
+
+
+def test_create_deck(client, anki):
+    response = client.post("/api/v1/decks", json={"name": "日本語 :: 面接"})
+    assert response.status_code == 201
+    assert response.json() == {"deck_name": "日本語::面接", "deck_id": 3, "sync_warning": None}
+    assert "日本語::面接" in anki.decks
+    assert anki.syncs == [{"raise_errors": True, "force": True}]  # 寫入後同步並等它完成
+
+
+def test_create_deck_invalid_name_is_400(client, anki):
+    response = client.post("/api/v1/decks", json={"name": "a::::b"})
+    assert _error(response) == (400, "DECK_NAME_INVALID")
+    assert response.json()["message"] == "牌組名稱的第 2 層是空的"
+    assert _error(client.post("/api/v1/decks", json={"name": "  "})) == (400, "DECK_NAME_INVALID")
+    assert list(anki.decks) == ["Default", "English::TOEIC"]
+
+
+def test_create_deck_existing_is_409(client, anki):
+    response = client.post("/api/v1/decks", json={"name": "English::TOEIC"})
+    assert _error(response) == (409, "DECK_EXISTS")
+    assert response.json()["message"] == "牌組「English::TOEIC」已存在"
+    assert anki.syncs == []
+
+
+def test_create_deck_sync_failure_still_201(client, anki):
+    anki.sync_error = AnkiConnectError("AnkiWeb 連線逾時")
+    response = client.post("/api/v1/decks", json={"name": "新牌組"})
+    assert response.status_code == 201
+    assert response.json()["sync_warning"].startswith("⚠️ 已寫入 Anki，但同步 AnkiWeb 失敗")
+    assert "新牌組" in anki.decks
+
+
+def test_create_deck_anki_error_is_502(client, anki):
+    """Anki 連不上或拒絕名稱：前端靠這個 502 顯示「結果未知」，不是輸入列下方的訊息。"""
+
+    async def refuse(deck: str) -> int:
+        raise AnkiConnectError("Anki 拒絕這個名稱")
+
+    anki.create_deck = refuse
+    response = client.post("/api/v1/decks", json={"name": "新牌組"})
+    assert _error(response) == (502, "ANKI_SERVICE_ERROR")
+    assert anki.syncs == []
+
+
+def test_create_deck_missing_name_is_422(client):
+    assert client.post("/api/v1/decks", json={}).status_code == 422
+
+
+def test_create_deck_requires_api_key(client, anki):
+    with mock.patch.object(settings, "API_SECRET_KEY", "s3cret"):
+        assert client.post("/api/v1/decks", json={"name": "新牌組"}).status_code == 401
+        assert "新牌組" not in anki.decks
+        response = client.post("/api/v1/decks", json={"name": "新牌組"}, headers={"X-API-Key": "s3cret"})
+        assert response.status_code == 201
+
+
 def test_anki_sync(client, anki):
     response = client.post("/api/v1/anki/sync")
     assert response.status_code == 204

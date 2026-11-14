@@ -237,6 +237,20 @@ class DeckInfo(BaseModel):
     deck_id: int
 
 
+class CreateDeckRequest(BaseModel):
+    """``POST /decks``：新增牌組（deck_create 計畫書 §5.3）。The create-deck request."""
+
+    name: str = Field(description="牌組全名；以 :: 分層，可一次建多層。每一層前後的空白會去掉")
+
+
+class CreateDeckResponse(BaseModel):
+    """``POST /decks`` 的回應。The create-deck response."""
+
+    deck_name: str = Field(description="Anki 裡實際的牌組名稱（整理後），前端用它選取新牌組")
+    deck_id: int
+    sync_warning: str | None = Field(default=None, description="同步 AnkiWeb 失敗時的提醒；牌組仍已建立")
+
+
 class UpdateJsonRequest(BaseModel):
     """``PUT /handlers/{name}/notes/{note_id}/json/{field}``：整欄送出（json_field_editor 計畫 D4）。"""
 

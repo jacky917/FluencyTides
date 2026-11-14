@@ -9,7 +9,7 @@ import { ChevronRight, Plus, X } from 'lucide-react'
 import { Button } from '../ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible'
 import { Input } from '../ui/input'
-import { addQuickPick, addTags, type FormField, type RowsValue } from '../../lib/createForm'
+import { addQuickPick, addTags, categoryDeckNotice, type FormField, type RowsValue } from '../../lib/createForm'
 import { cn } from '../../lib/utils'
 import type { CreateNoteResponse } from '../../types/api'
 import type { DeckStatus } from '../../hooks/useDeckStatus'
@@ -94,6 +94,10 @@ export function DeckSummary({
       ) : deckStatus === 'error' ? (
         <p id={id} role="status" className="break-all text-destructive">
           無法載入牌組清單，暫時無法確認牌組「{selectedDeck}」是否存在；請在牌組樹重新整理。
+        </p>
+      ) : deckStatus === 'category' ? (
+        <p id={id} role="status" className="break-all text-destructive">
+          {categoryDeckNotice(selectedDeck)}
         </p>
       ) : deckStatus === 'missing' ? (
         <p id={id} role="status" className="break-all text-destructive">

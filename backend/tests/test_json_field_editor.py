@@ -7,13 +7,13 @@ versions, the whole-field write with the version check and validation.
 import asyncio
 import html
 import json
-from datetime import date
 from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ValidationError
 
+from app.core.clock import today_iso
 from app.core.config import settings
 from app.core.dependencies import get_anki_client, get_relation_service
 from app.core.exceptions import FieldNotEditableError, HandlerOperationUnsupportedError, JsonFieldConflictError
@@ -109,7 +109,9 @@ class TestWrite:
         assert result["items"] == stored
         assert result["version"] == json_field_version(anki.value(1, "Followups_JSON"))
         assert result["sync_warning"] is None
-        assert anki.value(1, "Updated_At") == date.today().isoformat()
+        # 「今天」要用應用程式的時區（APP_TIMEZONE）：和執行測試的機器的日期比，UTC 15～24 點（東京隔天
+        # 0～9 點）在 CI 上會差一天
+        assert anki.value(1, "Updated_At") == today_iso()
 
     def test_interactions_move_last_contact(self):
         anki = ApplyingAnki([_person(Interactions_JSON="[]", Last_Contact="2026-01-01")])
