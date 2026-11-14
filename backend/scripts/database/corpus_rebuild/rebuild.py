@@ -4,12 +4,17 @@ Rebuild the corpus database from the legacy ``yuzusoft`` DB plus the game
 anchor / calibration files.
 
 - 對 ``yuzusoft`` 只做 SELECT；
-- 切換前可以反覆執行：每次刪掉新庫的所有表再從頭建立；
-- **切換後（``.env`` 的 ``MYSQL_DATABASE`` 已是新庫）拒絕執行**，因為卡片紀錄與
-  ``rel_links`` 之後只存在新庫，刪表會遺失資料。
+- 會刪掉目標資料庫的所有表再從頭建立，所以**只能對空的資料庫執行**。目標資料庫只要有這支腳本
+  還原不了的資料就拒絕（``data_stores_AUDIT_2026-11-01.md`` §4「紀錄表任何腳本都不得清空」）：
+  紀錄表（``PROTECTED_TABLES``：卡片紀錄、關係、修訂紀錄、詞彙索引、讀音判定、流程圖建置）有任何一列，
+  或 ``game_profiles`` 有其他遊戲（例如另外匯入的千戀＊萬花）。檢查的是資料庫本身，不看是哪一台機器、
+  哪一份 ``.env``；沒有略過的選項。要在測試用的資料庫重跑，先自己刪掉那個資料庫再建一個空的。
+- 另外保留原本的第一道檢查：``.env`` 的 ``MYSQL_DATABASE`` 已是目標資料庫（已切換）時直接拒絕。
 
-Read-only on ``yuzusoft``; drops and recreates every table in the new DB, so
-it refuses to run once ``MYSQL_DATABASE`` points at the new DB (after cutover).
+Read-only on ``yuzusoft``; drops and recreates every table in the target DB,
+so it only runs against an empty database: it refuses whenever the target
+holds data it cannot recreate (any row in the record tables, or another
+game's profile), whatever machine or ``.env`` it runs from.
 
 用法 / usage（在 backend/ 底下）::
 
@@ -48,6 +53,58 @@ DROP_ORDER = (
 )
 
 
+#: 不能被清掉的表：切換後只存在新庫、持續有寫入，或由別的流程產生（data_stores_AUDIT §4）。
+#: Tables that must never be wiped once they hold rows.
+PROTECTED_TABLES = (
+    "card_gen_log", "rel_links", "game_line_revisions", "nlp_line_terms", "nlp_line_readings", "story_builds",
+)
+
+
+def unrecoverable_data(cur, database: str) -> dict[str, int]:
+    """目標資料庫裡，重建會刪掉、而這支腳本還原不了的資料：表（或說明）→ 列數；沒有時為空 dict。
+
+    Data in the target DB that a rebuild would destroy and cannot recreate.
+
+    Args:
+        cur: 目標資料庫的 cursor。A cursor on the target DB.
+        database: 目標資料庫名稱。The target database name.
+
+    Returns:
+        ``{表名: 列數}``；另有 ``game_profiles（其他遊戲）``。Table to row count.
+    """
+    cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = %s", (database,))
+    existing = {row[0] for row in cur.fetchall()}
+    found: dict[str, int] = {}
+    for table in PROTECTED_TABLES:
+        if table not in existing:
+            continue
+        cur.execute(f"SELECT COUNT(*) FROM `{table}`")
+        count = cur.fetchone()[0]
+        if count:
+            found[table] = count
+    if "game_profiles" in existing:
+        cur.execute("SELECT COUNT(*) FROM `game_profiles` WHERE game_id <> %s", (GAME_PROFILE["game_id"],))
+        count = cur.fetchone()[0]
+        if count:
+            found["game_profiles（其他遊戲）"] = count
+    return found
+
+
+def refuse_if_unrecoverable(cur, database: str) -> None:
+    """目標資料庫有還原不了的資料時結束程式，什麼都不刪。Exit before touching a DB that holds such data.
+
+    Raises:
+        SystemExit: 有紀錄表資料或其他遊戲。When the target holds unrecoverable data.
+    """
+    found = unrecoverable_data(cur, database)
+    if found:
+        detail = "、".join(f"{name} {count} 列" for name, count in found.items())
+        sys.exit(
+            f"❌ {database} 有重建會清掉、而且還原不了的資料（{detail}），拒絕執行。"
+            "rebuild 只能對空的資料庫執行；要在測試用的資料庫重跑，請先自己刪掉並重建那個資料庫。"
+        )
+
+
 def connect(database: str) -> pymysql.connections.Connection:
     """以 .env 的帳號連線到指定資料庫。Connect with the .env credentials."""
     return pymysql.connect(host=settings.MYSQL_HOST, port=settings.MYSQL_PORT, user=settings.MYSQL_USER,
@@ -84,6 +141,8 @@ def write(c: Content, old_db: str, new_db: str) -> None:
     conn = connect(new_db)
     try:
         with conn.cursor() as cur:
+            # 刪表前在同一個連線再檢查一次：不論從哪裡呼叫 write，都不會清掉紀錄表
+            refuse_if_unrecoverable(cur, new_db)
             cur.execute("SET FOREIGN_KEY_CHECKS=0")
             for t in DROP_ORDER:
                 cur.execute(f"DROP TABLE IF EXISTS {t}")
@@ -114,7 +173,8 @@ def write(c: Content, old_db: str, new_db: str) -> None:
 
             logs.migrate(cur, old_db)
         conn.commit()
-    except Exception:
+    except BaseException:
+        # 含 SystemExit（拒絕執行）：什麼都沒刪，照樣收掉交易
         conn.rollback()
         raise
     finally:
@@ -139,6 +199,14 @@ def main() -> None:
 
     if settings.MYSQL_DATABASE == args.new and not args.dry_run:
         sys.exit(f"❌ .env 的 MYSQL_DATABASE 已是 {args.new}（已切換），rebuild 會刪掉卡片紀錄，拒絕執行。")
+    if not args.dry_run:
+        # 先查目標資料庫再做耗時的對齊：有還原不了的資料就不必往下跑（write 刪表前還會再查一次）
+        conn = connect(args.new)
+        try:
+            with conn.cursor() as cur:
+                refuse_if_unrecoverable(cur, args.new)
+        finally:
+            conn.close()
 
     t0 = time.time()
     anchors = json.loads(args.anchors.read_text(encoding="utf-8"))
