@@ -63,7 +63,6 @@ from app.infrastructure.database.database import (
     dispose_engine,
 )
 from app.infrastructure.database.corpus_database import dispose_corpus_engine
-from app.infrastructure.database.story_corpus_database import dispose_story_engine
 from app.infrastructure.llm.endpoints import log_endpoint_summary
 from app.services import capability_route_service
 from app.infrastructure.storage.minio_client import MinioClient
@@ -223,8 +222,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("✅ 資料庫引擎已釋放。")
     
     await dispose_corpus_engine()
-    # 劇情流程圖只有設定 STORY_CORPUS_DATABASE 覆寫時才有自己的引擎
-    await dispose_story_engine()
     
     logger.info("🏁 FluencyTides API 已關閉。")
 

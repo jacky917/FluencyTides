@@ -4,10 +4,8 @@ Integration tests for the story SQL against a real corpus database with an
 active build. Opt in with ``STORY_DB_TESTS=1``; skipped otherwise so CI
 never needs MySQL.
 
-資料庫和後端相同，是 ``MYSQL_DATABASE``；本機的 ``MYSQL_DATABASE`` 還沒切到新語料庫時，設定
-``STORY_CORPUS_DATABASE=fluencytides_corpus``（環境變數或 ``backend/.env``）明確覆寫。
-The database is ``MYSQL_DATABASE``; set ``STORY_CORPUS_DATABASE`` only as an
-explicit local override before cutover.
+資料庫和後端相同，是 ``.env`` 的 ``MYSQL_DATABASE``。
+The database is ``MYSQL_DATABASE``, as for the backend.
 """
 
 import asyncio
@@ -24,11 +22,11 @@ def _run(coro_fn):
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from sqlalchemy.pool import NullPool
 
-    from app.infrastructure.database.story_corpus_database import story_database_url
+    from app.core.config import settings
     from app.services.story.repository import MySQLStoryRepository
 
     async def main():
-        engine = create_async_engine(story_database_url(), poolclass=NullPool)
+        engine = create_async_engine(settings.mysql_async_url, poolclass=NullPool)
         try:
             repo = MySQLStoryRepository(async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False))
             return await coro_fn(repo)

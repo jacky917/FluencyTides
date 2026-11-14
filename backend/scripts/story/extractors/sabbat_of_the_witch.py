@@ -242,11 +242,9 @@ def main() -> None:
     parser.add_argument("--bgm", type=Path, help="BGM 資料夾（<code>.ogg 或 .mp3），匯入時只上傳 game_bgm_tracks 有的代號")
     parser.add_argument("--enable-bgm-audio", action="store_true",
                         help="在設定打開 BGM 播放（capabilities.bgm）；會改變 source_hash，須正常匯入成新版本")
-    parser.add_argument("--database", help="語料庫名稱（預設 backend/.env 的 MYSQL_DATABASE；"
-                                           "語料庫切換前可指定 fluencytides_corpus）")
     parser.add_argument("--note", help="這個版本的備註")
     args = parser.parse_args()
-    conn = corpus_db.connect(args.database)
+    conn = corpus_db.connect()
     try:
         if args.voices and not args.voices.is_dir():
             raise SystemExit(f"語音資料夾不存在：{args.voices}")

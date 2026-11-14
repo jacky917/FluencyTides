@@ -30,9 +30,8 @@ build, and requires the package to match the active build's hash.
     python backend/scripts/story/import_story_build.py --game SabbatOfTheWitch --list
     python backend/scripts/story/import_story_build.py --game SabbatOfTheWitch --rollback 3
 
-資料庫預設是 ``backend/.env`` 的 ``MYSQL_DATABASE``（和後端相同）；語料庫切換前要對新庫跑時加
-``--database fluencytides_corpus``。
-The database defaults to ``MYSQL_DATABASE``; use ``--database`` before cutover.
+資料庫是 ``backend/.env`` 的 ``MYSQL_DATABASE``（和後端相同）。
+The database is ``MYSQL_DATABASE``, as for the backend.
 """
 
 from __future__ import annotations
@@ -640,15 +639,13 @@ def main() -> None:
     parser.add_argument("--assets", default="minio", help="素材目的地：minio（預設）、local:<資料夾>、none")
     parser.add_argument("--assets-only", action="store_true",
                         help="不建新版本，只替上線版本上傳（補齊）樣板、縮圖、語音、BGM；建置包須和上線版本內容相同")
-    parser.add_argument("--database", help="語料庫名稱（預設 backend/.env 的 MYSQL_DATABASE；"
-                                           "語料庫切換前可指定 fluencytides_corpus）")
     parser.add_argument("--game", help="--list／--rollback 用的 game_id")
     parser.add_argument("--list", action="store_true", help="列出版本")
     parser.add_argument("--rollback", type=int, metavar="BUILD_ID",
                         help="把 retired 或 ready（--no-activate 寫入的）版本上線")
     args = parser.parse_args()
 
-    conn = corpus_db.connect(args.database)
+    conn = corpus_db.connect()
     store = MySQLBuildStore(conn)
     try:
         if args.list or args.rollback:
