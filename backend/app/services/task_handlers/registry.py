@@ -16,6 +16,7 @@ import logging
 from typing import Type
 
 from app.core.exceptions import FluencyTidesError
+from app.services.media_names import MEDIA_KINDS
 from app.services.task_handlers.base import BaseHandler
 from app.services.task_handlers.capabilities import ANY_FIELD_KEY, TAG_SEARCH_KEY
 from app.services.task_handlers.model_fields import model_field_names
@@ -233,6 +234,14 @@ def validate_handler(handler: BaseHandler) -> None:
     if unknown_specs:
         problems.append(f"JSON_FIELD_SPECS 的 {unknown_specs} 不在 JSON_FIELDS 內")
 
+    # 媒體欄位：種類只有 audio、image；同一個欄位不能又是 JSON 又是媒體
+    bad_kinds = {name: kind for name, kind in handler.MEDIA_FIELDS.items() if kind not in MEDIA_KINDS}
+    if bad_kinds:
+        problems.append(f"MEDIA_FIELDS 的種類只能是 {list(MEDIA_KINDS)}：{bad_kinds}")
+    both = [name for name in handler.MEDIA_FIELDS if name in handler.JSON_FIELDS]
+    if both:
+        problems.append(f"{both} 同時宣告在 JSON_FIELDS 與 MEDIA_FIELDS")
+
     # 欄位搜尋：開放就要有欄位按鈕；鍵不重複，「*」保留給「全部欄位」
     if caps.search.supported:
         search_fields = handler.search_fields()
@@ -272,7 +281,7 @@ def _unknown_declared_fields(handler: BaseHandler) -> list[str]:
     declared = {
         "RELATION_LABEL_FIELD": (handler.RELATION_LABEL_FIELD,) if handler.RELATION_LABEL_FIELD else (),
         "JSON_FIELDS": handler.JSON_FIELDS,
-        "MEDIA_FIELDS": handler.MEDIA_FIELDS,
+        "MEDIA_FIELDS": tuple(handler.MEDIA_FIELDS),
         "GRAPH": handler.GRAPH.field_names(),
     }
     if not any(declared.values()):

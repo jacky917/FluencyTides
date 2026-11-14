@@ -50,6 +50,7 @@ from app.api.jp_tokenizer import router as jp_tokenizer_router
 from app.api.capability_routes import router as capability_routes_router
 from app.api.cards import router as cards_router
 from app.api.notes import router as notes_router
+from app.api.media import router as media_router
 from app.api.drafts import router as drafts_router
 from app.api.story import router as story_router
 from app.api.jp_verb_readings import router as jp_verb_readings_router
@@ -391,6 +392,7 @@ app.include_router(jp_tokenizer_router, prefix="/api/v1")
 app.include_router(capability_routes_router, prefix="/api/v1")
 app.include_router(cards_router, prefix="/api/v1")
 app.include_router(notes_router, prefix="/api/v1")
+app.include_router(media_router, prefix="/api/v1")
 app.include_router(drafts_router, prefix="/api/v1")
 app.include_router(story_router, prefix="/api/v1")
 

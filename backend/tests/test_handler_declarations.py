@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 from app.core.config import settings
 from app.core.dependencies import get_card_service, get_relation_service
-from app.core.exceptions import FieldNotEditableError
+from app.core.exceptions import FieldNotEditableError, MediaFieldInvalidError
 from app.services.relation_service import RelationService
 from app.services.task_handlers.base import BaseHandler
 from app.services.task_handlers.capabilities import CreateCapability, HandlerCapabilities
@@ -157,7 +157,7 @@ class TestVocabularyPilot:
         assert handler.RELATION_LABEL_FIELD == "Expression"
         assert (handler.GRAPH.subtitle, handler.GRAPH.pos) == ("Target_Translation", "Target_POS")
         assert set(handler.JSON_FIELDS) == {"Word_Family_JSON", "Synonyms_JSON", "Collocations_JSON"}
-        assert set(handler.MEDIA_FIELDS) == {"Word_Audio", "Target_Example_Audio"}
+        assert handler.MEDIA_FIELDS == {"Word_Audio": "audio", "Target_Example_Audio": "audio"}
 
     def test_create_from_expression_only(self):
         """TG 建單字卡傳的就是 {"Expression": 單字}（§7），建出 _v2、其餘欄位空白。"""
@@ -171,14 +171,27 @@ class TestVocabularyPilot:
         assert note.fields["Expression"] == "allocate"
         assert note.tags == ["VocabularyMining", "HandlerGenerated"]
 
-    @pytest.mark.parametrize("field", ["Synonyms_JSON", "Word_Audio"])
-    def test_json_and_media_fields_not_editable(self, field):
+    @pytest.mark.parametrize(
+        ("field", "error"), [("Synonyms_JSON", FieldNotEditableError), ("Word_Audio", MediaFieldInvalidError)]
+    )
+    def test_json_fields_locked_and_media_fields_need_an_upload(self, field, error):
         anki = FakeAnki([_note(1, Expression="anyway")])
-        with pytest.raises(FieldNotEditableError):
+        with pytest.raises(error):
             _run(VocabularyMiningHandler().execute_update(
                 _card_service(anki), _relations(), 1, {"action": "update_fields", "fields": {field: "x"}}
             ))
         assert anki.updated == []
+
+    def test_audio_fields_take_uploaded_names(self):
+        """media_upload 計畫書 D5：單字卡的兩個音檔欄位在網頁上傳，存成 [sound:檔名]。"""
+        anki = FakeAnki()
+        _run(VocabularyMiningHandler().execute_create(
+            _card_service(anki), _relations(), "Default", V2,
+            {"Expression": "allocate", "Word_Audio": "web_audio_20261114_010203_0a1b2c.mp3", "Target_Example_Audio": ""},
+        ))
+        (note,) = anki.added
+        assert note.fields["Word_Audio"] == "[sound:web_audio_20261114_010203_0a1b2c.mp3]"
+        assert note.fields["Target_Example_Audio"] == ""
 
     def test_renaming_expression_updates_both_relation_ends(self, session_factory):  # noqa: F811
         _seed_relations(session_factory, [(1, "anyway", 2, "regardless"), (2, "regardless", 1, "anyway")])

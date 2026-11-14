@@ -11,10 +11,13 @@
  * `x-ui: list` 是一列一筆的欄位（人脈卡會變的欄位）：值是字串清單，或物件清單（`items` 指到 `$defs`
  * 裡的物件時，每列一格一個屬性，例如職位的公司＋職稱）；`x-item: textarea` 每列多行，`x-item: tag` 畫成
  * 一個一個小標籤（語言、興趣這種短值），`x-quick` 是快速選項。
+ * `x-ui: audio`、`x-ui: image` 是媒體欄位：畫成上傳（音檔另有錄音）元件，值是 `POST /media` 回傳的檔名
+ * （`docs/wip/media_upload_FEAT_2026-10-20.md` D3）。
  * 只畫上述欄位：其他型別的參數（例如外語糾錯預覽流程的 LLM 結果）不會出現在網頁表單。
  */
 
 import type { DeckStatus } from '../hooks/useDeckStatus'
+import { mediaKindOf, type MediaKind } from './mediaUpload'
 
 /** 一列一筆的欄位的值：每列一個字串，或每列一個物件（每格一個屬性）。The rows of a list field. */
 export type RowsValue = string[] | Record<string, string>[]
@@ -54,6 +57,8 @@ export interface FormField {
   pattern: string | null
   /** 一列一筆的欄位（`x-ui: list`）；一般文字欄位為 null。The list settings, or null. */
   rows: RowsSpec | null
+  /** 媒體欄位（`x-ui: audio`、`image`）的種類；其他欄位為 null。The media kind, or null. */
+  media: MediaKind | null
 }
 
 /** schema 的一個屬性（只列用到的鍵）。A schema property. */
@@ -137,6 +142,7 @@ export function schemaFields(schema: Record<string, unknown> | null): { fields: 
       lines,
       pattern: prop.pattern ?? null,
       rows: prop['x-ui'] === 'list' ? rowsSpec(prop, defs) : null,
+      media: lines ? null : mediaKindOf(prop['x-ui']),
     })
   }
   return { fields, skipped }

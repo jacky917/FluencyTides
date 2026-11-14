@@ -7,6 +7,7 @@
  */
 
 import type { GenericNoteDetail, HandlerInfo, NoteDetail, NotePermissions } from '../types/api'
+import type { MediaKind } from './mediaUpload'
 
 /** 欄位彈窗能做的事。What the field modal may do. */
 export interface NoteEditPolicy {
@@ -18,13 +19,19 @@ export interface NoteEditPolicy {
   editNotice: string | null
   /** 不能刪除時的說明（後端給的原因）。Why deleting is unavailable. */
   deleteNotice: string | null
-  /** 唯讀欄位 → 標示（「JSON」或「媒體」），依 handler 宣告。Read-only fields and their label. */
+  /** 唯讀欄位 → 標示（「JSON」），依 handler 宣告。Read-only fields and their label. */
   lockedFields: Map<string, string>
+  /**
+   * 媒體欄位 → 種類，依 handler 宣告：能修改時顯示上傳元件（只能換成上傳取得的檔案或清空），
+   * 不能修改時和其他欄位一樣唯讀。Media fields and their kinds.
+   */
+  mediaFields: Map<string, MediaKind>
 }
 
 /**
  * 依通用讀取回傳的 `permissions` 與 handler 宣告的 JSON、媒體欄位，決定彈窗能做的事
- * （handlers 計畫書 D3、D4）。前端不自行猜測：能否改、刪看後端，唯讀欄位看宣告。
+ * （handlers 計畫書 D3、D4；媒體欄位見 media_upload 計畫書 D3）。前端不自行猜測：能否改、刪看後端，
+ * 唯讀欄位與媒體欄位看宣告。
  *
  * Decides what the modal may do from the backend's permissions and the
  * handler's declared JSON and media fields.
@@ -43,7 +50,7 @@ export function noteEditPolicy(state: {
   const { update_fields: update, delete: remove } = note.permissions
   const lockedFields = new Map<string, string>()
   for (const name of handler?.json_fields ?? []) lockedFields.set(name, 'JSON')
-  for (const name of handler?.media_fields ?? []) lockedFields.set(name, '媒體')
+  const mediaFields = new Map<string, MediaKind>(Object.entries(handler?.media_fields ?? {}))
 
   let canEdit = update.allowed && note.handler !== null
   let editNotice = update.allowed ? null : update.reason
@@ -59,6 +66,7 @@ export function noteEditPolicy(state: {
     editNotice,
     deleteNotice: remove.allowed ? null : remove.reason,
     lockedFields,
+    mediaFields,
   }
 }
 

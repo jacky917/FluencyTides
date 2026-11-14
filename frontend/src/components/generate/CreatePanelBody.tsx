@@ -4,7 +4,9 @@
  *
  * - 卡片類型依 `capabilities.create.channels` 呈現：含 web 可選；只能在 TG、本機腳本建立的反灰並
  *   顯示原因；沒有任何管道的不顯示。前端不自行判斷，只看宣告（`lib/handlerCapabilities.ts`）。
- * - 填表流程（`flow="form"`）：表單由 `create_schema` 產生（`lib/createForm.ts`），不呼叫 LLM。
+ * - 填表流程（`flow="form"`）：表單由 `create_schema` 產生（`lib/createForm.ts`），不呼叫 LLM。媒體欄位
+ *   （`x-ui: audio`、`image`）是上傳／錄音元件：上傳只暫存在後端，建卡成功時才存進 Anki、失敗時 Anki 不變
+ *   （`docs/wip/media_upload_FEAT_2026-10-20.md`）；上傳中、等待麥克風授權、錄音中、錄好還沒決定時不能送出。
  * - 預覽流程（`flow="preview"`，三語對話卡與外語糾錯）：見 `PreviewCreate.tsx`。
  * - 選的卡片類型、選單是否展開、填到一半的內容都記在 localStorage（關掉分頁再開還在）；鍵與頁面無關，
  *   兩個入口看到的是同一份。
@@ -43,10 +45,12 @@ import {
   type FormErrors,
 } from '../../lib/createForm'
 import { createAvailability, type CreateAvailability } from '../../lib/handlerCapabilities'
+import { mediaFieldState } from '../../lib/mediaUpload'
 import { CURRENT_DRAFT_QUERY_KEY, draftFromError, timeLabel } from '../../lib/serverDraft'
 import { cn } from '../../lib/utils'
 import type { CreateNoteResponse, HandlerInfo, ServerDraft } from '../../types/api'
 import { ErrorNote } from '../shared/ErrorNote'
+import { MediaField } from '../shared/MediaField'
 import { Button } from '../ui/button'
 import { Skeleton } from '../ui/skeleton'
 import { CollapsibleSection, CreatedNotice, DeckRequiredNotice, DeckSummary, RowsFieldInput, SchemaFieldInput, TagsFieldInput } from './formParts'
@@ -322,6 +326,9 @@ function CreateForm({
   )
   const [errors, setErrors] = useState<FormErrors | null>(null)
   const [result, setResult] = useCreatedNotice(handler.name, onViewCreated !== undefined)
+  // 媒體欄位還沒做完的事（上傳中、等待麥克風授權、錄音中、錄好還沒決定）：欄位名 → 原因；有任何一個就先不能送出
+  const [mediaBusy, setMediaBusy] = useState<Record<string, string>>({})
+  const mediaBusyReason = Object.values(mediaBusy)[0] ?? null
 
   // 牌組固定的卡片不看牌組樹
   const fixedDeck = create.deck === 'fixed' ? create.fixed_deck : null
@@ -369,22 +376,31 @@ function CreateForm({
   })
 
   const formReady = handler.create_schema !== null && create.note_type !== null
-  const canSubmit = formReady && deck !== null && missing.length === 0 && !mutation.isPending
+  const canSubmit =
+    formReady && deck !== null && missing.length === 0 && mediaBusyReason === null && !mutation.isPending
   // 不能送出的原因寫在按鈕旁：牌組說明在表單最上方，欄位多時看不到
   const blockedReason = !formReady
     ? null
     : (deckBlockedReason(fixedDeck, selectedDeck, deckStatus) ??
       (missing.length > 0
         ? `還沒填：${missing.map((name) => fields.find((field) => field.name === name)?.title ?? name).join('、')}。`
-        : null))
+        : mediaBusyReason !== null
+          ? `${mediaBusyReason}，完成後才能建立。`
+          : null))
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (canSubmit) mutation.mutate()
   }
 
-  // 牌組不能用：一開始就不顯示表單（建立進行中照常顯示）。填到一半的內容還在 sessionStorage
-  if (formReady && !mutation.isPending && deckBlocksForm(fixedDeck, selectedDeck, deckStatus)) {
+  // 牌組不能用：一開始就不顯示表單（建立進行中照常顯示）。填到一半的內容還在 sessionStorage。
+  // 媒體欄位還在上傳或錄音時也照常顯示：換掉表單會卸載元件、靜默取消上傳；做完後檔名存進表單，才換成提示
+  if (
+    formReady &&
+    !mutation.isPending &&
+    mediaBusyReason === null &&
+    deckBlocksForm(fixedDeck, selectedDeck, deckStatus)
+  ) {
     const kept = Object.values(storedValues).some(hasInput) || tags.length > 0
     return (
       <DeckRequiredNotice
@@ -411,7 +427,30 @@ function CreateForm({
       {fields.map((field) => {
         const value = values[field.name]
         const onChange = (next: FormValue) => setStoredValues((prev) => ({ ...prev, [field.name]: next }))
-        return field.rows?.tags ? (
+        return field.media ? (
+          <MediaField
+            key={field.name}
+            id={`${formId}-${field.name}`}
+            kind={field.media}
+            label={field.title}
+            required={field.required}
+            description={field.description}
+            state={mediaFieldState(field.media, '', typeof value === 'string' ? value : '')}
+            error={errors?.fields[field.name]}
+            disabled={mutation.isPending}
+            onUploaded={onChange}
+            onClear={() => onChange('')}
+            onBusyChange={(reason) =>
+              setMediaBusy((prev) => {
+                if ((prev[field.name] ?? null) === reason) return prev
+                const next = { ...prev }
+                if (reason === null) delete next[field.name]
+                else next[field.name] = reason
+                return next
+              })
+            }
+          />
+        ) : field.rows?.tags ? (
           <TagsFieldInput
             key={field.name}
             id={`${formId}-${field.name}`}

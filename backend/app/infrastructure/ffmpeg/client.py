@@ -62,6 +62,13 @@ class FfmpegError(Exception):
         self.stderr_output = stderr_output
 
 
+class FfmpegTimeoutError(FfmpegError):
+    """FFmpeg 超過時間上限，已被中止。
+
+    FFmpeg ran past its time limit and was killed.
+    """
+
+
 class FfmpegClient:
     """非同步 FFmpeg 統一客戶端。
 
@@ -97,10 +104,18 @@ class FfmpegClient:
         self,
         args: list[str],
         input_bytes: bytes | None = None,
+        timeout: float | None = None,
     ) -> tuple[bytes, str]:
         """執行 FFmpeg 命令的底層核心方法。
 
         Low-level core method that runs an FFmpeg command.
+
+        逾時或呼叫端被取消（例如 HTTP 請求中斷）時會結束 ffmpeg 子程序，不留下繼續佔用 CPU 的程序。
+        沒有要餵 stdin 時 stdin 接到 ``DEVNULL``：ffmpeg 預設會讀 stdin 等互動按鍵，繼承開發機的終端機
+        可能吃掉輸入或卡住。
+
+        On timeout or cancellation the FFmpeg process is killed. Without input
+        bytes, stdin is ``DEVNULL`` so FFmpeg never reads the terminal.
 
         Args:
             args: 傳遞給 FFmpeg 的參數列表（不含 ffmpeg 執行檔本身）。
@@ -108,26 +123,38 @@ class FfmpegClient:
                 itself).
             input_bytes: 若需透過 stdin (pipe:0) 傳遞資料，可在此提供。
                 Optional bytes to feed via stdin (pipe:0).
+            timeout: 最長執行秒數；None 表示不限。The time limit in seconds, or None.
 
         Returns:
             (stdout_bytes, stderr_string): 標準輸出與標準錯誤。The captured
             stdout bytes and stderr string.
 
         Raises:
-            FfmpegError: 當 FFmpeg 返回非零碼或啟動失敗時。Raised when
-                FFmpeg exits non-zero or fails to start.
+            FfmpegTimeoutError: 超過 ``timeout``（子程序已結束）。Raised on timeout.
+            FfmpegError: 當 FFmpeg 返回非零碼或啟動失敗時（啟動失敗時 ``return_code`` 為 None）。
+                Raised when FFmpeg exits non-zero or fails to start.
         """
         command = [self._ffmpeg_bin] + args
-        
+
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
-                stdin=asyncio.subprocess.PIPE if input_bytes else None,
+                stdin=asyncio.subprocess.PIPE if input_bytes else asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            stdout_data, stderr_data = await process.communicate(input=input_bytes)
+            try:
+                stdout_data, stderr_data = await asyncio.wait_for(process.communicate(input=input_bytes), timeout)
+            except (TimeoutError, asyncio.CancelledError) as exc:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                error_msg = f"FFmpeg 執行超過 {timeout:g} 秒，已中止"
+                logger.error(error_msg)
+                raise FfmpegTimeoutError(message=error_msg) from exc
             stderr_text = stderr_data.decode("utf-8", errors="replace").strip()
 
             if process.returncode != 0:
@@ -177,6 +204,40 @@ class FfmpegClient:
         stdout_data, _ = await self._run_command(args, input_bytes=audio_data)
         logger.info("音訊 MP3 轉檔完成，輸出大小: %d bytes", len(stdout_data))
         
+        return stdout_data
+
+    async def convert_file_to_mp3(self, source: Path, timeout: float | None = None) -> bytes:
+        """把磁碟上的影音檔轉成 MP3（只取聲音），輸出留在記憶體。
+
+        Convert a media file on disk to MP3 (audio only), returning the bytes.
+
+        輸入用檔案而不是 pipe：m4a／mp4 的索引（moov）常放在檔尾，ffmpeg 要能往回讀才解得開，
+        從 stdin 讀會失敗。
+
+        The input is a file rather than a pipe: m4a/mp4 often keep their index
+        at the end, which FFmpeg cannot reach on a non-seekable stdin.
+
+        Args:
+            source: 來源檔案路徑（m4a、webm 等）。The source file.
+            timeout: 最長執行秒數；None 表示不限。The time limit in seconds, or None.
+
+        Returns:
+            MP3 的二進位資料。The MP3 bytes.
+
+        Raises:
+            FfmpegTimeoutError: 超過 ``timeout``。Raised on timeout.
+            FfmpegError: 轉檔失敗（檔案損壞、沒有音軌等），或 ffmpeg 無法啟動（``return_code`` 為
+                None）。Raised when conversion fails or FFmpeg cannot start.
+        """
+        args = [
+            "-y",
+            "-i", str(source),
+            "-vn",           # 不要影像（mp4 可能帶影片）
+            "-f", "mp3",
+            "pipe:1",
+        ]
+        stdout_data, _ = await self._run_command(args, timeout=timeout)
+        logger.info("檔案轉 MP3 完成: %s → %d bytes", source.name, len(stdout_data))
         return stdout_data
 
     async def merge_with_silence(

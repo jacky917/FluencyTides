@@ -25,6 +25,7 @@ from app.core.exceptions import (
     InvalidNoteQueryError,
 )
 from app.infrastructure.anki.search import note_types_query
+from app.services.media_names import MediaKind, media_field_text
 from app.services.task_handlers.capabilities import GraphSpec, HandlerCapabilities, JsonFieldSpec, SearchField
 
 #: 生成前發現重複時的決定：``overwrite`` 新卡建好後刪掉舊卡、``allow`` 允許重複。
@@ -112,10 +113,15 @@ class BaseHandler(ABC):
         GRAPH: 圖譜節點取哪些欄位（D12）。Which fields graph nodes use.
         RELATION_LABEL_FIELD: 關聯表用來辨認節點的文字欄位；有宣告時，標準修改會在它改變時同步
             關聯表兩端的標籤（D12）。The field relations use as node text.
-        JSON_FIELDS: JSON 欄位名稱；建卡與改欄位都不能直接寫（D3）。JSON field names.
+        JSON_FIELDS: JSON 欄位名稱；建卡與改欄位都不能直接寫（handlers 計畫書 D3）。JSON field names.
         JSON_FIELD_SPECS: 能在網頁以表單編輯的 JSON 欄位與格式（json_field_editor 計畫 D1）；
             要搭配 ``CAPABILITIES.update_json``。Editable JSON fields and their formats.
-        MEDIA_FIELDS: 媒體欄位名稱；同上。Media field names.
+        MEDIA_FIELDS: 媒體欄位 → 種類（``audio``、``image``；media_upload 計畫書 D3）。經 :meth:`field_texts`
+            的寫入（標準建立、``update_fields``）只能填 ``POST /media`` 命名格式的檔名、原值或空白，寫入時包成
+            ``[sound:檔名]`` 或 ``<img src="檔名">``；網頁的欄位彈窗顯示上傳元件，標準建立的表單也會列出並
+            標 ``x-ui``。不套用的地方：覆寫 ``CREATE_PARAMS`` 的建卡（要自己在參數標 ``x-ui``、組欄位，
+            見計畫書 §6.4），以及 handler 自己的具名動作（例如人脈卡 TG 用的 ``set_photo``，另有檢查）。
+            Media fields and their kinds.
         CREATE_TAGS: 標準建立加上的標籤。Tags the standard create adds.
         CREATE_PARAMS: 覆寫建立的 handler 的建立參數模型（D3）；服務層以它驗證參數、產生網頁表單。
             標準建立不用它（參數就是筆記欄位）。The create parameter model of a
@@ -133,7 +139,7 @@ class BaseHandler(ABC):
     RELATION_LABEL_FIELD: ClassVar[str | None] = None
     JSON_FIELDS: ClassVar[tuple[str, ...]] = ()
     JSON_FIELD_SPECS: ClassVar[Mapping[str, JsonFieldSpec]] = {}
-    MEDIA_FIELDS: ClassVar[tuple[str, ...]] = ()
+    MEDIA_FIELDS: ClassVar[Mapping[str, MediaKind]] = {}
     CREATE_TAGS: ClassVar[tuple[str, ...]] = ("HandlerGenerated",)
     CREATE_PARAMS: ClassVar[type[BaseModel] | None] = None
     SEARCH_FIELDS: ClassVar[tuple[SearchField, ...]] = ()
@@ -201,6 +207,7 @@ class BaseHandler(ABC):
         Standard create: ``parameters`` maps field names to values.
 
         欄位是否存在、首欄位是否重複由 ``CardService.create_note`` 檢查；沒填的欄位留空。
+        媒體欄位填 ``POST /media`` 回傳的檔名，寫入時包成 Anki 的寫法（見 :meth:`field_texts`）。
 
         Args:
             card_service: 卡片服務。Card service.
@@ -213,12 +220,13 @@ class BaseHandler(ABC):
             建立的 Note ID（一律是陣列，成組卡片一次會建多張）。The created note IDs.
 
         Raises:
-            FieldNotEditableError: 填了 JSON、媒體欄位。When a JSON or media field is given.
+            FieldNotEditableError: 填了 JSON 欄位。When a JSON field is given.
+            MediaFieldInvalidError: 媒體欄位填的不是上傳取得的檔名。A media field without an uploaded name.
             FieldMismatchError: 欄位不屬於這個筆記類型。On unknown fields.
             DuplicateCardError: 首欄位重複。On a duplicate first field.
         """
         self.reject_locked_fields(parameters)
-        fields = {name: field_text(value) for name, value in parameters.items()}
+        fields = self.field_texts(parameters)
         note_id = await card_service.create_note(
             deck_name=deck_name,
             model_name=model_name,
@@ -330,7 +338,9 @@ class BaseHandler(ABC):
         Raises:
             HandlerOperationUnsupportedError: 不是 ``update_fields``。For other actions.
             InvalidNoteFieldsError: ``fields`` 不是 ``{欄位名: 值}``。When fields is not a mapping.
-            FieldNotEditableError: 改了 JSON、媒體欄位。When a JSON or media field is given.
+            FieldNotEditableError: 改了 JSON 欄位。When a JSON field is given.
+            MediaFieldInvalidError: 媒體欄位填的不是上傳取得的檔名（也不是原本的值）。A media field
+                without an uploaded name.
             FieldMismatchError: 欄位不屬於這個筆記類型。On unknown fields.
             NoteNotFoundError: 筆記不存在。When the note does not exist.
         """
@@ -345,9 +355,7 @@ class BaseHandler(ABC):
         note = await card_service.get_note(note_id)
         current = note_field_values(note)
         changed = {
-            name: text
-            for name, value in fields.items()
-            if (text := field_text(value)) != current.get(name)
+            name: text for name, text in self.field_texts(fields, current).items() if text != current.get(name)
         }
         if not changed:
             return
@@ -506,16 +514,44 @@ class BaseHandler(ABC):
         """
 
     def reject_locked_fields(self, field_names: Iterable[str]) -> None:
-        """宣告為 JSON、媒體的欄位不能直接以文字寫入（D3）。
+        """宣告為 JSON 的欄位不能直接以文字寫入（handlers 計畫書 D3）。媒體欄位不在這裡擋：它能填上傳取得的
+        檔名，由 :meth:`field_texts` 檢查。
 
-        JSON and media fields cannot be written as plain text.
+        JSON fields cannot be written as plain text. Media fields are checked by
+        :meth:`field_texts` instead.
 
         Raises:
-            FieldNotEditableError: 含有這類欄位。When any is present.
+            FieldNotEditableError: 含有 JSON 欄位。When any is present.
         """
-        locked = [name for name in field_names if name in self.JSON_FIELDS or name in self.MEDIA_FIELDS]
+        locked = [name for name in field_names if name in self.JSON_FIELDS]
         if locked:
             raise FieldNotEditableError(f"這些欄位不能直接修改：{'、'.join(locked)}")
+
+    def field_texts(self, values: Mapping[str, object], current: Mapping[str, str] | None = None) -> dict[str, str]:
+        """把送來的欄位值轉成要寫進 Anki 的字串；媒體欄位另外檢查並包成 Anki 的寫法（media_upload 計畫書 D3）。
+
+        The texts to write for the given field values; media fields are checked and wrapped.
+
+        Args:
+            values: ``{欄位名: 值}``。Field name to submitted value.
+            current: 修改時欄位原本的值（媒體欄位送回原值代表不變）；建立時省略。The current values.
+
+        Returns:
+            ``{欄位名: 要寫入的字串}``。Field name to the text to write.
+
+        Raises:
+            MediaFieldInvalidError: 媒體欄位填的不是 ``POST /media`` 產生的檔名，或種類不符。
+                A media field without an uploaded name of its kind.
+        """
+        existing = current or {}
+        return {
+            name: (
+                media_field_text(name, self.MEDIA_FIELDS[name], value, existing.get(name, ""))
+                if name in self.MEDIA_FIELDS
+                else field_text(value)
+            )
+            for name, value in values.items()
+        }
 
 
 # =============================================================================

@@ -30,7 +30,7 @@ function handlerInfo(overrides: Partial<HandlerInfo> = {}): HandlerInfo {
     },
     create_schema: null,
     json_fields: ['Synonyms_JSON'],
-    media_fields: ['Word_Audio'],
+    media_fields: { Word_Audio: 'audio' },
     ...overrides,
   }
 }
@@ -55,7 +55,7 @@ function note(overrides: Partial<GenericNoteDetail> = {}): GenericNoteDetail {
 }
 
 describe('noteEditPolicy', () => {
-  it('follows the backend permissions and locks declared JSON and media fields', () => {
+  it('follows the backend permissions, locks declared JSON fields and lists media fields', () => {
     const policy = noteEditPolicy({ note: note(), handler: handlerInfo(), handlersError: null })
 
     expect(policy).toMatchObject({
@@ -65,7 +65,9 @@ describe('noteEditPolicy', () => {
       editNotice: null,
       deleteNotice: null,
     })
-    expect(Object.fromEntries(policy.lockedFields)).toEqual({ Synonyms_JSON: 'JSON', Word_Audio: '媒體' })
+    expect(Object.fromEntries(policy.lockedFields)).toEqual({ Synonyms_JSON: 'JSON' })
+    // 媒體欄位不是唯讀：能修改時顯示上傳元件（media_upload 計畫書 D3）
+    expect(Object.fromEntries(policy.mediaFields)).toEqual({ Word_Audio: 'audio' })
   })
 
   it('shows the backend reasons when editing or deleting is not allowed', () => {

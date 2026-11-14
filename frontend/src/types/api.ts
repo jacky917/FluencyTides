@@ -85,8 +85,12 @@ export interface HandlerInfo {
   json_fields: string[];
   /** 能以表單編輯的 JSON 欄位：標題與每一筆的 JSON Schema。Editable JSON fields. */
   json_field_specs?: Record<string, JsonFieldSpec>;
-  /** 媒體欄位：同上。Media fields, read-only. */
-  media_fields: string[];
+  /**
+   * 媒體欄位 → 種類：欄位彈窗顯示上傳元件，修改時只能填 `POST /media` 命名格式的檔名、原值或空白。
+   * 建卡表單不看這裡，看 `create_schema` 的 `x-ui`（只有標準建立會自動標上）。
+   * Media fields and their kinds, used by the field modal; the create form reads `x-ui` instead.
+   */
+  media_fields: Record<string, 'audio' | 'image'>;
   /** 欄位搜尋的欄位按鈕；不開放時為空。The field-search buttons. */
   search_fields?: SearchField[];
 }
@@ -330,6 +334,15 @@ export interface CreateDeckResponse {
   deck_id: number;
   /** 同步 AnkiWeb 失敗時的提醒；牌組仍已建立。A warning when the sync failed. */
   sync_warning: string | null;
+}
+
+/** `POST /media` 的回應（media_upload 計畫書 D2）。The upload response. */
+export interface MediaUploadResponse {
+  /** 後端產生的檔名：填進媒體欄位，建卡或修改成功時才以這個名字存進 Anki。The staged file name. */
+  filename: string;
+  kind: 'audio' | 'image';
+  /** 檔案大小（位元組）；轉檔過的是轉檔後的大小。The size in bytes. */
+  size: number;
 }
 
 // ============================================================================

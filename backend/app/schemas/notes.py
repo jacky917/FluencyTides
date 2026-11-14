@@ -69,7 +69,12 @@ class HandlerInfo(BaseModel):
     json_field_specs: dict[str, "JsonFieldSpecOut"] = Field(
         default_factory=dict, description="能以表單編輯的 JSON 欄位：標題與每一筆的 JSON Schema"
     )
-    media_fields: list[str] = Field(description="媒體欄位：同上")
+    media_fields: dict[str, Literal["audio", "image"]] = Field(
+        description=(
+            "媒體欄位 → 種類：網頁的欄位彈窗顯示上傳元件，修改時只能填 POST /media 命名格式的檔名、原值或空白。"
+            "建卡表單看 create_schema 的 x-ui（只有標準建立會自動標上）"
+        )
+    )
     search_fields: list["SearchFieldOut"] = Field(
         default_factory=list, description="欄位搜尋的欄位按鈕；不開放時為空（另有鍵 * 表示任何欄位）"
     )
@@ -249,6 +254,16 @@ class CreateDeckResponse(BaseModel):
     deck_name: str = Field(description="Anki 裡實際的牌組名稱（整理後），前端用它選取新牌組")
     deck_id: int
     sync_warning: str | None = Field(default=None, description="同步 AnkiWeb 失敗時的提醒；牌組仍已建立")
+
+
+class MediaUploadResponse(BaseModel):
+    """``POST /media`` 的回應（media_upload 計畫書 D2）。The upload response."""
+
+    filename: str = Field(
+        description="後端產生的檔名：填進媒體欄位，建卡或修改成功時以這個名字存進 Anki（在那之前只在後端暫存區）"
+    )
+    kind: Literal["audio", "image"]
+    size: int = Field(description="檔案大小（位元組）；轉檔過的是轉檔後的大小")
 
 
 class UpdateJsonRequest(BaseModel):

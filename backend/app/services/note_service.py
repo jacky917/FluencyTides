@@ -40,6 +40,9 @@ MAX_PROMPT_TAGS = 50
 from app.infrastructure.anki.client import AnkiConnectError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.anki.search import contains_term, note_types_query, tag_term
+from app.services.media_commit import committed_media, staged_names
+from app.services.media_names import MEDIA_KINDS
+from app.services.media_staging import media_staging
 from app.services.task_handlers.base import (
     DRAFT_SYSTEM_KEYS,
     DUPLICATE_CHECK_SKIPPED_KEY,
@@ -56,6 +59,7 @@ if TYPE_CHECKING:
 
     from app.infrastructure.anki.client import AnkiClient
     from app.services.card_service import CardService
+    from app.services.media_staging import MediaStaging
     from app.services.relation_service import RelationService
     from app.services.task_handlers.base import BaseHandler
     from app.services.task_handlers.capabilities import Operation
@@ -76,6 +80,7 @@ class NoteService:
         card_service: 卡片服務。Card service.
         relation_service: 關聯服務。Relation service.
         registry: handler 註冊表。The handler registry.
+        staging: 網頁上傳的暫存區。The staging area of web uploads.
     """
 
     def __init__(
@@ -83,6 +88,7 @@ class NoteService:
         card_service: CardService,
         relation_service: RelationService,
         registry: HandlerRegistry = handler_registry,
+        staging: MediaStaging | None = None,
     ) -> None:
         """初始化服務。Initialize the service.
 
@@ -90,10 +96,12 @@ class NoteService:
             card_service: 卡片服務。Card service.
             relation_service: 關聯服務。Relation service.
             registry: handler 註冊表；測試可換成自己的。The registry.
+            staging: 網頁上傳的暫存區；省略時用全站共用的 ``media_staging``。The staging area.
         """
         self.card_service = card_service
         self.relation_service = relation_service
         self.registry = registry
+        self.staging = staging or media_staging
 
     @property
     def anki_client(self) -> AnkiClient:
@@ -135,7 +143,7 @@ class NoteService:
                 "draft_schema": _draft_schema(handler),
                 "json_fields": list(handler.JSON_FIELDS),
                 "json_field_specs": json_field_specs(handler),
-                "media_fields": list(handler.MEDIA_FIELDS),
+                "media_fields": dict(handler.MEDIA_FIELDS),
                 "search_fields": [
                     {"key": f.key, "title": f.title} for f in handler.search_fields()
                 ] if handler.CAPABILITIES.search.supported else [],
@@ -159,13 +167,13 @@ class NoteService:
         return model.model_json_schema(by_alias=True)
 
     async def _standard_params_model(self, handler: BaseHandler, note_type: str) -> type[BaseModel]:
-        """標準建立的參數模型：向 Anki 查欄位，JSON、媒體欄位不列（D3）。
+        """標準建立的參數模型：向 Anki 查欄位，JSON 欄位不列，媒體欄位標成上傳元件（D3、media_upload D3）。
 
         The standard create parameter model built from Anki's field list.
         """
         names = await self.anki_client.get_model_field_names(note_type)
-        locked = frozenset(handler.JSON_FIELDS) | frozenset(handler.MEDIA_FIELDS)
-        return standard_params_model(note_type, tuple(names), locked)
+        media = tuple(sorted(handler.MEDIA_FIELDS.items()))
+        return standard_params_model(note_type, tuple(names), frozenset(handler.JSON_FIELDS), media)
 
     # =========================================================================
     # 建立、讀取、修改、刪除
@@ -181,7 +189,10 @@ class NoteService:
         tg_bot: str | None = None,
         tags: list[str] | None = None,
     ) -> dict[str, object]:
-        """建卡：檢查能力 → 驗證參數與標籤 → ``execute_create`` → 加標籤 → 後續處理（``after_create``，例如覆蓋時刪舊卡）→ 寫入後同步（§4.2）。
+        """建卡：檢查能力 → 驗證參數與標籤 → 存入上傳的媒體並 ``execute_create`` → 加標籤 → 後續處理（``after_create``，例如覆蓋時刪舊卡）→ 寫入後同步（§4.2）。
+
+        媒體欄位填了上傳的檔名時，那些檔案在這裡才從暫存區存進 Anki；``execute_create`` 失敗就撤回，Anki 和
+        送出前一樣，暫存檔留著可以直接重送（``media_commit``）。
 
         Create cards: capability check, parameter validation, the handler's
         create, then the sync after writing.
@@ -204,10 +215,13 @@ class NoteService:
             HandlerOperationUnsupportedError: 不開放建卡。Creation not offered.
             NoteTypeNotCreatableError: 筆記類型不是能建立的那種。Wrong note type.
             pydantic.ValidationError: 參數驗證失敗（REST 轉成 422）。Invalid parameters.
-            FieldNotEditableError: 填了 JSON、媒體欄位。A locked field was given.
+            FieldNotEditableError: 填了 JSON 欄位。A locked field was given.
+            MediaFieldInvalidError: 媒體欄位填的不是上傳取得的檔名（建卡之前檢查）。A media field
+                without an uploaded name.
             FieldMismatchError: 欄位不屬於這個筆記類型。Unknown fields.
             DuplicateCardError: 首欄位重複。Duplicate first field.
             TagInvalidError: 標籤不合格（在建卡之前檢查，不會建出卡片）。Invalid tags.
+            MediaUploadExpiredError: 用到的上傳檔已不在暫存區（什麼都沒寫）。An upload is gone.
         """
         handler = self.registry.get_handler(handler_name)
         create = handler.CAPABILITIES.create
@@ -227,7 +241,11 @@ class NoteService:
 
         user_tags = normalize_tags(tags or [])
 
-        note_ids = await handler.execute_create(self.card_service, self.relation_service, deck, note_type, parameters)
+        media = staged_names(parameters, _create_media_fields(handler))
+        async with committed_media(self.anki_client, self.staging, media):
+            note_ids = await handler.execute_create(
+                self.card_service, self.relation_service, deck, note_type, parameters
+            )
         tag_warning = await self._add_tags(list(note_ids), user_tags)
         # 後續處理（例如覆蓋時刪舊卡）在同步之前：刪除也在這一次同步推上 AnkiWeb
         try:
@@ -443,13 +461,20 @@ class NoteService:
             HandlerOperationUnsupportedError: 不開放修改。Updating not offered.
             NoteNotFoundError: 筆記不存在。Missing note.
             NoteNotOwnedByHandlerError: 筆記不歸這個 handler。Not this handler's note.
-            FieldNotEditableError: 改了 JSON、媒體欄位。A locked field was given.
+            FieldNotEditableError: 改了 JSON 欄位。A locked field was given.
+            MediaFieldInvalidError: 媒體欄位填的不是上傳取得的檔名。A media field without an uploaded name.
+            MediaUploadExpiredError: 用到的上傳檔已不在暫存區（什麼都沒寫）。An upload is gone.
             FieldMismatchError: 欄位不屬於這個筆記類型。Unknown fields.
+
+        媒體欄位換成上傳的檔名時，檔案在這裡才存進 Anki，寫入失敗就撤回（同 :meth:`create`）。換掉的舊檔案
+        不刪：可能還有其他筆記在用。
         """
         handler = await self._owning_handler(handler_name, note_id, "update_fields")
-        await handler.execute_update(
-            self.card_service, self.relation_service, note_id, {"action": "update_fields", "fields": dict(fields)}
-        )
+        media = staged_names(fields, handler.MEDIA_FIELDS)
+        async with committed_media(self.anki_client, self.staging, media):
+            await handler.execute_update(
+                self.card_service, self.relation_service, note_id, {"action": "update_fields", "fields": dict(fields)}
+            )
         sync_warning = await self.sync_after_write()
         detail = note_detail(await self.card_service.get_note(note_id))
         return {**detail, "sync_warning": sync_warning}
@@ -662,27 +687,35 @@ async def sync_warning(anki_client: AnkiClient) -> str | None:
 
 @cache
 def standard_params_model(
-    note_type: str, field_names: tuple[str, ...], locked: frozenset[str]
+    note_type: str,
+    field_names: tuple[str, ...],
+    locked: frozenset[str],
+    media: tuple[tuple[str, str], ...] = (),
 ) -> type[BaseModel]:
     """標準建立的參數模型（D3）：每個欄位都是選填字串，第一個欄位必填。
 
     The standard create parameter model: optional string fields, the first
     one required.
 
-    JSON、媒體欄位不列；多餘的鍵不在這裡擋，交給 handler（``FIELD_NOT_EDITABLE``）與
-    ``CardService``（``FIELD_MISMATCH``）回報。欄位名可能含空白等字元，所以以別名對應。
+    JSON 欄位不列；媒體欄位照列，並在 schema 標上 ``x-ui``（``audio``、``image``），網頁顯示上傳元件、
+    送出 ``POST /media`` 回傳的檔名（media_upload 計畫書 D3）。多餘的鍵不在這裡擋，交給 handler
+    （``FIELD_NOT_EDITABLE``）與 ``CardService``（``FIELD_MISMATCH``）回報。欄位名可能含空白等字元，
+    所以以別名對應。
 
-    Locked fields are left out; unknown keys pass through so the handler and
-    ``CardService`` report them. Field names map through aliases.
+    Locked fields are left out; media fields carry ``x-ui``; unknown keys pass
+    through so the handler and ``CardService`` report them. Field names map
+    through aliases.
 
     Args:
         note_type: 筆記類型（模型名稱用）。The note type, used to name the model.
         field_names: Anki 的欄位名，依順序。Anki's field names, in order.
-        locked: JSON、媒體欄位。Locked fields.
+        locked: JSON 欄位。Locked fields.
+        media: ``(媒體欄位, 種類)``；為了能快取，用 tuple 而不是 dict。Media fields and kinds.
 
     Returns:
         Pydantic 模型。The model.
     """
+    kinds = dict(media)
     definitions: dict[str, object] = {}
     for index, name in enumerate(field_names):
         if name in locked:
@@ -691,6 +724,9 @@ def standard_params_model(
             # Anki 不允許第一個欄位為空，也以它判斷重複
             first = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
             definitions[f"field_{index}"] = (first, Field(alias=name, title=name))
+        elif name in kinds:
+            extra = {"x-ui": kinds[name]}
+            definitions[f"field_{index}"] = (str, Field(default="", alias=name, title=name, json_schema_extra=extra))
         else:
             definitions[f"field_{index}"] = (str, Field(default="", alias=name, title=name))
     return create_model(  # type: ignore[call-overload]
@@ -745,6 +781,18 @@ def _suggested_tags(raw: object, existing: list[str]) -> list[dict[str, object]]
         seen.add(tag.casefold())
         result.append({"tag": tag, "existing": tag.casefold() in known})
     return result
+
+
+def _create_media_fields(handler: BaseHandler) -> list[str]:
+    """建卡參數裡的媒體欄位：標準建立就是 ``MEDIA_FIELDS``；覆寫 ``CREATE_PARAMS`` 的是 schema 標了
+    ``x-ui: audio``／``image`` 的參數（handler 自己檢查、組欄位，這裡只負責把檔案存進 Anki）。
+
+    The create parameters holding media.
+    """
+    if handler.CREATE_PARAMS is None:
+        return list(handler.MEDIA_FIELDS)
+    properties = handler.CREATE_PARAMS.model_json_schema().get("properties", {})
+    return [name for name, prop in properties.items() if isinstance(prop, dict) and prop.get("x-ui") in MEDIA_KINDS]
 
 
 def _draft_schema(handler: BaseHandler) -> dict[str, object] | None:
