@@ -8,7 +8,7 @@
 | **範圍** | 語料庫：`fluencytides_corpus` 的 `game_*` 表加入 `SenrenBanka`（不動魔女的夜宴的列）。匯入腳本：`backend/scripts/database/corpus_rebuild/` 新增遊戲匯入。流程圖：`backend/scripts/story/extractors/senren_banka.py`、`backend/app/services/story/games/`、`backend/app/infrastructure/krkr/`（新存檔格式）、`frontend/public/story-themes/`。素材：`Y:\material\yuzusoft\SenrenBanka\` |
 | **不動** | 魔女的夜宴在新庫的所有列；舊庫 `yuzusoft`（只讀；P0 的刪除除外）；遊戲本體與加密封包；`SB_calib`（只讀它的產出） |
 | **基準分支** | `main`（`4b99f04`）。**不要在 `feat/cards-create-panel` 上做**：那個分支比 main 落後 80 個 commit，沒有語料庫與流程圖的程式 |
-| **關聯文件** | main 的 `docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md`（語料庫，🔨 待切換）、`docs/wip/story_flowchart_FEAT_2026-10-31.md`（流程圖）；`docs/archive/senren_banka_materials_FEAT_2026-11-08.md`（素材）；`docs/wip/senren_banka_scripts_import_FEAT_2026-11-08.md`（誤匯入舊表，本計畫取代它） |
+| **關聯文件** | `docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md`（語料庫，本機與正式機都已切換）、`docs/wip/story_flowchart_FEAT_2026-10-31.md`（流程圖）；`docs/archive/senren_banka_materials_FEAT_2026-11-08.md`（素材）；`docs/wip/senren_banka_scripts_import_FEAT_2026-11-08.md`（誤匯入舊表，本計畫取代它） |
 
 ## 1. 現況（2026-11-08 對 main 與資料庫查證）
 
