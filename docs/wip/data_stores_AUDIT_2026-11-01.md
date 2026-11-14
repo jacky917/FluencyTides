@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-11-01 |
 | **性質** | 稽核：盤點現有的資料庫與儲存體、彼此怎麼互相引用，並逐項評估遷移到 `fluencytides_corpus` 的風險 |
-| **狀態** | 🔨 盤點完成；收尾進行中（2026-11-14，見 §6）：ES 已核對並補上千戀＊萬花、兩個資料庫已傾印到開發機、`rebuild.py` 改成檢查目標資料庫。**還沒做**：切換後的建卡驗收、定期備份與第二份備份的去處 |
+| **狀態** | 🔨 盤點完成；收尾進行中（2026-11-14，見 §6）：ES 已核對並補上千戀＊萬花、兩個資料庫已傾印到開發機、`rebuild.py` 改成檢查目標資料庫。**還沒做**：切換後實際建卡的驗收（試跑已通過）、定期備份與第二份備份的去處 |
 | **範圍** | MySQL `yuzusoft`、`fluencytides_corpus`；網站 SQLite（本機與正式機各一份）；Elasticsearch `fluencytides_dialogue`；Anki；MinIO；本機的校準檔案與設定檔 |
 | **不動** | §1–§5 只盤點與評估，不改任何資料；§6 的收尾另外記錄做了什麼 |
 | **PR / 進度** | `rebuild.py` 的保護：分支 `fix/rebuild-guard` |
@@ -164,7 +164,7 @@ gunzip -c sql/fluencytides_corpus_20261114_2026.sql.gz | mysql --defaults-extra-
 
 ### 6.5 還沒做
 
-- 切換後的建卡驗收（`corpus_db_rebuild_FEAT_2026-10-31.md` §8 的兩項 M3）：建一張核心動詞卡、一張自他動詞卡；刪掉本機 `backend/.env` 的 8 個舊 `JP_*` 設定。
+- 切換後的建卡驗收（`corpus_db_rebuild_FEAT_2026-10-31.md` §8 的兩項 M3）：實際建一張核心動詞卡、一張自他動詞卡（會寫進 Anki 與卡片紀錄）。2026-11-14 已做的部分：兩條建卡管線不寫入的試跑（`--limit 1 --dry-run --game SabbatOfTheWitch`）都選得到句子；語音（23,491 個檔）與頭像（13 個檔）資料夾由 `GAME_ASSETS_ROOT`＋`game_profiles` 找得到；本機 `backend/.env` 的 8 個舊 `JP_*` 設定已刪（備份 `.env.bak_20261114_remove_legacy_jp`）。
 - 備份的第二份去處與定期備份（§6.2）。
 - 兩份 SQLite 的 `card_relations` 合併（M6、M7）：屬於關係圖計畫的 R2。
 
