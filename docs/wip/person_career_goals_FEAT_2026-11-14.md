@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-11-14 |
 | **性質** | 新增機能設計 + 實作工作項 |
-| **狀態** | 🔨 實作中：PR 1（工作經歷、預設全部顯示、逐筆隱藏）已部署並 commit（`18cc408`）。§9 已定案（2026-11-14 使用者：「都照建議」）。§12 只留一種卡片（D13–D16）2026-11-15 定案。PR 2（目標、新欄位、只留一種卡片）已遷移 Anki、部署並 commit（§13）；兩個 PR 都還沒推上 GitHub |
+| **狀態** | 🔨 實作中：PR 1（工作經歷、預設全部顯示、逐筆隱藏）已部署並 commit（`18cc408`）。§9 已定案（2026-11-14 使用者：「都照建議」）。§12 只留一種卡片（D13–D16）2026-11-15 定案。PR 2（目標、新欄位、只留一種卡片）已遷移 Anki、部署並 commit（§13）；PR 1、PR 2 已開 PR（#46、#47）。PR 3 經歷欄位（§14）實作中 |
 | **範圍** | `backend/app/schemas/person_profile.py`（職位、目標、新欄位的格式）；`backend/app/anki_models/Person_Profile_Dark_*.html`、`_style.css`（卡面）；`backend/app/services/task_handlers/person_profile_handler.py`（動作）；`backend/app/bot/handlers/person_profile.py`、`bot/utils/person_profile_view.py`（TG）；`services/person_profile_ingest.py`、`person_profile_topics.py`（AI 整理與話題）；`frontend/src/components/JsonFieldEditor.tsx`（網頁編輯）；筆記類型 `Person_Profile_Dark` 新增欄位 |
 | **不動** | 其他筆記類型；人脈卡既有欄位的名稱（不刪、不改名）；互動紀錄、待追蹤、家人、重要日期、聯絡方式的格式 |
 | **PR / 進度** | 分支 `feat/person-career-goals`（PR 1）；PR 2 另開分支 |
@@ -408,3 +408,36 @@ python scripts/local_anki/Person_Profile_Dark/migrate_single_card.py --apply
 
 - 手機實機確認：背面 FrontSide 的 JS 在 AnkiDroid 的行為、長按名字區與頭像。
 - 目標的狀態沒有讓 AI 建議（例如「考過了」→ 達成）；先手動在 TG 按。
+
+## 14. PR 3：經歷欄位（2026-11-15，分支 `feat/person-experiences`）
+
+### 14.1 為什麼要加
+
+「對方去過 XXX 山」這類**做過的事**，現有欄位都放不下：
+
+| 欄位 | 為什麼不合適 |
+|---|---|
+| `Interests`（興趣） | 是短標籤，只能記「登山」，記不下「去過玉山」 |
+| `Interactions_JSON`（互動） | 埋在某次見面的紀錄裡，卡面不會單獨列出 |
+| `Common_Ground`（共同點） | 只有兩個人都去過才算 |
+| `Goals_JSON`（目標） | 是還沒做的事 |
+| `Notes`（備註） | 什麼都丟進來會變雜物區 |
+
+分工：興趣記「喜歡什麼」，經歷記「做過什麼」，目標記「想做什麼」。
+
+### 14.2 設計
+
+| 項目 | 決定 |
+|---|---|
+| 欄位 | `Experiences`，標題「經歷」；會變的欄位，一筆一件事（`HistoryNote`，和 `Needs`、`Common_Ground` 相同），每筆有登錄日、可以劃掉、可以逐筆隱藏 |
+| 放什麼 | 去過的地方、做過的事、印象深的故事，例如「去過 XXX 山」「在澳洲打工度假一年」「跑過東京馬拉松」 |
+| 欄位順序 | 定義檔裡接在 `Interests` 後面，網頁建卡表單也在興趣下面 |
+| 卡面 | 「興趣與喜好」區塊，興趣標籤下面一列「經歷」 |
+| TG | 清單代號 `EX`；放在「興趣」那一區的欄位裡；摘要分組改名「興趣、經歷與飲食」 |
+| 網頁搜尋 | 「興趣」按鈕改名「興趣・經歷」，一起搜兩個欄位 |
+| AI | 「用一段話記錄」的提示詞說明興趣、經歷、目標的分工；AI 話題自動讀進來（清單欄位通用） |
+| 遷移 | 沿用 `migrate_single_card.py`：它會補上定義檔有、Anki 沒有的欄位；模板已經改過名的步驟會略過 |
+
+### 14.3 上線順序
+
+和 §13.3 相同：所有裝置先同步 → 跑遷移 `--apply` → NAS 的 Anki 完整同步上傳 → 部署後端。這次只加欄位、不動模板名稱，複習紀錄不受影響。
