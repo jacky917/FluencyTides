@@ -25,7 +25,7 @@ from pydantic import ValidationError
 from app.core.dependencies import get_template_engine
 from app.core.exceptions import LLMGenerationError
 from app.infrastructure.llm.routing import route
-from app.schemas.llm.person_profile import LLMPersonIngestResult
+from app.schemas.llm.person_profile import IngestListUpdate, LLMPersonIngestResult
 from app.schemas.person_profile import (
     PERSON_HISTORY_FIELDS,
     RETIRED_FIELDS,
@@ -33,10 +33,13 @@ from app.schemas.person_profile import (
     Interaction,
     PersonCreateParams,
     append_field_html,
+    entry_detail,
     entry_text,
     history_from_text,
     is_active,
     item_fingerprint,
+    normalize_period,
+    period_order_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,16 +91,18 @@ def _multiline(name: str) -> bool:
 
 
 def _history_lines(name: str, items: list[object]) -> tuple[list[str], list[str]]:
-    """會變的欄位給 LLM 看的：有效的每筆附編號（``#序號+1``，劃掉時用），以及過去的（劃掉的）。
+    """會變的欄位給 LLM 看的：有效的每筆附編號（``#序號+1``，劃掉時用），以及過去的（劃掉的，或有離職年月的
+    職位）。職位附任職期間與說明。
 
     The current entries numbered for "end" proposals, and the past ones.
     """
     current, past = [], []
     for index, item in enumerate(items):
-        text = plain_text(entry_text(name, item), 200)
+        text = plain_text(entry_detail(name, item), 200)
         # 不是物件的項目是格式壞掉的：不列（也不能被劃掉）
         if not text or not isinstance(item, dict):
             continue
+        # 以前的工作有離職年月，不一定劃掉過；is_active 兩個都看
         if is_active(item):
             added = str(item.get("added") or "")
             current.append(f"#{index + 1} {text}" + (f"（{added} 起）" if added else ""))
@@ -269,19 +274,79 @@ def proposals_from(
                 "text": entry_text(name, items[index]), "reason": change.reason,
             }))
             continue
-        item = _history_item(name, change.value, change.job_title, today)
+        if name == "Company":
+            item = _position_item(change, today)
+        else:
+            item = _history_item(name, change.value, change.job_title, today)
         if item is None:
             logger.warning("略過格式不對的新增建議: %s=%r（職稱 %r；理由：%s）", name, change.value, change.job_title,
                            change.reason)
             continue
-        current = {entry_text(name, entry) for entry in items if is_active(entry)}
-        if entry_text(name, item) in current:
+        if _already_known(name, items, item):
             continue
         proposals.append(Proposal("history_add", {
             "field": name, "item": {k: v for k, v in item.items() if k not in ("added", "ended")},
-            "text": entry_text(name, item), "reason": change.reason,
+            "text": entry_detail(name, item), "reason": change.reason,
         }))
     return proposals
+
+
+def _already_known(name: str, items: list[object], item: dict[str, object]) -> bool:
+    """新增建議是不是已經記過的（不必再列給使用者勾）。Whether a suggested entry is already recorded.
+
+    - 一般欄位：和某筆有效的內容相同。
+    - 現職：同名的現職已經有，而且這次沒帶來那一筆還空著的到職年月或說明（有的話 handler 會補進去）。
+    - 以前的工作：同名的還是現職（應該由 ``end`` 處理，另外新增會變成兩筆），或公司・職稱與起訖都相同。
+    """
+    text = entry_text(name, item)
+    current = {entry_text(name, entry): entry for entry in items if is_active(entry)}
+    if name != "Company":
+        return text in current
+    if not is_active(item):
+        if text in current:
+            logger.warning("略過和現職同名的以前的工作（應該用 end）: %s", text)
+            return True
+        key = (text, item.get("start", ""), item.get("end", ""))
+        return any(
+            isinstance(entry, dict)
+            and (entry_text(name, entry), entry.get("start", ""), entry.get("end", "")) == key
+            for entry in items
+        )
+    target = current.get(text)
+    if not isinstance(target, dict):
+        return False
+    return not any(item.get(key) and not str(target.get(key) or "").strip() for key in ("start", "note"))
+
+
+def _position_item(change: IngestListUpdate, today: date) -> dict[str, object] | None:
+    """職位的新增建議：公司、職稱，加上任職起訖與說明。年月有問題時不丟掉整筆：看不懂的到職拿掉；看不懂的
+    離職填 ``?``（LLM 給了離職就是以前的工作，拿掉會變成現職）；前後顛倒時拿掉到職、離職改成 ``?``。
+
+    The suggested position; unusable periods are degraded, not the whole entry.
+    """
+    item = _history_item("Company", change.value, change.job_title, today)
+    if item is None:
+        return None
+    for key, raw in (("start", change.job_start), ("end", change.job_end)):
+        value = normalize_period(raw, allow_unknown=key == "end")
+        if value is None:
+            logger.warning("看不懂的%s年月: %r（%s，%s）", "離職" if key == "end" else "到職", raw,
+                           entry_text("Company", item), change.reason)
+            if key == "end":
+                item["end"] = "?"  # 仍是以前的工作，只是不知道時間
+        elif value:
+            item[key] = value
+    error = period_order_error(str(item.get("start") or ""), str(item.get("end") or ""))
+    if error:
+        logger.warning("略過前後顛倒的任職年月（%s）: %s", error, change.reason)
+        item.pop("start", None)
+        item["end"] = "?"  # 仍是以前的工作，只是不知道時間
+    if change.job_note.strip():
+        item["note"] = change.job_note.strip()
+    try:
+        return PERSON_HISTORY_FIELDS["Company"].model.model_validate(item).model_dump()
+    except ValidationError:
+        return None
 
 
 def _history_item(name: str, value: str, job_title: str, today: date) -> dict[str, object] | None:

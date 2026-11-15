@@ -2,11 +2,14 @@
      版面：頭部（頭像、姓名與讀音、徽章）→ 見面前必看（一律展開）→ TG 按鈕 → 可收合區段（<details>）。
      欄位都放在隱藏的 div，由下方的 JS 讀取後畫出；JSON 欄位解析失敗時該區段顯示「資料格式錯誤」與原文，
      不會默默消失。模板只顯示、不寫資料：寫入交給網頁與 TG——有 Card_ID 與 TG_Bot 時，每個區塊標題的
-     「+」開啟 TG 新增（區塊有多個欄位時 TG 先問新增哪一項），長按清單項目 3 秒開啟 TG 刪除（TG 會再確認一次）、
-     長按文字欄位（出身、備註等）3 秒開啟 TG 修改那個欄位，
-     「劃掉」開啟 TG 把那筆標成失效。沒有內容的區段只在有 TG 時顯示（才有「+」可按）。
+     「+」開啟 TG 新增（區塊有多個欄位時 TG 先問新增哪一項），長按清單項目 3 秒開啟 TG 的選單（隱藏或顯示、
+     劃掉〔只有會變的欄位；職位叫離職〕、刪除；刪除 TG 會再確認一次）、長按文字欄位（出身、備註等）3 秒開啟 TG 的
+     選單（修改、隱藏或顯示），「劃掉」開啟 TG 把那筆標成失效。沒有內容的區段只在有 TG 時顯示（才有「+」可按）。
      會變的欄位（興趣、職位、現居地等）是 JSON 清單，每筆 {value, added, ended}（職位是 {company, title, …}）：
-     預設只顯示有效的，欄位旁的眼睛（與 TG 按鈕列裡的 AI 遮名字開關不同）展開全部紀錄。 -->
+     全部顯示，有效的在前，劃掉的接在後面（刪除線、附登錄日與失效日）。職位就是工作經歷：現職（沒有離職年月、
+     沒有劃掉）在上面、標「現職」，以前的工作在下面、附任職期間；同一段裡照清單順序（在網頁調整）。
+     在卡面隱藏的（清單項目有 hidden: true；文字欄位有「人脈卡隱藏::欄位名」標籤）變成遮擋塊，點一下才看得到；
+     同一個欄位出現在別處時也要遮（例如生日也出現在頭部的徽章）。工作經歷計畫書 §4、§5。 -->
 <div class="card person-card" id="person-root">
     <div class="card-kind" id="person-kind"></div>
     <div id="person-header"></div>
@@ -234,8 +237,8 @@
 
     /**
      * 一筆 JSON 項目的指紋（djb2，UTF-16 碼元，36 進位），與後端 item_fingerprint 相同算法。
-     * 刪除、標成完成、劃掉時附在序號後面：卡片上的序號可能過時（別處新增或刪除、尚未同步），TG 據此確認
-     * 要動的還是同一筆。added、ended 不放進指紋：劃掉後同一筆的指紋不變。
+     * 長按選單、標成完成、劃掉時附在序號後面：卡片上的序號可能過時（別處新增或刪除、尚未同步），TG 據此確認
+     * 要動的還是同一筆。added、ended、start、end、note、hidden 都不放進指紋：劃掉、補年月、隱藏後指紋不變。
      */
     function itemFingerprint(item) {
         var keys = ['date', 'item', 'topics', 'name', 'label', 'handle', 'relation', 'channel'];
@@ -306,18 +309,58 @@
 
     var LONG_PRESS_MS = 3000;
 
-    /**
-     * 長按 3 秒刪除清單的一筆：開啟 TG 確認刪除（見 longPress）。沒有 TG 連結時什麼都不做。
-     */
-    function longPressDelete(node, field, index, item) {
-        return longPress(node, tgUrl('pdel', field, itemRef(index, item)), '長按 3 秒刪除', '在 TG 刪除這筆', '');
+    // ============================
+    // 在卡面隱藏（只影響卡面；AI 分析照樣讀得到）
+    // ============================
+
+    // 文字欄位的隱藏記在標籤（與後端 HIDDEN_TAG_PREFIX 相同）
+    var HIDDEN_TAG_PREFIX = '人脈卡隱藏::';
+    var hiddenFields = {};
+    readField('Tags').split(/\s+/).forEach(function (tag) {
+        if (tag.indexOf(HIDDEN_TAG_PREFIX) === 0) hiddenFields[tag.slice(HIDDEN_TAG_PREFIX.length)] = true;
+    });
+
+    function isHiddenItem(item) {
+        return Boolean(item) && typeof item === 'object' && item.hidden === true;
     }
 
     /**
-     * 長按 3 秒修改文字欄位（出身、備註等）：開啟 TG 的「改資料」直接到這個欄位。沒有 TG 連結時什麼都不做。
+     * 隱藏的內容蓋上一塊明顯的斜線遮擋，點一下才看得到（翻下一張就恢復）。label 預設「已隱藏・點一下看」，
+     * 標籤這種小東西用短的「隱藏」。同一個節點也要長按時，先呼叫 longPress 再呼叫這裡：長按觸發後的那一下
+     * click 先由 longPress 吞掉（它要重設自己的狀態），遮擋再順便掀開；反過來的話 longPress 收不到那一下，
+     * 之後一次正常的點擊會被它吞掉。正面兩份模板各有一份同樣的寫法，改這裡時一起改。
      */
-    function longPressEdit(node, field) {
-        return longPress(node, tgUrl('pedit', field, 'none'), '長按 3 秒在 TG 修改', '在 TG 修改', ' lp-edit');
+    function coverIfHidden(node, hidden, label) {
+        if (!hidden || !node) return node;
+        node.className += ' is-hidden';
+        node.appendChild(el('span', 'hidden-cover', label || '已隱藏・點一下看'));
+        // 捕獲階段先攔下：第一下只是掀開，不要展開區段、開 TG 或翻面
+        node.addEventListener('click', function (e) {
+            if (node.className.indexOf('is-revealed') >= 0) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            node.className += ' is-revealed';
+        }, true);
+        return node;
+    }
+
+    /**
+     * 清單的一筆：在卡面隱藏的蓋上遮擋（cover 指定要蓋的節點，預設就是 node），並且長按 3 秒開啟 TG 的選單
+     * （隱藏或顯示、劃掉、刪除，見 longPress）。沒有 TG 連結時只處理遮擋。
+     */
+    function longPressItem(node, field, index, item, cover) {
+        longPress(node, tgUrl('pitm', field, itemRef(index, item)), '長按 3 秒：在 TG 隱藏、刪除等',
+            '在 TG 開啟選單', '');
+        coverIfHidden(cover || node, isHiddenItem(item));
+        return node;
+    }
+
+    /**
+     * 文字欄位（出身、備註等）：有隱藏標籤的蓋上遮擋，並且長按 3 秒開啟 TG 的選單（修改、隱藏或顯示）。
+     */
+    function longPressField(node, field) {
+        longPress(node, tgUrl('pfld', field, 'none'), '長按 3 秒：在 TG 修改或隱藏', '在 TG 開啟選單', ' lp-edit');
+        return coverIfHidden(node, hiddenFields[field] === true);
     }
 
     /**
@@ -448,7 +491,8 @@
     }
 
     // ============================
-    // 會變的欄位：每筆 {value, added, ended}；職位 {company, title, added, ended}
+    // 會變的欄位：每筆 {value, added, ended}；職位 {company, title, start, end, note, added, ended}；
+    // 每一筆都可能有 hidden: true
     // ============================
 
     // 與後端 PERSON_HISTORY_FIELDS 相同（tests/test_person_profile_template.py 比對）
@@ -458,8 +502,20 @@
     var historyLists = {};
     HISTORY_FIELDS.forEach(function (name) { historyLists[name] = readJsonList(name); });
 
+    /** 目前有效：沒有劃掉；職位另外要沒有離職年月（與後端 is_active 相同）。 */
     function isActiveEntry(item) {
-        return Boolean(item) && typeof item === 'object' && !String(item.ended || '').trim();
+        return Boolean(item) && typeof item === 'object' && !String(item.ended || '').trim()
+            && !String(item.end || '').trim();
+    }
+
+    /** 職位的任職期間：「2021-04～」「2019～2021」「～？」；劃掉卻沒有離職年月時用劃掉的月份（與後端 position_period 相同）。 */
+    function positionPeriod(item) {
+        if (!item || typeof item !== 'object') return '';
+        var start = String(item.start || '').trim();
+        var end = String(item.end || '').trim();
+        if (!end && String(item.ended || '').trim()) end = String(item.ended).trim().slice(0, 7);
+        if (end === '?') end = '？';
+        return start || end ? start + '～' + end : '';
     }
 
     /** 一筆的文字：職位是「公司・職稱」，其他是內容（與後端 entry_text 相同）。 */
@@ -494,33 +550,31 @@
         return historyEntries(name).filter(function (e) { return isActiveEntry(e.item); });
     }
 
-    function activeText(name, separator) {
-        return activeEntries(name).map(function (e) { return entryText(name, e.item); }).join(separator);
-    }
-
-    /** 「劃掉」：開 TG 把這筆標成失效（失效日＝今天，保留紀錄）。 */
+    /** 「劃掉」：開 TG 把這筆標成失效（失效日＝今天，保留紀錄）；職位叫「離職」（另外補上離職年月）。 */
     function endLink(name, entry) {
-        var a = tgLink('劃掉', tgUrl('pend', name, itemRef(entry.index, entry.item)), 'done-link');
-        a.title = '在 TG 劃掉（不再適用，保留成過去的紀錄）';
+        var leave = name === 'Company';
+        var a = tgLink(leave ? '離職' : '劃掉', tgUrl('pend', name, itemRef(entry.index, entry.item)), 'done-link');
+        a.title = leave ? '在 TG 標成離職（保留在工作經歷裡）' : '在 TG 劃掉（不再適用，保留成過去的紀錄）';
         return a;
     }
 
-    /** 歷史紀錄的眼睛：小圖示＋筆數（TG 按鈕列裡的 AI 遮名字開關是有框的大圖示，兩者不同）。 */
-    function historyToggle(count) {
-        var t = el('span', 'hist-toggle');
-        t.setAttribute('role', 'button');
-        t.title = '看全部紀錄（含登錄日與劃掉的）';
-        t.setAttribute('aria-label', t.title);
-        t.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" '
-            + 'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">'
-            + '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
-        t.appendChild(el('span', null, String(count)));
-        return t;
+    /** 劃掉的那筆附的日期：「登錄日・失效日 劃掉」。 */
+    function endedNote(item) {
+        var added = String(item.added || '');
+        return (added ? added + ' 登錄' : '日期不明') + '・' + String(item.ended || '') + ' 劃掉';
+    }
+
+    /** 格式不對的項目：不算有效也不算劃掉，另外列出；長按開的選單只有刪除（隱藏、劃掉都要改那一筆的鍵）。 */
+    function malformedNodes(name) {
+        return malformedEntries(name).map(function (e) {
+            var bad = el('div', 'json-error', '這筆格式不對（請在網頁修正）：' + JSON.stringify(e.item));
+            return longPressItem(bad, name, e.index, e.item);
+        });
     }
 
     /**
-     * 會變的欄位的一列：預設只顯示有效的（opts.chips 顯示成標籤），眼睛展開全部紀錄——每筆附登錄日，
-     * 劃掉的加刪除線與失效日。有 TG 時有效的那筆旁有「劃掉」（標籤在展開後才有），每筆都能長按刪除。
+     * 會變的欄位的一列：全部顯示，有效的在前、劃掉的接在後面（刪除線、附登錄日與失效日）；opts.chips 顯示成標籤。
+     * 有 TG 時有效的那筆旁有「劃掉」（標籤沒有，長按開選單再劃掉），每筆都能長按開選單。
      * opts.blur：內容模糊，點了才清楚（敏感話題）。沒有任何紀錄時回傳 null。
      */
     function historyRow(label, name, opts) {
@@ -528,66 +582,41 @@
         var list = historyLists[name];
         if (isError(list)) return row(label, errorNode(list));
         var entries = historyEntries(name);
-        var malformed = malformedEntries(name);
+        var malformed = malformedNodes(name);
         if (!entries.length && !malformed.length) return null;
         var active = entries.filter(function (e) { return isActiveEntry(e.item); });
-
-        var r = el('div', 'p-row');
-        var head = el('div', 'p-label hist-label');
-        if (label) head.appendChild(el('span', null, label));
-        var toggle = historyToggle(entries.length + malformed.length);
-        head.appendChild(toggle);
-        r.appendChild(head);
+        var ended = entries.filter(function (e) { return !isActiveEntry(e.item); });
 
         var content = el('div', 'p-value');
-        var current = el('div', 'hist-current');
-        if (!active.length) {
-            current.appendChild(el('span', 'empty-hint', '目前沒有有效的（點眼睛看過去的紀錄）'));
-        } else if (opts.chips) {
+        if (opts.chips) {
             var chipRow = el('div', 'chip-row');
-            active.forEach(function (e) {
-                chipRow.appendChild(longPressDelete(el('span', 'chip', entryText(name, e.item)), name, e.index, e.item));
+            active.concat(ended).forEach(function (e) {
+                var isEnded = !isActiveEntry(e.item);
+                var chip = el('span', 'chip' + (isEnded ? ' is-ended' : ''), entryText(name, e.item));
+                if (isEnded) chip.title = endedNote(e.item);
+                longPress(chip, tgUrl('pitm', name, itemRef(e.index, e.item)), '長按 3 秒：在 TG 隱藏、劃掉等',
+                    '在 TG 開啟選單', '');
+                chipRow.appendChild(coverIfHidden(chip, isHiddenItem(e.item), '隱藏'));
             });
-            current.appendChild(chipRow);
+            content.appendChild(chipRow);
         } else {
             active.forEach(function (e) {
                 var line = el('div', 'hist-line');
                 line.appendChild(el('span', 'hist-text', entryText(name, e.item)));
                 if (tgEnabled) line.appendChild(endLink(name, e));
-                current.appendChild(longPressDelete(line, name, e.index, e.item));
+                content.appendChild(longPressItem(line, name, e.index, e.item));
+            });
+            ended.forEach(function (e) {
+                var line = el('div', 'hist-line is-ended');
+                line.appendChild(el('span', 'hist-text', entryText(name, e.item)));
+                line.appendChild(el('span', 'hist-date', endedNote(e.item)));
+                content.appendChild(longPressItem(line, name, e.index, e.item));
             });
         }
-        // 格式不對的項目兩種畫面都列出（不要假裝成已劃掉），長按可刪除
-        malformed.forEach(function (e) {
-            var bad = el('div', 'json-error', '這筆格式不對（請在網頁修正）：' + JSON.stringify(e.item));
-            current.appendChild(longPressDelete(bad, name, e.index, e.item));
-        });
-        content.appendChild(current);
+        malformed.forEach(function (node) { content.appendChild(node); });
 
-        var all = el('div', 'hist-all');
-        all.style.display = 'none';
-        entries.forEach(function (e) {
-            var ended = !isActiveEntry(e.item);
-            var line = el('div', 'hist-line' + (ended ? ' is-ended' : ''));
-            line.appendChild(el('span', 'hist-text', entryText(name, e.item)));
-            var added = String(e.item.added || '');
-            var note = (added ? added + ' 登錄' : '日期不明') + (ended ? '・' + String(e.item.ended || '') + ' 劃掉' : '');
-            line.appendChild(el('span', 'hist-date', note));
-            if (!ended && tgEnabled) line.appendChild(endLink(name, e));
-            all.appendChild(longPressDelete(line, name, e.index, e.item));
-        });
-        malformed.forEach(function (e) {
-            all.appendChild(el('div', 'json-error', '這筆格式不對（請在網頁修正）：' + JSON.stringify(e.item)));
-        });
-        content.appendChild(all);
-
-        toggle.addEventListener('click', function (ev) {
-            ev.stopPropagation();
-            var open = all.style.display === 'none';
-            all.style.display = open ? '' : 'none';
-            current.style.display = open ? 'none' : '';
-            toggle.className = 'hist-toggle' + (open ? ' is-open' : '');
-        });
+        var r = el('div', 'p-row');
+        if (label) r.appendChild(el('div', 'p-label', label));
 
         if (opts.blur) {
             content.className += ' blur-reveal';
@@ -599,6 +628,49 @@
                 content.className = content.className.replace(/\s*blur-reveal/, ' revealed');
             }, true);
         }
+        r.appendChild(content);
+        return r;
+    }
+
+    /**
+     * 工作經歷（職位 Company）：現職在上（「現職」標籤、字大一級、旁邊有「離職」），以前的工作在下（較淡、
+     * 附任職期間）；同一段裡照清單順序（網頁的上移、下移）。每筆附說明（note），都能長按開選單。
+     */
+    function careerRow() {
+        var name = 'Company';
+        var list = historyLists[name];
+        if (isError(list)) return row('工作經歷', errorNode(list));
+        var entries = historyEntries(name);
+        var malformed = malformedNodes(name);
+        if (!entries.length && !malformed.length) return null;
+        var content = el('div', 'p-value career');
+
+        function line(e, current) {
+            var item = e.item;
+            var node = el('div', 'career-item ' + (current ? 'is-current' : 'is-past'));
+            var head = el('div', 'career-head');
+            if (current) head.appendChild(el('span', 'career-badge', '現職'));
+            head.appendChild(el('span', 'career-name', entryText(name, item)));
+            var period = positionPeriod(item);
+            if (period) head.appendChild(el('span', 'career-period', period));
+            if (current && tgEnabled) head.appendChild(endLink(name, e));
+            node.appendChild(head);
+            var note = String(item.note || '').trim();
+            if (note) node.appendChild(el('div', 'career-note', note));
+            return longPressItem(node, name, e.index, item);
+        }
+
+        var current = entries.filter(function (e) { return isActiveEntry(e.item); });
+        var past = entries.filter(function (e) { return !isActiveEntry(e.item); });
+        current.forEach(function (e) { content.appendChild(line(e, true)); });
+        if (past.length) {
+            content.appendChild(el('div', 'career-past-label', current.length ? '以前' : '以前（目前沒有現職）'));
+            past.forEach(function (e) { content.appendChild(line(e, false)); });
+        }
+        malformed.forEach(function (node) { content.appendChild(node); });
+
+        var r = el('div', 'p-row');
+        r.appendChild(el('div', 'p-label', '工作經歷'));
         r.appendChild(content);
         return r;
     }
@@ -659,24 +731,34 @@
         if (alt.length) names.appendChild(el('div', 'person-alt', alt.join(' · ')));
 
         var memo = readField('Name_Memo');
-        if (memo) names.appendChild(longPressEdit(el('div', 'person-memo', '名字記法：' + memo), 'Name_Memo'));
+        if (memo) names.appendChild(longPressField(el('div', 'person-memo', '名字記法：' + memo), 'Name_Memo'));
 
-        var work = activeText('Company', '／');
-        if (work) names.appendChild(el('div', 'person-work', work));
+        // 現職（隱藏的那份蓋上遮擋，仍佔一個位置）
+        var jobs = activeEntries('Company');
+        if (jobs.length) {
+            var work = el('div', 'person-work');
+            jobs.forEach(function (e, i) {
+                if (i > 0) work.appendChild(document.createTextNode('／'));
+                work.appendChild(coverIfHidden(el('span', null, entryText('Company', e.item)), isHiddenItem(e.item), '隱藏'));
+            });
+            names.appendChild(work);
+        }
 
         var badges = el('div', 'badge-row');
         activeEntries('Relationship').forEach(function (e) {
-            badges.appendChild(el('span', 'pane-badge badge-blue', entryText('Relationship', e.item)));
+            badges.appendChild(coverIfHidden(el('span', 'pane-badge badge-blue', entryText('Relationship', e.item)),
+                isHiddenItem(e.item), '隱藏'));
         });
 
         // 理論上只有一筆有效；取消劃掉或網頁編輯可能留下多筆，取最後新增的
         var closenessEntries = activeEntries('Closeness');
-        var closeness = closenessEntries.length
-            ? parseInt(entryText('Closeness', closenessEntries[closenessEntries.length - 1].item), 10) : NaN;
+        var closenessItem = closenessEntries.length ? closenessEntries[closenessEntries.length - 1].item : null;
+        var closeness = closenessItem ? parseInt(entryText('Closeness', closenessItem), 10) : NaN;
         if (closeness >= 1 && closeness <= 5) {
             var dots = '';
             for (var i = 1; i <= 5; i++) dots += i <= closeness ? '●' : '○';
-            badges.appendChild(el('span', 'pane-badge closeness-dots', dots));
+            badges.appendChild(coverIfHidden(el('span', 'pane-badge closeness-dots', dots), isHiddenItem(closenessItem),
+                '隱藏'));
         }
 
         var birthday = parseDate(readField('Birthday'));
@@ -685,7 +767,9 @@
             var years = age(birthday);
             var text = untilBirthday === 0 ? '今天生日' : '生日還有 ' + untilBirthday + ' 天';
             if (years !== null) text += '（' + (untilBirthday === 0 ? years : years + 1) + ' 歲）';
-            badges.appendChild(el('span', 'pane-badge ' + (untilBirthday <= 14 ? 'badge-yellow' : ''), text));
+            // 生日設成隱藏時，徽章也遮（否則看得出生日與年齡）
+            badges.appendChild(coverIfHidden(el('span', 'pane-badge ' + (untilBirthday <= 14 ? 'badge-yellow' : ''), text),
+                hiddenFields.Birthday === true, '隱藏'));
         }
 
         var since = daysSince(readField('Last_Contact'));
@@ -740,13 +824,14 @@
                     var li = el('li', null, f.item || '');
                     var note = f.due ? '期限 ' + shortDate(f.due) : f.added ? shortDate(f.added) + ' 記' : '';
                     if (note) li.appendChild(el('span', 'followup-date', note));
-                    list.appendChild(longPressDelete(li, 'Followups_JSON', entry.index, f));
+                    list.appendChild(longPressItem(li, 'Followups_JSON', entry.index, f));
                     if (tgEnabled) {
-                        // 點一下開 TG，TG 先問要不要標成完成（不直接標）；長按 3 秒仍是刪除。
-                        // 在 longPressDelete 之後註冊：長按觸發後的那次點擊已被它 preventDefault，這裡就不開
+                        // 點一下開 TG，TG 先問要不要標成完成（不直接標）；長按 3 秒仍是選單。
+                        // 在 longPressItem 之後註冊：長按觸發後的那次點擊已被它 preventDefault、掀開遮擋的那一下
+                        // 已被 stopImmediatePropagation，這裡就不開
                         var doneUrl = tgUrl('pdone', 'Followups_JSON', itemRef(entry.index, f));
                         li.className += ' tap-target';
-                        li.setAttribute('title', '點一下在 TG 標成完成（會先確認）；長按 3 秒刪除');
+                        li.setAttribute('title', '點一下在 TG 標成完成（會先確認）；長按 3 秒開選單');
                         li.addEventListener('click', function (e) {
                             if (e.defaultPrevented) return;
                             e.stopPropagation();
@@ -761,16 +846,24 @@
         if (isError(historyLists.Dietary)) {
             mustRow('飲食', errorNode(historyLists.Dietary));
         } else {
-            var dietary = activeText('Dietary', '；');
-            if (dietary) mustRow('飲食限制', el('div', 'warn-box hist-text', dietary));
+            // 一筆一行，隱藏的那筆蓋上遮擋（過敏仍看得出「有一筆被隱藏」）
+            var dietary = activeEntries('Dietary');
+            if (dietary.length) {
+                var warn = el('div', 'warn-box');
+                dietary.forEach(function (e) {
+                    warn.appendChild(longPressItem(el('div', 'hist-text', entryText('Dietary', e.item)), 'Dietary',
+                        e.index, e.item));
+                });
+                mustRow('飲食限制', warn);
+            }
         }
 
         if (isError(interactions)) {
             mustRow('上次', errorNode(interactions));
         } else if (interactions.length) {
             var last = interactions.slice().sort(byDateDesc)[0];
-            var lastText = el('span', null, (last.topics || '') + (last.updates ? '｜' + last.updates : ''));
-            mustRow('上次（' + shortDate(last.date || '') + '）', lastText);
+            var lastText = el('div', null, (last.topics || '') + (last.updates ? '｜' + last.updates : ''));
+            mustRow('上次（' + shortDate(last.date || '') + '）', coverIfHidden(lastText, isHiddenItem(last)));
         }
 
         if (!isError(keyDates)) {
@@ -779,15 +872,15 @@
                     var d = parseDate(k.date);
                     if (!d) return null;
                     var until = k.yearly ? daysUntilNext(d) : daysUntil(d);
-                    return until >= 0 && until <= 60 ? { label: k.label, date: d, until: until } : null;
+                    return until >= 0 && until <= 60 ? { label: k.label, date: d, until: until, hidden: isHiddenItem(k) } : null;
                 })
                 .filter(Boolean)
                 .sort(function (a, b) { return a.until - b.until; });
             if (soon.length) {
                 var list = el('ul', 'followup-list');
                 soon.forEach(function (s) {
-                    list.appendChild(el('li', null, s.label + '（' + pad2(s.date.month) + '/' + pad2(s.date.day) +
-                        (s.until === 0 ? '，就是今天' : '，還有 ' + s.until + ' 天') + '）'));
+                    list.appendChild(coverIfHidden(el('li', null, s.label + '（' + pad2(s.date.month) + '/' + pad2(s.date.day) +
+                        (s.until === 0 ? '，就是今天' : '，還有 ' + s.until + ' 天') + '）'), s.hidden));
                 });
                 mustRow('近期', list);
             }
@@ -808,7 +901,7 @@
         wrap.appendChild(tgLink('照片', tgUrl('pphoto', 'Photo', 'none')));
         wrap.appendChild(tgLink('AI 分析與話題', tgUrl('ptopic', 'Display_Name', 'none')));
         wrap.appendChild(maskToggle());
-        wrap.appendChild(el('span', 'tg-hint', '點待追蹤：在 TG 標成完成｜長按 3 秒：清單項目刪除、文字欄位修改'));
+        wrap.appendChild(el('span', 'tg-hint', '點待追蹤：在 TG 標成完成｜長按 3 秒：在 TG 隱藏、劃掉、刪除或修改'));
         document.getElementById('person-tg').appendChild(wrap);
     })();
 
@@ -827,7 +920,7 @@
 
         // 工作
         sections.push(section('work', '工作', '#3498db', [
-            historyRow('職位', 'Company'),
+            careerRow(),
             historyRow('工作內容', 'Work_Detail'),
             historyRow('學歷', 'Education')
         ], '', { section: 'work' }));
@@ -841,7 +934,7 @@
                 var parts = [m.name];
                 if (m.birth_year) parts.push(m.birth_year + ' 年生（' + (today().getFullYear() - m.birth_year) + ' 歲）');
                 var r = row(m.relation || '家人', parts.filter(Boolean).join('・') + (m.note ? '｜' + m.note : ''));
-                familyNodes.push(longPressDelete(r, 'Family_JSON', index, m));
+                familyNodes.push(longPressItem(r, 'Family_JSON', index, m));
             });
         }
         sections.push(section('family', '家庭', '#e91e63', familyNodes, isError(family) ? '' : family.length || '',
@@ -863,11 +956,12 @@
             withIndex(interactions).sort(function (a, b) { return byDateDesc(a.item, b.item); }).forEach(function (entry, order) {
                 var it = entry.item;
                 var item = el('details', 'timeline-item');
-                item.open = order === 0;
+                // 隱藏的那筆不自動展開：遮擋只蓋在標題列，展開前要先掀開
+                item.open = order === 0 && !isHiddenItem(it);
                 var summary = el('summary');
                 summary.appendChild(el('span', 'timeline-date', it.date || '日期不明'));
                 summary.appendChild(el('span', 'timeline-topics', it.topics || it.place || ''));
-                item.appendChild(longPressDelete(summary, 'Interactions_JSON', entry.index, it));
+                item.appendChild(longPressItem(summary, 'Interactions_JSON', entry.index, it));
                 var body = el('div', 'timeline-body');
                 if (it.place) body.appendChild(row('地點', it.place));
                 if (it.updates) body.appendChild(row('對方的近況', it.updates));
@@ -883,7 +977,7 @@
                 var doneList = el('ul', 'followup-list');
                 done.forEach(function (entry) {
                     var li = el('li', 'followup-done', entry.item.item || '');
-                    doneList.appendChild(longPressDelete(li, 'Followups_JSON', entry.index, entry.item));
+                    doneList.appendChild(longPressItem(li, 'Followups_JSON', entry.index, entry.item));
                 });
                 interactionNodes.push(row('已完成的待追蹤', doneList));
             }
@@ -900,7 +994,7 @@
                 var g = entry.item;
                 var label = (g.direction === 'received' ? '收到' : '送出') + (g.date ? '・' + g.date : '');
                 var r = row(label, (g.item || '') + (g.reaction ? '｜' + g.reaction : ''));
-                giftNodes.push(longPressDelete(r, 'Gifts_JSON', entry.index, g));
+                giftNodes.push(longPressItem(r, 'Gifts_JSON', entry.index, g));
             });
         }
         sections.push(section('gifts', '禮物', '#f1c40f', giftNodes, isError(gifts) ? '' : gifts.length || '',
@@ -912,17 +1006,17 @@
         var birthdayDate = parseDate(birthdayText);
         if (birthdayDate) {
             var birthdayAge = age(birthdayDate);
-            dateNodes.push(longPressEdit(row('生日', (birthdayDate.year !== null ? birthdayText : pad2(birthdayDate.month) + '/' + pad2(birthdayDate.day)) +
+            dateNodes.push(longPressField(row('生日', (birthdayDate.year !== null ? birthdayText : pad2(birthdayDate.month) + '/' + pad2(birthdayDate.day)) +
                 (birthdayAge !== null ? '（' + birthdayAge + ' 歲）' : '') + '・還有 ' + daysUntilNext(birthdayDate) + ' 天'), 'Birthday'));
         } else if (birthdayText) {
-            dateNodes.push(longPressEdit(row('生日', birthdayText), 'Birthday'));
+            dateNodes.push(longPressField(row('生日', birthdayText), 'Birthday'));
         }
         if (isError(keyDates)) {
             dateNodes.push(errorNode(keyDates));
         } else {
             keyDates.forEach(function (k, index) {
                 var r = row(k.label || '日子', (k.date || '') + (k.yearly ? '（每年）' : ''));
-                dateNodes.push(longPressDelete(r, 'Key_Dates_JSON', index, k));
+                dateNodes.push(longPressItem(r, 'Key_Dates_JSON', index, k));
             });
         }
         // 「+」可新增生日（沒填時卡片上沒有那一列可以長按）或重要日期
@@ -935,7 +1029,7 @@
         } else {
             contacts.forEach(function (c, index) {
                 var r = row(c.channel || '聯絡方式', (c.handle || '') + (c.preferred ? '（偏好）' : ''));
-                contactNodes.push(longPressDelete(r, 'Contacts_JSON', index, c));
+                contactNodes.push(longPressItem(r, 'Contacts_JSON', index, c));
             });
         }
         contactNodes.push(historyRow('溝通偏好', 'Comm_Prefs'));
@@ -953,14 +1047,14 @@
             });
         }
         sections.push(section('context', '認識脈絡與基本資料', '#95a5a6', [
-            // 文字欄位：長按開 TG 修改（認識日期與場合分成兩列，各自對應一個欄位）
-            longPressEdit(row('認識日期', readField('Met_Date')), 'Met_Date'),
-            longPressEdit(row('認識場合', readField('Met_Where')), 'Met_Where'),
-            longPressEdit(row('管道', readField('Met_Via')), 'Met_Via'),
-            introducerNode ? longPressEdit(row('介紹人', introducerNode), 'Introducer_Note_ID') : null,
-            longPressEdit(htmlRow('第一印象', 'First_Impression'), 'First_Impression'),
-            longPressEdit(htmlRow('外貌特徵', 'Appearance'), 'Appearance'),
-            longPressEdit(row('出身', readField('Hometown')), 'Hometown'),
+            // 文字欄位：長按開 TG 選單（修改、隱藏或顯示；認識日期與場合分成兩列，各自對應一個欄位）
+            longPressField(row('認識日期', readField('Met_Date')), 'Met_Date'),
+            longPressField(row('認識場合', readField('Met_Where')), 'Met_Where'),
+            longPressField(row('管道', readField('Met_Via')), 'Met_Via'),
+            introducerNode ? longPressField(row('介紹人', introducerNode), 'Introducer_Note_ID') : null,
+            longPressField(htmlRow('第一印象', 'First_Impression'), 'First_Impression'),
+            longPressField(htmlRow('外貌特徵', 'Appearance'), 'Appearance'),
+            longPressField(row('出身', readField('Hometown')), 'Hometown'),
             historyRow('現居', 'Residence'),
             historyRow('語言', 'Languages', { chips: true }),
             historyRow('時區', 'Timezone'),
@@ -970,7 +1064,7 @@
 
         // 備註
         sections.push(section('notes', '備註', '#7f8c8d', [
-            longPressEdit(htmlRow(null, 'Notes'), 'Notes'),
+            longPressField(htmlRow(null, 'Notes'), 'Notes'),
             row('資料更新', readField('Updated_At'))
         ]));
 

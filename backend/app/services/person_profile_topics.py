@@ -30,7 +30,7 @@ from app.core.dependencies import get_template_engine
 from app.core.exceptions import LLMGenerationError
 from app.infrastructure.llm.routing import route
 from app.schemas.llm.person_profile import LLMPersonTopicsResult
-from app.schemas.person_profile import PERSON_HISTORY_FIELDS, RETIRED_FIELDS, PersonCreateParams, entry_text, is_active
+from app.schemas.person_profile import PERSON_HISTORY_FIELDS, RETIRED_FIELDS, PersonCreateParams, entry_detail, is_active
 from app.services.person_profile_ingest import WEEKDAYS, plain_text
 
 logger = logging.getLogger(__name__)
@@ -232,13 +232,14 @@ def history_text(name: str, items: list[object]) -> str:
     """
     # 不是物件的項目是格式壞掉的（在 Anki 手改的），不當成過去的事送出
     entries = [item for item in items if isinstance(item, dict)]
-    current = [plain_text(entry_text(name, item), 200) for item in entries if is_active(item)]
+    # 職位附任職期間與說明（entry_detail），期間已經寫在裡面，不再接「到某天為止」
+    current = [plain_text(entry_detail(name, item), 200) for item in entries if is_active(item)]
     past = []
     for item in entries:
-        if is_active(item) or not (text := plain_text(entry_text(name, item), 200)):
+        if is_active(item) or not (text := plain_text(entry_detail(name, item), 200)):
             continue
         ended = str(item.get("ended") or "")
-        past.append(f"{text}（到 {ended} 為止）" if ended else text)
+        past.append(f"{text}（到 {ended} 為止）" if ended and name != "Company" else text)
     line = "、".join(text for text in current if text)
     if past:
         line += ("；" if line else "") + "以前：" + "、".join(past)

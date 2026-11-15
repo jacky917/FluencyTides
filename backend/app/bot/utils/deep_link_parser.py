@@ -12,6 +12,7 @@ never has to parse string formats by itself.
 """
 
 import logging
+from typing import get_args
 
 from app.schemas.tg.deep_link import (
     DeepLinkAction,
@@ -27,7 +28,10 @@ logger = logging.getLogger(__name__)
 
 #: 人脈卡深連結的動作前綴 → PersonLinkAction.verb。Person link prefixes.
 PERSON_VERBS = {"pview": "view", "padd": "add", "pdel": "del", "pdone": "done", "pend": "end", "psec": "section",
-                "pedit": "edit", "pphoto": "photo", "ptopic": "topic", "pmask": "mask"}
+                "pedit": "edit", "pphoto": "photo", "ptopic": "topic", "pmask": "mask", "pitm": "item", "pfld": "field"}
+# 與 PersonLinkAction.verb 的 Literal 是兩份清單：漏加時 import 就失敗，不要等到解析深連結才發現
+assert set(PERSON_VERBS.values()) == set(get_args(PersonLinkAction.model_fields["verb"].annotation)), \
+    "PERSON_VERBS 與 PersonLinkAction.verb 不一致"
 
 
 class DeepLinkParser:
@@ -43,7 +47,7 @@ class DeepLinkParser:
         Parse a deep link payload.
 
         支援的格式：{Action}-{FieldName}-{Index}-{Card_ID}
-        - Action: rec, del, addaudio, ttsaudio, gen；人脈卡為 pview、padd、pdel、pdone、pend、psec、pedit、pphoto、ptopic、pmask
+        - Action: rec, del, addaudio, ttsaudio, gen；人脈卡為 pview、padd、pdel、pdone、pend、psec、pedit、pphoto、ptopic、pmask、pitm、pfld
         - FieldName: 對應 Anki 的欄位名稱 (例如 Recordings)；人脈卡的格式見 PersonLinkAction
         - Index: 數字或 'last'，如果不適用則為 'none'
         - Card_ID: 卡片的唯一識別碼

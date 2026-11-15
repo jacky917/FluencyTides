@@ -11,7 +11,7 @@ import re
 from functools import cache
 
 from app.core.exceptions import TagInvalidError
-from app.schemas.person_profile import TEXT_UNMASKED_TAG
+from app.schemas.person_profile import HIDDEN_TAG_PREFIX, TEXT_UNMASKED_TAG
 
 #: 程式或 Anki 自己加的標籤（各 handler 的 ``CREATE_TAGS`` 另外從註冊表收集）。
 #: Tags added by code or Anki itself; handlers' ``CREATE_TAGS`` are collected separately.
@@ -33,8 +33,9 @@ _FIXED_SYSTEM_TAGS = frozenset({
     TEXT_UNMASKED_TAG,
 })
 
-#: 以這些開頭的標籤都是系統標籤（例如記錄生成模型的 ``LLM::(claude-code)opus@high``）。
-SYSTEM_TAG_PREFIXES = ("LLM::",)
+#: 以這些開頭的標籤都是系統標籤（例如記錄生成模型的 ``LLM::(claude-code)opus@high``、人脈卡隱藏文字欄位的
+#: ``人脈卡隱藏::Appearance``）。
+SYSTEM_TAG_PREFIXES = ("LLM::", HIDDEN_TAG_PREFIX)
 
 #: 建卡時最多加幾個標籤、每個最長幾個字。Limits on tags given at creation.
 MAX_TAGS = 20

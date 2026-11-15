@@ -5,9 +5,12 @@ Telegram flows of the person profile card.
 
 - ``/p 名字``：找人，回覆「見面前必看」摘要與操作按鈕。
 - 摘要的按鈕：記一筆互動、待追蹤（標成完成、刪除）、改資料（文字欄位）、各清單（新增、刪除；
-  會變的欄位另可劃掉、取消劃掉）、照片、全部資料。
+  會變的欄位另可劃掉、取消劃掉，職位叫離職、恢復現職）、照片、全部資料。
 - 卡面的深連結（動作見 ``deep_link_parser.PERSON_VERBS``）由 ``commands.py`` 的 ``/start`` 轉給
   :func:`handle_person_link`。``psec`` 是區塊的「+」：區塊有多個欄位時先問新增哪一項；``pend`` 是「劃掉」。
+  長按清單的一筆（``pitm``）或文字欄位（``pfld``）先開選單：隱藏或顯示（只影響卡面）、劃掉（職位是離職）、
+  刪除，職位另有修改任職期間與說明；文字欄位是修改、隱藏或顯示（工作經歷計畫書 §5.4）。TG 的清單與
+  「改資料」也有同樣的隱藏開關，不必回卡片長按。
 - ``/newcard`` 選「人脈卡」時由 :func:`start_person_create` 建立新的人。
 - 「AI 分析與話題」：LLM 以諮商師的角度分析這個人並推薦話題，名字遮起來送出（:mod:`app.services.person_profile_topics`）。
 - 「用一段話記錄」：一段文字或語音經 LLM 整理成互動、待追蹤與欄位建議，勾選後才寫入
@@ -25,6 +28,7 @@ import base64
 import logging
 from datetime import date
 from io import BytesIO
+from typing import Any
 
 from aiogram import F, Router, types
 from aiogram.exceptions import TelegramAPIError
@@ -60,8 +64,13 @@ from app.schemas.person_profile import (
     PersonCreateParams,
     active_texts,
     append_field_html,
+    hidden_tag,
+    hidden_text_fields,
     is_active,
+    is_hidden,
     item_fingerprint,
+    normalize_period,
+    period_order_error,
 )
 from app.schemas.tg.deep_link import PersonLinkAction
 from app.services import person_profile_ingest as ingest_service
@@ -69,7 +78,7 @@ from app.services import person_profile_topics as topics_service
 from app.services.card_service import CardService
 from app.services.note_service import NoteService, sync_warning
 from app.services.task_handlers.base import note_field_values
-from app.services.task_handlers.person_profile_handler import new_card_id
+from app.services.task_handlers.person_profile_handler import new_card_id, resolve_index
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +167,7 @@ async def _ensure_ids(card_service: CardService, note_id: int, fields: dict[str,
     if changes:
         await card_service.update_note_fields(note_id, changes, model_name=PERSON_NOTE_TYPE)
         fields.update(changes)
-        # 同步後手機上的卡面才有 Card_ID，TG 按鈕與長按刪除才能用；同步失敗不擋摘要，下次寫入時會再同步
+        # 同步後手機上的卡面才有 Card_ID，TG 按鈕與長按選單才能用；同步失敗不擋摘要，下次寫入時會再同步
         warning = await sync_warning(card_service.anki_client)
         if warning:
             logger.warning("人脈卡補上 Card_ID 後同步失敗（note %s）: %s", note_id, warning)
@@ -310,7 +319,7 @@ async def handle_person_link(
                 return
             await start_add(message, state, note_id, action.field_name)
         elif action.verb == "edit":
-            # 長按文字欄位：直接進「改資料」的那個欄位（會變的欄位走清單，不在這裡）
+            # 舊卡面的長按文字欄位（pedit，重新渲染前仍可用）：直接進「改資料」的那個欄位（會變的欄位走清單）
             if action.field_name not in view.EDITABLE_FIELDS:
                 await message.answer("❌ 這個連結不支援，請回 Anki 重新點。")
                 return
@@ -320,13 +329,22 @@ async def handle_person_link(
                 await message.answer("❌ 這個連結不支援，請回 Anki 重新點。")
                 return
             await _send_section_menu(message, note_id, action.field_name)
-        elif action.verb in ("del", "done", "end"):
+        elif action.verb == "field":
+            # 長按文字欄位：選單（修改、隱藏或顯示）
+            if action.field_name not in view.EDITABLE_FIELDS:
+                await message.answer("❌ 這個連結不支援，請回 Anki 重新點。")
+                return
+            await _send_field_menu(message, card_service, note_id, action.field_name)
+        elif action.verb in ("del", "done", "end", "item"):
             index, _, fingerprint = action.index.partition("_")
-            known = {"del": view.CODE_OF_LIST, "done": ("Followups_JSON",), "end": PERSON_HISTORY_FIELDS}[action.verb]
+            known = {"del": view.CODE_OF_LIST, "item": view.CODE_OF_LIST, "done": ("Followups_JSON",),
+                     "end": PERSON_HISTORY_FIELDS}[action.verb]
             if action.field_name not in known or not index.isdigit() or not fingerprint:
                 await message.answer("❌ 這個連結不支援，請回 Anki 重新點。")
                 return
-            if action.verb == "del":
+            if action.verb == "item":
+                await _send_item_menu(message, card_service, note_id, action.field_name, int(index), fingerprint)
+            elif action.verb == "del":
                 await _confirm_delete(message, card_service, note_id, action.field_name, int(index), fingerprint)
             elif action.verb == "done":
                 # 卡片上點待追蹤：先確認，不直接標成完成（點到不一定是做完了）
@@ -406,6 +424,22 @@ async def on_person_button(
                 message, note_service, _int_arg(parts, 2), field_name, _int_arg(parts, 4), _arg(parts, 5),
                 ended=mode == "e",
             )
+        elif verb == "hd":
+            mode = _arg(parts, 6)
+            if mode not in ("h", "s"):
+                raise _StaleButton
+            await _set_item_hidden(
+                message, note_service, _int_arg(parts, 2), _list_arg(parts, 3), _int_arg(parts, 4), _arg(parts, 5),
+                hidden=mode == "h",
+            )
+        elif verb == "hf":
+            mode = _arg(parts, 4)
+            if mode not in ("h", "s"):
+                raise _StaleButton
+            field_name = view.EDITABLE_FIELDS[_index_arg(parts, 3, len(view.EDITABLE_FIELDS))]
+            await _set_field_hidden(message, card_service, _int_arg(parts, 2), field_name, hidden=mode == "h")
+        elif verb == "pe":
+            await _start_position_edit(message, state, card_service, _int_arg(parts, 2), _int_arg(parts, 3), _arg(parts, 4))
         elif verb == "st":
             status = "done" if _arg(parts, 5) == "d" else "open"
             await _set_followup_status(
@@ -432,6 +466,8 @@ async def on_person_button(
             await start_person_create(message, state, name=str(data.get("new_name") or "") or None)
         elif verb in ("ch", "skip"):
             await _answer_step_button(message, state, note_service, card_service, parts)
+        elif verb == "back":
+            await _back_to_start(message, state)
         elif verb == "save":
             await _save_item(message, state, note_service, card_service)
         elif verb == "ing":
@@ -542,7 +578,8 @@ async def _send_section_menu(message: types.Message, note_id: int, section: str)
 
 
 async def _send_list(message: types.Message, card_service: CardService, note_id: int, field_name: str) -> None:
-    """一個清單的每一筆，附刪除（與待追蹤的完成、會變的欄位的劃掉）按鈕。One list with its item buttons."""
+    """一個清單的每一筆，附刪除（與待追蹤的完成、會變的欄位的劃掉）、在卡面隱藏或顯示的按鈕；職位另有「改」
+    （任職起訖與說明）。One list with its item buttons."""
     loaded = await _load(card_service, note_id)
     if loaded is None:
         await message.answer(CARD_NOT_FOUND)
@@ -562,8 +599,14 @@ async def _send_list(message: types.Message, card_service: CardService, note_id:
             row.append(_button(f"{'復原' if done else '完成'} {index + 1}", f"pp:st:{note_id}:{index}:{fp}:{'o' if done else 'd'}"))
         elif view.is_history(field_name) and isinstance(item, dict):
             active = is_active(item)
-            row.append(_button(f"{'劃掉' if active else '取消劃掉'} {index + 1}",
+            row.append(_button(f"{view.history_toggle_label(field_name, active)} {index + 1}",
                                f"pp:hx:{note_id}:{code}:{index}:{fp}:{'e' if active else 'o'}"))
+        if isinstance(item, dict):
+            hidden = is_hidden(item)
+            row.append(_button(f"{'顯示' if hidden else '隱藏'} {index + 1}",
+                               f"pp:hd:{note_id}:{code}:{index}:{fp}:{'s' if hidden else 'h'}"))
+        if field_name == "Company" and isinstance(item, dict):
+            row.append(_button(f"改 {index + 1}", f"pp:pe:{note_id}:{index}:{fp}"))
         rows.append(row)
     if field_name in view.broken_lists(loaded[0]):
         lines.append(escape_tg(view.BROKEN_NOTE))
@@ -571,6 +614,8 @@ async def _send_list(message: types.Message, card_service: CardService, note_id:
         lines.append("（還沒有）")
     elif len(items) > len(shown):
         lines.insert(1, f"<i>只列最近 {len(shown)} 筆</i>")
+    if items and field_name not in view.broken_lists(loaded[0]):
+        lines.append("<i>隱藏只影響卡面（變成遮擋塊，點一下才看得到）。</i>")
     rows.append([_button("+ 新增", f"pp:add:{note_id}:{code}"), _button("回摘要", f"pp:s:{note_id}")])
     await message.answer(view.truncate("\n".join(lines)), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
                          parse_mode="HTML")
@@ -594,7 +639,8 @@ async def _confirm_delete(
     code = view.CODE_OF_LIST[field_name]
     await message.answer(
         f"要刪除這一筆{view.list_title(field_name)}嗎？\n\n{view.item_line(field_name, items[index])}"
-        + ("\n\n<i>只是不再適用的話，用「劃掉」保留紀錄就好；刪除是給打錯的。</i>" if view.is_history(field_name) else ""),
+        + (f"\n\n<i>只是不再適用的話，用「{view.history_toggle_label(field_name, True)}」保留紀錄就好；刪除是給打錯的。</i>"
+           if view.is_history(field_name) else ""),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             _button("確認刪除", f"pp:delok:{note_id}:{code}:{index}:{fingerprint}"),
             _button("取消", f"pp:s:{note_id}"),
@@ -675,11 +721,137 @@ async def _set_history_status(
     )
     code = view.CODE_OF_LIST[field_name]
     title = escape_tg(view.list_title(field_name))
+    if field_name == "Company":
+        text = "已標成離職（保留在工作經歷裡）。" if ended else "已恢復成現職。"
+    else:
+        text = f"已劃掉這筆{title}（保留在紀錄裡）。" if ended else f"已取消劃掉，這筆{title}恢復有效。"
     await message.answer(
-        (f"已劃掉這筆{title}（保留在紀錄裡）。" if ended else f"已取消劃掉，這筆{title}恢復有效。") + sync_suffix(warning),
+        text + sync_suffix(warning),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            _button("復原" if ended else "劃掉", f"pp:hx:{note_id}:{code}:{index}:{fingerprint}:{'o' if ended else 'e'}"),
+            _button("復原" if ended else view.history_toggle_label(field_name, True),
+                    f"pp:hx:{note_id}:{code}:{index}:{fingerprint}:{'o' if ended else 'e'}"),
             _button("看清單", f"pp:ls:{note_id}:{code}"),
+            _button("回摘要", f"pp:s:{note_id}"),
+        ]]),
+        parse_mode="HTML",
+    )
+
+
+# =============================================================================
+# 長按的選單：隱藏或顯示（只影響卡面）、劃掉、刪除；文字欄位是修改、隱藏或顯示
+# =============================================================================
+
+
+async def _send_item_menu(
+    message: types.Message, card_service: CardService, note_id: int, field_name: str, index: int, fingerprint: str
+) -> None:
+    """長按清單的一筆：顯示那一筆與能做的事。The long-press menu of one item."""
+    loaded = await _load(card_service, note_id)
+    if loaded is None:
+        await message.answer(CARD_NOT_FOUND)
+        return
+    fields, lists = loaded
+    if field_name in view.broken_lists(fields):
+        # 壞掉的清單讀成空的：不要說成「這一筆變了」，同步再多次也不會好
+        await message.answer(f"❌ 這張卡的「{escape_tg(view.list_title(field_name))}」資料格式壞了，請在網頁或 Anki 修正。",
+                             parse_mode="HTML")
+        return
+    items = lists.get(field_name, [])
+    found = resolve_index(items, index, fingerprint)  # 找不到時 JsonItemChangedError，交給外層回覆
+    item = items[found]
+    code = view.CODE_OF_LIST[field_name]
+    ref = f"{note_id}:{code}:{found}:{fingerprint}"
+    hidden = is_hidden(item)
+    row = []
+    # 不是物件的項目（格式不對）只能刪除：隱藏、劃掉都要改那一筆的鍵
+    if isinstance(item, dict):
+        row.append(_button("在卡面顯示" if hidden else "在卡面隱藏", f"pp:hd:{ref}:{'s' if hidden else 'h'}"))
+    if view.is_history(field_name) and isinstance(item, dict):
+        active = is_active(item)
+        row.append(_button(view.history_toggle_label(field_name, active), f"pp:hx:{ref}:{'e' if active else 'o'}"))
+    edit_row = []
+    if field_name == "Company" and isinstance(item, dict):
+        edit_row.append(_button("修改任職期間／說明", f"pp:pe:{note_id}:{found}:{fingerprint}"))
+    rows = [r for r in (row, edit_row, [_button("刪除", f"pp:del:{ref}"), _button("回摘要", f"pp:s:{note_id}")]) if r]
+    state = "（目前在卡面隱藏）" if hidden else ""
+    await message.answer(
+        f"<b>{escape_tg(view.list_title(field_name))}</b>{state}\n\n{view.item_line(field_name, item)}\n\n"
+        "<i>隱藏只影響卡面（變成遮擋塊，點一下才看得到），AI 分析照樣讀得到。</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        parse_mode="HTML",
+    )
+
+
+async def _set_item_hidden(
+    message: types.Message,
+    note_service: NoteService,
+    note_id: int,
+    field_name: str,
+    index: int,
+    fingerprint: str,
+    *,
+    hidden: bool,
+) -> None:
+    """在卡面隱藏或顯示清單的一筆，附反向的按鈕。Hide or show one item on the card."""
+    warning = await note_service.run_action(
+        note_id, "set_hidden", {"field": field_name, "index": index, "fingerprint": fingerprint, "hidden": hidden}
+    )
+    code = view.CODE_OF_LIST[field_name]
+    await message.answer(
+        ("已在卡面隱藏這一筆（同步後卡面會變成遮擋塊）。" if hidden else "已在卡面顯示這一筆。") + sync_suffix(warning),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            _button("復原", f"pp:hd:{note_id}:{code}:{index}:{fingerprint}:{'s' if hidden else 'h'}"),
+            _button("回摘要", f"pp:s:{note_id}"),
+        ]]),
+    )
+
+
+async def _send_field_menu(message: types.Message, card_service: CardService, note_id: int, field_name: str) -> None:
+    """長按文字欄位：顯示目前的內容，可以修改或在卡面隱藏。The long-press menu of a text field."""
+    loaded = await _load_with_tags(card_service, note_id)
+    if loaded is None:
+        await message.answer(CARD_NOT_FOUND)
+        return
+    fields, _, tags = loaded
+    current = fields.get(field_name, "")
+    hidden = field_name in hidden_text_fields(tags)
+    field_index = view.EDITABLE_FIELDS.index(field_name)
+    shown = anki_field_to_tg_text(current, 600) if current else "（空白）"
+    state = "（目前在卡面隱藏）" if hidden else ""
+    await message.answer(
+        f"<b>{escape_tg(view.field_title(field_name))}</b>{state}\n\n{shown}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [_button("修改", f"pp:ef:{note_id}:{field_index}"),
+             _button("在卡面顯示" if hidden else "在卡面隱藏", f"pp:hf:{note_id}:{field_index}:{'s' if hidden else 'h'}")],
+            [_button("回摘要", f"pp:s:{note_id}")],
+        ]),
+        parse_mode="HTML",
+    )
+
+
+async def _set_field_hidden(
+    message: types.Message, card_service: CardService, note_id: int, field_name: str, *, hidden: bool
+) -> None:
+    """在卡面隱藏或顯示文字欄位：加減標籤 ``人脈卡隱藏::欄位名``（不改筆記類型），並同步。
+
+    Hide or show a text field on the card via its tag, then sync.
+    """
+    if await _load(card_service, note_id) is None:
+        await message.answer(CARD_NOT_FOUND)
+        return
+    client = card_service.anki_client
+    if hidden:
+        await client.add_tags([note_id], hidden_tag(field_name))
+    else:
+        await client.remove_tags([note_id], hidden_tag(field_name))
+    warning = await sync_warning(client)
+    field_index = view.EDITABLE_FIELDS.index(field_name)
+    title = escape_tg(view.field_title(field_name))
+    await message.answer(
+        (f"已在卡面隱藏「{title}」（同步後卡面會變成遮擋塊）。" if hidden else f"已在卡面顯示「{title}」。")
+        + sync_suffix(warning),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            _button("復原", f"pp:hf:{note_id}:{field_index}:{'s' if hidden else 'h'}"),
             _button("回摘要", f"pp:s:{note_id}"),
         ]]),
         parse_mode="HTML",
@@ -691,6 +863,50 @@ async def _set_history_status(
 # =============================================================================
 
 
+async def _start_position_edit(
+    message: types.Message, state: FSMContext, card_service: CardService, note_id: int, index: int, fingerprint: str
+) -> None:
+    """修改一份工作的任職起訖與說明：沿用新增的問答（``edit`` 模式），每一步顯示目前的值，略過＝保留。
+
+    Edit a position's period and note through the add-step flow.
+    """
+    loaded = await _load(card_service, note_id)
+    if loaded is None:
+        await message.answer(CARD_NOT_FOUND)
+        return
+    fields, lists = loaded
+    if "Company" in view.broken_lists(fields):
+        await message.answer("❌ 這張卡的「職位」資料格式壞了，請在網頁或 Anki 修正。")
+        return
+    items = lists.get("Company", [])
+    found = resolve_index(items, index, fingerprint)  # 找不到時 JsonItemChangedError，交給外層回覆
+    entry = items[found]
+    if not isinstance(entry, dict):
+        await message.answer("❌ 這一筆職位的格式不對，請在網頁修正。")
+        return
+    # 預覽要看得到公司・職稱與是否現職，所以整筆帶進來；儲存時只送任職起訖與說明
+    prefill = {key: str(entry.get(key) or "") for key in ("company", "title", "start", "end", "note", "ended")}
+    # 卡上手改留下的年月（2021/4）先整理，比較先後才不會比錯；整理不了的（2021年春）照原文顯示，
+    # 那一步不能略過（保留了儲存時一定失敗）
+    invalid = []
+    for key in ("start", "end"):
+        normalized = normalize_period(prefill[key], allow_unknown=key == "end")
+        if normalized is None:
+            invalid.append(key)
+            logger.info("人脈卡 note %s 職位 #%s 的 %s 格式不對: %r", note_id, found + 1, key, prefill[key])
+        else:
+            prefill[key] = normalized
+    await state.clear()
+    await state.set_state(PersonStates.add_step)
+    # edit 帶原值（儲存時比對：同名的兩份工作指紋相同，序號過時可能對到另一筆）
+    await state.update_data(nid=note_id, field="Company", step=0, item=prefill, edit={
+        "index": found, "fingerprint": item_fingerprint(entry), "invalid": invalid,
+        "start": str(entry.get("start") or ""), "end": str(entry.get("end") or ""),
+    })
+    await message.answer(f"<b>修改職位</b>\n{view.item_line('Company', entry)}", parse_mode="HTML")
+    await _ask_step(message, state)
+
+
 async def start_add(message: types.Message, state: FSMContext, note_id: int, field_name: str) -> None:
     """開始新增一筆：依清單的步驟逐一詢問。Start adding an item to a list."""
     await state.clear()
@@ -700,19 +916,39 @@ async def start_add(message: types.Message, state: FSMContext, note_id: int, fie
     await _ask_step(message, state)
 
 
+def _steps(data: dict[str, Any]) -> tuple[view.Step, ...]:
+    """這次問答的步驟：修改職位（``edit``）只問任職起訖與說明，否則是那個清單的新增步驟。The steps in progress."""
+    return view.POSITION_DETAIL_STEPS if data.get("edit") else view.ADD_STEPS[data["field"]]
+
+
 async def _ask_step(message: types.Message, state: FSMContext) -> None:
-    """問目前這一步；全部問完時顯示預覽。Ask the current step, or preview when done."""
+    """問目前這一步；全部問完時顯示預覽。修改職位時附上目前的值（略過＝保留）。Ask the current step, or preview."""
     data = await state.get_data()
-    steps = view.ADD_STEPS[data["field"]]
+    steps = _steps(data)
+    editing = bool(data.get("edit"))
     if data["step"] >= len(steps):
         await state.set_state(PersonStates.add_confirm)
         await message.answer(
-            view.preview_item(data["field"], data["item"]),
+            view.preview_item(data["field"], data["item"], editing=editing),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("儲存", "pp:save"), *CANCEL_ROW]]),
             parse_mode="HTML",
         )
         return
     step = steps[data["step"]]
+    prompt = step.prompt
+    if editing:
+        # 目前的值是使用者打的字，bot 預設用 HTML 送出：一定要轉義（說明裡的「<3 年」會讓 Telegram 拒收）
+        edit = data["edit"]
+        current = escape_tg(str(data["item"].get(step.key) or ""), 300) or "（空白）"
+        if step.key in edit.get("invalid", []):
+            hint = "這個值的格式不對，請重新輸入，或輸入「清空」清除。"
+        elif step.key == "end" and edit.get("end"):
+            hint = "略過＝保留目前的值；輸入「清空」＝改回現職。"
+        else:
+            hint = "略過＝保留目前的值；輸入「清空」清除。"
+        prompt += f"\n\n目前：{current}\n{hint}"
+    elif step.skip_hint and not step.required:
+        prompt += f"\n{step.skip_hint}"
     rows: list[list[InlineKeyboardButton]] = []
     if step.choices:
         buttons = [_button(label, f"pp:ch:{i}") for i, (_, label) in enumerate(step.choices)]
@@ -721,19 +957,43 @@ async def _ask_step(message: types.Message, state: FSMContext) -> None:
         rows.append([_button("今天", "pp:ch:t0"), _button("昨天", "pp:ch:t1")])
     last = [_button("略過", "pp:skip")] if not step.required else []
     rows.append(last + CANCEL_ROW)
-    await message.answer(step.prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await message.answer(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 async def _store_answer(message: types.Message, state: FSMContext, raw: str | None) -> None:
-    """記下這一步的回答（None 為略過）並問下一步；格式不對時重問。Store an answer and move on."""
+    """記下這一步的回答（None 為略過）並問下一步；格式不對時重問。Store an answer and move on.
+
+    修改職位（``edit``）時：略過＝保留（原值格式不對的不能保留）；「清空」清掉這個值，清掉的是原本有的離職年月時
+    一併清掉失效日（改回現職，和 handler 的 ``edit_position`` 相同，預覽才不會說錯）。
+    職位的離職那一步（略過也算）檢查離職不早於到職，不對就重問這一步，並提供「重新輸入到職」（錯的常是到職）；
+    不叫使用者略過或清空：那兩個都會讓以前的工作變成現職。
+    """
     data = await state.get_data()
-    step = view.ADD_STEPS[data["field"]][data["step"]]
+    step = _steps(data)[data["step"]]
     item = dict(data["item"])
-    if raw is not None:
+    edit = data.get("edit")
+    if edit:
+        edit = dict(edit)
+    if raw is None and edit and step.key in edit.get("invalid", []):
+        await message.answer("❌ 目前的值格式不對，不能保留：請重新輸入，或輸入「清空」清除。")
+        return
+    if raw is not None and edit and raw.strip() == "清空":
+        item[step.key] = ""
+        if step.key == "end" and edit.get("end"):
+            item["ended"] = ""
+    elif raw is not None:
         if step.kind == "date":
             value = view.parse_date_input(raw, _today())
             if value is None:
                 await message.answer("❌ 日期看不懂，請用 YYYY-MM-DD 或 MM-DD，例如 2026-10-01。")
+                return
+            item[step.key] = value
+        elif step.kind == "period":
+            value = view.parse_period_input(raw, allow_unknown=step.allow_unknown)
+            if value is None:
+                hint = "離職了但不知道時間就寫 ?。" if step.allow_unknown else ""
+                hint += "略過＝保留目前的值。" if edit else step.skip_hint
+                await message.answer(f"❌ 看不懂或不是真的日期，請寫 2021、2021-04 或 2021-04-01（年份 1900–2100）。{hint}")
                 return
             item[step.key] = value
         elif step.kind == "lines":
@@ -747,7 +1007,34 @@ async def _store_answer(message: types.Message, state: FSMContext, raw: str | No
             if step.required and item[step.key] in ("", None):
                 await message.answer("這一項必填，請輸入內容。")
                 return
+    if data["field"] == "Company" and step.key == "end":
+        error = period_order_error(str(item.get("start") or ""), str(item.get("end") or ""))
+        if error:
+            await message.answer(
+                f"❌ {escape_tg(error)}。請重新輸入離職年月；不知道離職時間就寫 ?。到職打錯的話按「重新輸入到職」。",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("重新輸入到職", "pp:back"), *CANCEL_ROW]]),
+                parse_mode="HTML",
+            )
+            return
+    if edit and raw is not None and step.key in edit.get("invalid", []):
+        # 重新輸入過了：之後再回到這一步（重新輸入到職）可以略過
+        edit["invalid"] = [key for key in edit["invalid"] if key != step.key]
+        await state.update_data(edit=edit)
     await state.update_data(item=item, step=data["step"] + 1)
+    await _ask_step(message, state)
+
+
+async def _back_to_start(message: types.Message, state: FSMContext) -> None:
+    """「重新輸入到職」：問答回到到職那一步（離職早於到職時，錯的常是剛輸入的到職）。Go back to the start step."""
+    if await state.get_state() != PersonStates.add_step.state:
+        await message.answer("⌛ 這個步驟已結束，請重新開始。")
+        return
+    data = await state.get_data()
+    keys = [step.key for step in _steps(data)]
+    if "start" not in keys:
+        raise _StaleButton
+    await message.edit_reply_markup(reply_markup=None)
+    await state.update_data(step=keys.index("start"))
     await _ask_step(message, state)
 
 
@@ -755,7 +1042,7 @@ async def _store_answer(message: types.Message, state: FSMContext, raw: str | No
 async def process_add_text(message: types.Message, state: FSMContext) -> None:
     """新增一筆時輸入的文字。Typed text while adding an item."""
     data = await state.get_data()
-    step = view.ADD_STEPS[data["field"]][data["step"]]
+    step = _steps(data)[data["step"]]
     text = (message.text or "").strip()
     if step.kind == "choice":
         # 選擇題也接受打字：比對值或按鈕文字
@@ -781,7 +1068,7 @@ async def _answer_step_button(
         await message.answer("⌛ 這個步驟已結束，請重新開始。")
         return
     data = await state.get_data()
-    step = view.ADD_STEPS[data["field"]][data["step"]]
+    step = _steps(data)[data["step"]]
     # 先解析按鈕，確定有效才拿掉按鈕：失效的按鈕不該讓這一步的其他按鈕跟著消失
     if parts[1] == "skip":
         answer = None
@@ -800,15 +1087,21 @@ async def _answer_step_button(
 async def _save_item(
     message: types.Message, state: FSMContext, note_service: NoteService, card_service: CardService
 ) -> None:
-    """儲存新增的一筆（互動紀錄附帶的「下次要問」各存成一筆待追蹤）。Save the new item."""
+    """儲存新增的一筆（互動紀錄附帶的「下次要問」各存成一筆待追蹤），或修改職位的任職起訖與說明。
+
+    Save the new item, or the edited position.
+    """
     if await state.get_state() != PersonStates.add_confirm.state:
         await message.answer("⌛ 這個步驟已結束，請重新開始。")
         return
     data = await state.get_data()
-    await state.clear()
     note_id, field_name = int(data["nid"]), str(data["field"])
     item = {k: v for k, v in dict(data["item"]).items() if not k.startswith("_")}
     await message.edit_reply_markup(reply_markup=None)
+    if data.get("edit"):
+        await _save_position_edit(message, state, note_service, card_service, note_id, data["edit"], item)
+        return
+    await state.clear()
     if field_name == "Interactions_JSON":
         warning = await note_service.run_action(note_id, "add_interaction", {"item": item})
         for line in data["item"].get("_followups") or []:
@@ -820,6 +1113,42 @@ async def _save_item(
     else:
         warning = await note_service.run_action(note_id, "add_item", {"field": field_name, "item": item})
     await send_summary(message, card_service, note_id, prefix="✅ 已儲存。" + sync_suffix(warning))
+
+
+async def _save_position_edit(
+    message: types.Message,
+    state: FSMContext,
+    note_service: NoteService,
+    card_service: CardService,
+    note_id: int,
+    edit: dict[str, Any],
+    item: dict[str, object],
+) -> None:
+    """寫入修改的任職起訖與說明。寫入失敗時留在確認這一步（回答不丟，可以再按一次儲存或取消）；
+    寫入成功、只是讀摘要失敗時照樣說已更新。
+
+    Write the edited position; a failed write keeps the answers for another try.
+    """
+    try:
+        warning = await note_service.run_action(note_id, "edit_position", {
+            "index": int(edit["index"]), "fingerprint": str(edit["fingerprint"]),
+            **{key: str(item.get(key) or "") for key in view.POSITION_DETAIL_KEYS},
+            "expected_start": str(edit.get("start") or ""), "expected_end": str(edit.get("end") or ""),
+        })
+    except (FluencyTidesError, AnkiConnectError) as e:
+        await _reply_error(message, e)
+        await message.answer(
+            "回答都還在：要再試一次就按「儲存」，不改了就按「取消」。",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("儲存", "pp:save"), *CANCEL_ROW]]),
+        )
+        return
+    await state.clear()
+    prefix = "✅ 已更新這份工作。" + sync_suffix(warning)
+    try:
+        await send_summary(message, card_service, note_id, prefix=prefix)
+    except (FluencyTidesError, AnkiConnectError) as e:
+        logger.warning("人脈卡 note %s：已更新職位，但讀摘要失敗: %s", note_id, e)
+        await message.answer(prefix + "\n（摘要暫時讀不到，稍後用 /p 再看。）", parse_mode="HTML")
 
 
 # =============================================================================
@@ -844,21 +1173,29 @@ async def _send_edit_fields(message: types.Message, note_id: int, group_index: i
 async def _start_edit(
     message: types.Message, state: FSMContext, card_service: CardService, note_id: int, field_name: str
 ) -> None:
-    loaded = await _load(card_service, note_id)
+    """改一個文字欄位：顯示目前的內容，等使用者輸入；附「在卡面隱藏／顯示」（按了不影響這次修改）。
+
+    Start editing a text field; the hide toggle leaves the edit waiting.
+    """
+    loaded = await _load_with_tags(card_service, note_id)
     if loaded is None:
         await message.answer(CARD_NOT_FOUND)
         return
-    current = loaded[0].get(field_name, "")
+    fields, _, tags = loaded
+    current = fields.get(field_name, "")
+    hidden = field_name in hidden_text_fields(tags)
     await state.clear()
     await state.set_state(PersonStates.edit_value)
     await state.update_data(nid=note_id, field=field_name)
     info = PersonCreateParams.model_fields[field_name]
     hint = f"\n<i>{escape_tg(info.description, 120)}</i>" if info.description else ""
     shown = anki_field_to_tg_text(current, 600) if current else "（空白）"
+    field_index = view.EDITABLE_FIELDS.index(field_name)
+    toggle = _button("在卡面顯示" if hidden else "在卡面隱藏", f"pp:hf:{note_id}:{field_index}:{'s' if hidden else 'h'}")
     await message.answer(
-        f"<b>{escape_tg(view.field_title(field_name))}</b>{hint}\n\n目前：{shown}\n\n"
-        "輸入新的內容（輸入「清空」清除）：",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[CANCEL_ROW]),
+        f"<b>{escape_tg(view.field_title(field_name))}</b>{'（目前在卡面隱藏）' if hidden else ''}{hint}\n\n"
+        f"目前：{shown}\n\n輸入新的內容（輸入「清空」清除）：",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[toggle, *CANCEL_ROW]]),
         parse_mode="HTML",
     )
 

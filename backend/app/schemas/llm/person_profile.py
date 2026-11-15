@@ -50,6 +50,11 @@ class IngestListUpdate(BaseModel):
     )
     value: str = Field("", description="add 時要新增的內容（純文字）；職位（Company）填公司名稱；end 時空字串")
     job_title: str = Field("", description="只有職位（Company）用：職稱；其他欄位空字串")
+    job_start: str = Field("", description="只有職位（Company）add 用：到職年月（YYYY、YYYY-MM）；文中沒提就空字串")
+    job_end: str = Field(
+        "", description="只有職位（Company）add 用：以前的工作的離職年月（YYYY、YYYY-MM），已離職但時間不明填 ?；現職空字串"
+    )
+    job_note: str = Field("", description="只有職位（Company）add 用：這份工作的簡短說明（做什麼、做了多久）；沒有就空字串")
     entry: int = Field(0, description="end 時要劃掉的那一筆的編號（提示中「#」後面的數字）；add 時 0")
     reason: str = Field(description="依據文中的哪句話（簡短）")
 

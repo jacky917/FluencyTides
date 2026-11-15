@@ -27,27 +27,44 @@
     })();
 
     (function () {
-        // 職位（Company）是 JSON 清單：只顯示目前有效的（與背面的 entryText 相同）；都劃掉了就不顯示
-        // （複習看現況，與「認人」不同）；還沒轉換的舊文字照原文顯示
+        // 職位（Company）是 JSON 清單：只顯示現職（沒有離職年月、沒有劃掉，與背面的 isActiveEntry 相同）；
+        // 沒有現職就不顯示（複習看現況，與「認人」不同）；還沒轉換的舊文字照原文顯示。
+        // 在卡面隱藏的（hidden: true）蓋上遮擋，點一下才看得到（與背面的 coverIfHidden 相同）
         var raw = (document.getElementById('review-company').textContent || '').trim();
         if (!raw) return;
-        var text = '';
+        var work = document.getElementById('review-work');
         var items = null;
         try {
             items = JSON.parse(raw);
         } catch (e) {
-            text = raw;
+            work.textContent = raw;
+            work.style.display = '';
+            return;
         }
-        if (items !== null && Object.prototype.toString.call(items) !== '[object Array]') items = [];
-        if (items) {
-            text = items.filter(function (p) { return p && !String(p.ended || '').trim(); })
-                .map(function (p) {
-                    return [p.company, p.title].map(function (s) { return String(s || '').trim(); })
-                        .filter(Boolean).join('・');
-                }).filter(Boolean).join('／');
-        }
-        var work = document.getElementById('review-work');
-        work.textContent = text;
-        work.style.display = text ? '' : 'none';
+        if (Object.prototype.toString.call(items) !== '[object Array]') items = [];
+        var shown = 0;
+        items.forEach(function (p) {
+            if (!p || typeof p !== 'object' || String(p.ended || '').trim() || String(p.end || '').trim()) return;
+            var text = [p.company, p.title].map(function (s) { return String(s || '').trim(); }).filter(Boolean).join('・');
+            if (!text) return;
+            if (shown++ > 0) work.appendChild(document.createTextNode('／'));
+            var span = document.createElement('span');
+            span.textContent = text;
+            if (p.hidden === true) {
+                span.className = 'is-hidden';
+                var c = document.createElement('span');
+                c.className = 'hidden-cover';
+                c.textContent = '隱藏';
+                span.appendChild(c);
+                span.addEventListener('click', function (e) {
+                    if (span.className.indexOf('is-revealed') >= 0) return;
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    span.className += ' is-revealed';
+                }, true);
+            }
+            work.appendChild(span);
+        });
+        work.style.display = shown ? '' : 'none';
     })();
 </script>

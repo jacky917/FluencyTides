@@ -2,8 +2,8 @@
 
 Contract tests between the person card's back template and the backend.
 
-模板的 JS 自己寫死了欄位清單、區塊代號與指紋算法；改了後端卻沒改模板時，卡片上的「+」、「劃掉」與長按刪除
-會在 TG 回「連結不支援」或「這一筆已經變了」，pytest 之外沒有東西會發現。
+模板的 JS 自己寫死了欄位清單、區塊代號與指紋算法；改了後端卻沒改模板時，卡片上的「+」、「劃掉」與長按選單
+（pitm／pfld）會在 TG 回「連結不支援」或「這一筆已經變了」，pytest 之外沒有東西會發現。
 """
 
 import json
@@ -15,7 +15,14 @@ from pathlib import Path
 import pytest
 
 from app.bot.utils import person_profile_view as view
-from app.schemas.person_profile import PERSON_HISTORY_FIELDS, active_texts, entry_text, is_active, item_fingerprint
+from app.schemas.person_profile import (
+    PERSON_HISTORY_FIELDS,
+    active_texts,
+    entry_text,
+    is_active,
+    item_fingerprint,
+    position_period,
+)
 
 BACK_TEMPLATE = Path("app/anki_models/Person_Profile_Dark_back.html")
 SOURCE = BACK_TEMPLATE.read_text(encoding="utf-8")
@@ -36,15 +43,32 @@ class TestConstants:
         assert fields and fields <= set(view.CODE_OF_LIST)
 
     def test_edit_targets_are_text_fields(self):
-        """長按修改（pedit）只指向 TG「改資料」認得的文字欄位。"""
-        fields = set(re.findall(r"longPressEdit\(.*?, '(\w+)'\)", SOURCE))
+        """長按文字欄位的選單（pfld）只指向 TG「改資料」認得的文字欄位。"""
+        fields = set(re.findall(r"longPressField\(.*?, '(\w+)'\)", SOURCE))
         assert {"Hometown", "Notes", "Met_Date", "Met_Where", "Birthday"} <= fields
         assert fields <= set(view.EDITABLE_FIELDS)
 
     def test_history_rows_cover_every_history_field(self):
         """每個會變的欄位都在卡片上有一列（Dietary 在見面前必看）。"""
         rows = set(re.findall(r"historyRow\('[^']*', '(\w+)'", SOURCE))
-        assert rows | {"Dietary"} == set(PERSON_HISTORY_FIELDS)
+        # 職位由 careerRow（工作經歷）畫：要在區塊裡被呼叫，不是只有定義
+        assert re.search(r"(?<!function )careerRow\(\)", SOURCE)
+        assert rows | {"Dietary", "Company"} == set(PERSON_HISTORY_FIELDS)
+
+    def test_hidden_tag_prefix_matches(self):
+        """文字欄位的隱藏標籤：背面與認人正面的前綴都和後端相同。"""
+        from app.schemas.person_profile import HIDDEN_TAG_PREFIX
+
+        assert f"var HIDDEN_TAG_PREFIX = '{HIDDEN_TAG_PREFIX}';" in SOURCE
+        recognize = Path("app/anki_models/Person_Profile_Dark_front_recognize.html").read_text(encoding="utf-8")
+        assert f"'{HIDDEN_TAG_PREFIX}' + field" in recognize
+        # 認人正面的文字線索各自能遮
+        assert "['Met_Where', 'Met_Date', 'Appearance']" in recognize
+        assert 'id="cue-Met_Date"' in recognize
+
+    def test_birthday_badge_follows_the_hidden_tag(self):
+        """生日設成隱藏時，頭部的徽章也要遮（否則看得出生日與年齡）。"""
+        assert "hiddenFields.Birthday === true" in SOURCE
 
 
 def _run_card_js(functions: list[str], script: str):
@@ -70,6 +94,11 @@ ITEMS = [
     # 原有六種清單的項目：指紋不能因為這次加鍵而改變
     {"added": "2026-10-01", "item": "介紹 Ken 給他", "type": "my_promise", "status": "open"},
     {"date": "2026-10-01", "topics": "轉職", "place": "中野"},
+    # 工作經歷：有離職年月的是以前的工作；任職期間、說明、隱藏不進指紋
+    {"company": "QBC", "title": "QA", "start": "2025", "end": "", "note": "x", "hidden": True, "added": "", "ended": ""},
+    {"company": "Sony", "start": "2019-04", "end": "2021-03", "added": "", "ended": ""},
+    {"company": "A", "end": "?", "ended": ""},
+    {"company": "B", "ended": "2025-01-10"},
 ]
 
 
@@ -80,7 +109,8 @@ class TestCardScript:
         assert result == [item_fingerprint(item) for item in ITEMS]
 
     def test_entry_text_and_active_match_the_backend(self):
-        names = ["Interests", "Interests", "Company", "Company", "Company", "Closeness", "Interests", "Interests"]
+        names = ["Interests", "Interests", "Company", "Company", "Company", "Closeness", "Interests", "Interests",
+                 "Company", "Company", "Company", "Company"]
         script = (
             f"var items = {json.dumps(ITEMS)}; var names = {json.dumps(names)};"
             "console.log(JSON.stringify(items.map(function (it, i) {"
@@ -89,3 +119,7 @@ class TestCardScript:
         result = _run_card_js(["isActiveEntry", "entryText"], script)
         assert result == [[entry_text(name, item), is_active(item)] for name, item in zip(names, ITEMS)]
         assert active_texts("Company", ITEMS[2:4]) == ["Geekly・エンジニア", "Sony"]
+
+    def test_position_period_matches_the_backend(self):
+        result = _run_card_js(["positionPeriod"], f"console.log(JSON.stringify({json.dumps(ITEMS)}.map(positionPeriod)))")
+        assert result == [position_period(item) for item in ITEMS]
