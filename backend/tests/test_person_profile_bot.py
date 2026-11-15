@@ -415,8 +415,11 @@ class TestAddFlow:
         _run(person_profile.start_add(message, state, 5, "Residence"))
         typed, _ = _message("橫濱")
         _run(person_profile.process_add_text(typed, state))
+        # 現居地接著問搬來的時間（工作經歷計畫書 §15）；略過
+        assert "什麼時候搬來" in _sent(typed.answer)[0]
+        skipped = _press("pp:skip", state, note_service, card_service)
         assert _run(state.get_state()) == PersonStates.add_confirm.state
-        preview = _sent(typed.answer)[0]
+        preview = _sent(skipped.message.answer)[-1]
         _assert_tg_html(preview)
         assert "登錄日：今天" in preview and "自動劃掉" in preview
         _press("pp:save", state, note_service, card_service)
@@ -488,7 +491,7 @@ class TestHistoryList:
         _assert_tg_html(text)
         assert "1. 登山（2026-01-01 登錄）" in text and "2. <s>攝影</s>（2025-01-01 登錄，2026-05-01 劃掉）" in text
         rows = query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard
-        assert [b.text for b in rows[0]] == ["刪 1", "劃掉 1", "隱藏 1"]
+        assert [b.text for b in rows[0]] == ["刪 1", "劃掉 1", "隱藏 1", "改 1"]
         assert rows[1][1].callback_data == f"pp:hx:5:IN:1:{item_fingerprint(items[1])}:o"
 
     def test_end_button(self):

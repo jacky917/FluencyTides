@@ -28,6 +28,7 @@ from app.infrastructure.llm.routing import route
 from app.schemas.llm.person_profile import IngestListUpdate, LLMPersonIngestResult
 from app.schemas.person_profile import (
     GOAL_STATUSES,
+    HISTORY_PERIOD_KEYS,
     PERSON_HISTORY_FIELDS,
     RETIRED_FIELDS,
     Followup,
@@ -94,7 +95,8 @@ def _multiline(name: str) -> bool:
 
 def _history_lines(name: str, items: list[object]) -> tuple[list[str], list[str]]:
     """會變的欄位給 LLM 看的：有效的每筆附編號（``#序號+1``，劃掉時用），以及過去的（劃掉的，或有離職年月的
-    職位）。職位附任職期間與說明。
+    職位）。每筆附事件時間（:func:`entry_detail`，職位另附說明）；有效的另外附「登錄 日期」：寫法和事件時間
+    （「2015 起」）不同，LLM 才分得出哪個是那件事的時間、哪個只是記下的日子。
 
     The current entries numbered for "end" proposals, and the past ones.
     """
@@ -107,7 +109,7 @@ def _history_lines(name: str, items: list[object]) -> tuple[list[str], list[str]
         # 以前的工作有離職年月，不一定劃掉過；is_active 兩個都看
         if is_active(item):
             added = str(item.get("added") or "")
-            current.append(f"#{index + 1} {text}" + (f"（{added} 起）" if added else ""))
+            current.append(f"#{index + 1} {text}" + (f"（登錄 {added}）" if added else ""))
         else:
             past.append(text)
     return current, past
@@ -306,6 +308,8 @@ def proposals_from(
             item = _position_item(change, today)
         else:
             item = _history_item(name, change.value, change.job_title, today)
+            if item is not None:
+                _add_periods(name, item, change)
         if item is None:
             logger.warning("略過格式不對的新增建議: %s=%r（職稱 %r；理由：%s）", name, change.value, change.job_title,
                            change.reason)
@@ -322,14 +326,19 @@ def proposals_from(
 def _already_known(name: str, items: list[object], item: dict[str, object]) -> bool:
     """新增建議是不是已經記過的（不必再列給使用者勾）。Whether a suggested entry is already recorded.
 
-    - 一般欄位：和某筆有效的內容相同。
+    - 一般欄位：和某筆有效的內容相同，而且這次沒帶來那一筆還空著的事件時間（有的話 handler 會補進去）。
     - 現職：同名的現職已經有，而且這次沒帶來那一筆還空著的到職年月或說明（有的話 handler 會補進去）。
     - 以前的工作：同名的還是現職（應該由 ``end`` 處理，另外新增會變成兩筆），或公司・職稱與起訖都相同。
     """
     text = entry_text(name, item)
     current = {entry_text(name, entry): entry for entry in items if is_active(entry)}
     if name != "Company":
-        return text in current
+        target = current.get(text)
+        if target is None:
+            return False
+        keys = HISTORY_PERIOD_KEYS.get(name, ())
+        return not any(item.get(key) and isinstance(target, dict) and not str(target.get(key) or "").strip()
+                       for key in keys)
     if not is_active(item):
         if text in current:
             logger.warning("略過和現職同名的以前的工作（應該用 end）: %s", text)
@@ -355,7 +364,7 @@ def _position_item(change: IngestListUpdate, today: date) -> dict[str, object] |
     item = _history_item("Company", change.value, change.job_title, today)
     if item is None:
         return None
-    for key, raw in (("start", change.job_start), ("end", change.job_end)):
+    for key, raw in (("start", change.time_start), ("end", change.time_end)):
         value = normalize_period(raw, allow_unknown=key == "end")
         if value is None:
             logger.warning("看不懂的%s年月: %r（%s，%s）", "離職" if key == "end" else "到職", raw,
@@ -375,6 +384,43 @@ def _position_item(change: IngestListUpdate, today: date) -> dict[str, object] |
         return PERSON_HISTORY_FIELDS["Company"].model.model_validate(item).model_dump()
     except ValidationError:
         return None
+
+
+def _add_periods(name: str, item: dict[str, object], change: IngestListUpdate) -> None:
+    """職位以外的事件時間（:data:`HISTORY_PERIOD_KEYS`）：``time_start`` 放第一個鍵、``time_end`` 放第二個
+    （學歷的畢業）。降級而不丟掉整筆（時間之後可以長按補），每種都記 log 方便調提示詞：
+
+    - 看不懂的那個時間略過。
+    - 整筆驗證不過（例如畢業早於入學）時拿掉全部時間。
+    - 這個欄位用不到的時間（只有一個時間鍵的欄位給了 ``time_end``、沒有時間的欄位給了時間）不用。
+    - 可切的欄位一次建議了好幾項（「登山、潛水」）時不放時間：寫入時會切成多筆，同一個時間套到每一筆會記錯
+      （TG 一次輸入多個興趣時也不問時間）。
+
+    Put the suggested times on the entry; unusable times are dropped, not the entry.
+    """
+    keys = HISTORY_PERIOD_KEYS.get(name, ())
+    raws = (change.time_start, change.time_end)
+    if any(raw.strip() for raw in raws[len(keys):]):
+        logger.warning("略過這個欄位用不到的時間: %s time_start=%r time_end=%r（%s）", name, *raws, change.reason)
+    if not keys or not any(raw.strip() for raw in raws[:len(keys)]):
+        return
+    if PERSON_HISTORY_FIELDS[name].split and len(history_from_text(name, str(item.get("value") or ""), "")) > 1:
+        logger.warning("一次建議多項的時間不放（會套到每一項）: %s %r time_start=%r（%s）", name, item.get("value"),
+                       change.time_start, change.reason)
+        return
+    for key, raw in zip(keys, raws, strict=False):
+        value = normalize_period(raw)
+        if value is None:
+            logger.warning("看不懂的時間: %s %s=%r（%s）", name, key, raw, change.reason)
+        elif value:
+            item[key] = value
+    try:
+        item.update(PERSON_HISTORY_FIELDS[name].model.model_validate(item).model_dump())
+    except ValidationError as e:
+        logger.warning("略過不合理的時間（%s）: %s %r time_start=%r time_end=%r（%s）", e.errors()[0].get("msg", ""),
+                       name, item.get("value"), *raws, change.reason)
+        for key in keys:
+            item.pop(key, None)
 
 
 def _history_item(name: str, value: str, job_title: str, today: date) -> dict[str, object] | None:

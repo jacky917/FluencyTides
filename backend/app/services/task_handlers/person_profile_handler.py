@@ -13,9 +13,10 @@ photo are written through named actions, not as plain text.
 import html
 import re
 import secrets
+from datetime import date
 from typing import Literal, TypeVar, override
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.core import clock
 from app.core.exceptions import (
@@ -26,6 +27,7 @@ from app.core.exceptions import (
 )
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.person_profile import (
+    HISTORY_PERIOD_KEYS,
     PERSON_HISTORY_FIELDS,
     PERSON_JSON_ITEMS,
     PERSON_NOTE_TYPE,
@@ -72,6 +74,7 @@ ACTIONS = (
     "add_history",
     "set_history_status",
     "edit_position",
+    "edit_history_period",
     "set_hidden",
     "remove_item",
     "set_photo",
@@ -148,9 +151,22 @@ class _AddItem(_ActionParams):
 
 
 class _SetGoalStatus(_ActionParams):
+    """改目標的狀態。``closed`` 是達成或放棄的那天（TG 按的時候問；沒給就是今天），要是真的日期、不能在未來；
+    改回進行中時不看它。
+
+    Set a goal's status; ``closed`` is the day it was reached or dropped (today when omitted).
+    """
+
     index: int = Field(ge=0)
     fingerprint: str | None = None
     status: Literal["open", "done", "dropped"]
+    closed: date | None = None
+
+    @model_validator(mode="after")
+    def _closed_not_in_future(self) -> "_SetGoalStatus":
+        if self.closed is not None and self.closed.isoformat() > today_iso():
+            raise ValueError(f"結束日 {self.closed.isoformat()} 還沒到")
+        return self
 
 
 class _AddHistory(_ActionParams):
@@ -179,6 +195,22 @@ class _EditPosition(_ActionParams):
     note: str
     expected_start: str | None = None
     expected_end: str | None = None
+
+
+class _EditHistoryPeriod(_ActionParams):
+    """改一筆的事件時間（職位以外有 :data:`HISTORY_PERIOD_KEYS` 的欄位；職位走 ``edit_position``）。
+
+    ``values`` 要剛好是那個欄位的時間鍵（整組取代，空字串＝清掉），漏送不會被當成清掉。``expected`` 是開始修改時
+    看到的原值：同內容的兩筆指紋相同，序號過時可能對到另一筆，原值對不上就當成這一筆變了。
+
+    Replace one entry's event times; ``expected`` holds the values seen when editing began.
+    """
+
+    field: str
+    index: int = Field(ge=0)
+    fingerprint: str | None = None
+    values: dict[str, str]
+    expected: dict[str, str] | None = None
 
 
 class _SetHidden(_ActionParams):
@@ -210,10 +242,11 @@ class PersonProfileHandler(BaseHandler):
     - 修改一般欄位：JSON 與 ``Card_ID`` 不能直接改，非空的 ``Title`` 也不行（已併進 ``Company`` 的職位，
       清空可以）；照片只能填網頁上傳取得的檔名（media_upload 計畫書 D3）；有改動時更新 ``Updated_At``。
     - 具名動作（``ACTIONS``）：追加互動紀錄（同時更新 ``Last_Contact``）、新增待追蹤、改待追蹤狀態、
-      在其他清單新增一筆（目標一律進行中、登錄日今天）、改目標的狀態（``set_goal_status``：達成、放棄記下結束日）、
+      在其他清單新增一筆（目標一律進行中、登錄日今天）、改目標的狀態（``set_goal_status``：達成、放棄記下結束日，
+      可以指定那天，預設今天）、
       在會變的欄位新增一筆（``add_history``）或劃掉／取消劃掉
       （``set_history_status``；職位的劃掉＝離職，另外補上離職年月）、改一份工作的任職起訖與說明
-      （``edit_position``）、在卡面隱藏或顯示一筆
+      （``edit_position``）、改其他欄位一筆的事件時間（``edit_history_period``）、在卡面隱藏或顯示一筆
       （``set_hidden``）、刪除一筆、設定照片。項目以 §3.3 的模型驗證；刪除、改狀態與隱藏以指紋確認
       要動的是同一筆。每次寫入都更新 ``Updated_At``。
     - 會變的欄位：建立時把文字轉成清單（登錄日＝今天）；新增時登錄日、劃掉時失效日都由系統填今天；
@@ -248,7 +281,7 @@ class PersonProfileHandler(BaseHandler):
         SearchField("relationship", "關係", ("Relationship",)),
         SearchField("company", "公司・職稱", ("Company",)),
         SearchField("work", "工作", ("Work_Detail", "Education")),
-        SearchField("interests", "興趣", ("Interests",)),
+        SearchField("interests", "興趣・經歷", ("Interests", "Experiences")),
         SearchField("food", "飲食", ("Food_Drink", "Dietary")),
         SearchField("personality", "個性", ("Personality_Values", "First_Impression", "Praise", "Ask_Advice")),
         SearchField("languages", "語言", ("Languages",)),
@@ -403,11 +436,11 @@ class PersonProfileHandler(BaseHandler):
             if not isinstance(entry, dict):
                 raise InvalidNoteFieldsError("這一筆目標的格式不對，請在網頁修正。")
             entry["status"] = params.status
-            # 達成、放棄記下那天；改回進行中拿掉（選填的空值不存，和 add_item 存下來的形狀一致）
+            # 達成、放棄記下那天（沒給就是今天）；改回進行中拿掉（選填的空值不存，和 add_item 存下來的形狀一致）
             if params.status == "open":
                 entry.pop("closed", None)
             else:
-                entry["closed"] = today_iso()
+                entry["closed"] = params.closed.isoformat() if params.closed else today_iso()
             await _write(card_service, note_id, {"Goals_JSON": AnkiJsonFieldManager.serialize(items)})
         elif action == "add_history":
             params = _parse(_AddHistory, parameters)
@@ -430,6 +463,16 @@ class PersonProfileHandler(BaseHandler):
             index = resolve_index(items, params.index, params.fingerprint)
             items[index] = edit_position(items, index, params)
             await _write(card_service, note_id, {"Company": _serialize("Company", items)})
+        elif action == "edit_history_period":
+            params = _parse(_EditHistoryPeriod, parameters)
+            if params.field == "Company" or params.field not in HISTORY_PERIOD_KEYS:
+                spec = PERSON_HISTORY_FIELDS.get(params.field)
+                what = f"「{spec.title}」" if spec else params.field
+                raise InvalidNoteFieldsError(f"{what}沒有可以用這個動作改的時間（職位用 edit_position）")
+            items = _list(await _read(card_service, note_id), params.field)
+            index = resolve_index(items, params.index, params.fingerprint)
+            items[index] = edit_history_period(params.field, items, index, params.values, params.expected)
+            await _write(card_service, note_id, {params.field: _serialize(params.field, items)})
         elif action == "set_hidden":
             params = _parse(_SetHidden, parameters)
             if params.field not in self.JSON_FIELDS:
@@ -552,6 +595,10 @@ def add_history(field: str, items: list[object], item: dict[str, object], today:
     Add entries to a history field: dates by the system, splittable values
     split, current duplicates skipped, single-value fields end the old one.
 
+    和某筆有效的相同、但這次帶了那一筆還空著的事件時間（:data:`HISTORY_PERIOD_KEYS`，例如補上興趣開始的年份）
+    時，把時間補進那一筆，不另外新增；帶的時間和那一筆已有的不同時丟 :class:`InvalidNoteFieldsError`（不默默
+    丟掉使用者剛輸入的時間）。其他完全相同的重複照舊略過。
+
     職位例外：和某份現職同名時不另外新增，而是把到職年月、說明補進那一筆（那一筆原本空著時）；什麼都沒補到
     就是重複，丟 :class:`InvalidNoteFieldsError`，免得使用者以為存了。有離職年月的（以前的工作）不併進現職，
     直接接在後面；公司・職稱與起訖都和某一筆相同時才算重複。
@@ -588,6 +635,15 @@ def add_history(field: str, items: list[object], item: dict[str, object], today:
     if field == "Company" and new and all(entry_text(field, entry) in current for entry in new):
         _merge_into_current(new, current)
         return items
+    conflicts = []
+    for entry in new:
+        if entry_text(field, entry) in current:
+            conflicts += _fill_periods(field, entry, current[entry_text(field, entry)])
+    if conflicts:
+        raise InvalidNoteFieldsError(
+            f"已經有「{'、'.join(conflicts)}」，時間和這次輸入的不同，沒有修改。"
+            "要改時間請長按卡片上那一筆，或在 TG 的清單按「改」。"
+        )
     new = [entry for entry in new if entry_text(field, entry) not in current]
     if new and PERSON_HISTORY_FIELDS[field].single:
         for entry in items:
@@ -680,6 +736,67 @@ def edit_position(items: list[object], index: int, params: _EditPosition) -> dic
     return edited
 
 
+def _fill_periods(field: str, new: dict[str, object], target: object) -> list[str]:
+    """重複的那筆（``target``）還空著的事件時間，用新的補上（職位以外；職位見 :func:`_merge_into_current`）。
+    補完整筆再經模型驗證（例如學歷原本只有畢業 2015，又補上入學 2018），不合法就不補、丟錯。
+
+    Fill the empty event times of the duplicate entry, validating the result.
+
+    Returns:
+        帶了時間、但和那一筆已有的時間不同的項目文字（含已有的時間），給呼叫端報錯。The conflicting entries.
+
+    Raises:
+        InvalidNoteFieldsError: 補完的那一筆不合法。When the filled entry is invalid.
+    """
+    if field == "Company" or not isinstance(target, dict):
+        return []
+    filled = dict(target)
+    conflict = False
+    for key in HISTORY_PERIOD_KEYS.get(field, ()):
+        value = str(new.get(key) or "")
+        existing = str(target.get(key) or "").strip()
+        if value and not existing:
+            filled[key] = value
+        elif value and value != existing:
+            conflict = True
+    if conflict:
+        return [entry_detail(field, target)]
+    if filled != target:
+        try:
+            validated = _validate_item(field, filled)
+        except InvalidNoteFieldsError as e:
+            raise InvalidNoteFieldsError(
+                f"已經有「{entry_detail(field, target)}」，補上這次的時間會不合理（{e}）。請長按那一筆修改時間。"
+            ) from e
+        target.update(validated)
+    return []
+
+
+def edit_history_period(
+    field: str, items: list[object], index: int, values: dict[str, str], expected: dict[str, str] | None
+) -> dict[str, object]:
+    """改好的那一筆（不改 ``items``）：事件時間換成新的，其他鍵照舊，整筆再經模型驗證。
+
+    The entry with its event times replaced; the list itself is left untouched.
+
+    Raises:
+        JsonItemChangedError: 原值（``expected``）對不上：這一筆在別處被改過。When the item changed elsewhere.
+        InvalidNoteFieldsError: 鍵不對、格式不對或畢業早於入學。On invalid keys or values.
+    """
+    keys = HISTORY_PERIOD_KEYS[field]
+    title = PERSON_HISTORY_FIELDS[field].title
+    if set(values) != set(keys):
+        raise InvalidNoteFieldsError(f"{title}的時間要送 {'、'.join(keys)}，收到 {'、'.join(values) or '（沒有）'}")
+    if expected is not None and set(expected) != set(keys):
+        raise InvalidNoteFieldsError(f"{title}的原值要送 {'、'.join(keys)}，收到 {'、'.join(expected) or '（沒有）'}")
+    entry = items[index]
+    if not isinstance(entry, dict):
+        raise InvalidNoteFieldsError(f"這一筆{title}的格式不對，請在網頁修正。")
+    if expected is not None and any(expected.get(key, "") != str(entry.get(key) or "") for key in keys):
+        raise JsonItemChangedError(f"這一筆{title}的時間在別處被改過了，請重新打開清單再改。")
+    return _validate_item(field, {**entry, **values})
+
+
 def _reject_duplicate_past(items: list[object], new: list[dict[str, object]]) -> None:
     """以前的工作：公司・職稱與任職起訖都和某一筆相同就是重複。A past job already recorded.
 
@@ -739,7 +856,7 @@ def _validate_item(field: str, item: dict[str, object]) -> dict[str, object]:
 
     Validate one item with the list's model; returns the dict to store.
     會變的欄位保留形狀固定的鍵（value 或 company／title、added、ended；``ended`` 空白＝有效）；後來加的選填鍵
-    （隱藏、職位的任職起訖與說明）沒有值時由模型的 ``model_dump`` 自己拿掉（``_Item._OMIT_WHEN_EMPTY``）。
+    （隱藏，以及職位的說明、事件時間等各模型自己的）沒有值時由模型的 ``model_dump`` 自己拿掉（``_Item._OMIT_WHEN_EMPTY``）。
 
     Raises:
         InvalidNoteFieldsError: 格式不對。On an invalid item.

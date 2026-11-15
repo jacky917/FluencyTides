@@ -154,7 +154,7 @@ class TestPrompt:
         assert "2026-10-24（星期六）" in prompt
         assert "出身地（Hometown）：福岡" in prompt and "（Notes）：" not in prompt and "（Interests）：" not in prompt
         # 會變的欄位：有效的附編號（劃掉時用），劃掉的標成過去
-        assert "職位（Company）：#2 Geekly・PM（2026-03-01 起）｜已劃掉（過去的）：舊公司" in prompt
+        assert "職位（Company）：#2 Geekly・PM（登錄 2026-03-01）｜已劃掉（過去的）：舊公司" in prompt
         assert "N1 考得如何？" in prompt and "寄履歷" not in prompt
         assert "話題5" in prompt and "話題3" in prompt and "話題2" not in prompt
         assert "今天喝咖啡" in prompt
@@ -556,61 +556,62 @@ CURRENT = {"company": "QBC", "title": "QA", "added": "2026-01-01", "ended": ""}
 class TestPositionProposals:
     def test_current_job_with_start_and_note(self):
         (p,) = _company_proposals([{"field": "Company", "op": "add", "value": "Sony", "job_title": "PM",
-                                    "job_start": "2026/10", "job_note": "負責主機", "reason": "轉職"}])
+                                    "time_start": "2026/10", "job_note": "負責主機", "reason": "轉職"}])
         assert p.data["item"] == {"company": "Sony", "title": "PM", "start": "2026-10", "note": "負責主機"}
         assert p.data["text"] == "Sony・PM（2026-10～）：負責主機"
 
     def test_past_job_with_unknown_end(self):
         """「以前在台北的公司做了 7 年」：以前的工作，離職時間不明。"""
-        (p,) = _company_proposals([{"field": "Company", "op": "add", "value": "台北的公司", "job_end": "?",
+        (p,) = _company_proposals([{"field": "Company", "op": "add", "value": "台北的公司", "time_end": "?",
                                     "job_note": "工作 7 年", "reason": "以前在台北做了 7 年"}])
         assert p.data["item"] == {"company": "台北的公司", "title": "", "end": "?", "note": "工作 7 年"}
         line = view.proposal_line("history_add", p.data)
         assert "（以前的工作）" in line and "～？" in line
 
     def test_bad_period_drops_only_the_period(self):
-        (p,) = _company_proposals([{"field": "Company", "op": "add", "value": "Sony", "job_start": "去年",
+        (p,) = _company_proposals([{"field": "Company", "op": "add", "value": "Sony", "time_start": "去年",
                                     "reason": ""}])
         assert p.data["item"] == {"company": "Sony", "title": ""}
 
     @pytest.mark.parametrize("raw", ["不明", "unknown", "2021年左右"])
     def test_unreadable_end_keeps_it_a_past_job(self, raw):
         """給了離職就是以前的工作：看不懂時填 ?，不拿掉（拿掉會變成現職，同名時還會併進現職）。"""
-        (p,) = _company_proposals([{"field": "Company", "op": "add", "value": "樂天", "job_start": "2018",
-                                    "job_end": raw, "reason": ""}])
+        (p,) = _company_proposals([{"field": "Company", "op": "add", "value": "樂天", "time_start": "2018",
+                                    "time_end": raw, "reason": ""}])
         assert p.data["item"] == {"company": "樂天", "title": "", "start": "2018", "end": "?"}
         assert "（以前的工作）" in view.proposal_line("history_add", p.data)
 
     def test_reversed_period_keeps_it_a_past_job(self):
-        (p,) = _company_proposals([{"field": "Company", "op": "add", "value": "Sony", "job_start": "2022",
-                                    "job_end": "2020", "reason": ""}])
+        (p,) = _company_proposals([{"field": "Company", "op": "add", "value": "Sony", "time_start": "2022",
+                                    "time_end": "2020", "reason": ""}])
         assert p.data["item"] == {"company": "Sony", "title": "", "end": "?"}
 
     def test_past_job_named_like_a_current_one_is_skipped(self):
         """還是現職的要用 end 劃掉；另外新增一筆以前的工作會變成兩筆。"""
         assert _company_proposals([{"field": "Company", "op": "add", "value": "QBC", "job_title": "QA",
-                                    "job_end": "2026-11", "reason": "離職了"}], [CURRENT]) == []
+                                    "time_end": "2026-11", "reason": "離職了"}], [CURRENT]) == []
 
     def test_identical_past_job_is_skipped(self):
         past = {"company": "Sony", "title": "", "start": "2019", "end": "2021", "added": "", "ended": ""}
-        assert _company_proposals([{"field": "Company", "op": "add", "value": "Sony", "job_start": "2019",
-                                    "job_end": "2021", "reason": ""}], [past]) == []
+        assert _company_proposals([{"field": "Company", "op": "add", "value": "Sony", "time_start": "2019",
+                                    "time_end": "2021", "reason": ""}], [past]) == []
 
     def test_current_job_filling_a_missing_start_is_proposed(self):
         """同名現職補到職年月：列出來（handler 會補進原本那筆）；什麼都沒補就不列。"""
         (p,) = _company_proposals([{"field": "Company", "op": "add", "value": "QBC", "job_title": "QA",
-                                    "job_start": "2025", "reason": "去年進公司"}], [CURRENT])
+                                    "time_start": "2025", "reason": "去年進公司"}], [CURRENT])
         assert p.data["item"]["start"] == "2025"
         assert _company_proposals([{"field": "Company", "op": "add", "value": "QBC", "job_title": "QA",
                                     "reason": ""}], [CURRENT]) == []
 
-    def test_other_fields_ignore_job_keys(self):
+    def test_fields_without_times_ignore_the_time_keys(self):
         result = _result(followups=[], field_updates=[], list_updates=[
-            {"field": "Interests", "op": "add", "value": "登山", "job_start": "2020", "reason": ""},
+            {"field": "Food_Drink", "op": "add", "value": "拉麵", "time_start": "2020", "time_end": "2021", "job_note": "x",
+             "reason": ""},
         ])
         (p,) = [p for p in ingest.proposals_from(result, {}, {}, TODAY) if p.kind == "history_add"]
-        assert p.data["item"] == {"value": "登山"}
+        assert p.data["item"] == {"value": "拉麵"}
 
     def test_prompt_explains_past_jobs(self):
         prompt = ingest.build_prompt({"Display_Name": "田中さん"}, {}, "x", TODAY)
-        assert "`job_end`" in prompt and "以前的工作" in prompt and "用 `end` 劃掉它" in prompt
+        assert "`time_end`：**以前的工作**" in prompt and "以前的工作" in prompt and '用 `op: "end"` 劃掉它' in prompt

@@ -1,21 +1,21 @@
-"""人脈卡只留一種卡片，並加上目標與三個新欄位（工作經歷計畫書 §8、§12.5）。
+"""人脈卡的筆記類型跟上定義檔：加欄位、只留一種卡片、換模板（工作經歷計畫書 §8、§12.5、§14、§15）。
 
-Keep a single person card type and add the goal and three new fields.
+Bring the person note type up to the definition: fields, the single card, templates.
 
-一次做完會讓 AnkiWeb 要求完整同步的變更，只完整同步一次：
+會讓 AnkiWeb 要求完整同步的變更（第 1–3 步）一次做完，只完整同步一次：
 
-1. 加欄位：``Goals_JSON``、``Common_Ground``、``Needs``、``Dislikes``，插在定義檔（``Person_Profile_Dark.json``）
-   的位置（已經有的略過）。
+1. 加欄位：定義檔（``Person_Profile_Dark.json``）有、Anki 還沒有的欄位，插在定義檔的位置（已經有的略過）。
+   §13 加了 ``Goals_JSON``、``Common_Ground``、``Needs``、``Dislikes``，§14 加了 ``Experiences``。
 2. 卡片模板「見面前複習」改名「人脈卡」（每個人都已經有這張卡）。
 3. 刪掉「認人」模板：所有人的認人卡與它的複習紀錄一起刪掉（使用者同意複習紀錄可以丟，D15）；筆記與欄位內容不動。
-4. 換成新的模板與 CSS（同 ``import_model.py``）。
+4. 換成新的模板與 CSS（同 ``import_model.py``；每次都做，只換模板不需要完整同步）。
 
 預設只列出會做什麼（不寫入，dry-run），加 ``--apply`` 才執行。開始前會先同步，同步失敗就中止（其他裝置的修改要先
-同步上來，完整同步時才不會遺失）。做過的步驟再執行一次會略過，可以重複執行。執行完要在 Anki 做一次完整同步
-（選「上傳到 AnkiWeb」），其他裝置再下載。
+同步上來，完整同步時才不會遺失）。第 1–3 步做過的再執行一次會略過，可以重複執行。有做第 1–3 步時，執行完要在
+Anki 做一次完整同步（選「上傳到 AnkiWeb」），其他裝置再下載；只換模板（例如 §15）時一般同步就好，腳本會自己同步。
 
-Dry run by default; ``--apply`` performs the steps. Re-running skips the
-steps already done. A full sync (upload to AnkiWeb) is needed afterwards.
+Dry run by default; ``--apply`` performs the steps. Re-running skips steps 1–3
+once done. A full sync is needed only when steps 1–3 ran.
 
 用法 / Usage::
 
@@ -70,6 +70,11 @@ class Plan:
     notes: int = 0
     #: 沒辦法安全執行的原因。Why it cannot run safely.
     problems: list[str] = field(default_factory=list)
+
+    @property
+    def needs_full_sync(self) -> bool:
+        """加欄位、改名、刪模板會讓 AnkiWeb 要求完整同步；只換模板不會。Whether a full sync will be required."""
+        return bool(self.add_fields or self.rename or self.remove)
 
 
 def _card_query(template: str) -> str:
@@ -159,7 +164,15 @@ async def main(apply: bool) -> None:
             print("（dry-run：沒有寫入。確認後加 --apply 執行）")
             return
         await apply_plan(client, plan)
-        print("✅ 完成。請在 Anki 做一次完整同步（選「上傳到 AnkiWeb」），其他裝置再下載。")
+        if plan.needs_full_sync:
+            print("✅ 完成。請在 Anki 做一次完整同步（選「上傳到 AnkiWeb」），其他裝置再下載。")
+            return
+        try:
+            await client.sync(raise_errors=True, force=True)
+        except AnkiConnectError as e:
+            print(f"✅ 已換上新的模板與 CSS，但同步失敗：{e}。請之後在 Anki 一般同步一次（不用完整同步）。")
+            return
+        print("✅ 完成並已同步（只換模板，不用完整同步）。")
     finally:
         await client.close()
 

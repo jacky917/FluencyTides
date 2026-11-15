@@ -474,6 +474,20 @@ details[open] > summary .accordion-arrow {
     margin-left: 6px;
 }
 
+/* 事件時間（經歷的時間、學歷的入學～畢業、現居地搬來的時間） */
+.hist-period {
+    color: #95a5a6;
+    font-size: 12px;
+    margin-left: 6px;
+}
+
+/* 興趣標籤裡的開始時間 */
+.chip-period {
+    color: #8fa3b0;
+    font-size: 11px;
+    margin-left: 5px;
+}
+
 .hist-line.is-ended .hist-text {
     color: #7f8c8d;
     text-decoration: line-through;

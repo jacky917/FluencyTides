@@ -95,7 +95,7 @@ class TestDeclarations:
         schema = handler.JSON_FIELD_SPECS["Interests"].item.model_json_schema()
         assert schema["properties"]["added"]["x-default"] == "today"
         # 「隱藏」定義在基底類別，表單上排在最後
-        assert list(schema["properties"]) == ["value", "added", "ended", "hidden"]
+        assert list(schema["properties"]) == ["value", "added", "ended", "since", "hidden"]
 
     def test_history_fields_exist_in_the_note_type(self):
         """D1：欄位名不變、不增刪筆記類型的欄位。"""
@@ -407,7 +407,7 @@ class TestActions:
     def test_declared_actions(self):
         assert set(PersonProfileHandler.CAPABILITIES.actions) == {
             "add_interaction", "add_followup", "set_followup_status", "add_item", "set_goal_status", "add_history",
-            "set_history_status", "edit_position", "set_hidden", "remove_item", "set_photo",
+            "set_history_status", "edit_position", "edit_history_period", "set_hidden", "remove_item", "set_photo",
         }
 
 
