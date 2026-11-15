@@ -325,7 +325,7 @@ class TestTgEdit:
 
     def test_broken_key_outside_the_edit_is_refused(self):
         _, _, _, query = _begin("Experiences", [{**YUSHAN, "added": "bad"}])
-        assert "修改改不到的值格式不對（added）" in _sent(query.message.answer)[-1]
+        assert "「登錄日」格式不對，修改改不到" in _sent(query.message.answer)[-1]
 
     def test_tg_edit_is_accepted_by_the_backend(self):
         """TG 送出的參數直接交給後端：卡上手改的 2021/4 在 TG 整理過，原值照原文送，後端比對得上。"""
@@ -377,3 +377,109 @@ class TestTgEdit:
         for _ in range(5):
             _tap("pp:skip", state, note_service, card_service)
         assert _run(state.get_state()) == PersonStates.add_confirm.state
+
+
+class TestTgEditReview:
+    """§18.5 審查修正。"""
+
+    def test_contract_error_ends_the_step(self):
+        """送的參數和後端對不上是程式錯誤：不叫使用者重新修改（改幾次都一樣）。"""
+        from app.core.exceptions import ActionContractError
+
+        state, note_service, card_service, _ = _begin("Gifts_JSON", [GIFT])
+        _skip_to_preview(state, note_service, card_service)
+        note_service.run_action = mock.AsyncMock(side_effect=ActionContractError("禮物能改的是 …"))
+        query = _tap("pp:save", state, note_service, card_service)
+        sent = _sent(query.message.answer)
+        assert any("程式內部錯誤" in text for text in sent) and not any("重新修改" in text for text in sent)
+        assert _run(state.get_state()) is None
+
+    @pytest.mark.parametrize("error", ["corrupted", "not_editable"])
+    def test_errors_that_retrying_cannot_fix_end_the_step(self, error):
+        from app.core.exceptions import AnkiFieldCorruptedError, FieldNotEditableError
+
+        exc = AnkiFieldCorruptedError("禮物的資料格式壞了") if error == "corrupted" else FieldNotEditableError("不能改")
+        state, note_service, card_service, _ = _begin("Gifts_JSON", [GIFT])
+        _skip_to_preview(state, note_service, card_service)
+        note_service.run_action = mock.AsyncMock(side_effect=exc)
+        query = _tap("pp:save", state, note_service, card_service)
+        assert not any("回答都還在" in text for text in _sent(query.message.answer))
+        assert _run(state.get_state()) is None
+
+    def test_changed_item_keeps_what_was_typed(self):
+        state, note_service, card_service, _ = _begin("Gifts_JSON", [GIFT])
+        _tap("pp:skip", state, note_service, card_service)
+        _type(state, "紅茶")
+        _skip_to_preview(state, note_service, card_service)
+        note_service.run_action = mock.AsyncMock(side_effect=JsonItemChangedError("變了"))
+        query = _tap("pp:save", state, note_service, card_service)
+        (text,) = _sent(query.message.answer)
+        _assert_tg_html(text)
+        assert "剛才的修改沒有儲存" in text and "紅茶" in text
+
+    def test_broken_required_value_has_no_skip_or_clear(self):
+        """必填又格式壞掉的那一步：只能重新輸入，提示不叫你清空或略過。"""
+        talk = {"date": "10月", "topics": "轉職"}
+        state, note_service, card_service, query = _begin("Interactions_JSON", [talk])
+        prompt = _sent(query.message.answer)[-1]
+        rows = query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard
+        assert "請重新輸入。" in prompt and "清空" not in prompt.split("目前：")[1]
+        assert "pp:skip" not in [b.callback_data for row in rows for b in row]
+        typed = _type(state, "清空")
+        reply = _sent(typed.answer)[-1]
+        assert "不能清空" in reply and "略過" not in reply
+
+    def test_edit_prompts_do_not_carry_add_hints(self):
+        state, _, _, query = _begin("Company", [{"company": "QBC", "title": "QA", "added": "", "ended": ""}])
+        assert "沒有就略過" not in _sent(query.message.answer)[-1]
+        _, _, _, query = _begin("Interests", [BASS])
+        assert "多個用頓號" not in _sent(query.message.answer)[-1]
+        add_state = _fsm()
+        message, _ = _message()
+        _run(person_profile.start_add(message, add_state, 5, "Interests"))
+        assert "多個用頓號或逗號分開" in _sent(message.answer)[-1]
+
+    def test_whole_item_error_can_still_be_edited(self):
+        """卡上手改的「畢業早於入學」：修改是修正它的路，不能擋在門外。"""
+        broken = {"value": "台大", "start": "2015", "finish": "2011", "added": "", "ended": ""}
+        state, note_service, card_service, query = _begin("Education", [broken])
+        assert _run(state.get_state()) == PersonStates.add_step.state
+        assert not any("改不到" in text for text in _sent(query.message.answer))
+        _tap("pp:skip", state, note_service, card_service)  # 學校
+        _tap("pp:skip", state, note_service, card_service)  # 入學
+        query = _tap("pp:skip", state, note_service, card_service)  # 畢業：先後檢查擋下
+        assert "不能早於入學" in _sent(query.message.answer)[-1]
+
+    def test_redo_keeps_the_answers_and_the_original_values(self):
+        state, note_service, card_service, _ = _begin("Gifts_JSON", [GIFT])
+        _tap("pp:skip", state, note_service, card_service)
+        _type(state, "茶")
+        _skip_to_preview(state, note_service, card_service)
+        note_service.run_action = mock.AsyncMock(side_effect=InvalidNoteFieldsError("禮物的內容不正確"))
+        _tap("pp:save", state, note_service, card_service)
+        _tap("pp:redo", state, note_service, card_service)
+        query = _tap("pp:skip", state, note_service, card_service)  # 方向
+        assert "目前：茶" in _sent(query.message.answer)[-1]
+        _skip_to_preview(state, note_service, card_service)
+        note_service.run_action = mock.AsyncMock(return_value=None)
+        _tap("pp:save", state, note_service, card_service)
+        params = note_service.run_action.await_args.args[2]
+        assert params["values"]["item"] == "茶" and params["expected"]["item"] == "咖啡豆"
+
+    def test_stale_redo_button(self):
+        query = _tap("pp:redo", _fsm())
+        assert "步驟已結束" in _sent(query.message.answer)[-1]
+
+    @pytest.mark.parametrize("data,reopen", [
+        ("pp:delok:5:G:0:zzz", "pp:ls:5:G"),
+        ("pp:hx:5:IN:0:zzz:e", "pp:ls:5:IN"),
+        ("pp:hd:5:G:0:zzz:h", "pp:ls:5:G"),
+        ("pp:st:5:0:zzz:d", "pp:ls:5:F"),
+        ("pp:gs:5:0:zzz:o", "pp:ls:5:GL"),
+        ("pp:ie:5:G:0:zzz", "pp:ls:5:G"),
+    ])
+    def test_stale_item_buttons_reopen_their_list(self, data, reopen):
+        note_service = _note_service()
+        note_service.run_action = mock.AsyncMock(side_effect=JsonItemChangedError("變了"))
+        query = _tap(data, _fsm(), note_service, _card_service(_note(Gifts_JSON=json.dumps([GIFT]))))
+        assert query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == reopen

@@ -129,3 +129,31 @@ class TestIngestNote:
     def test_note_on_other_fields_is_ignored(self):
         (p,) = _adds([{"field": "Interests", "op": "add", "value": "登山", "note": "x", "reason": ""}], {})
         assert "note" not in p.data["item"]
+
+
+class TestWorkMergeReview:
+    """§18.5 審查修正。"""
+
+    def test_same_school_with_a_known_note_is_refused(self):
+        anki = PersonAnki([person(1, Display_Name="陳さん", Education=json.dumps([{**NTU, "note": "資工系"}]))])
+        with pytest.raises(InvalidNoteFieldsError, match="已經有「台大（2011～2015）：資工系」，沒有新增"):
+            _add(anki, "Education", {"value": "台大", "note": "資工系"})
+
+    def test_education_note_proposals(self):
+        known = {"Education": [{**NTU, "note": "資工系"}]}
+        assert _adds([{"field": "Education", "op": "add", "value": "台大", "note": "資工系", "reason": ""}], known) == []
+        (p,) = _adds([{"field": "Education", "op": "add", "value": "台大", "note": "吉他社", "reason": ""}], known)
+        assert p.data["item"]["note"] == "吉他社"
+
+    def test_prompt_examples_use_the_output_fields(self):
+        """提示詞範例的 list_updates 鍵要和結構化輸出的欄位相同（job_note 改名 note 時手改了好幾處）。"""
+        import re
+        from pathlib import Path
+
+        from app.schemas.llm.person_profile import IngestListUpdate
+
+        prompt = Path("app/templates/prompts/anki/Person_Profile_Ingest.j2").read_text(encoding="utf-8")
+        examples = [line for line in prompt.splitlines() if line.strip().startswith('{"field":') and '"op"' in line]
+        assert examples
+        for line in examples:
+            assert set(re.findall(r'"(\w+)":', line)) == set(IngestListUpdate.model_fields), line

@@ -44,6 +44,7 @@ from app.bot.utils.texts import ANKI_UNREACHABLE, CARD_NOT_FOUND, error_detail, 
 from app.core import clock
 from app.core.config import settings
 from app.core.exceptions import (
+    ActionContractError,
     AnkiFieldCorruptedError,
     FluencyTidesError,
     InvalidNoteFieldsError,
@@ -75,6 +76,7 @@ from app.schemas.person_profile import (
     is_hidden,
     item_fingerprint,
     item_error_keys,
+    item_model,
     normalize_period,
     period_order_error,
 )
@@ -564,13 +566,22 @@ def _button_list(parts: list[str]) -> tuple[int, str] | None:
     return None
 
 
-async def _reply_item_changed(message: types.Message, note_id: int, field_name: str) -> None:
-    """那一筆已經改過或不在了：請使用者重新打開清單（舊訊息的按鈕帶的是舊的序號與指紋）。
+async def _reply_item_changed(
+    message: types.Message, note_id: int, field_name: str, *, unsaved: str | None = None
+) -> None:
+    """那一筆已經改過或不在了：請使用者重新打開清單（舊訊息的按鈕帶的是舊的序號與指紋）。``unsaved`` 是修改到
+    一半的預覽（已轉義）：附上剛才輸入的內容，使用者重新打開清單後可以照著再改。
 
     Ask to reopen the list when the item has changed.
     """
+    title = escape_tg(view.list_title(field_name))
+    if unsaved:
+        text = (f"❌ 剛才的修改沒有儲存：這一筆{title}已經改過或不在了。以下是剛才輸入的內容，重新打開清單後可以照著再改："
+                f"\n\n{unsaved}")
+    else:
+        text = f"❌ 這一筆{title}已經改過或不在了，請重新打開清單再操作。"
     await message.answer(
-        f"❌ 這一筆{escape_tg(view.list_title(field_name))}已經改過或不在了，請重新打開清單再操作。",
+        text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             _button("打開清單", f"pp:ls:{note_id}:{view.CODE_OF_LIST[field_name]}"), _button("回摘要", f"pp:s:{note_id}"),
         ]]),
@@ -854,7 +865,7 @@ async def _send_item_menu(
     ref = f"{note_id}:{code}:{found}:{fingerprint}"
     hidden = is_hidden(item)
     row = []
-    # 不是物件的項目（格式不對）只能刪除：隱藏、劃掉都要改那一筆的鍵
+    # 不是物件的項目（格式不對）只能刪除：隱藏、劃掉、修改都要改那一筆的鍵
     if isinstance(item, dict):
         row.append(_button("在卡面顯示" if hidden else "在卡面隱藏", f"pp:hd:{ref}:{'s' if hidden else 'h'}"))
     if view.is_history(field_name) and isinstance(item, dict):
@@ -1148,12 +1159,16 @@ async def _start_item_edit(
         return
     keys = ITEM_EDIT_KEYS[field_name]
     # 卡上手改壞的值先找出來（儲存時整筆會再經模型驗證）：能改的鍵那一步不能略過；改不到的鍵（登錄日等）
-    # 修改也救不了，請使用者到網頁修正。整筆層級的錯（""，例如畢業早於入學）由問到結束那一步時的先後檢查處理
+    # 修改也救不了，請使用者到網頁修正。整筆層級的錯（""）要放行，修改是修正它的路：起訖先後由問到結束那一步時的
+    # 檢查處理，其他（例如工作經歷全空）到儲存時才擋（給「重新修改」）
     errors = item_error_keys(field_name, entry)
     locked = sorted(errors - set(keys) - {""})
     if locked:
-        logger.info("人脈卡 note %s %s #%s 有修改改不到的壞值: %s", note_id, field_name, found + 1, locked)
-        await message.answer(f"❌ 這一筆{title}有修改改不到的值格式不對（{'、'.join(locked)}），請在網頁修正。")
+        model_fields = item_model(field_name).model_fields
+        names = "、".join(str(model_fields[key].title or key) if key in model_fields else key for key in locked)
+        logger.warning("人脈卡 note %s %s #%s 有修改改不到的壞值: %r", note_id, field_name, found + 1,
+                       {key: entry.get(key) for key in locked})
+        await message.answer(f"❌ 這一筆{title}的「{names}」格式不對，修改改不到，請在網頁修正。")
         return
     # 整筆帶進來：預覽要看得到其他鍵（職位是否現職、目標的狀態等）；儲存時只送能改的鍵（ITEM_EDIT_KEYS）
     prefill = dict(entry)
@@ -1222,7 +1237,7 @@ async def _ask_step(message: types.Message, state: FSMContext) -> None:
         edit = data["edit"]
         current = escape_tg(view.current_value_text(step, data["item"].get(step.key)), 300) or "（空白）"
         if step.key in edit.get("invalid", []):
-            hint = "這個值的格式不對，請重新輸入，或輸入「清空」清除。"
+            hint = "這個值的格式不對，請重新輸入。" + ("" if step.required else "或輸入「清空」清除。")
         elif data["field"] == "Company" and step.key == "end" and edit.get("expected", {}).get("end"):
             hint = "略過＝保留目前的值；輸入「清空」＝改回現職。"
         elif step.required:
@@ -1230,16 +1245,17 @@ async def _ask_step(message: types.Message, state: FSMContext) -> None:
         else:
             hint = "略過＝保留目前的值；輸入「清空」清除。"
         prompt += f"\n\n目前：{current}\n{hint}"
-    elif step.skip_hint and not step.required:
-        prompt += f"\n{step.skip_hint}"
+    else:
+        prompt += "".join(f"\n{hint}" for hint in (step.add_hint, "" if step.required else step.skip_hint) if hint)
     rows: list[list[InlineKeyboardButton]] = []
     if step.choices:
         buttons = [_button(label, f"pp:ch:{i}") for i, (_, label) in enumerate(step.choices)]
         rows.extend(buttons[i:i + 3] for i in range(0, len(buttons), 3))
     if step.default_today:
         rows.append([_button("今天", "pp:ch:t0"), _button("昨天", "pp:ch:t1")])
-    # 修改時必填的也能略過（＝保留目前的值）
-    last = [_button("略過", "pp:skip")] if editing or not step.required else []
+    # 修改時必填的也能略過（＝保留目前的值）；原值格式不對的那一步不能保留，所以不給略過
+    invalid = editing and step.key in data["edit"].get("invalid", [])
+    last = [_button("略過", "pp:skip")] if not invalid and (editing or not step.required) else []
     rows.append(last + CANCEL_ROW)
     await message.answer(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
@@ -1260,12 +1276,14 @@ async def _store_answer(message: types.Message, state: FSMContext, raw: str | No
     edit = data.get("edit")
     if edit:
         edit = dict(edit)
-    if raw is None and edit and step.key in edit.get("invalid", []):
-        await message.answer("❌ 目前的值格式不對，不能保留：請重新輸入，或輸入「清空」清除。")
+    invalid = bool(edit) and step.key in edit.get("invalid", [])
+    if raw is None and invalid:
+        await message.answer("❌ 目前的值格式不對，不能保留：請重新輸入" + ("。" if step.required else "，或輸入「清空」清除。"))
         return
     if raw is not None and edit and raw.strip() == "清空":
         if step.required:
-            await message.answer("這一項必填，不能清空：請輸入新的內容，或按「略過」保留目前的值。")
+            keep = "" if invalid else "，或按「略過」保留目前的值"
+            await message.answer(f"這一項必填，不能清空：請輸入新的內容{keep}。")
             return
         item[step.key] = None if step.kind == "int" else ""
         if data["field"] == "Company" and step.key == "end" and edit.get("expected", {}).get("end"):
@@ -1429,10 +1447,12 @@ async def _save_item_edit(
 ) -> None:
     """寫入修改的一筆（``edit_item``，§16）；失敗時依原因：
 
-    - 這一筆在別處被改過或不在了：結束這一步，請使用者重新打開清單（再按儲存也不會成功）。
+    - 這一筆在別處被改過或不在了：結束這一步，附上剛才輸入的內容，請使用者重新打開清單（再按儲存也不會成功）。
+    - 參數和後端對不上（:class:`ActionContractError`，程式錯誤）：結束這一步、記 error，不叫使用者重試。
     - 卡片不在、清單格式壞了：結束這一步並說明（要先在網頁或 Anki 處理）。
     - 被擋下（和另一筆重複、內容不合格式）：回答留著，提供「重新修改」從第一步再改（再按儲存結果一樣，所以不給）。
-    - 其他（Anki 連不上、同步失敗等）：留在確認這一步，可以再按一次儲存。
+    - Anki 連不上：留在確認這一步，可以再按一次儲存。
+    - 其他錯誤：重試也沒用，結束這一步並說明。
 
     寫入成功、只是讀摘要失敗時照樣說已更新。
 
@@ -1448,7 +1468,13 @@ async def _save_item_edit(
     except JsonItemChangedError as e:
         logger.info("人脈卡 note %s：修改 %s #%s 時那一筆已經變了: %s", note_id, field_name, index + 1, e)
         await state.clear()
-        await _reply_item_changed(message, note_id, field_name)
+        await _reply_item_changed(message, note_id, field_name,
+                                  unsaved=view.preview_item(field_name, item, editing=True))
+        return
+    except ActionContractError as e:
+        logger.error("人脈卡 note %s：修改 %s #%s 的參數和後端對不上: %s", note_id, field_name, index + 1, e)
+        await state.clear()
+        await message.answer("❌ 這次修改沒有儲存（程式內部錯誤，已記錄）。請重新打開清單再試。")
         return
     except (NoteNotFoundError, AnkiFieldCorruptedError) as e:
         logger.warning("人脈卡 note %s：修改 %s #%s 時卡片或清單讀不到: %s", note_id, field_name, index + 1, e)
@@ -1463,13 +1489,19 @@ async def _save_item_edit(
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("重新修改", "pp:redo"), *CANCEL_ROW]]),
         )
         return
-    except (FluencyTidesError, AnkiConnectError) as e:
-        logger.warning("人脈卡 note %s：修改 %s #%s 寫入失敗: %s", note_id, field_name, index + 1, e)
-        await _reply_error(message, e)
+    except AnkiConnectError as e:
+        logger.warning("人脈卡 note %s：修改 %s #%s 寫入失敗（Anki 連不上）: %s", note_id, field_name, index + 1, e,
+                       exc_info=e)
+        await message.answer(ANKI_UNREACHABLE)
         await message.answer(
             "回答都還在：要再試一次就按「儲存」，不改了就按「取消」。",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("儲存", "pp:save"), *CANCEL_ROW]]),
         )
+        return
+    except FluencyTidesError as e:
+        logger.warning("人脈卡 note %s：修改 %s #%s 寫入失敗: %s", note_id, field_name, index + 1, e)
+        await state.clear()
+        await _reply_error(message, e)
         return
     await state.clear()
     prefix = f"✅ 已修改這一筆{view.list_title(field_name)}。" + sync_suffix(warning)

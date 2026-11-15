@@ -116,9 +116,11 @@ class TestHandler:
             _act(anki, 1, action="add_history", field="Interests", item={"value": "貝斯", "since": "2015"})
         assert _list(anki, 1, "Interests") == [{**BASS, "since": "2010"}]
 
-    def test_plain_duplicate_is_still_skipped(self):
+    def test_plain_duplicate_is_refused(self):
+        """完全重複（沒有新的時間或說明）：報錯，免得使用者以為存了（§18 審查修正）。"""
         anki = PersonAnki([person(1, Display_Name="陳さん", Interests=json.dumps([{**BASS, "since": "2010"}]))])
-        _act(anki, 1, action="add_history", field="Interests", item={"value": "貝斯"})
+        with pytest.raises(InvalidNoteFieldsError, match="已經有「貝斯（2010 起）」，沒有新增"):
+            _act(anki, 1, action="add_history", field="Interests", item={"value": "貝斯"})
         assert _list(anki, 1, "Interests") == [{**BASS, "since": "2010"}]
 
     def test_filling_a_time_that_breaks_the_order_is_rejected(self):

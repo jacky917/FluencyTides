@@ -449,6 +449,22 @@ class InvalidNoteFieldsError(ServiceBaseError):
     status_code = 422
 
 
+class ActionContractError(InvalidNoteFieldsError):
+    """具名動作的參數和後端的約定不一致（鍵不對、清單名不對）：呼叫端的程式錯誤，不是使用者能修正的內容。
+
+    The caller broke the action's contract; a programming error, not a user-fixable value.
+    """
+    error_code = "ACTION_CONTRACT"
+
+
+class ActionContractError(InvalidNoteFieldsError):
+    """具名動作的參數和後端的約定不一致（鍵不對、清單名不對）：呼叫端的程式錯誤，不是使用者能修正的內容。
+
+    The caller broke the action's contract; a programming error, not a user-fixable value.
+    """
+    error_code = "ACTION_CONTRACT"
+
+
 class TagInvalidError(ServiceBaseError):
     """建卡時加的標籤不合格：含空白、是系統標籤、太長或太多。
 

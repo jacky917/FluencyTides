@@ -57,7 +57,7 @@ class IngestListUpdate(BaseModel):
     op: Literal["add", "end"] = Field(
         description="add：新增一筆；end：劃掉目前有效的某一筆（不再適用了，例如離職、搬走、不再玩的興趣）"
     )
-    value: str = Field("", description="op 為 add 時要新增的內容（純文字）；工作經歷（Company）填公司名稱；op 為 end 時空字串")
+    value: str = Field("", description="op 為 add 時要新增的內容（純文字）；工作經歷（Company）填公司名稱，不知道就空字串；op 為 end 時空字串")
     job_title: str = Field("", description="只有工作經歷（Company）用：職稱；其他欄位空字串")
     time_start: str = Field(
         "",

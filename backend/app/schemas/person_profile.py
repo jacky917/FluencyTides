@@ -110,7 +110,7 @@ class PersonCreateParams(BaseModel):
 
     會變的欄位（:data:`PERSON_HISTORY_FIELDS`）建立時轉成清單、登錄日填今天（:func:`history_from_input`）：
     單值欄位（現居地、時區、關係、親密度）是一段文字；其他的可以一列一筆（``_rows``），也接受一段文字。
-    職位一列是公司＋職稱；``Title`` 欄位已停用，不在建立參數裡。
+    職位一列是公司＋職稱；停用的欄位（:data:`RETIRED_FIELDS`：``Title``、``Work_Detail``）不在建立參數裡。
 
     Parameters for creating a person card; only the display name is required.
     History fields become lists on creation; multi-entry ones take one value per row.
@@ -139,7 +139,8 @@ class PersonCreateParams(BaseModel):
     Relationship: str = _text("關係", "例如「客戶」「朋友」「同事」")
     Closeness: str = _text("親密度", "1–5", pattern=r"^$|^[1-5]$")
     First_Impression: str = _text("第一印象", multiline=True)
-    Company: str | list[PositionInput] = _rows("職位", "一份工作一列：公司與職稱至少填一個")
+    # 建卡表單一列只有公司、職稱兩格（都空的列略過）；只有任職時間或說明的工作，建卡後在工作經歷的清單加（§17）
+    Company: str | list[PositionInput] = _rows("工作經歷", "一份工作一列：填公司或職稱（只有時間或說明的，建卡後在清單加）")
     Education: str | list[str] = _rows("學歷", "一個學歷一列")
     Interests: str | list[str] = _rows("興趣", "輸入後按 Enter 加入；背面也顯示成標籤", tags=True)
     Experiences: str | list[str] = _rows("經歷", "去過的地方、做過的事、印象深的故事；一件一列（想做的記在「目標」）",
@@ -306,8 +307,9 @@ def append_field_html(current: str, addition: str) -> str:
 FINGERPRINT_KEYS = ("date", "item", "topics", "name", "label", "handle", "relation", "channel")
 #: 會變的欄位的項目另外加進指紋的鍵：只在項目有這個鍵時才接上（原有六種清單的指紋不變）。``added``、
 #: ``ended`` 刻意不放：劃掉、取消劃掉後同一筆的指紋不變，TG 的「復原」按鈕與卡片上的舊連結才對得上。事件時間
-#: （:data:`HISTORY_PERIOD_KEYS`，含職位的 ``start``、``end``）、職位的 ``note`` 與每筆的 ``hidden`` 也刻意不放：
-#: 補時間、離職、隱藏後連結仍對得上。
+#: （:data:`HISTORY_PERIOD_KEYS`，含職位的 ``start``、``end``）、說明（``note``）與每筆的 ``hidden`` 也刻意不放：
+#: 補時間、離職、隱藏後連結仍對得上。例外是沒有公司與職稱的工作（§17）：接上說明，不然這種工作的指紋全部相同，
+#: 序號過時時刪除、隱藏、劃掉會動到另一筆（見 :func:`item_fingerprint`）。
 #: Extra keys of history items, appended only when present; the dates stay out so ending keeps the fingerprint.
 FINGERPRINT_EXTRA_KEYS = ("value", "company", "title")
 
@@ -331,6 +333,8 @@ def item_fingerprint(item: object) -> str:
     values = item if isinstance(item, dict) else {}
     key = "|".join("" if values.get(k) is None else _js_string(values[k]) for k in FINGERPRINT_KEYS)
     key += "".join("|" + _js_string(values[k]) for k in FINGERPRINT_EXTRA_KEYS if values.get(k) is not None)
+    if ("company" in values or "title" in values) and not _position_name(values):
+        key += "|" + str(values.get("note") or "")
     h = 5381
     data = key.encode("utf-16-le")
     for i in range(0, len(data), 2):
@@ -469,8 +473,8 @@ class Position(_Item):
     :data:`UNNAMED_POSITION`。
     現職＝沒有離職（``end``）也沒有劃掉（``ended``），見 :func:`is_active`。
 
-    One job: company and/or title, period, note and dates. It is current
-    while it has neither an ``end`` nor an ``ended`` date.
+    One job: company, title, period, note and dates, at least one of the first
+    five set. It is current while it has neither an ``end`` nor an ``ended`` date.
 
     ``end`` 與 ``ended`` 的組合：都空＝現職；網頁填了離職、TG 離職（兩個都有）、舊資料只有劃掉，都是以前的工作。
     任職起訖輸入時整理成存放的形狀（:func:`normalize_period`），離職不能早於到職。
@@ -708,8 +712,9 @@ HISTORY_PERIOD_KEYS: dict[str, tuple[str, ...]] = {
     "Residence": ("since",),
 }
 
-#: 「修改一筆」能改的鍵（工作經歷計畫書 §16），順序同 TG 的問答：會變的欄位是內容與事件時間（職位是公司、
-#: 職稱、任職起訖與說明），其他清單是新增時問的那幾項。登錄日、劃掉日、隱藏與狀態不在這裡（各有自己的按鈕）。
+#: 「修改一筆」能改的鍵（工作經歷計畫書 §16），順序同 TG 的問答：會變的欄位是內容、事件時間與說明（職位是
+#: 公司、職稱、任職起訖與說明），其他清單是新增時問的那幾項。登錄日、劃掉日、隱藏、狀態與目標的結束日不在
+#: 這裡（各有自己的按鈕，:data:`SYSTEM_ITEM_KEYS`）。
 #: The keys "edit one item" may change, per list, in asking order.
 ITEM_EDIT_KEYS: dict[str, tuple[str, ...]] = {
     "Interactions_JSON": ("date", "topics", "updates", "place", "quote"),
@@ -731,8 +736,11 @@ assert set(ITEM_EDIT_KEYS) == set(PERSON_HISTORY_FIELDS) | set(PERSON_JSON_ITEMS
 assert all(set(keys) <= set((PERSON_HISTORY_FIELDS[name].model if name in PERSON_HISTORY_FIELDS
                              else PERSON_JSON_ITEMS[name][0]).model_fields)
            for name, keys in ITEM_EDIT_KEYS.items()), "ITEM_EDIT_KEYS 有模型沒有的鍵"
-# 系統管理的鍵各有自己的按鈕（劃掉、隱藏、狀態），修改不能碰
-assert all({"added", "ended", "hidden", "status", "closed"}.isdisjoint(keys) for keys in ITEM_EDIT_KEYS.values()),     "ITEM_EDIT_KEYS 含系統管理的鍵"
+#: 系統管理的鍵：登錄日、劃掉日、隱藏、狀態與目標的結束日，各有自己的按鈕，修改不能碰。The system-owned keys.
+SYSTEM_ITEM_KEYS = frozenset({"added", "ended", "hidden", "status", "closed"})
+assert all(SYSTEM_ITEM_KEYS.isdisjoint(keys) for keys in ITEM_EDIT_KEYS.values()), "ITEM_EDIT_KEYS 含系統管理的鍵"
+assert set(RETIRED_FIELDS).isdisjoint(PersonCreateParams.model_fields) \
+    and set(RETIRED_FIELDS).isdisjoint(PERSON_HISTORY_FIELDS), "停用的欄位還在建立參數或會變的欄位裡"
 
 
 def item_model(name: str) -> type[BaseModel]:
@@ -839,7 +847,8 @@ def _position_name(item: dict[str, object]) -> str:
 
 def entry_key(field: str, item: object) -> str:
     """比對、去重用的鍵：通常就是 :func:`entry_text`。沒有公司與職稱的工作經歷改看說明與到職（§17），不然兩份
-    不同的「公司不明」會被當成同一份。The key entries are compared by."""
+    不同的「公司不明」會被當成同一份。代價是這種現職沒辦法「同一份再新增、補上說明」：說明不同就是另一份，
+    要改說明請用修改。The key entries are compared by."""
     if field == "Company" and isinstance(item, dict) and not _position_name(item):
         return "\x1f".join(("", str(item.get("note") or "").strip(), str(item.get("start") or "").strip()))
     return entry_text(field, item)
@@ -865,8 +874,8 @@ def history_period(field: str, item: object) -> str:
 
 def entry_detail(field: str, item: object) -> str:
     """一筆給人（或 LLM）看的完整文字：附事件時間（:func:`history_period`），有說明的欄位（:data:`NOTE_FIELDS`）
-    另外附說明，多行的接成一行（「QBC・QA（2025～）：前端開發／帶新人」「爬過玉山（2026-10）」）。比對、去重
-    一律用 :func:`entry_key`。
+    另外附說明，多行的接成一行（「QBC・QA（2025～）：前端開發／帶新人」「爬過玉山（2026-10）」）。清單裡的
+    比對、去重用 :func:`entry_key`。
 
     The readable text of an entry with its event time and note, on one line.
     """
@@ -885,7 +894,8 @@ def one_line(text: str) -> str:
 
 def merged_note(existing: str, new: str) -> str | None:
     """對同一筆再新增時的說明（§18）：原本是空的就用新的；新的不在原本的裡面就換行接在後面；沒有新東西
-    （新的是空的、或原本已經包含）時為 None。
+    （新的是空的、或原本已經包含）時為 None。「包含」是子字串比對：原本「負責 PMO」時新的「PM」也算已經有；
+    新的內容通常是一句話，誤判的代價只是少接一行（之後可以修改），所以不做更細的比對。
 
     The note after adding to the same entry again, or None when nothing is new.
     """

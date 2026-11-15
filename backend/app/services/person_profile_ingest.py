@@ -98,7 +98,7 @@ def _multiline(name: str) -> bool:
 
 def _history_lines(name: str, items: list[object]) -> tuple[list[str], list[str]]:
     """會變的欄位給 LLM 看的：有效的每筆附編號（``#序號+1``，劃掉時用），以及過去的（劃掉的，或有離職年月的
-    職位）。每筆附事件時間（:func:`entry_detail`，職位另附說明）；有效的另外附「登錄 日期」：寫法和事件時間
+    職位）。每筆附事件時間與說明（:func:`entry_detail`，工作經歷與學歷有說明）；有效的另外附「登錄 日期」：寫法和事件時間
     （「2015 起」）不同，LLM 才分得出哪個是那件事的時間、哪個只是記下的日子。
 
     The current entries numbered for "end" proposals, and the past ones.
@@ -316,7 +316,7 @@ def proposals_from(
                 if change.note.strip() and name in NOTE_FIELDS:
                     item["note"] = change.note.strip()
                 elif change.note.strip():
-                    logger.info("略過用不到的說明: %s=%r（%s）", name, change.note, change.reason)
+                    logger.warning("略過用不到的說明: %s=%r（%s）", name, change.note, change.reason)
         if item is None:
             logger.warning("略過格式不對的新增建議: %s=%r（職稱 %r；理由：%s）", name, change.value, change.job_title,
                            change.reason)
@@ -394,7 +394,8 @@ def _position_item(change: IngestListUpdate, today: date) -> dict[str, object] |
         item["note"] = change.note.strip()
     try:
         return PERSON_HISTORY_FIELDS["Company"].model.model_validate(item).model_dump()
-    except ValidationError:
+    except ValidationError as e:
+        logger.warning("略過不合格的工作經歷建議（%s）: %r（%s）", e.errors()[0].get("msg", ""), item, change.reason)
         return None
 
 

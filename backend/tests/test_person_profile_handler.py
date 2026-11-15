@@ -456,7 +456,8 @@ class TestHistory:
 
     def test_single_value_same_as_current_changes_nothing(self):
         anki = PersonAnki([person(1, Display_Name="田中さん", Residence=json.dumps([_entry("東京")]))])
-        _act(anki, 1, action="add_history", field="Residence", item={"value": "東京"})
+        with pytest.raises(InvalidNoteFieldsError, match="已經有「東京」"):
+            _act(anki, 1, action="add_history", field="Residence", item={"value": "東京"})
         assert _list(anki, 1, "Residence") == [_entry("東京")]
 
     def test_positions_are_not_single_value(self):

@@ -5,10 +5,11 @@
      欄位都放在隱藏的 div，由下方的 JS 讀取後畫出；JSON 欄位解析失敗時該區段顯示「資料格式錯誤」與原文，
      不會默默消失。模板只顯示、不寫資料：寫入交給網頁與 TG——有 Card_ID 與 TG_Bot 時，每個區塊標題的
      「+」開啟 TG 新增（區塊有多個欄位時 TG 先問新增哪一項），長按清單項目 3 秒開啟 TG 的選單（隱藏或顯示、
-     劃掉〔只有會變的欄位；職位叫離職〕、目標的達成或放棄、刪除；刪除 TG 會再確認一次）、長按文字欄位（名字、
+     劃掉〔只有會變的欄位；職位叫離職〕、目標的達成或放棄、修改、刪除；刪除 TG 會再確認一次）、長按文字欄位（名字、
      出身、備註等）與頭像 3 秒開啟 TG 的選單（修改或換照片、隱藏或顯示），「劃掉」開啟 TG 把那筆標成失效。
      沒有內容的區段只在有 TG 時顯示（才有「+」可按）。
-     會變的欄位（興趣、職位、現居地等）是 JSON 清單，每筆 {value, added, ended}（職位是 {company, title, …}）：
+     會變的欄位（興趣、職位、現居地等）是 JSON 清單，每筆 {value, added, ended}（職位是 {company, title, …}，
+     職位與學歷另有說明 note）：
      全部顯示，有效的在前，劃掉的接在後面（刪除線、附登錄日與失效日）。職位就是工作經歷：現職（沒有離職年月、
      沒有劃掉）在上面、標「現職」，以前的工作在下面、附任職期間；同一段裡照清單順序（在網頁調整）。
      在卡面隱藏的（清單項目有 hidden: true；文字欄位與照片有「人脈卡隱藏::欄位名」標籤）在正面變成遮擋塊，
@@ -46,8 +47,9 @@
     <div id="f-Closeness">{{Closeness}}</div>
     <div id="f-First_Impression">{{First_Impression}}</div>
     <div id="f-Company">{{Company}}</div>
+    <!-- 停用的欄位（職稱、工作內容，都併進工作經歷）：卡面不讀，但筆記類型保留這兩個欄位（刪欄位要完整同步），
+         而每個欄位都要在模板上有一個 div（tests/test_person_profile_template.py 比對） -->
     <div id="f-Title">{{Title}}</div>
-    <!-- 停用的欄位（職稱、工作內容）：筆記類型保留，卡面不讀 -->
     <div id="f-Work_Detail">{{Work_Detail}}</div>
     <div id="f-Education">{{Education}}</div>
     <div id="f-Interests">{{Interests}}</div>
@@ -257,6 +259,11 @@
         ['value', 'company', 'title'].forEach(function (k) {
             if (item && item[k] !== undefined && item[k] !== null) key += '|' + String(item[k]);
         });
+        // 沒有公司與職稱的工作接上說明（與後端相同），不然這種工作的指紋全部一樣
+        if (item && typeof item === 'object' && ('company' in item || 'title' in item)
+            && !String(item.company || '').trim() && !String(item.title || '').trim()) {
+            key += '|' + String(item.note || '');
+        }
         var h = 5381;
         for (var i = 0; i < key.length; i++) h = ((h * 33) ^ key.charCodeAt(i)) >>> 0;
         return h.toString(36);
@@ -508,7 +515,7 @@
 
     // ============================
     // 會變的欄位：每筆 {value, added, ended}；職位 {company, title, start, end, note, added, ended}；
-    // 每一筆都可能有 hidden: true
+    // 學歷另有 {start, finish, note}；每一筆都可能有 hidden: true
     // ============================
 
     // 與後端 PERSON_HISTORY_FIELDS 相同（tests/test_person_profile_template.py 比對）
@@ -623,6 +630,12 @@
         });
     }
 
+    /** 有說明的欄位（學歷的科系等）：說明接在那一筆底下，多行照換行顯示。 */
+    function appendNote(line, name, item) {
+        var note = NOTE_FIELDS.indexOf(name) >= 0 ? String(item.note || '').trim() : '';
+        if (note) line.appendChild(el('div', 'hist-note', note));
+    }
+
     /**
      * 會變的欄位的一列：全部顯示，有效的在前、劃掉的接在後面（刪除線、附登錄日與失效日）；opts.chips 顯示成標籤。
      * 有 TG 時有效的那筆旁有「劃掉」（標籤沒有，長按開選單再劃掉），每筆都能長按開選單。
@@ -630,12 +643,6 @@
      * opts.byTime：有效的依事件時間新到舊排（沒有時間的排最後，照清單順序）；劃掉的照清單順序。
      * 沒有任何紀錄時回傳 null。
      */
-    /** 有說明的欄位（學歷的科系等）：說明接在那一筆底下，多行照換行顯示。 */
-    function appendNote(line, name, item) {
-        var note = NOTE_FIELDS.indexOf(name) >= 0 ? String(item.note || '').trim() : '';
-        if (note) line.appendChild(el('div', 'hist-note', note));
-    }
-
     function historyRow(label, name, opts) {
         opts = opts || {};
         var list = historyLists[name];

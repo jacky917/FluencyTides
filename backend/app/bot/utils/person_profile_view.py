@@ -393,8 +393,8 @@ def history_toggle_label(field_name: str, active: bool) -> str:
 def item_line(field_name: str, item: object) -> str:
     """清單裡一筆的一行文字（已轉義）。One item as an escaped line.
 
-    會變的欄位附登錄日，劃掉的加刪除線與失效日；職位前面標「[現職]」或「[以前]」，附任職期間與說明，以前的工作
-    不加刪除線（期間已寫在裡面）；在卡面隱藏的加「〔卡面隱藏〕」。
+    會變的欄位附登錄日，劃掉的加刪除線與失效日，學歷附說明；職位前面標「[現職]」或「[以前]」，附任職期間與
+    說明，以前的工作不加刪除線（期間已寫在裡面）；在卡面隱藏的加「〔卡面隱藏〕」。多行的說明接成一行。
     """
     line = _item_line(field_name, item)
     return f"{line}〔卡面隱藏〕" if is_hidden(item) else line
@@ -459,7 +459,7 @@ def truncate(text: str, limit: int = MESSAGE_LIMIT) -> str:
 
 @dataclass(frozen=True)
 class Step:
-    """新增一筆時的一個問題。One question when adding an item.
+    """新增或修改一筆時的一個問題（修改沿用新增的步驟，見 :func:`edit_steps`）。One question when adding or editing.
 
     Attributes:
         key: 寫進項目的鍵；``_followups`` 為互動紀錄附帶的「下次要問」（每行一筆）。The item key.
@@ -469,8 +469,9 @@ class Step:
         required: 必填：新增時沒有「略過」；修改時可以略過（＝保留目前的值），但不能清空。Whether it is required.
         choices: ``choice`` 的選項 (值, 按鈕文字)；``text`` 有選項時是建議按鈕。Choices.
         default_today: 日期步驟提供「今天」「昨天」按鈕。Offer today / yesterday buttons.
-        skip_hint: 新增時「略過」代表什麼（接在問題下面）；修改時略過一律是保留，由 handler 另外說明，
-            所以問題本身只寫問句與格式。What skipping means when adding.
+        skip_hint: 新增時「略過」代表什麼（接在問題下面，必填的不顯示）；修改時略過一律是保留，由 handler 另外
+            說明，所以問題本身只寫問句與格式。What skipping means when adding.
+        add_hint: 只有新增時接在問題下面的說明（例如「多個用頓號分開」：修改時只能改成一個）。A hint for adding only.
         allow_unknown: ``period`` 步驟也收 ``?``（已離職但不知道時間）。Accept ``?`` for a period.
     """
 
@@ -482,6 +483,7 @@ class Step:
     default_today: bool = False
     skip_hint: str = ""
     allow_unknown: bool = False
+    add_hint: str = ""
 
 
 ADD_STEPS: dict[str, tuple[Step, ...]] = {
@@ -565,7 +567,7 @@ HISTORY_DETAIL_STEPS: dict[str, tuple[Step, ...]] = {
         Step("since", "什麼時候搬來的？（例如 2023-04）", kind="period", skip_hint="不知道就略過。"),
     ),
 }
-# 步驟的鍵要和 HISTORY_PERIOD_KEYS 一致（職位另外多了說明，只比前面的時間）
+# 步驟的鍵要和 HISTORY_PERIOD_KEYS 一致（有說明的欄位時間後面多了說明，只比前面的時間）
 assert {name: tuple(step.key for step in steps)[:len(HISTORY_PERIOD_KEYS[name])]
         for name, steps in HISTORY_DETAIL_STEPS.items()} == HISTORY_PERIOD_KEYS, "HISTORY_DETAIL_STEPS 與 HISTORY_PERIOD_KEYS 不一致"
 
@@ -587,13 +589,13 @@ def skip_detail_step(field_name: str, item: dict[str, object], step: Step) -> bo
 
 
 def _history_steps(name: str) -> tuple[Step, ...]:
-    """會變的欄位新增時要問的：登錄日由系統填；有事件時間的欄位接著問時間（:data:`HISTORY_DETAIL_STEPS`，
-    職位是任職起訖與說明）。The steps of a history field."""
+    """會變的欄位新增（與修改）時要問的：登錄日由系統填；有事件時間的欄位接著問時間，有說明的欄位再問說明
+    （:data:`HISTORY_DETAIL_STEPS`；職位是公司、職稱、任職起訖與說明）。The steps of a history field."""
     title = field_title(name)
     if name == "Company":
         return (
-            Step("company", "公司？（沒有就略過）"),
-            Step("title", "職稱？（沒有就略過；公司、職稱都不知道也沒關係，後面寫時間或說明就好）"),
+            Step("company", "公司？", skip_hint="沒有就略過。"),
+            Step("title", "職稱？", skip_hint="沒有就略過；公司、職稱都不知道也沒關係，後面寫時間或說明就好。"),
             *POSITION_DETAIL_STEPS,
         )
     if name == "Closeness":
@@ -605,15 +607,16 @@ def _history_steps(name: str) -> tuple[Step, ...]:
     if name == "Timezone":
         return (Step("value", "時區？（例如 Asia/Tokyo）", required=True,
                      choices=(("Asia/Tokyo", "Asia/Tokyo"), ("Asia/Taipei", "Asia/Taipei"))),)
-    hint = "（多個用頓號或逗號分開，會存成多筆）" if PERSON_HISTORY_FIELDS[name].split else ""
-    return (Step("value", f"{title}？{hint}", required=True), *HISTORY_DETAIL_STEPS.get(name, ()))
+    hint = "多個用頓號或逗號分開，會存成多筆。" if PERSON_HISTORY_FIELDS[name].split else ""
+    return (Step("value", f"{title}？", required=True, add_hint=hint), *HISTORY_DETAIL_STEPS.get(name, ()))
 
 
 ADD_STEPS.update({name: _history_steps(name) for name in PERSON_HISTORY_FIELDS})
 
 
 def edit_steps(name: str) -> tuple[Step, ...]:
-    """修改一筆時問的步驟（工作經歷計畫書 §16）：同新增，但不問互動附帶的「下次要問」。The steps of editing an item."""
+    """修改一筆時問的步驟（工作經歷計畫書 §16）：同新增，但不問 ``_`` 開頭的附帶步驟（不是這一筆的鍵，目前只有
+    互動附帶的「下次要問」）。The steps of editing an item."""
     return tuple(step for step in ADD_STEPS[name] if not step.key.startswith("_"))
 
 
