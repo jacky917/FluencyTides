@@ -30,6 +30,7 @@ from pydantic import (
     Field,
     SerializerFunctionWrapHandler,
     StrictBool,
+    ValidationError,
     ValidationInfo,
     field_validator,
     model_serializer,
@@ -139,7 +140,6 @@ class PersonCreateParams(BaseModel):
     Closeness: str = _text("親密度", "1–5", pattern=r"^$|^[1-5]$")
     First_Impression: str = _text("第一印象", multiline=True)
     Company: str | list[PositionInput] = _rows("職位", "一份工作一列：公司與職稱至少填一個")
-    Work_Detail: str | list[str] = _rows("工作內容", "工作內容、目前的專案、職涯經歷；一件一列", multiline=True)
     Education: str | list[str] = _rows("學歷", "一個學歷一列")
     Interests: str | list[str] = _rows("興趣", "輸入後按 Enter 加入；背面也顯示成標籤", tags=True)
     Experiences: str | list[str] = _rows("經歷", "去過的地方、做過的事、印象深的故事；一件一列（想做的記在「目標」）",
@@ -464,7 +464,9 @@ def period_order_error(start: str, end: str, *, labels: tuple[str, str] = ("到�
 
 
 class Position(_Item):
-    """一份工作（工作經歷計畫書 §4.1）：公司與職稱（至少一個）、任職起訖、說明、登錄日、失效日。
+    """一份工作（工作經歷計畫書 §4.1）：公司、職稱、任職起訖、說明、登錄日、失效日。公司與職稱都可以空
+    （聊天常常沒問到，§17），但公司、職稱、任職起訖、說明至少要有一項；沒有公司與職稱的顯示成
+    :data:`UNNAMED_POSITION`。
     現職＝沒有離職（``end``）也沒有劃掉（``ended``），見 :func:`is_active`。
 
     One job: company and/or title, period, note and dates. It is current
@@ -480,7 +482,7 @@ class Position(_Item):
     title: str = Field("", title="職稱")
     start: str = Field("", title="到職", description="年、年月或日期，例如 2021-04", pattern=PERIOD)
     end: str = Field("", title="離職", description="空白＝現職；已離職但不知道時間填 ?", pattern=PERIOD_END)
-    note: str = Field("", title="說明", description="這份工作做什麼（長的專案內容記在「工作內容」）")
+    note: str = Field("", title="說明", description="這份工作做什麼、負責的專案（可以多行）", json_schema_extra=_TEXTAREA)
     added: str = _added_field()
     ended: str = _ended_field()
 
@@ -497,8 +499,8 @@ class Position(_Item):
 
     @model_validator(mode="after")
     def _check(self) -> Position:
-        if not (self.company or self.title):
-            raise ValueError("公司與職稱至少要填一個")
+        if not (self.company or self.title or self.start or self.end or self.note):
+            raise ValueError("工作經歷至少要有公司、職稱、任職時間或說明其中一項")
         error = period_order_error(self.start, self.end)
         if error:
             raise ValueError(error)
@@ -556,17 +558,19 @@ EDUCATION_LABELS = ("入學", "畢業")
 
 
 class EducationEntry(HistoryEntry):
-    """學歷的一筆：入學 ``start``、畢業 ``finish``（年、年月或日期，都可空；畢業不能早於入學）。
+    """學歷的一筆：入學 ``start``、畢業 ``finish``（年、年月或日期，都可空；畢業不能早於入學）、說明 ``note``
+    （科系等，工作經歷計畫書 §18）。
 
     One education entry with its start and finish.
 
     畢業不叫 ``end``：``is_active`` 把有 ``end`` 的當成失效（職位的離職），畢業過的學歷仍是有效的資料。
     """
 
-    _OMIT_WHEN_EMPTY: ClassVar[tuple[str, ...]] = ("hidden", "start", "finish")
+    _OMIT_WHEN_EMPTY: ClassVar[tuple[str, ...]] = ("hidden", "start", "finish", "note")
 
     start: str = Field("", title="入學", description="年、年月或日期，例如 2011-09", pattern=PERIOD)
     finish: str = Field("", title="畢業", description="畢業或離開的時間；還在讀就空白", pattern=PERIOD)
+    note: str = Field("", title="說明", description="科系、研究、社團（可以多行）", json_schema_extra=_TEXTAREA)
 
     @field_validator("start", "finish", mode="before")
     @classmethod
@@ -666,8 +670,7 @@ PERSON_HISTORY_FIELDS: dict[str, HistoryField] = {
     "Food_Drink": HistoryField(HistoryEntry, "飲食喜好", split=True),
     "Dislikes": HistoryField(HistoryEntry, "不喜歡的事", split=True),
     "Dietary": HistoryField(HistoryNote, "飲食限制"),
-    "Company": HistoryField(Position, "職位"),
-    "Work_Detail": HistoryField(HistoryNote, "工作內容"),
+    "Company": HistoryField(Position, "工作經歷"),
     "Education": HistoryField(EducationEntry, "學歷"),
     "Personality_Values": HistoryField(HistoryNote, "個性與價值觀"),
     "Praise": HistoryField(WhenNote, "讚美素材"),
@@ -683,9 +686,15 @@ PERSON_HISTORY_FIELDS: dict[str, HistoryField] = {
     "Sensitive": HistoryField(HistoryNote, "敏感話題"),
 }
 
-#: 不再使用的欄位：職稱併進 ``Company`` 的職位（筆記類型的欄位保留，刪欄位要完整同步）。
-#: The retired field; the note type keeps it.
-RETIRED_FIELDS = ("Title",)
+#: 不再使用的欄位與擋下寫入時的說明（筆記類型的欄位保留，刪欄位要完整同步）：職稱併進工作經歷的職稱，
+#: 工作內容併進每份工作的說明（工作經歷計畫書 §18）。The retired fields; the note type keeps them.
+RETIRED_FIELDS: dict[str, str] = {
+    "Title": "「職稱」已併進「工作經歷」（Company 欄位）：請在工作經歷的清單裡改。",
+    "Work_Detail": "「工作內容」已併進「工作經歷」每份工作的說明（Company 欄位的 note）：請在工作經歷的清單裡改。",
+}
+
+#: 每筆有說明（``note``）的會變欄位：工作經歷是做什麼，學歷是科系（§18）。The history fields with a note.
+NOTE_FIELDS = ("Company", "Education")
 
 #: 會變的欄位裡記「事件時間」的鍵（工作經歷計畫書 §15）：那件事的時間，和系統填的登錄日、劃掉日不同。
 #: 順序是新增時追問的順序；「用一段話記錄」的 ``start`` 對應第一個、``end`` 對應第二個。
@@ -699,9 +708,48 @@ HISTORY_PERIOD_KEYS: dict[str, tuple[str, ...]] = {
     "Residence": ("since",),
 }
 
+#: 「修改一筆」能改的鍵（工作經歷計畫書 §16），順序同 TG 的問答：會變的欄位是內容與事件時間（職位是公司、
+#: 職稱、任職起訖與說明），其他清單是新增時問的那幾項。登錄日、劃掉日、隱藏與狀態不在這裡（各有自己的按鈕）。
+#: The keys "edit one item" may change, per list, in asking order.
+ITEM_EDIT_KEYS: dict[str, tuple[str, ...]] = {
+    "Interactions_JSON": ("date", "topics", "updates", "place", "quote"),
+    "Followups_JSON": ("type", "item", "due"),
+    "Family_JSON": ("relation", "name", "birth_year", "note"),
+    "Gifts_JSON": ("direction", "item", "date", "reaction"),
+    "Key_Dates_JSON": ("label", "date", "yearly"),
+    "Contacts_JSON": ("channel", "handle", "preferred"),
+    "Goals_JSON": ("kind", "item", "target"),
+    "Company": ("company", "title", "start", "end", "note"),
+    **{name: ("value", *HISTORY_PERIOD_KEYS.get(name, ()), *(("note",) if name in NOTE_FIELDS else ()))
+       for name in PERSON_HISTORY_FIELDS if name != "Company"},
+}
+
 # 會變的欄位必須是建立參數裡的文字欄位，而且不能和原本的 JSON 清單重名（打錯欄位名時 import 就失敗）
 assert set(PERSON_HISTORY_FIELDS) <= set(PersonCreateParams.model_fields), "PERSON_HISTORY_FIELDS 有不存在的欄位"
 assert set(PERSON_HISTORY_FIELDS).isdisjoint(PERSON_JSON_ITEMS), "PERSON_HISTORY_FIELDS 與 PERSON_JSON_ITEMS 重複"
+assert set(ITEM_EDIT_KEYS) == set(PERSON_HISTORY_FIELDS) | set(PERSON_JSON_ITEMS), "ITEM_EDIT_KEYS 沒有涵蓋每個清單"
+assert all(set(keys) <= set((PERSON_HISTORY_FIELDS[name].model if name in PERSON_HISTORY_FIELDS
+                             else PERSON_JSON_ITEMS[name][0]).model_fields)
+           for name, keys in ITEM_EDIT_KEYS.items()), "ITEM_EDIT_KEYS 有模型沒有的鍵"
+# 系統管理的鍵各有自己的按鈕（劃掉、隱藏、狀態），修改不能碰
+assert all({"added", "ended", "hidden", "status", "closed"}.isdisjoint(keys) for keys in ITEM_EDIT_KEYS.values()),     "ITEM_EDIT_KEYS 含系統管理的鍵"
+
+
+def item_model(name: str) -> type[BaseModel]:
+    """清單一筆的模型（會變的欄位或 JSON 清單）。The model of one item of a list."""
+    return PERSON_HISTORY_FIELDS[name].model if name in PERSON_HISTORY_FIELDS else PERSON_JSON_ITEMS[name][0]
+
+
+def item_error_keys(name: str, entry: dict[str, object]) -> set[str]:
+    """這一筆過不了模型驗證的鍵（卡上手改壞的值）；整筆層級的錯（例如畢業早於入學）是空字串。沒有錯時為空集合。
+
+    The keys of an item that fail validation; ``""`` for whole-item errors.
+    """
+    try:
+        item_model(name).model_validate(entry)
+    except ValidationError as e:
+        return {str(error["loc"][0]) if error["loc"] else "" for error in e.errors()}
+    return set()
 
 _SPLIT = re.compile(r"[,，、\n]+")
 
@@ -770,14 +818,31 @@ def position_period(item: object) -> str:
     return f"{start}～{end}"
 
 
+#: 沒有公司與職稱的工作經歷顯示的文字（卡面 ``entryText`` 相同）。The text of a job without company and title.
+UNNAMED_POSITION = "公司不明"
+
+
 def entry_text(field: str, item: object) -> str:
-    """一筆的文字：職位是「公司・職稱」，其他是內容。The text of an entry."""
+    """一筆的文字：職位是「公司・職稱」（都沒有時是 :data:`UNNAMED_POSITION`），其他是內容。The text of an entry."""
     if not isinstance(item, dict):
         return str(item)
     if field == "Company":
-        parts = (str(item.get(key) or "").strip() for key in ("company", "title"))
-        return "・".join(part for part in parts if part)
+        return _position_name(item) or UNNAMED_POSITION
     return str(item.get("value") or "").strip()
+
+
+def _position_name(item: dict[str, object]) -> str:
+    """「公司・職稱」；都沒有時是空字串。The company and title of a position."""
+    parts = (str(item.get(key) or "").strip() for key in ("company", "title"))
+    return "・".join(part for part in parts if part)
+
+
+def entry_key(field: str, item: object) -> str:
+    """比對、去重用的鍵：通常就是 :func:`entry_text`。沒有公司與職稱的工作經歷改看說明與到職（§17），不然兩份
+    不同的「公司不明」會被當成同一份。The key entries are compared by."""
+    if field == "Company" and isinstance(item, dict) and not _position_name(item):
+        return "\x1f".join(("", str(item.get("note") or "").strip(), str(item.get("start") or "").strip()))
+    return entry_text(field, item)
 
 
 def history_period(field: str, item: object) -> str:
@@ -799,17 +864,35 @@ def history_period(field: str, item: object) -> str:
 
 
 def entry_detail(field: str, item: object) -> str:
-    """一筆給人（或 LLM）看的完整文字：附事件時間（:func:`history_period`），職位另外附說明
-    （「QBC・QA（2025～）：測試」「爬過玉山（2026-10）」）。比對、去重一律用 :func:`entry_text`。
+    """一筆給人（或 LLM）看的完整文字：附事件時間（:func:`history_period`），有說明的欄位（:data:`NOTE_FIELDS`）
+    另外附說明，多行的接成一行（「QBC・QA（2025～）：前端開發／帶新人」「爬過玉山（2026-10）」）。比對、去重
+    一律用 :func:`entry_key`。
 
-    The readable text of an entry with its event time; positions add their note.
+    The readable text of an entry with its event time and note, on one line.
     """
     text = entry_text(field, item)
     if not text or not isinstance(item, dict):
         return text
     period = history_period(field, item)
-    note = str(item.get("note") or "").strip() if field == "Company" else ""
+    note = one_line(str(item.get("note") or "")) if field in NOTE_FIELDS else ""
     return text + (f"（{period}）" if period else "") + (f"：{note}" if note else "")
+
+
+def one_line(text: str) -> str:
+    """多行的說明接成一行（「／」分開），給一行顯示的地方用。Join a multi-line note into one line."""
+    return "／".join(line.strip() for line in text.splitlines() if line.strip())
+
+
+def merged_note(existing: str, new: str) -> str | None:
+    """對同一筆再新增時的說明（§18）：原本是空的就用新的；新的不在原本的裡面就換行接在後面；沒有新東西
+    （新的是空的、或原本已經包含）時為 None。
+
+    The note after adding to the same entry again, or None when nothing is new.
+    """
+    existing, new = existing.strip(), new.strip()
+    if not new or new in existing:
+        return None
+    return f"{existing}\n{new}" if existing else new
 
 
 def active_texts(field: str, items: list[object]) -> list[str]:

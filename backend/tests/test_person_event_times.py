@@ -228,14 +228,14 @@ class TestTgAdd:
         assert "從什麼時候開始" not in "".join(_sent(message.answer))
 
     def test_education_asks_start_and_finish(self):
-        state, note_service, card_service, message = _add("Education", "台大資工", "2011", "2015")
+        state, note_service, card_service, message = _add("Education", "台大", "2011", "2015", "資工系")
         preview = _sent(message.answer)[-1]
         _assert_tg_html(preview)
-        assert "台大資工（2011～2015）" in preview
+        assert "台大（2011～2015）" in preview and "說明：資工系" in preview
         _tap("pp:save", state, note_service, card_service)
-        note_service.run_action.assert_awaited_once_with(
-            5, "add_history", {"field": "Education", "item": {"value": "台大資工", "start": "2011", "finish": "2015"}}
-        )
+        note_service.run_action.assert_awaited_once_with(5, "add_history", {
+            "field": "Education", "item": {"value": "台大", "start": "2011", "finish": "2015", "note": "資工系"},
+        })
 
     def test_finish_before_start_asks_again(self):
         state, _, _, message = _add("Education", "台大資工", "2015", "2011")
@@ -262,46 +262,54 @@ class TestTgEdit:
         _, _, _, query = self._list("Experiences", [YUSHAN])
         assert "1. 去過玉山（2019-08）（2026-11-15 登錄）" in _sent(query.message.answer)[0]
         row = query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0]
-        assert (row[-1].text, row[-1].callback_data) == ("改 1", f"pp:te:5:EX:0:{item_fingerprint(YUSHAN)}")
-
-    def test_no_edit_for_fields_without_times(self):
-        _, _, _, query = self._list("Food_Drink", [BASS])
-        row = query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0]
-        assert not any(b.text.startswith("改") for b in row)
+        assert (row[-1].text, row[-1].callback_data) == ("改 1", f"pp:ie:5:EX:0:{item_fingerprint(YUSHAN)}")
 
     def test_edit_a_time(self):
         state, note_service, card_service, _ = self._list("Experiences", [YUSHAN])
-        query = _tap(f"pp:te:5:EX:0:{item_fingerprint(YUSHAN)}", state, note_service, card_service)
+        query = _tap(f"pp:ie:5:EX:0:{item_fingerprint(YUSHAN)}", state, note_service, card_service)
         sent = _sent(query.message.answer)
-        assert "修改經歷的時間" in sent[0] and "目前：2019-08" in sent[1]
+        assert "修改經歷" in sent[0] and "目前：去過玉山" in sent[1]
+        asked = _tap("pp:skip", state, note_service, card_service)  # 內容保留
+        assert "目前：2019-08" in _sent(asked.message.answer)[-1]
         typed, _ = _message("2018")
         _run(person_profile.process_add_text(typed, state))
         assert "去過玉山（2018）" in _sent(typed.answer)[-1]
         _tap("pp:save", state, note_service, card_service)
-        note_service.run_action.assert_awaited_once_with(5, "edit_history_period", {
-            "index": 0, "fingerprint": item_fingerprint(YUSHAN), "field": "Experiences",
-            "values": {"when": "2018"}, "expected": {"when": "2019-08"},
+        note_service.run_action.assert_awaited_once_with(5, "edit_item", {
+            "field": "Experiences", "index": 0, "fingerprint": item_fingerprint(YUSHAN),
+            "values": {"value": "去過玉山", "when": "2018"}, "expected": {"value": "去過玉山", "when": "2019-08"},
         })
 
     def test_skipping_keeps_and_clearing_clears(self):
         state, note_service, card_service, _ = self._list("Education", [NTU])
-        _tap(f"pp:te:5:ED:0:{item_fingerprint(NTU)}", state, note_service, card_service)
-        _tap("pp:skip", state, note_service, card_service)
+        _tap(f"pp:ie:5:ED:0:{item_fingerprint(NTU)}", state, note_service, card_service)
+        _tap("pp:skip", state, note_service, card_service)  # 內容
+        _tap("pp:skip", state, note_service, card_service)  # 入學
         typed, _ = _message("清空")
         _run(person_profile.process_add_text(typed, state))
+        _tap("pp:skip", state, note_service, card_service)  # 說明
         _tap("pp:save", state, note_service, card_service)
         args = note_service.run_action.await_args.args
-        assert args[1] == "edit_history_period" and args[2]["values"] == {"start": "2011", "finish": ""}
+        assert args[1] == "edit_item" and args[2]["values"] == {
+            "value": "台大資工", "start": "2011", "finish": "", "note": None,
+        }
+
+    def test_old_edit_time_button_opens_the_edit(self):
+        """聊天紀錄裡舊的「修改時間」按鈕（pp:te）也進修改問答。"""
+        state, note_service, card_service, _ = self._list("Experiences", [YUSHAN])
+        query = _tap(f"pp:te:5:EX:0:{item_fingerprint(YUSHAN)}", state, note_service, card_service)
+        assert "修改經歷" in _sent(query.message.answer)[0]
+        assert _run(state.get_state()) == PersonStates.add_step.state
 
     def test_stale_field_code(self):
-        query = _tap("pp:te:5:FD:0:abc", _fsm())
+        query = _tap("pp:ie:5:ZZ:0:abc", _fsm())
         assert "按鈕已失效" in _sent(query.message.answer)[0]
 
     def test_long_press_menu_label(self):
         fp = item_fingerprint(NTU)
         message, _ = _start(f"pitm-Education-0_{fp}-PP_1", _note(Education=json.dumps([NTU])))
         rows = message.answer.await_args.kwargs["reply_markup"].inline_keyboard
-        assert [(b.text, b.callback_data) for b in rows[1]] == [("修改入學／畢業", f"pp:te:5:ED:0:{fp}")]
+        assert [(b.text, b.callback_data) for b in rows[1]] == [("修改", f"pp:ie:5:ED:0:{fp}")]
 
 
 class TestTgGoalClosed:

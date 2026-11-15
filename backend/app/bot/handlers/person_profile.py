@@ -9,8 +9,8 @@ Telegram flows of the person profile card.
 - 卡面的深連結（動作見 ``deep_link_parser.PERSON_VERBS``）由 ``commands.py`` 的 ``/start`` 轉給
   :func:`handle_person_link`。``psec`` 是區塊的「+」：區塊有多個欄位時先問新增哪一項；``pend`` 是「劃掉」。
   長按清單的一筆（``pitm``）或文字欄位（``pfld``）先開選單：隱藏或顯示（只影響卡面）、劃掉（職位是離職）、
-  刪除，職位另有修改任職期間與說明；文字欄位是修改、隱藏或顯示（工作經歷計畫書 §5.4）。TG 的清單與
-  「改資料」也有同樣的隱藏開關，不必回卡片長按。
+  刪除與修改（每一筆都能改內容與時間，工作經歷計畫書 §16）；文字欄位是修改、隱藏或顯示（§5.4）。TG 的清單與
+  「改資料」也有同樣的隱藏開關與修改，不必回卡片長按。
 - ``/newcard`` 選「人脈卡」時由 :func:`start_person_create` 建立新的人。
 - 「AI 分析與話題」：LLM 以諮商師的角度分析這個人並推薦話題，名字遮起來送出（:mod:`app.services.person_profile_topics`）。
 - 「用一段話記錄」：一段文字或語音經 LLM 整理成互動、待追蹤與欄位建議，勾選後才寫入
@@ -60,6 +60,7 @@ from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.anki import AnkiStoreMediaParams
 from app.schemas.person_profile import (
     HISTORY_PERIOD_KEYS,
+    ITEM_EDIT_KEYS,
     PERSON_HISTORY_FIELDS,
     PERSON_JSON_ITEMS,
     PERSON_NOTE_TYPE,
@@ -69,9 +70,11 @@ from app.schemas.person_profile import (
     append_field_html,
     hidden_tag,
     hidden_text_fields,
+    history_from_text,
     is_active,
     is_hidden,
     item_fingerprint,
+    item_error_keys,
     normalize_period,
     period_order_error,
 )
@@ -469,15 +472,14 @@ async def on_person_button(
             await _finish_goal_closed(message, state, note_service, note_id, index, fingerprint, status,
                                       view.today_choice(_today(), int(offset)))
         elif verb == "pe":
-            await _start_detail_edit(
+            # 舊的「修改任職期間／說明」按鈕（聊天紀錄裡的）：進新的修改問答
+            await _start_item_edit(
                 message, state, card_service, _int_arg(parts, 2), "Company", _int_arg(parts, 3), _arg(parts, 4)
             )
-        elif verb == "te":
-            field_name = _list_arg(parts, 3)
-            if field_name not in view.HISTORY_DETAIL_STEPS:
-                raise _StaleButton
-            await _start_detail_edit(
-                message, state, card_service, _int_arg(parts, 2), field_name, _int_arg(parts, 4), _arg(parts, 5)
+        elif verb in ("te", "ie"):
+            # te 是舊的「修改時間」按鈕，ie 是「修改」：都進修改問答（§16）
+            await _start_item_edit(
+                message, state, card_service, _int_arg(parts, 2), _list_arg(parts, 3), _int_arg(parts, 4), _arg(parts, 5)
             )
         elif verb == "st":
             status = "done" if _arg(parts, 5) == "d" else "open"
@@ -512,6 +514,8 @@ async def on_person_button(
             await _back_to_start(message, state)
         elif verb == "save":
             await _save_item(message, state, note_service, card_service)
+        elif verb == "redo":
+            await _redo_item_edit(message, state)
         elif verb == "ing":
             await _start_ingest(message, state, card_service, _int_arg(parts, 2))
         elif verb == "ig":
@@ -528,8 +532,50 @@ async def on_person_button(
     except _StaleButton:
         logger.info("人脈卡按鈕的資料解析不了: %r", callback.data)
         await message.answer("❌ 這個按鈕已失效，請用 /p 重新找人。")
+    except JsonItemChangedError as e:
+        # 清單上的舊按鈕（那一筆被改過內容、刪掉或移動了）：TG 要重新打開清單，不是同步卡片
+        target = _button_list(parts)
+        logger.info("人脈卡按鈕指向的那一筆已經變了: %r（%s）", callback.data, e)
+        if target is None:
+            await _reply_error(message, e)
+        else:
+            await _reply_item_changed(message, *target)
     except (FluencyTidesError, AnkiConnectError) as e:
         await _reply_error(message, e)
+
+
+def _button_list(parts: list[str]) -> tuple[int, str] | None:
+    """清單一筆的按鈕指向的人與清單（那一筆已經變了時給「打開清單」）；不是這種按鈕時為 None。
+
+    The person and list a per-item button points at.
+    """
+    verb = parts[1] if len(parts) > 1 else ""
+    try:
+        if verb in ("del", "delok", "hx", "hd", "te", "ie"):
+            return _int_arg(parts, 2), _list_arg(parts, 3)
+        if verb == "pe":
+            return _int_arg(parts, 2), "Company"
+        if verb == "st":
+            return _int_arg(parts, 2), "Followups_JSON"
+        if verb in ("gs", "gc"):
+            return _int_arg(parts, 2), "Goals_JSON"
+    except _StaleButton:
+        return None
+    return None
+
+
+async def _reply_item_changed(message: types.Message, note_id: int, field_name: str) -> None:
+    """那一筆已經改過或不在了：請使用者重新打開清單（舊訊息的按鈕帶的是舊的序號與指紋）。
+
+    Ask to reopen the list when the item has changed.
+    """
+    await message.answer(
+        f"❌ 這一筆{escape_tg(view.list_title(field_name))}已經改過或不在了，請重新打開清單再操作。",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            _button("打開清單", f"pp:ls:{note_id}:{view.CODE_OF_LIST[field_name]}"), _button("回摘要", f"pp:s:{note_id}"),
+        ]]),
+        parse_mode="HTML",
+    )
 
 
 class _StaleButton(Exception):
@@ -588,7 +634,7 @@ def _active_company(raw: str) -> str:
 
 
 async def _send_lists_menu(message: types.Message, card_service: CardService, note_id: int) -> None:
-    """各清單的按鈕（括號是筆數；會變的欄位是有效的筆數），兩個一排。The list buttons."""
+    """各清單的按鈕（括號是筆數；會變的欄位是有效的筆數，工作經歷含以前的工作），兩個一排。The list buttons."""
     loaded = await _load(card_service, note_id)
     if loaded is None:
         await message.answer(CARD_NOT_FOUND)
@@ -598,7 +644,8 @@ async def _send_lists_menu(message: types.Message, card_service: CardService, no
     buttons = []
     for code, name in view.LIST_CODES.items():
         items = lists.get(name, [])
-        count = sum(1 for item in items if is_active(item)) if view.is_history(name) else len(items)
+        # 工作經歷的以前的工作也是經歷（不是作廢的資料），所以算全部
+        count = sum(1 for item in items if is_active(item)) if view.is_history(name) and name != "Company" else len(items)
         label = "格式壞了" if name in broken else str(count)
         buttons.append(_button(f"{view.list_title(name)}（{label}）", f"pp:ls:{note_id}:{code}"))
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
@@ -620,8 +667,8 @@ async def _send_section_menu(message: types.Message, note_id: int, section: str)
 
 
 async def _send_list(message: types.Message, card_service: CardService, note_id: int, field_name: str) -> None:
-    """一個清單的每一筆，附刪除（與待追蹤的完成、會變的欄位的劃掉）、在卡面隱藏或顯示的按鈕；有事件時間的欄位
-    另有「改」（職位是任職起訖與說明，其他是時間）。One list with its item buttons."""
+    """一個清單的每一筆，附刪除（與待追蹤的完成、會變的欄位的劃掉、目標的狀態）、在卡面隱藏或顯示，以及「改」
+    （內容與時間，§16）的按鈕。One list with its item buttons."""
     loaded = await _load(card_service, note_id)
     if loaded is None:
         await message.answer(CARD_NOT_FOUND)
@@ -650,8 +697,7 @@ async def _send_list(message: types.Message, card_service: CardService, note_id:
             hidden = is_hidden(item)
             row.append(_button(f"{'顯示' if hidden else '隱藏'} {index + 1}",
                                f"pp:hd:{note_id}:{code}:{index}:{fp}:{'s' if hidden else 'h'}"))
-        if field_name in view.HISTORY_DETAIL_STEPS and isinstance(item, dict):
-            row.append(_button(f"改 {index + 1}", _detail_edit_data(note_id, field_name, index, fp)))
+            row.append(_button(f"改 {index + 1}", _edit_data(note_id, field_name, index, fp)))
         rows.append(row)
     if field_name in view.broken_lists(loaded[0]):
         lines.append(escape_tg(view.BROKEN_NOTE))
@@ -818,14 +864,15 @@ async def _send_item_menu(
         for label, goal_code in view.goal_buttons(str(item.get("status") or "open")):
             row.append(_button(label, f"pp:gs:{note_id}:{found}:{fingerprint}:{goal_code}"))
     edit_row = []
-    if field_name in view.HISTORY_DETAIL_STEPS and isinstance(item, dict):
-        edit_row.append(_button(view.detail_edit_label(field_name),
-                                _detail_edit_data(note_id, field_name, found, fingerprint)))
+    if isinstance(item, dict):
+        edit_row.append(_button("修改", _edit_data(note_id, field_name, found, fingerprint)))
     rows = [r for r in (row, edit_row, [_button("刪除", f"pp:del:{ref}"), _button("回摘要", f"pp:s:{note_id}")]) if r]
     state = "（目前在卡面隱藏）" if hidden else ""
     await message.answer(
         f"<b>{escape_tg(view.list_title(field_name))}</b>{state}\n\n{view.item_line(field_name, item)}\n\n"
-        "<i>隱藏只影響卡面（變成遮擋塊，點一下才看得到），AI 分析照樣讀得到。</i>",
+        "<i>隱藏只影響卡面（變成遮擋塊，點一下才看得到），AI 分析照樣讀得到。</i>"
+        + ("\n<i>修改＝更正記錯的內容或時間；事情變了（搬家、不玩了）請用「劃掉」，舊的會留成過去的紀錄。</i>"
+           if view.is_history(field_name) else ""),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         parse_mode="HTML",
     )
@@ -1067,17 +1114,12 @@ async def _finish_goal_closed(
 # =============================================================================
 
 
-def _detail_edit_data(note_id: int, field_name: str, index: int, fingerprint: str) -> str:
-    """「改」「修改時間」按鈕的 callback data：職位沿用 ``pp:pe``（聊天紀錄裡的舊按鈕照樣能用），其他是 ``pp:te``。
-
-    The callback data of the edit-time buttons.
-    """
-    if field_name == "Company":
-        return f"pp:pe:{note_id}:{index}:{fingerprint}"
-    return f"pp:te:{note_id}:{view.CODE_OF_LIST[field_name]}:{index}:{fingerprint}"
+def _edit_data(note_id: int, field_name: str, index: int, fingerprint: str) -> str:
+    """「改 N」「修改」按鈕的 callback data（§16）。The callback data of the edit buttons."""
+    return f"pp:ie:{note_id}:{view.CODE_OF_LIST[field_name]}:{index}:{fingerprint}"
 
 
-async def _start_detail_edit(
+async def _start_item_edit(
     message: types.Message,
     state: FSMContext,
     card_service: CardService,
@@ -1086,9 +1128,8 @@ async def _start_detail_edit(
     index: int,
     fingerprint: str,
 ) -> None:
-    """修改一筆的事件時間（職位另有說明）：沿用新增的問答（``edit`` 模式），每一步顯示目前的值，略過＝保留。
-
-    Edit an entry's event times (and a position's note) through the add-step flow.
+    """修改一筆（工作經歷計畫書 §16）：沿用新增的問答（``edit`` 模式，:func:`view.edit_steps`），每一步顯示目前的
+    值，略過＝保留。Edit one item through the add-step flow.
     """
     loaded = await _load(card_service, note_id)
     if loaded is None:
@@ -1105,30 +1146,37 @@ async def _start_detail_edit(
     if not isinstance(entry, dict):
         await message.answer(f"❌ 這一筆{title}的格式不對，請在網頁修正。")
         return
-    period_keys = HISTORY_PERIOD_KEYS[field_name]
-    # 預覽要看得到這一筆是什麼（職位還要看是否現職），所以整筆帶進來；儲存時只送時間（職位加說明）
-    keys = ("company", "title", "start", "end", "note", "ended") if field_name == "Company" else (
-        "value", *period_keys, "ended")
-    prefill = {key: str(entry.get(key) or "") for key in keys}
+    keys = ITEM_EDIT_KEYS[field_name]
+    # 卡上手改壞的值先找出來（儲存時整筆會再經模型驗證）：能改的鍵那一步不能略過；改不到的鍵（登錄日等）
+    # 修改也救不了，請使用者到網頁修正。整筆層級的錯（""，例如畢業早於入學）由問到結束那一步時的先後檢查處理
+    errors = item_error_keys(field_name, entry)
+    locked = sorted(errors - set(keys) - {""})
+    if locked:
+        logger.info("人脈卡 note %s %s #%s 有修改改不到的壞值: %s", note_id, field_name, found + 1, locked)
+        await message.answer(f"❌ 這一筆{title}有修改改不到的值格式不對（{'、'.join(locked)}），請在網頁修正。")
+        return
+    # 整筆帶進來：預覽要看得到其他鍵（職位是否現職、目標的狀態等）；儲存時只送能改的鍵（ITEM_EDIT_KEYS）
+    prefill = dict(entry)
     # 卡上手改留下的年月（2021/4）先整理，比較先後才不會比錯；整理不了的（2021年春）照原文顯示，
     # 那一步不能略過（保留了儲存時一定失敗）
-    invalid = []
-    for key in period_keys:
-        normalized = normalize_period(prefill[key], allow_unknown=field_name == "Company" and key == "end")
+    for key in HISTORY_PERIOD_KEYS.get(field_name, ()):
+        normalized = normalize_period(str(entry.get(key) or ""), allow_unknown=field_name == "Company" and key == "end")
         if normalized is None:
-            invalid.append(key)
-            logger.info("人脈卡 note %s %s #%s 的 %s 格式不對: %r", note_id, field_name, found + 1, key, prefill[key])
+            errors.add(key)
         else:
             prefill[key] = normalized
+    invalid = [key for key in keys if key in errors]
+    if invalid:
+        logger.info("人脈卡 note %s %s #%s 的 %s 格式不對: %r", note_id, field_name, found + 1, invalid,
+                    {key: entry.get(key) for key in invalid})
     await state.clear()
     await state.set_state(PersonStates.add_step)
     # edit 帶原值（儲存時比對：同內容的兩筆指紋相同，序號過時可能對到另一筆）
     await state.update_data(nid=note_id, field=field_name, step=0, item=prefill, edit={
         "index": found, "fingerprint": item_fingerprint(entry), "invalid": invalid,
-        "expected": {key: str(entry.get(key) or "") for key in period_keys},
+        "expected": {key: entry.get(key) for key in keys},
     })
-    heading = "修改職位" if field_name == "Company" else f"修改{title}的時間"
-    await message.answer(f"<b>{escape_tg(heading)}</b>\n{view.item_line(field_name, entry)}", parse_mode="HTML")
+    await message.answer(f"<b>修改{escape_tg(title)}</b>\n{view.item_line(field_name, entry)}", parse_mode="HTML")
     await _ask_step(message, state)
 
 
@@ -1142,8 +1190,8 @@ async def start_add(message: types.Message, state: FSMContext, note_id: int, fie
 
 
 def _steps(data: dict[str, Any]) -> tuple[view.Step, ...]:
-    """這次問答的步驟：修改（``edit``）只問事件時間（職位加說明），否則是那個清單的新增步驟。The steps in progress."""
-    return view.HISTORY_DETAIL_STEPS[data["field"]] if data.get("edit") else view.ADD_STEPS[data["field"]]
+    """這次問答的步驟：修改（``edit``）是 :func:`view.edit_steps`，否則是那個清單的新增步驟。The steps in progress."""
+    return view.edit_steps(data["field"]) if data.get("edit") else view.ADD_STEPS[data["field"]]
 
 
 async def _ask_step(message: types.Message, state: FSMContext) -> None:
@@ -1172,11 +1220,13 @@ async def _ask_step(message: types.Message, state: FSMContext) -> None:
     if editing:
         # 目前的值是使用者打的字，bot 預設用 HTML 送出：一定要轉義（說明裡的「<3 年」會讓 Telegram 拒收）
         edit = data["edit"]
-        current = escape_tg(str(data["item"].get(step.key) or ""), 300) or "（空白）"
+        current = escape_tg(view.current_value_text(step, data["item"].get(step.key)), 300) or "（空白）"
         if step.key in edit.get("invalid", []):
             hint = "這個值的格式不對，請重新輸入，或輸入「清空」清除。"
         elif data["field"] == "Company" and step.key == "end" and edit.get("expected", {}).get("end"):
             hint = "略過＝保留目前的值；輸入「清空」＝改回現職。"
+        elif step.required:
+            hint = "略過＝保留目前的值。"
         else:
             hint = "略過＝保留目前的值；輸入「清空」清除。"
         prompt += f"\n\n目前：{current}\n{hint}"
@@ -1188,7 +1238,8 @@ async def _ask_step(message: types.Message, state: FSMContext) -> None:
         rows.extend(buttons[i:i + 3] for i in range(0, len(buttons), 3))
     if step.default_today:
         rows.append([_button("今天", "pp:ch:t0"), _button("昨天", "pp:ch:t1")])
-    last = [_button("略過", "pp:skip")] if not step.required else []
+    # 修改時必填的也能略過（＝保留目前的值）
+    last = [_button("略過", "pp:skip")] if editing or not step.required else []
     rows.append(last + CANCEL_ROW)
     await message.answer(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
@@ -1196,8 +1247,9 @@ async def _ask_step(message: types.Message, state: FSMContext) -> None:
 async def _store_answer(message: types.Message, state: FSMContext, raw: str | None) -> None:
     """記下這一步的回答（None 為略過）並問下一步；格式不對時重問。Store an answer and move on.
 
-    修改（``edit``）時：略過＝保留（原值格式不對的不能保留）；「清空」清掉這個值。職位清掉的是原本有的離職年月時
-    一併清掉失效日（改回現職，和 handler 的 ``edit_position`` 相同，預覽才不會說錯）。
+    修改（``edit``）時：略過＝保留（原值格式不對的不能保留）；「清空」清掉這個值（必填的不能清空）。職位清掉的是
+    原本有的離職年月時一併清掉失效日（改回現職，和 handler 的 ``edit_item`` 相同，預覽才不會說錯）。可切的欄位
+    改了內容時只能改成一個值（沒改的舊資料可以含頓號）。
     有起訖的欄位（職位、學歷，:data:`view.PERIOD_PAIRS`）問到結束那一步時（略過也算）檢查不早於開始，不對就重問
     這一步，並提供「重新輸入到職／入學」（錯的常是開始）；不叫使用者略過或清空：職位的那兩個都會讓以前的工作
     變成現職。
@@ -1212,7 +1264,10 @@ async def _store_answer(message: types.Message, state: FSMContext, raw: str | No
         await message.answer("❌ 目前的值格式不對，不能保留：請重新輸入，或輸入「清空」清除。")
         return
     if raw is not None and edit and raw.strip() == "清空":
-        item[step.key] = ""
+        if step.required:
+            await message.answer("這一項必填，不能清空：請輸入新的內容，或按「略過」保留目前的值。")
+            return
+        item[step.key] = None if step.kind == "int" else ""
         if data["field"] == "Company" and step.key == "end" and edit.get("expected", {}).get("end"):
             item["ended"] = ""
     elif raw is not None:
@@ -1240,6 +1295,12 @@ async def _store_answer(message: types.Message, state: FSMContext, raw: str | No
                 return
             if step.required and item[step.key] in ("", None):
                 await message.answer("這一項必填，請輸入內容。")
+                return
+            if edit and step.key == "value" and view.is_history(data["field"]) \
+                    and PERSON_HISTORY_FIELDS[data["field"]].split \
+                    and str(item[step.key]) != str(edit.get("expected", {}).get("value") or "") \
+                    and len(history_from_text(data["field"], str(item[step.key]), "")) > 1:
+                await message.answer("修改時只能改成一個；要新增好幾個請用「新增」。請重新輸入。")
                 return
     pair = view.PERIOD_PAIRS.get(data["field"])
     if pair and step.key == pair[1]:
@@ -1328,9 +1389,9 @@ async def _answer_step_button(
 async def _save_item(
     message: types.Message, state: FSMContext, note_service: NoteService, card_service: CardService
 ) -> None:
-    """儲存新增的一筆（互動紀錄附帶的「下次要問」各存成一筆待追蹤），或修改的事件時間（職位加說明）。
+    """儲存新增的一筆（互動紀錄附帶的「下次要問」各存成一筆待追蹤），或修改的一筆（:func:`_save_item_edit`）。
 
-    Save the new item, or the edited times.
+    Save the new or the edited item.
     """
     if await state.get_state() != PersonStates.add_confirm.state:
         await message.answer("⌛ 這個步驟已結束，請重新開始。")
@@ -1340,7 +1401,7 @@ async def _save_item(
     item = {k: v for k, v in dict(data["item"]).items() if not k.startswith("_")}
     await message.edit_reply_markup(reply_markup=None)
     if data.get("edit"):
-        await _save_detail_edit(message, state, note_service, card_service, note_id, field_name, data["edit"], item)
+        await _save_item_edit(message, state, note_service, card_service, note_id, field_name, data["edit"], item)
         return
     await state.clear()
     if field_name == "Interactions_JSON":
@@ -1356,7 +1417,7 @@ async def _save_item(
     await send_summary(message, card_service, note_id, prefix="✅ 已儲存。" + sync_suffix(warning))
 
 
-async def _save_detail_edit(
+async def _save_item_edit(
     message: types.Message,
     state: FSMContext,
     note_service: NoteService,
@@ -1366,35 +1427,44 @@ async def _save_detail_edit(
     edit: dict[str, Any],
     item: dict[str, object],
 ) -> None:
-    """寫入修改的事件時間（職位走 ``edit_position``，加說明）。寫入失敗時留在確認這一步（回答不丟，可以再按一次
-    儲存或取消）；寫入成功、只是讀摘要失敗時照樣說已更新。
+    """寫入修改的一筆（``edit_item``，§16）；失敗時依原因：
 
-    Write the edited times; a failed write keeps the answers for another try.
+    - 這一筆在別處被改過或不在了：結束這一步，請使用者重新打開清單（再按儲存也不會成功）。
+    - 卡片不在、清單格式壞了：結束這一步並說明（要先在網頁或 Anki 處理）。
+    - 被擋下（和另一筆重複、內容不合格式）：回答留著，提供「重新修改」從第一步再改（再按儲存結果一樣，所以不給）。
+    - 其他（Anki 連不上、同步失敗等）：留在確認這一步，可以再按一次儲存。
+
+    寫入成功、只是讀摘要失敗時照樣說已更新。
+
+    Write the edited item; how a failure is handled depends on its cause.
     """
-    expected = dict(edit.get("expected") or {})
-    if field_name == "Company":
-        action, params = "edit_position", {
-            **{key: str(item.get(key) or "") for key in view.POSITION_DETAIL_KEYS},
-            "expected_start": str(expected.get("start") or ""), "expected_end": str(expected.get("end") or ""),
-        }
-    else:
-        action, params = "edit_history_period", {
-            "field": field_name, "values": {key: str(item.get(key) or "") for key in HISTORY_PERIOD_KEYS[field_name]},
-            "expected": expected,
-        }
+    index = int(edit["index"])
     try:
-        warning = await note_service.run_action(note_id, action, {
-            "index": int(edit["index"]), "fingerprint": str(edit["fingerprint"]), **params,
+        warning = await note_service.run_action(note_id, "edit_item", {
+            "field": field_name, "index": index, "fingerprint": str(edit["fingerprint"]),
+            "values": {key: item.get(key) for key in ITEM_EDIT_KEYS[field_name]},
+            "expected": dict(edit.get("expected") or {}),
         })
     except JsonItemChangedError as e:
-        # 這一筆在別處被改過或不在了：再按儲存也不會成功，請使用者重新打開清單
+        logger.info("人脈卡 note %s：修改 %s #%s 時那一筆已經變了: %s", note_id, field_name, index + 1, e)
+        await state.clear()
+        await _reply_item_changed(message, note_id, field_name)
+        return
+    except (NoteNotFoundError, AnkiFieldCorruptedError) as e:
+        logger.warning("人脈卡 note %s：修改 %s #%s 時卡片或清單讀不到: %s", note_id, field_name, index + 1, e)
         await state.clear()
         await _reply_error(message, e)
-        await message.answer("請重新打開清單再改。", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            _button("打開清單", f"pp:ls:{note_id}:{view.CODE_OF_LIST[field_name]}"), _button("回摘要", f"pp:s:{note_id}"),
-        ]]))
+        return
+    except InvalidNoteFieldsError as e:
+        logger.info("人脈卡 note %s：修改 %s #%s 被擋下: %s", note_id, field_name, index + 1, e)
+        await _reply_error(message, e)
+        await message.answer(
+            "回答都還在：按「重新修改」從第一步再改一次（略過＝保留剛才的回答），不改了就按「取消」。",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("重新修改", "pp:redo"), *CANCEL_ROW]]),
+        )
         return
     except (FluencyTidesError, AnkiConnectError) as e:
+        logger.warning("人脈卡 note %s：修改 %s #%s 寫入失敗: %s", note_id, field_name, index + 1, e)
         await _reply_error(message, e)
         await message.answer(
             "回答都還在：要再試一次就按「儲存」，不改了就按「取消」。",
@@ -1402,13 +1472,24 @@ async def _save_detail_edit(
         )
         return
     await state.clear()
-    done = "這份工作" if field_name == "Company" else f"這一筆{view.list_title(field_name)}的時間"
-    prefix = f"✅ 已更新{done}。" + sync_suffix(warning)
+    prefix = f"✅ 已修改這一筆{view.list_title(field_name)}。" + sync_suffix(warning)
     try:
         await send_summary(message, card_service, note_id, prefix=prefix)
     except (FluencyTidesError, AnkiConnectError) as e:
         logger.warning("人脈卡 note %s：已更新 %s，但讀摘要失敗: %s", note_id, field_name, e)
         await message.answer(prefix + "\n（摘要暫時讀不到，稍後用 /p 再看。）", parse_mode="HTML")
+
+
+async def _redo_item_edit(message: types.Message, state: FSMContext) -> None:
+    """「重新修改」：修改被擋下後回到第一步；剛才的回答留著（略過＝保留剛才的回答）。Restart the edit steps."""
+    data = await state.get_data()
+    if await state.get_state() != PersonStates.add_confirm.state or not data.get("edit"):
+        await message.answer("⌛ 這個步驟已結束，請重新開始。")
+        return
+    await message.edit_reply_markup(reply_markup=None)
+    await state.set_state(PersonStates.add_step)
+    await state.update_data(step=0)
+    await _ask_step(message, state)
 
 
 # =============================================================================

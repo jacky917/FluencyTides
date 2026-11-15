@@ -53,7 +53,7 @@ class TestHistoryFromText:
 
     def test_other_fields_are_one_entry(self):
         """D4：只有興趣、飲食喜好、語言切；其他整段一筆（多行保留）。"""
-        assert history_from_text("Work_Detail", "後端、API\n帶新人", "") == [
+        assert history_from_text("Ask_Advice", "後端、API\n帶新人", "") == [
             {"value": "後端、API\n帶新人", "added": "", "ended": ""}
         ]
 
@@ -132,7 +132,7 @@ class TestLegacyConversion:
         """D2：舊文字轉成清單，登錄日留空（日期不明），全部有效；職稱併進職位、Title 清空。"""
         fields = {
             "Interests": "登山、攝影<br>咖啡",
-            "Work_Detail": "後端<br>帶新人",
+            "Ask_Advice": "後端<br>帶新人",
             "Company": "Geekly",
             "Title": "PM",
             "Closeness": "4",
@@ -142,9 +142,9 @@ class TestLegacyConversion:
         result = _convert(fields)
         changes = result.changes
         assert result.dropped == [] and result.skipped == []
-        assert set(changes) == {"Interests", "Work_Detail", "Company", "Closeness", "Title"}
+        assert set(changes) == {"Interests", "Ask_Advice", "Company", "Closeness", "Title"}
         assert [e["value"] for e in _parsed(changes, "Interests")] == ["登山", "攝影", "咖啡"]
-        assert _parsed(changes, "Work_Detail") == [{"value": "後端\n帶新人", "added": "", "ended": ""}]
+        assert _parsed(changes, "Ask_Advice") == [{"value": "後端\n帶新人", "added": "", "ended": ""}]
         assert _parsed(changes, "Company") == [{"company": "Geekly", "title": "PM", "added": "", "ended": ""}]
         assert changes["Title"] == ""
 
