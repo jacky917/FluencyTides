@@ -2,8 +2,9 @@
 
 Create or update the Person_Profile_Dark note type in the local Anki.
 
-模型不存在時依 ``app/anki_models/Person_Profile_Dark.json`` 建立（兩種卡片：認人、見面前複習）；
-已存在時只更新模板與 CSS（欄位有增減或順序改變時會先詢問）。
+模型不存在時依 ``app/anki_models/Person_Profile_Dark.json`` 建立（一種卡片「人脈卡」：正面是完整資料，
+背面是同一份畫面、遮擋全部掀開）；已存在時只更新模板與 CSS（欄位有增減或順序改變時會先詢問）。
+原本有「認人」「見面前複習」兩種卡片的模型，先跑 ``migrate_single_card.py``（改名、刪模板、加欄位）。
 
 Creates the note type from the model definition when missing; otherwise
 updates its templates and CSS (asking first before any field change).

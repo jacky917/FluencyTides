@@ -28,6 +28,9 @@ from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.anki.search import escape_search_value, note_type_term
 from app.schemas.llm.person_profile import LLMPersonTopicsResult
 from app.schemas.person_profile import (
+    GOAL_KINDS,
+    GOAL_STATUSES,
+    HIDEABLE_TEXT_FIELDS,
     PERSON_HISTORY_FIELDS,
     PERSON_JSON_ITEMS,
     PERSON_NOTE_TYPE,
@@ -38,6 +41,7 @@ from app.schemas.person_profile import (
     entry_text,
     is_active,
     is_hidden,
+    is_open_goal,
     normalize_period,
     position_period,
 )
@@ -49,7 +53,7 @@ NAME_FIELDS = ("Display_Name", "Name_ZH", "Name_EN", "Name_JA", "Name_JA_Kana", 
 MAX_SEARCH_RESULTS = 10
 
 #: callback data 裡的清單代號（callback data 上限 64 bytes），順序同「清單」選單。
-#: 前六個是原本的 JSON 清單，其餘是會變的欄位。Short list codes for callback data, in menu order.
+#: 前七個是 JSON 清單（目標是後來加的），其餘是會變的欄位。Short list codes for callback data, in menu order.
 LIST_CODES = {
     "F": "Followups_JSON",
     "I": "Interactions_JSON",
@@ -57,8 +61,10 @@ LIST_CODES = {
     "G": "Gifts_JSON",
     "D": "Key_Dates_JSON",
     "C": "Contacts_JSON",
+    "GL": "Goals_JSON",
     "IN": "Interests",
     "FD": "Food_Drink",
+    "DL": "Dislikes",
     "DT": "Dietary",
     "CO": "Company",
     "WK": "Work_Detail",
@@ -66,6 +72,8 @@ LIST_CODES = {
     "PV": "Personality_Values",
     "PR": "Praise",
     "AA": "Ask_Advice",
+    "ND": "Needs",
+    "CG": "Common_Ground",
     "CP": "Comm_Prefs",
     "RS": "Residence",
     "LG": "Languages",
@@ -82,9 +90,9 @@ CODE_OF_LIST = {name: code for code, name in LIST_CODES.items()}
 #: 只對應一個欄位的區塊（家庭、互動等）直接用 ``padd``。The fields behind each section's "+".
 SECTION_FIELDS: dict[str, tuple[str, ...]] = {
     "must": ("Followups_JSON", "Dietary"),
-    "interests": ("Interests", "Food_Drink"),
+    "interests": ("Interests", "Food_Drink", "Dislikes"),
     "work": ("Company", "Work_Detail", "Education"),
-    "personality": ("Personality_Values", "Praise", "Ask_Advice"),
+    "personality": ("Personality_Values", "Praise", "Ask_Advice", "Needs"),
     "contacts": ("Contacts_JSON", "Comm_Prefs"),
     # 生日是文字欄位：沒填時卡片上沒有那一列可以長按，從這裡新增（走改資料）
     "dates": ("Birthday", "Key_Dates_JSON"),
@@ -112,8 +120,8 @@ DISPLAY_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("外貌與基本資料", ("Appearance", "Birthday", "Hometown", "Residence", "Languages", "Timezone")),
     ("認識", ("Met_Date", "Met_Where", "Met_Via", "Introducer_Note_ID", "Relationship", "Closeness", "First_Impression")),
     ("工作", ("Company", "Work_Detail", "Education")),
-    ("興趣與飲食", ("Interests", "Food_Drink", "Dietary")),
-    ("個性與價值觀", ("Personality_Values", "Praise", "Ask_Advice", "Sensitive")),
+    ("興趣與飲食", ("Interests", "Food_Drink", "Dislikes", "Dietary")),
+    ("個性與價值觀", ("Personality_Values", "Praise", "Ask_Advice", "Needs", "Common_Ground", "Sensitive")),
     ("聯絡與其他", ("Comm_Prefs", "Notes", "Last_Contact", "Contact_Cadence")),
 )
 
@@ -292,6 +300,15 @@ def summary_text(fields: dict[str, str], lists: dict[str, list[object]], today: 
         if 0 <= until <= 60:
             soon.append((until, f"{escape_tg(str(item.get('label', '')), 40)}（{month:02d}/{day:02d}，"
                                 f"{'就是今天' if until == 0 else f'還有 {until} 天'}）"))
+    for goal in lists.get("Goals_JSON", []):
+        # 有完整日期、60 天內到期的進行中目標（例如考試當天）也算近期
+        parsed = parse_date(str(goal.get("target", ""))) if is_open_goal(goal) else None
+        if not parsed or parsed[0] is None:
+            continue
+        until = (date(*parsed) - today).days  # type: ignore[arg-type]
+        if 0 <= until <= 60:
+            soon.append((until, f"{escape_tg(str(goal.get('item', '')), 40)}（{parsed[1]:02d}/{parsed[2]:02d}，"
+                                f"{'就是今天' if until == 0 else f'還有 {until} 天'}）"))
     if soon:
         must.append("<b>近期</b>：" + "；".join(text for _, text in sorted(soon)))
     lines.append("")
@@ -338,6 +355,18 @@ def _position_text(item: object) -> str:
     return f"{text}（{period}）" if text and period else text
 
 
+def is_hideable_field(name: str) -> bool:
+    """卡面能隱藏的文字欄位（TG 只對這些顯示隱藏開關）。Whether the card can hide this text field."""
+    return name in HIDEABLE_TEXT_FIELDS
+
+
+def goal_buttons(status: str) -> tuple[tuple[str, str], ...]:
+    """目標一筆的狀態按鈕：(按鈕文字, 代碼)；進行中可以達成或放棄，結束的可以重開。The status buttons of a goal."""
+    if status == "open":
+        return (("達成", "d"), ("放棄", "x"))
+    return (("重開", "o"),)
+
+
 def history_toggle_label(field_name: str, active: bool) -> str:
     """會變的欄位「劃掉／取消劃掉」按鈕的文字；職位是「離職／恢復現職」。The end / restore button text."""
     if field_name == "Company":
@@ -381,8 +410,15 @@ def _item_line(field_name: str, item: object) -> str:
     if field_name == "Family_JSON":
         return f"{get('relation')}：{get('name')}" + (f"（{item.get('birth_year')} 年生）" if item.get("birth_year") else "")
     if field_name == "Gifts_JSON":
-        direction = "收到" if item.get("direction") == "received" else "送出"
+        direction = {"received": "收到", "idea": "想要"}.get(str(item.get("direction") or ""), "送出")
         return f"{direction} {get('item')}" + (f"（{get('date')}）" if item.get("date") else "")
+    if field_name == "Goals_JSON":
+        status = str(item.get("status") or "open")
+        line = f"[{get('kind') or '目標'}] {get('item')}" + (f"（目標 {get('target')}）" if item.get("target") else "")
+        if status != "open":
+            closed = f" {get('closed')}" if item.get("closed") else ""
+            line = f"<s>{line}</s>（{GOAL_STATUSES.get(status, status)}{closed}）"
+        return line
     if field_name == "Key_Dates_JSON":
         return f"{get('label')}：{get('date')}" + ("（每年）" if item.get("yearly") else "")
     if field_name == "Contacts_JSON":
@@ -453,16 +489,22 @@ ADD_STEPS: dict[str, tuple[Step, ...]] = {
         Step("note", "備註？"),
     ),
     "Gifts_JSON": (
-        Step("direction", "送出還是收到？", kind="choice", required=True,
-             choices=(("given", "送出"), ("received", "收到"))),
+        Step("direction", "送出、收到，還是想要的（禮物靈感）？", kind="choice", required=True,
+             choices=(("given", "送出"), ("received", "收到"), ("idea", "想要的"))),
         Step("item", "什麼禮物？", required=True),
-        Step("date", "哪一天？", kind="date", default_today=True),
+        Step("date", "哪一天？（想要的禮物就略過）", kind="date", default_today=True),
         Step("reaction", "對方的反應？"),
     ),
     "Key_Dates_JSON": (
         Step("label", "什麼日子？（例如「N1 考試」）", required=True),
         Step("date", "日期？（YYYY-MM-DD）", kind="date", required=True),
         Step("yearly", "每年都有嗎？", kind="choice", required=True, choices=(("1", "每年"), ("0", "只有一次"))),
+    ),
+    "Goals_JSON": (
+        Step("kind", "哪一種目標？（可以點建議，或直接輸入）", required=True,
+             choices=tuple((kind, kind) for kind in GOAL_KINDS)),
+        Step("item", "目標是什麼？（例如「日本語能力試驗 N1」）", required=True),
+        Step("target", "目標時間？（例如 2026-12，或只寫年 2027）", kind="period", skip_hint="沒有就略過。"),
     ),
     "Contacts_JSON": (
         Step("channel", "哪種聯絡方式？", required=True,
@@ -606,6 +648,9 @@ def proposal_line(kind: str, data: dict[str, object]) -> str:
         label = FOLLOWUP_TYPES.get(str(data.get("type") or "ask"), "下次要問")
         return f"<b>{label}</b>：{get('item')}" + (f"（期限 {get('due')}）" if data.get("due") else "")
     reason = f"\n    <i>（{get('reason', 120)}）</i>" if data.get("reason") else ""
+    if kind == "goal":
+        target = f"（目標 {get('target')}）" if data.get("target") else ""
+        return f"<b>目標</b> 新增：[{get('kind') or '目標'}] {get('item')}{target}" + reason
     if kind in ("history_add", "history_end"):
         name = str(data.get("field", ""))
         title = escape_tg(field_title(name))

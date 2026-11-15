@@ -330,7 +330,10 @@ async def handle_person_link(
                 return
             await _send_section_menu(message, note_id, action.field_name)
         elif action.verb == "field":
-            # 長按文字欄位：選單（修改、隱藏或顯示）
+            # 長按文字欄位：選單（修改、隱藏或顯示）；頭像是照片的選單
+            if action.field_name == "Photo":
+                await _send_photo_menu(message, card_service, note_id)
+                return
             if action.field_name not in view.EDITABLE_FIELDS:
                 await message.answer("❌ 這個連結不支援，請回 Anki 重新點。")
                 return
@@ -438,6 +441,16 @@ async def on_person_button(
                 raise _StaleButton
             field_name = view.EDITABLE_FIELDS[_index_arg(parts, 3, len(view.EDITABLE_FIELDS))]
             await _set_field_hidden(message, card_service, _int_arg(parts, 2), field_name, hidden=mode == "h")
+        elif verb == "hp":
+            mode = _arg(parts, 3)
+            if mode not in ("h", "s"):
+                raise _StaleButton
+            await _set_field_hidden(message, card_service, _int_arg(parts, 2), "Photo", hidden=mode == "h")
+        elif verb == "gs":
+            status = _GOAL_CODES.get(_arg(parts, 5))
+            if status is None:
+                raise _StaleButton
+            await _set_goal_status(message, note_service, _int_arg(parts, 2), _int_arg(parts, 3), _arg(parts, 4), status)
         elif verb == "pe":
             await _start_position_edit(message, state, card_service, _int_arg(parts, 2), _int_arg(parts, 3), _arg(parts, 4))
         elif verb == "st":
@@ -456,6 +469,9 @@ async def on_person_button(
             await _finish_edit(message, state, note_service, card_service, append=_arg(parts, 2) == "a")
         elif verb == "photo":
             await _start_photo(message, state, _int_arg(parts, 2))
+        elif verb == "pfm":
+            await state.clear()
+            await _send_photo_menu(message, card_service, _int_arg(parts, 2))
         elif verb == "phrm":
             await state.clear()
             note_id = _int_arg(parts, 2)
@@ -601,6 +617,9 @@ async def _send_list(message: types.Message, card_service: CardService, note_id:
             active = is_active(item)
             row.append(_button(f"{view.history_toggle_label(field_name, active)} {index + 1}",
                                f"pp:hx:{note_id}:{code}:{index}:{fp}:{'e' if active else 'o'}"))
+        elif field_name == "Goals_JSON" and isinstance(item, dict):
+            for label, goal_code in view.goal_buttons(str(item.get("status") or "open")):
+                row.append(_button(f"{label} {index + 1}", f"pp:gs:{note_id}:{index}:{fp}:{goal_code}"))
         if isinstance(item, dict):
             hidden = is_hidden(item)
             row.append(_button(f"{'顯示' if hidden else '隱藏'} {index + 1}",
@@ -769,6 +788,9 @@ async def _send_item_menu(
     if view.is_history(field_name) and isinstance(item, dict):
         active = is_active(item)
         row.append(_button(view.history_toggle_label(field_name, active), f"pp:hx:{ref}:{'e' if active else 'o'}"))
+    if field_name == "Goals_JSON" and isinstance(item, dict):
+        for label, goal_code in view.goal_buttons(str(item.get("status") or "open")):
+            row.append(_button(label, f"pp:gs:{note_id}:{found}:{fingerprint}:{goal_code}"))
     edit_row = []
     if field_name == "Company" and isinstance(item, dict):
         edit_row.append(_button("修改任職期間／說明", f"pp:pe:{note_id}:{found}:{fingerprint}"))
@@ -818,12 +840,40 @@ async def _send_field_menu(message: types.Message, card_service: CardService, no
     field_index = view.EDITABLE_FIELDS.index(field_name)
     shown = anki_field_to_tg_text(current, 600) if current else "（空白）"
     state = "（目前在卡面隱藏）" if hidden else ""
+    first = [_button("修改", f"pp:ef:{note_id}:{field_index}")]
+    if view.is_hideable_field(field_name):
+        first.append(_hide_toggle(note_id, field_name, hidden))
     await message.answer(
         f"<b>{escape_tg(view.field_title(field_name))}</b>{state}\n\n{shown}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[first, [_button("回摘要", f"pp:s:{note_id}")]]),
+        parse_mode="HTML",
+    )
+
+
+def _hide_toggle(note_id: int, field_name: str, hidden: bool) -> InlineKeyboardButton:
+    """文字欄位（含照片）的「在卡面隱藏／顯示」按鈕。The hide / show button of a text field or the photo."""
+    mode = "s" if hidden else "h"
+    data = (f"pp:hp:{note_id}:{mode}" if field_name == "Photo"
+            else f"pp:hf:{note_id}:{view.EDITABLE_FIELDS.index(field_name)}:{mode}")
+    return _button("在卡面顯示" if hidden else "在卡面隱藏", data)
+
+
+async def _send_photo_menu(message: types.Message, card_service: CardService, note_id: int) -> None:
+    """長按卡面的頭像：換照片、移除、在卡面隱藏或顯示。The long-press menu of the photo."""
+    loaded = await _load_with_tags(card_service, note_id)
+    if loaded is None:
+        await message.answer(CARD_NOT_FOUND)
+        return
+    fields, _, tags = loaded
+    hidden = "Photo" in hidden_text_fields(tags)
+    has_photo = bool((fields.get("Photo") or "").strip())
+    first = [_button("換照片" if has_photo else "加照片", f"pp:photo:{note_id}")]
+    if has_photo:
+        first.append(_button("移除照片", f"pp:phrm:{note_id}"))
+    await message.answer(
+        "<b>照片</b>" + ("（目前在卡面隱藏）" if hidden else "") + ("" if has_photo else "\n\n（還沒有照片）"),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [_button("修改", f"pp:ef:{note_id}:{field_index}"),
-             _button("在卡面顯示" if hidden else "在卡面隱藏", f"pp:hf:{note_id}:{field_index}:{'s' if hidden else 'h'}")],
-            [_button("回摘要", f"pp:s:{note_id}")],
+            first, [_hide_toggle(note_id, "Photo", hidden), _button("回摘要", f"pp:s:{note_id}")],
         ]),
         parse_mode="HTML",
     )
@@ -845,17 +895,35 @@ async def _set_field_hidden(
     else:
         await client.remove_tags([note_id], hidden_tag(field_name))
     warning = await sync_warning(client)
-    field_index = view.EDITABLE_FIELDS.index(field_name)
-    title = escape_tg(view.field_title(field_name))
+    titles = {"Photo": "照片", "Display_Name": "名字"}
+    title = escape_tg(titles.get(field_name) or view.field_title(field_name))
+    undo = _hide_toggle(note_id, field_name, hidden)
     await message.answer(
         (f"已在卡面隱藏「{title}」（同步後卡面會變成遮擋塊）。" if hidden else f"已在卡面顯示「{title}」。")
         + sync_suffix(warning),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            _button("復原", f"pp:hf:{note_id}:{field_index}:{'s' if hidden else 'h'}"),
+            _button("復原", undo.callback_data or ""),
             _button("回摘要", f"pp:s:{note_id}"),
         ]]),
         parse_mode="HTML",
     )
+
+
+#: 目標狀態按鈕的代碼。The goal status codes of the buttons.
+_GOAL_CODES = {"d": "done", "x": "dropped", "o": "open"}
+
+
+async def _set_goal_status(
+    message: types.Message, note_service: NoteService, note_id: int, index: int, fingerprint: str, status: str
+) -> None:
+    """目標標成達成、放棄或重開，附「復原」（改回進行中）。Set a goal's status."""
+    warning = await note_service.run_action(
+        note_id, "set_goal_status", {"index": index, "fingerprint": fingerprint, "status": status}
+    )
+    text = {"done": "🎉 已標成達成。", "dropped": "已標成放棄（保留在目標裡）。", "open": "已改回進行中。"}[status]
+    buttons = [_button("復原", f"pp:gs:{note_id}:{index}:{fingerprint}:o")] if status != "open" else []
+    buttons += [_button("看目標", f"pp:ls:{note_id}:GL"), _button("回摘要", f"pp:s:{note_id}")]
+    await message.answer(text + sync_suffix(warning), reply_markup=InlineKeyboardMarkup(inline_keyboard=[buttons]))
 
 
 # =============================================================================
@@ -1190,12 +1258,13 @@ async def _start_edit(
     info = PersonCreateParams.model_fields[field_name]
     hint = f"\n<i>{escape_tg(info.description, 120)}</i>" if info.description else ""
     shown = anki_field_to_tg_text(current, 600) if current else "（空白）"
-    field_index = view.EDITABLE_FIELDS.index(field_name)
-    toggle = _button("在卡面顯示" if hidden else "在卡面隱藏", f"pp:hf:{note_id}:{field_index}:{'s' if hidden else 'h'}")
+    first = [_hide_toggle(note_id, field_name, hidden)] if view.is_hideable_field(field_name) else []
+    if field_name == "Display_Name":
+        hint += "\n<i>在卡面隱藏的是整個名字區（各語言的名字、讀音、敬稱、名字記法）。</i>"
     await message.answer(
         f"<b>{escape_tg(view.field_title(field_name))}</b>{'（目前在卡面隱藏）' if hidden else ''}{hint}\n\n"
         f"目前：{shown}\n\n輸入新的內容（輸入「清空」清除）：",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[toggle, *CANCEL_ROW]]),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[*first, *CANCEL_ROW]]),
         parse_mode="HTML",
     )
 
@@ -1268,8 +1337,11 @@ async def _start_photo(message: types.Message, state: FSMContext, note_id: int) 
     await state.set_state(PersonStates.waiting_photo)
     await state.update_data(nid=note_id)
     await message.answer(
-        "傳一張照片（會放在「認人」卡的正面與背面頭像）：",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("移除照片", f"pp:phrm:{note_id}"), *CANCEL_ROW]]),
+        "傳一張照片（會放在卡面的頭像；要練認人可以在卡面隱藏）：",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [_button("移除照片", f"pp:phrm:{note_id}"), _button("在卡面隱藏／顯示", f"pp:pfm:{note_id}")],
+            CANCEL_ROW,
+        ]),
     )
 
 
@@ -1578,6 +1650,8 @@ def _proposal_action(kind: str, data: dict[str, object]) -> tuple[str, dict[str,
     """
     if kind in _PROPOSAL_ACTIONS:
         return _PROPOSAL_ACTIONS[kind], {"item": data}
+    if kind == "goal":
+        return "add_item", {"field": "Goals_JSON", "item": {k: v for k, v in data.items() if k != "reason"}}
     if kind == "history_add":
         return "add_history", {"field": data["field"], "item": data["item"]}
     if kind == "history_end":

@@ -27,9 +27,11 @@ from app.core.exceptions import LLMGenerationError
 from app.infrastructure.llm.routing import route
 from app.schemas.llm.person_profile import IngestListUpdate, LLMPersonIngestResult
 from app.schemas.person_profile import (
+    GOAL_STATUSES,
     PERSON_HISTORY_FIELDS,
     RETIRED_FIELDS,
     Followup,
+    Goal,
     Interaction,
     PersonCreateParams,
     append_field_html,
@@ -67,8 +69,8 @@ class Proposal:
     """一項建議。One suggestion.
 
     Attributes:
-        kind: ``interaction``、``followup``、``field``、``history_add`` 或 ``history_end``。The kind.
-        data: 互動或待追蹤的項目（已驗證）；文字欄位的建議為 ``{"field", "value", "mode", "reason"}``；
+        kind: ``interaction``、``followup``、``goal``、``field``、``history_add`` 或 ``history_end``。The kind.
+        data: 互動、待追蹤或目標的項目（已驗證；目標另附 ``reason``）；文字欄位的建議為 ``{"field", "value", "mode", "reason"}``；
             新增一筆為 ``{"field", "item", "text", "reason"}``（``item`` 交給 ``add_history``）；
             劃掉一筆為 ``{"field", "index", "fingerprint", "text", "reason"}``。
     """
@@ -149,6 +151,11 @@ def build_prompt(fields: dict[str, str], lists: dict[str, list[object]], text: s
         known_fields=known,
         known_lists=known_lists,
         open_followups=open_followups,
+        known_goals=[
+            f"{g.get('kind') or '目標'}：{g.get('item', '')}" + (f"（目標 {g['target']}）" if g.get("target") else "")
+            + ("" if str(g.get("status") or "open") == "open" else f"（{GOAL_STATUSES.get(str(g['status']), '')}）")
+            for g in lists.get("Goals_JSON", []) if isinstance(g, dict)
+        ],
         recent_interactions=[f"{i.get('date', '')}：{i.get('topics', '')}" for i in recent],
         updatable_fields=updatable,
         list_fields=list_fields,
@@ -208,7 +215,7 @@ def proposals_from(
         today: 今天。Today.
 
     Returns:
-        建議，依互動、待追蹤、文字欄位、會變的欄位的順序。The proposals.
+        建議，依互動、待追蹤、目標、文字欄位、會變的欄位的順序。The proposals.
     """
     proposals: list[Proposal] = []
     interaction = result.interaction.model_dump()
@@ -228,6 +235,27 @@ def proposals_from(
             continue
         proposals.append(Proposal("followup", {
             k: v for k, v in validated.model_dump().items() if k in ("item", "type", "due") and v not in ("", None)
+        }))
+
+    known_goals = {str(g.get("item") or "").strip() for g in lists.get("Goals_JSON", []) if isinstance(g, dict)}
+    for goal in result.goals:
+        data = goal.model_dump(exclude={"reason"})
+        try:
+            validated_goal = Goal.model_validate(data)
+        except ValidationError:
+            # 目標時間看不懂時拿掉時間，目標本身照樣建議
+            try:
+                validated_goal = Goal.model_validate({**data, "target": ""})
+            except ValidationError:
+                logger.warning("略過格式不對的目標建議: %s（%s）", goal.item, goal.reason)
+                continue
+            logger.warning("目標時間看不懂，拿掉時間: %r（%s）", goal.target, goal.item)
+        if validated_goal.item in known_goals:
+            continue
+        known_goals.add(validated_goal.item)
+        proposals.append(Proposal("goal", {
+            **{k: v for k, v in validated_goal.model_dump().items() if k in ("kind", "item", "target") and v},
+            "reason": goal.reason,
         }))
 
     for update in result.field_updates:

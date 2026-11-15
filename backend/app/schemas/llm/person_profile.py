@@ -30,6 +30,15 @@ class IngestFollowup(BaseModel):
     due: str = Field("", description="YYYY-MM-DD；有明確時間點時才填（例如考試日、約定的日期），否則空字串")
 
 
+class IngestGoal(BaseModel):
+    """一個新的目標。One new goal."""
+
+    kind: str = Field(description="類型：證照、簽證、資格、升學、職涯、努力方向、夢想、願景，或其他簡短的說法")
+    item: str = Field(description="目標的內容，例如「日本語能力試驗 N1」「拿到永住」")
+    target: str = Field("", description="目標時間：YYYY、YYYY-MM 或 YYYY-MM-DD；文中沒提就空字串")
+    reason: str = Field(description="依據文中的哪句話（簡短）")
+
+
 class IngestFieldUpdate(BaseModel):
     """建議更新的一個文字欄位。One suggested text field update."""
 
@@ -64,6 +73,7 @@ class LLMPersonIngestResult(BaseModel):
 
     interaction: IngestInteraction
     followups: list[IngestFollowup] = Field(default_factory=list)
+    goals: list[IngestGoal] = Field(default_factory=list)
     field_updates: list[IngestFieldUpdate] = Field(default_factory=list)
     list_updates: list[IngestListUpdate] = Field(default_factory=list)
 
