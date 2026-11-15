@@ -13,7 +13,7 @@ photo are written through named actions, not as plain text.
 import html
 import re
 import secrets
-from typing import TypeVar, override
+from typing import Literal, TypeVar, override
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -55,7 +55,7 @@ from app.services.task_handlers.registry import register_handler
 SYSTEM_FIELDS = ("Card_ID",)
 
 #: ``add_item`` 能新增的清單（互動紀錄與待追蹤各有自己的動作）。Lists ``add_item`` accepts.
-GENERIC_LISTS = ("Family_JSON", "Gifts_JSON", "Key_Dates_JSON", "Contacts_JSON")
+GENERIC_LISTS = ("Family_JSON", "Gifts_JSON", "Key_Dates_JSON", "Contacts_JSON", "Goals_JSON")
 
 #: 照片檔名：Anki 媒體資料夾裡的檔名，只允許安全的字元。A safe media file name.
 _MEDIA_NAME = re.compile(r"^[\w.\-]{1,120}$")
@@ -68,6 +68,7 @@ ACTIONS = (
     "add_followup",
     "set_followup_status",
     "add_item",
+    "set_goal_status",
     "add_history",
     "set_history_status",
     "edit_position",
@@ -146,6 +147,12 @@ class _AddItem(_ActionParams):
     item: dict[str, object]
 
 
+class _SetGoalStatus(_ActionParams):
+    index: int = Field(ge=0)
+    fingerprint: str | None = None
+    status: Literal["open", "done", "dropped"]
+
+
 class _AddHistory(_ActionParams):
     field: str
     item: dict[str, object]
@@ -203,14 +210,15 @@ class PersonProfileHandler(BaseHandler):
     - 修改一般欄位：JSON 與 ``Card_ID`` 不能直接改，非空的 ``Title`` 也不行（已併進 ``Company`` 的職位，
       清空可以）；照片只能填網頁上傳取得的檔名（media_upload 計畫書 D3）；有改動時更新 ``Updated_At``。
     - 具名動作（``ACTIONS``）：追加互動紀錄（同時更新 ``Last_Contact``）、新增待追蹤、改待追蹤狀態、
-      在其他清單新增一筆、在會變的欄位新增一筆（``add_history``）或劃掉／取消劃掉
+      在其他清單新增一筆（目標一律進行中、登錄日今天）、改目標的狀態（``set_goal_status``：達成、放棄記下結束日）、
+      在會變的欄位新增一筆（``add_history``）或劃掉／取消劃掉
       （``set_history_status``；職位的劃掉＝離職，另外補上離職年月）、改一份工作的任職起訖與說明
       （``edit_position``）、在卡面隱藏或顯示一筆
       （``set_hidden``）、刪除一筆、設定照片。項目以 §3.3 的模型驗證；刪除、改狀態與隱藏以指紋確認
       要動的是同一筆。每次寫入都更新 ``Updated_At``。
     - 會變的欄位：建立時把文字轉成清單（登錄日＝今天）；新增時登錄日、劃掉時失效日都由系統填今天；
       單值欄位（現居地、時區、關係、親密度）新增時把原本有效的那筆劃掉。清單空了時欄位寫空字串
-      （``Company`` 有值才產生「認人」卡，``[]`` 也算有值）。
+      （和建卡時沒填的一樣；以前「認人」卡看 ``Company`` 有沒有值，``[]`` 也算有值）。
     - 網頁整欄編輯 JSON 欄位（``JSON_FIELD_SPECS``）：寫入後更新 ``Updated_At``；互動紀錄有更新的日期時
       一併更新 ``Last_Contact``。
     - 刪除：標準刪除。
@@ -380,9 +388,27 @@ class PersonProfileHandler(BaseHandler):
             params = _parse(_AddItem, parameters)
             if params.field not in GENERIC_LISTS:
                 raise InvalidNoteFieldsError(f"add_item 不能新增到 {params.field}")
-            item = _validate_item(params.field, params.item)
+            raw = dict(params.item)
+            if params.field == "Goals_JSON":
+                # 新的目標一律進行中，登錄日由系統填（同會變的欄位）
+                raw.update({"added": today_iso(), "status": "open", "closed": ""})
+            item = _validate_item(params.field, raw)
             items = _list(await _read(card_service, note_id), params.field) + [item]
             await _write(card_service, note_id, {params.field: AnkiJsonFieldManager.serialize(items)})
+        elif action == "set_goal_status":
+            params = _parse(_SetGoalStatus, parameters)
+            items = _list(await _read(card_service, note_id), "Goals_JSON")
+            index = resolve_index(items, params.index, params.fingerprint)
+            entry = items[index]
+            if not isinstance(entry, dict):
+                raise InvalidNoteFieldsError("這一筆目標的格式不對，請在網頁修正。")
+            entry["status"] = params.status
+            # 達成、放棄記下那天；改回進行中拿掉（選填的空值不存，和 add_item 存下來的形狀一致）
+            if params.status == "open":
+                entry.pop("closed", None)
+            else:
+                entry["closed"] = today_iso()
+            await _write(card_service, note_id, {"Goals_JSON": AnkiJsonFieldManager.serialize(items)})
         elif action == "add_history":
             params = _parse(_AddHistory, parameters)
             _require_history(params.field)
@@ -444,7 +470,7 @@ class PersonProfileHandler(BaseHandler):
         self, card_service: CardService, note_id: int, field_name: str, items: list[object]
     ) -> None:
         """網頁整欄寫入之後：互動紀錄的最新日期推進 ``Last_Contact``；會變的欄位清空時寫空字串
-        （``[]`` 也算有值，``Company`` 會因此產生空的「認人」卡）；並更新 ``Updated_At``。
+        （和建卡時沒填的一樣）；並更新 ``Updated_At``。
 
         After the web writes a whole field: move ``Last_Contact`` forward,
         blank emptied history fields, and stamp ``Updated_At``.
@@ -672,7 +698,7 @@ def _reject_duplicate_past(items: list[object], new: list[dict[str, object]]) ->
 
 
 def _serialize(field: str, items: list[object]) -> str:
-    """清單寫回欄位的字串；會變的欄位清空時寫空字串（``Company`` 的 ``[]`` 會產生空的「認人」卡）。
+    """清單寫回欄位的字串；會變的欄位清空時寫空字串（和建卡時沒填的一樣）。
 
     The field string of a list; emptied history fields become blank.
     """

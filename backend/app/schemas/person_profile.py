@@ -124,7 +124,7 @@ class PersonCreateParams(BaseModel):
     Name_Romaji: str = _text("羅馬拼音")
     Honorific: str = _text("稱呼與敬語", "例如「さん／敬語」")
     Name_Memo: str = _text("名字記憶法", "名字的由來、諧音或聯想口訣")
-    Appearance: str = _text("外貌特徵", "沒有照片時是「認人」卡的主要線索", multiline=True)
+    Appearance: str = _text("外貌特徵", "沒有照片時，隱藏名字練認人的主要線索", multiline=True)
     Birthday: str = _text("生日", "例如 1994-03-15；不知年份只寫月日，例如 3/15", pattern=BIRTHDAY)
     Hometown: str = _text("出身地")
     Residence: str = _text("現居地")
@@ -142,10 +142,14 @@ class PersonCreateParams(BaseModel):
     Education: str | list[str] = _rows("學歷", "一個學歷一列")
     Interests: str | list[str] = _rows("興趣", "輸入後按 Enter 加入；背面也顯示成標籤", tags=True)
     Food_Drink: str | list[str] = _rows("飲食喜好", "喜歡吃喝的東西、愛去的店；輸入後按 Enter 加入", tags=True)
-    Dietary: str | list[str] = _rows("飲食限制", "過敏、不吃的東西；背面用紅框提醒", multiline=True)
-    Personality_Values: str | list[str] = _rows("個性與價值觀", "個性、價值觀、夢想、煩惱", multiline=True)
+    Dislikes: str | list[str] = _rows("不喜歡的事", "討厭、在意的事（吃的放飲食限制，不要提的放敏感話題）；輸入後按 Enter 加入",
+                                      tags=True)
+    Dietary: str | list[str] = _rows("飲食限制", "過敏、不吃的東西；卡面用紅框提醒", multiline=True)
+    Personality_Values: str | list[str] = _rows("個性與價值觀", "個性、價值觀、煩惱（夢想、目標記在「目標」）", multiline=True)
     Praise: str | list[str] = _rows("讚美素材", "具體、真實的成就或優點", multiline=True)
     Ask_Advice: str | list[str] = _rows("可以請教的事", multiline=True)
+    Needs: str | list[str] = _rows("對方需要的幫助", "對方在找的人、資訊或機會；幫上了就劃掉", multiline=True)
+    Common_Ground: str | list[str] = _rows("共同點", "同鄉、同校、共同的興趣或經歷（開話題用）", multiline=True)
     Sensitive: str | list[str] = _rows("敏感話題", "不要主動提的事；背面預設模糊", multiline=True)
     Comm_Prefs: str | list[str] = _rows("溝通偏好", "偏好的聯絡管道、時段、風格", multiline=True)
     Notes: str = _text("備註", multiline=True)
@@ -256,10 +260,15 @@ class FamilyMember(_Item):
 
 
 class Gift(_Item):
-    """送出或收到的禮物。A gift given or received."""
+    """送出或收到的禮物，或禮物靈感（對方想要的，``idea``；送出後把方向改成送出，同一筆接著用）。
+
+    A gift given or received, or a gift idea.
+    """
 
     item: str = Field(min_length=1, title="禮物")
-    direction: Literal["given", "received"] = Field("given", title="方向", description="given：送出；received：收到")
+    direction: Literal["given", "received", "idea"] = Field(
+        "given", title="方向", description="given：送出；received：收到；idea：想要的（禮物靈感）"
+    )
     date: str = Field("", title="日期", pattern=OPTIONAL_DATE)
     reaction: str = Field("", title="反應")
 
@@ -344,17 +353,6 @@ def _base36(number: int) -> str:
         number, rest = divmod(number, 36)
         out = digits[rest] + out
     return out
-
-
-#: JSON 欄位 → (項目模型, 標題)。JSON field → (item model, title).
-PERSON_JSON_ITEMS: dict[str, tuple[type[_Item], str]] = {
-    "Interactions_JSON": (Interaction, "互動紀錄"),
-    "Followups_JSON": (Followup, "待追蹤"),
-    "Family_JSON": (FamilyMember, "家人"),
-    "Gifts_JSON": (Gift, "禮物"),
-    "Key_Dates_JSON": (KeyDate, "重要日期"),
-    "Contacts_JSON": (Contact, "聯絡方式"),
-}
 
 
 # =============================================================================
@@ -502,6 +500,55 @@ class Position(_Item):
         return self
 
 
+#: 目標的類型（快速選項；也可以自己填）。Quick choices of a goal's kind.
+GOAL_KINDS = ("證照", "簽證", "資格", "升學", "職涯", "努力方向", "夢想", "願景")
+#: 目標的狀態與中文。Goal statuses.
+GOAL_STATUSES = {"open": "進行中", "done": "達成", "dropped": "放棄"}
+
+
+class Goal(_Item):
+    """一個目標（工作經歷計畫書 §6）：類型、內容、目標時間、狀態；達成或放棄的那天記在 ``closed``。
+
+    A goal with its kind, target time and status.
+    """
+
+    kind: str = Field("", title="類型", description="例如：" + "、".join(GOAL_KINDS) + "；也可以自己填")
+    item: str = Field(min_length=1, title="內容", description="例如「日本語能力試驗 N1」")
+    target: str = Field("", title="目標時間", description="年、年月或日期，例如 2026-12；可空", pattern=PERIOD)
+    status: Literal["open", "done", "dropped"] = Field(
+        "open", title="狀態", description="open：進行中；done：達成；dropped：放棄"
+    )
+    added: str = _added_field()
+    closed: str = Field("", title="結束日", description="改成達成或放棄時系統填今天", pattern=OPTIONAL_DATE)
+
+    @field_validator("target", mode="before")
+    @classmethod
+    def _normalize_target(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = normalize_period(value)
+        if normalized is None:
+            raise ValueError(f"「{value.strip()}」不是可用的時間，請寫 2026、2026-12 或 2026-12-07")
+        return normalized
+
+
+def is_open_goal(item: object) -> bool:
+    """進行中的目標（不是 dict 的不算）。Whether a goal is still open."""
+    return isinstance(item, dict) and str(item.get("status") or "open") == "open"
+
+
+#: JSON 欄位 → (項目模型, 標題)。JSON field → (item model, title).
+PERSON_JSON_ITEMS: dict[str, tuple[type[_Item], str]] = {
+    "Interactions_JSON": (Interaction, "互動紀錄"),
+    "Followups_JSON": (Followup, "待追蹤"),
+    "Family_JSON": (FamilyMember, "家人"),
+    "Gifts_JSON": (Gift, "禮物"),
+    "Key_Dates_JSON": (KeyDate, "重要日期"),
+    "Contacts_JSON": (Contact, "聯絡方式"),
+    "Goals_JSON": (Goal, "目標"),
+}
+
+
 @dataclass(frozen=True)
 class HistoryField:
     """一個會變的欄位的設定。The settings of one history field.
@@ -528,6 +575,7 @@ class HistoryField:
 PERSON_HISTORY_FIELDS: dict[str, HistoryField] = {
     "Interests": HistoryField(HistoryEntry, "興趣", split=True),
     "Food_Drink": HistoryField(HistoryEntry, "飲食喜好", split=True),
+    "Dislikes": HistoryField(HistoryEntry, "不喜歡的事", split=True),
     "Dietary": HistoryField(HistoryNote, "飲食限制"),
     "Company": HistoryField(Position, "職位"),
     "Work_Detail": HistoryField(HistoryNote, "工作內容"),
@@ -535,6 +583,8 @@ PERSON_HISTORY_FIELDS: dict[str, HistoryField] = {
     "Personality_Values": HistoryField(HistoryNote, "個性與價值觀"),
     "Praise": HistoryField(HistoryNote, "讚美素材"),
     "Ask_Advice": HistoryField(HistoryNote, "可以請教的事"),
+    "Needs": HistoryField(HistoryNote, "對方需要的幫助"),
+    "Common_Ground": HistoryField(HistoryNote, "共同點"),
     "Comm_Prefs": HistoryField(HistoryNote, "溝通偏好"),
     "Residence": HistoryField(HistoryEntry, "現居地", single=True),
     "Languages": HistoryField(HistoryEntry, "語言", split=True),
@@ -578,6 +628,15 @@ def is_hidden(item: object) -> bool:
 #: 文字欄位在卡面隱藏的標籤前綴：``人脈卡隱藏::Appearance``（工作經歷計畫書 D8；用標籤不改筆記類型）。
 #: The tag prefix hiding a text field on the card.
 HIDDEN_TAG_PREFIX = "人脈卡隱藏::"
+
+
+#: 卡面能隱藏的文字欄位（模板有對應的遮擋；tests/test_person_profile_template.py 比對）。名字只有
+#: ``Display_Name`` 一個開關，遮整個名字區（各語言的名字、讀音、敬稱、名字記法）；``Photo`` 遮頭像照片。
+#: TG 只對這些欄位顯示隱藏開關，免得按了卡面沒有變化。Text fields the card can hide.
+HIDEABLE_TEXT_FIELDS = (
+    "Display_Name", "Photo", "Name_Memo", "Appearance", "Birthday", "Hometown",
+    "Met_Date", "Met_Where", "Met_Via", "Introducer_Note_ID", "First_Impression", "Notes",
+)
 
 
 def hidden_tag(field: str) -> str:

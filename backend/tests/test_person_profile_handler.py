@@ -26,7 +26,9 @@ from app.services.task_handlers.registry import handler_registry
 from tests.test_handler_base import FakeAnki, _card_service, _relations
 
 PERSON_FIELDS = json.load(open("app/anki_models/Person_Profile_Dark.json", encoding="utf-8"))["inOrderFields"]
-JSON_FIELDS = ["Interactions_JSON", "Followups_JSON", "Family_JSON", "Gifts_JSON", "Key_Dates_JSON", "Contacts_JSON"]
+JSON_FIELDS = [
+    "Interactions_JSON", "Followups_JSON", "Family_JSON", "Gifts_JSON", "Key_Dates_JSON", "Contacts_JSON", "Goals_JSON",
+]
 HISTORY_FIELDS = list(PERSON_HISTORY_FIELDS)
 
 
@@ -404,8 +406,8 @@ class TestActions:
 
     def test_declared_actions(self):
         assert set(PersonProfileHandler.CAPABILITIES.actions) == {
-            "add_interaction", "add_followup", "set_followup_status", "add_item", "add_history", "set_history_status",
-            "edit_position", "set_hidden", "remove_item", "set_photo",
+            "add_interaction", "add_followup", "set_followup_status", "add_item", "set_goal_status", "add_history",
+            "set_history_status", "edit_position", "set_hidden", "remove_item", "set_photo",
         }
 
 

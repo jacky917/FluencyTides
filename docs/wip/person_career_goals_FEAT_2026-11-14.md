@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-11-14 |
 | **性質** | 新增機能設計 + 實作工作項 |
-| **狀態** | 🔨 實作中：PR 1（工作經歷、預設全部顯示、逐筆隱藏）已部署，待 commit。§9 已定案（2026-11-14 使用者：「都照建議」）。§12 只留一種卡片（D13–D16）2026-11-15 定案，放進 PR 2 |
+| **狀態** | 🔨 實作中：PR 1（工作經歷、預設全部顯示、逐筆隱藏）已部署並 commit（`18cc408`）。§9 已定案（2026-11-14 使用者：「都照建議」）。§12 只留一種卡片（D13–D16）2026-11-15 定案。PR 2（目標、新欄位、只留一種卡片）已遷移 Anki、部署並 commit（§13）；兩個 PR 都還沒推上 GitHub |
 | **範圍** | `backend/app/schemas/person_profile.py`（職位、目標、新欄位的格式）；`backend/app/anki_models/Person_Profile_Dark_*.html`、`_style.css`（卡面）；`backend/app/services/task_handlers/person_profile_handler.py`（動作）；`backend/app/bot/handlers/person_profile.py`、`bot/utils/person_profile_view.py`（TG）；`services/person_profile_ingest.py`、`person_profile_topics.py`（AI 整理與話題）；`frontend/src/components/JsonFieldEditor.tsx`（網頁編輯）；筆記類型 `Person_Profile_Dark` 新增欄位 |
 | **不動** | 其他筆記類型；人脈卡既有欄位的名稱（不刪、不改名）；互動紀錄、待追蹤、家人、重要日期、聯絡方式的格式 |
 | **PR / 進度** | 分支 `feat/person-career-goals`（PR 1）；PR 2 另開分支 |
@@ -359,3 +359,52 @@ JSON 編輯器照模型畫表單：`Position` 加 `start`、`end`、`note` 三�
 - AnkiConnect 的 `modelTemplateRemove`、`modelTemplateRename` 在 NAS 上的版本是否可用（`infrastructure/anki/client.py` 目前沒有包裝這兩個，要加）。
 - AnkiDroid 上 `{{FrontSide}}` 會不會重跑正面的 JS（決定背面要不要另外跑一次初始化）；用實機確認。
 - 互動紀錄、原話裡可能寫著對方的名字，名字隱藏時這些地方不會遮；先不處理，實際用了再看。
+
+
+## 13. PR 2 實作紀錄（2026-11-15，分支 `feat/person-goals-single-card`）
+
+### 13.1 做了什麼
+
+| 項目 | 實作 |
+|---|---|
+| 目標（§6） | `Goals_JSON`，一筆 `{kind, item, target, status, added, closed}`（`Goal`）；目標時間用 `normalize_period` 整理。新增走 `add_item`（一律進行中、登錄日今天）；新動作 `set_goal_status`（達成、放棄記下結束日，重開拿掉） |
+| 新欄位（§7） | `Dislikes`（不喜歡的事，標籤）、`Needs`（對方需要的幫助）、`Common_Ground`（共同點），都是會變的欄位；網頁表單、TG、用一段話記錄、AI 話題自動支援 |
+| 禮物靈感（§7） | `Gifts_JSON` 的 `direction` 多 `idea`（想要的）；卡面在禮物區塊最上面 |
+| 欄位順序 | 新欄位插在定義檔的相關位置（不是接在最後）：網頁建卡表單的順序和筆記類型相同 |
+| 只留一種卡片（§12） | 正面 `Person_Profile_Dark_front.html` 是完整資料（原本的背面）；背面 `Person_Profile_Dark_back.html` 是正面包在 `.pp-back` 裡，CSS 拿掉遮擋、改成虛線框；刪掉兩個舊正面 |
+| 名字與照片（D14） | `HIDEABLE_TEXT_FIELDS`：卡面能遮的文字欄位（含 `Display_Name`、`Photo`），TG 只對這些顯示隱藏開關；名字遮整個名字區，首字頭像在正面改成「?」；長按頭像開照片選單（換照片、移除、隱藏或顯示，`pp:hp`） |
+| TG | 清單代號 `GL`、`DL`、`ND`、`CG`；目標的新增問答（類型建議按鈕、內容、目標時間）、清單與長按選單的「達成／放棄／重開」（`pp:gs`）；摘要的「近期」列出 60 天內到期、有完整日期的目標 |
+| AI | 用一段話記錄可以建議新增目標（`goals`；已知的不重複，時間看不懂只拿掉時間）；AI 話題讀進行中與達成的目標、禮物靈感（放棄的不送） |
+| 遷移腳本 | `scripts/local_anki/Person_Profile_Dark/migrate_single_card.py`：先同步、列計畫（dry-run），`--apply` 才執行；AnkiClient 加 `rename_model_template`、`remove_model_template` |
+
+### 13.2 驗證
+
+- 後端 2259 項測試、ruff 通過；新測試在 `backend/tests/test_person_goals.py`，模板契約在 `test_person_profile_template.py`（單一模板、註解不能有雙大括號、背面不攔點擊、能遮的欄位和後端相同）。
+- 以假資料渲染正反面在瀏覽器實測：正面名字區、名字記法、生日徽章、隱藏的興趣與目標都遮住，頭像是「?」，近期列出 N1；背面 8 個遮擋全部拿掉、改虛線框、第一下點擊不被攔，頭像顯示首字。
+- 遷移 dry-run（2026-11-15，對真實的 Anki，只讀）：3 人；加 4 個欄位；「見面前複習」改名；刪掉 2 張認人卡。
+
+### 13.3 上線順序（不能顛倒）
+
+新的後端建人時會寫 `Goals_JSON`，Anki 還沒有這個欄位時建卡會失敗，所以先遷移 Anki、再部署後端：
+
+1. 所有裝置（手機、桌面）先同步。
+2. 跑遷移：
+
+```bash
+python scripts/local_anki/Person_Profile_Dark/migrate_single_card.py --apply
+```
+
+3. 在 NAS 的 Anki 做完整同步，選「上傳到 AnkiWeb」；其他裝置再下載。
+4. 部署後端。
+
+遷移後、部署前，舊的後端照常可用（它不碰新欄位）。
+
+### 13.4 上線（2026-11-15）
+
+- 遷移 `--apply`：加 4 個欄位（第 29、34、35、45 個）、「見面前複習」改名「人脈卡」、刪掉「認人」（2 張卡）、換上新模板與 CSS；檢查欄位與定義檔一致、3 人 3 張卡。
+- 後端 SSH 部署（`845f11e`，回滾點 `pre-18cc408`）；使用者在 NAS 的 Anki 完整同步上傳後，同步恢復正常。
+
+### 13.5 還沒做
+
+- 手機實機確認：背面 FrontSide 的 JS 在 AnkiDroid 的行為、長按名字區與頭像。
+- 目標的狀態沒有讓 AI 建議（例如「考過了」→ 達成）；先手動在 TG 按。

@@ -200,12 +200,23 @@ def build_prompt(
         for d in lists.get("Key_Dates_JSON", [])[:10]
         if isinstance(d, dict)
     ]
+    directions = {"received": "收到", "idea": "想要（還沒送）"}
     gifts = [
-        f"{'收到' if g.get('direction') == 'received' else '送出'}{m(str(g.get('item', '')))}"
+        f"{directions.get(str(g.get('direction') or ''), '送出')}{m(str(g.get('item', '')))}"
         + (f"（{g['date']}）" if g.get("date") else "")
-        for g in lists.get("Gifts_JSON", [])[-5:]
+        for g in lists.get("Gifts_JSON", [])[-8:]
         if isinstance(g, dict)
     ]
+    # 目標：進行中的是最好的聊天素材（「考試準備得如何」）；達成的可以恭喜，放棄的不主動提
+    goals = []
+    for goal in lists.get("Goals_JSON", []):
+        if not isinstance(goal, dict) or str(goal.get("status") or "open") == "dropped":
+            continue
+        kind = str(goal.get("kind") or "目標")
+        line = f"{kind}：{m(str(goal.get('item', '')))}" + (f"（目標 {goal['target']}）" if goal.get("target") else "")
+        if goal.get("status") == "done":
+            line += f"（已達成{'，' + str(goal['closed']) if goal.get('closed') else ''}）"
+        goals.append(line)
     prompt = get_template_engine().render(
         "prompts/anki/Person_Profile_Topics.j2",
         person_token=PERSON_TOKEN,
@@ -219,6 +230,7 @@ def build_prompt(
         followups=followups,
         key_dates=key_dates,
         gifts=gifts,
+        goals=goals,
         # 劃掉的敏感話題也算（過去的事一樣不該主動提）；欄位格式壞了讀不出清單時看原文
         has_sensitive=bool(lists.get("Sensitive")) or bool(plain_text(fields.get("Sensitive", ""))),
     )

@@ -60,9 +60,16 @@
 - {{ line }}
 {% endfor %}
 {% endif %}
+{% if goals %}
+
+他的目標（證照、簽證、職涯、夢想等）：
+{% for line in goals %}
+- {{ line }}
+{% endfor %}
+{% endif %}
 {% if gifts %}
 
-禮物往來：
+禮物往來（「想要」是他想要、還沒送的禮物靈感）：
 {% for line in gifts %}
 - {{ line }}
 {% endfor %}
