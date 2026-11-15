@@ -1,4 +1,4 @@
-/* Person_Profile_Dark Style - 人脈卡暗色模式。基底（.card、.section、徽章、手風琴）沿用 JP_CoreVerb_Cloze_Dark 的配色，
+/* Person_Profile_Dark Style - 人脈卡暗色模式（一種卡片：正面是完整資料，背面是同一份畫面包在 .pp-back 裡）。基底（.card、.section、徽章、手風琴）沿用 JP_CoreVerb_Cloze_Dark 的配色，
    新增頭部、見面前必看、待追蹤、時間軸、標籤、模糊顯示等。可收合區段用原生 <details>／<summary>。 */
 
 /* ============================
@@ -39,113 +39,12 @@ html, body {
 }
 
 /* ============================
-   正面：兩種卡共用同一個骨架（標籤 → 頭像 → 內容 → 問題），置中
-   ============================ */
-.person-front {
-    text-align: center;
-}
-
-.front-kicker {
-    font-size: 12px;
-    font-weight: bold;
-    color: #ff9f43;
-    letter-spacing: 2px;
-    margin-bottom: 18px;
-}
-
-.front-name {
-    font-size: 30px;
-    font-weight: 800;
-    margin-top: 14px;
-}
-
-.front-sub {
-    color: #95a5a6;
-    font-size: 15px;
-    margin-top: 4px;
-}
-
-.front-question {
-    margin-top: 22px;
-    padding-top: 14px;
-    border-top: 1px solid #2c2c2c;
-    color: #bdc3c7;
-    font-size: 15px;
-}
-
-/* 認人的線索：標籤一欄、內容一欄，整塊置中 */
-.cue-list {
-    display: inline-block;
-    margin: 16px 0 0;
-    text-align: left;
-    max-width: 100%;
-}
-
-.cue {
-    display: flex;
-    gap: 14px;
-    align-items: baseline;
-    padding: 8px 0;
-    border-bottom: 1px solid #2c2c2c;
-}
-
-.cue:last-child {
-    border-bottom: 0;
-}
-
-.cue dt {
-    flex-shrink: 0;
-    color: #95a5a6;
-    font-size: 13px;
-    letter-spacing: 1px;
-}
-
-.cue dd {
-    margin: 0;
-    font-size: 19px;
-    font-weight: 600;
-}
-
-/* ============================
    頭像
    ============================ */
-.avatar-lg {
-    width: 88px;
-    height: 88px;
-    margin: 0 auto;
-    border-radius: 50%;
-    overflow: hidden;
-    border: 2px solid #444;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background-color: #2a2a2a;
-}
-
-.avatar-lg img,
 .avatar-md img {
     width: 100%;
     height: 100%;
     object-fit: cover;
-}
-
-.avatar-initial {
-    color: #ffffff;
-    font-size: 34px;
-    font-weight: 800;
-}
-
-/* 認人：照片是主要線索，放大 */
-.avatar-photo-cue {
-    width: 160px;
-    height: 160px;
-}
-
-/* 認人沒有照片：問號佔住頭像的位置，與複習卡對齊 */
-.avatar-unknown {
-    color: #95a5a6;
-    font-size: 36px;
-    font-weight: 800;
 }
 
 .avatar-md {
@@ -167,14 +66,6 @@ html, body {
 /* ============================
    背面頭部
    ============================ */
-.card-kind {
-    font-size: 12px;
-    font-weight: bold;
-    color: #ff9f43;
-    letter-spacing: 1px;
-    margin-bottom: 12px;
-}
-
 .person-header {
     display: flex;
     gap: 16px;
@@ -427,7 +318,7 @@ html, body {
     opacity: 1;
 }
 
-/* 長按 3 秒刪除：按住時下緣的進度條跑滿 3 秒 */
+/* 長按 3 秒開 TG 選單（清單項目：隱藏、劃掉、刪除）：按住時下緣的進度條跑滿 3 秒 */
 .lp-target {
     position: relative;
     cursor: pointer;
@@ -447,7 +338,7 @@ html, body {
     background-color: #e74c3c;
 }
 
-/* 長按修改（文字欄位）的進度條用藍色，和刪除的紅色區分 */
+/* 文字欄位的長按選單（修改、隱藏）進度條用藍色，和清單項目的紅色區分 */
 .lp-target.lp-edit::after {
     background-color: #5dade2;
 }
@@ -567,38 +458,8 @@ details[open] > summary .accordion-arrow {
 }
 
 /* ============================
-   會變的欄位：預設只顯示有效的，眼睛展開全部紀錄
+   會變的欄位：全部顯示，劃掉的接在後面（刪除線）
    ============================ */
-/* 歷史紀錄的眼睛：無框的小圖示＋筆數，與 TG 按鈕列裡有框的 AI 遮名字開關（.mask-toggle）區分 */
-.hist-label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.hist-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    padding: 0 4px;
-    border-radius: 4px;
-    color: #666;
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    user-select: none;
-    -webkit-user-select: none;
-}
-
-.hist-toggle:hover {
-    color: #bdc3c7;
-}
-
-.hist-toggle.is-open {
-    color: #5dade2;
-    background-color: rgba(93, 173, 226, 0.12);
-}
-
 .hist-line {
     padding: 2px 0;
 }
@@ -616,6 +477,108 @@ details[open] > summary .accordion-arrow {
 .hist-line.is-ended .hist-text {
     color: #7f8c8d;
     text-decoration: line-through;
+}
+
+.chip.is-ended {
+    background-color: transparent;
+    border: 1px solid #3b4650;
+    color: #7f8c8d;
+    text-decoration: line-through;
+}
+
+/* ============================
+   工作經歷：現職在上、以前的在下
+   ============================ */
+.career-item {
+    padding: 4px 0;
+}
+
+.career-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.career-badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background-color: #3498db;
+    color: #fff;
+}
+
+.career-item.is-current .career-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: #ecf0f1;
+}
+
+.career-item.is-past .career-name {
+    font-size: 14px;
+    color: #95a5a6;
+}
+
+.career-period {
+    color: #7f8c8d;
+    font-size: 12px;
+}
+
+.career-note {
+    color: #bdc3c7;
+    font-size: 13px;
+    white-space: pre-wrap;
+}
+
+.career-item.is-past .career-note {
+    color: #7f8c8d;
+}
+
+.career-past-label {
+    margin-top: 6px;
+    color: #666;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+/* ============================
+   在卡面隱藏：不透明的斜線遮擋蓋在內容上，點一下掀開
+   ============================ */
+.is-hidden {
+    position: relative;
+    cursor: pointer;
+}
+
+.hidden-cover {
+    position: absolute;
+    /* 不用 inset：舊的 iOS（14.5 以前）不支援，遮擋會蓋不住內容 */
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.4em;
+    overflow: hidden;
+    white-space: nowrap;
+    border: 1px dashed #7f8c8d;
+    border-radius: 6px;
+    background: repeating-linear-gradient(135deg, #3d4349 0 6px, #2b2f33 6px 12px);
+    color: #d0d6db;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+}
+
+.is-hidden.is-revealed {
+    cursor: auto;
+}
+
+.is-hidden.is-revealed > .hidden-cover {
+    display: none;
 }
 
 .mini-action-btn {
@@ -751,11 +714,79 @@ details[open] > summary .accordion-arrow {
         font-size: 22px;
     }
 
-    .cue dd {
-        font-size: 17px;
-    }
+}
 
-    .front-name {
-        font-size: 26px;
-    }
+/* ============================
+   名字區：一個開關（Display_Name）整塊遮
+   ============================ */
+.person-name-box.is-hidden .hidden-cover {
+    font-size: 14px;
+}
+
+/* ============================
+   背面：遮擋全部掀開，原本隱藏的加虛線框（看得出剛才要回想的是哪幾項）
+   ============================ */
+.pp-back .is-hidden {
+    cursor: auto;
+    outline: 1px dashed #f39c12;
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+.pp-back .is-hidden > .hidden-cover {
+    display: none;
+}
+
+/* ============================
+   目標
+   ============================ */
+.goal-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid #2c2c2c;
+}
+
+.goal-item:last-child {
+    border-bottom: 0;
+}
+
+.goal-kind {
+    font-size: 12px;
+    font-weight: 700;
+    color: #1abc9c;
+    border: 1px solid #16a085;
+    border-radius: 10px;
+    padding: 0 8px;
+}
+
+.goal-text {
+    font-weight: 600;
+}
+
+.goal-target {
+    font-size: 13px;
+    color: #95a5a6;
+}
+
+.goal-target.is-soon {
+    color: #f1c40f;
+}
+
+.goal-target.is-overdue {
+    color: #e74c3c;
+}
+
+.goal-status {
+    font-size: 12px;
+    color: #7f8c8d;
+}
+
+.goal-item.is-closed .goal-text,
+.goal-item.is-closed .goal-kind {
+    color: #7f8c8d;
+    border-color: #555;
+    text-decoration: line-through;
 }

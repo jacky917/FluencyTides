@@ -29,10 +29,13 @@
         "Education",
         "Interests",
         "Food_Drink",
+        "Dislikes",
         "Dietary",
         "Personality_Values",
         "Praise",
         "Ask_Advice",
+        "Needs",
+        "Common_Ground",
         "Sensitive",
         "Comm_Prefs",
         "Notes",
@@ -42,6 +45,7 @@
         "Gifts_JSON",
         "Key_Dates_JSON",
         "Contacts_JSON",
+        "Goals_JSON",
         "Last_Contact",
         "Contact_Cadence",
         "Card_ID",
@@ -51,13 +55,8 @@
     "css": "Person_Profile_Dark_style.css",
     "cardTemplates": [
         {
-            "Name": "認人",
-            "Front": "Person_Profile_Dark_front_recognize.html",
-            "Back": "Person_Profile_Dark_back.html"
-        },
-        {
-            "Name": "見面前複習",
-            "Front": "Person_Profile_Dark_front_review.html",
+            "Name": "人脈卡",
+            "Front": "Person_Profile_Dark_front.html",
             "Back": "Person_Profile_Dark_back.html"
         }
     ]

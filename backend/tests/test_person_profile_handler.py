@@ -26,7 +26,9 @@ from app.services.task_handlers.registry import handler_registry
 from tests.test_handler_base import FakeAnki, _card_service, _relations
 
 PERSON_FIELDS = json.load(open("app/anki_models/Person_Profile_Dark.json", encoding="utf-8"))["inOrderFields"]
-JSON_FIELDS = ["Interactions_JSON", "Followups_JSON", "Family_JSON", "Gifts_JSON", "Key_Dates_JSON", "Contacts_JSON"]
+JSON_FIELDS = [
+    "Interactions_JSON", "Followups_JSON", "Family_JSON", "Gifts_JSON", "Key_Dates_JSON", "Contacts_JSON", "Goals_JSON",
+]
 HISTORY_FIELDS = list(PERSON_HISTORY_FIELDS)
 
 
@@ -92,7 +94,8 @@ class TestDeclarations:
         # 網頁新增一筆時預填今天的標記
         schema = handler.JSON_FIELD_SPECS["Interests"].item.model_json_schema()
         assert schema["properties"]["added"]["x-default"] == "today"
-        assert list(schema["properties"]) == ["value", "added", "ended"]
+        # 「隱藏」定義在基底類別，表單上排在最後
+        assert list(schema["properties"]) == ["value", "added", "ended", "hidden"]
 
     def test_history_fields_exist_in_the_note_type(self):
         """D1：欄位名不變、不增刪筆記類型的欄位。"""
@@ -403,8 +406,8 @@ class TestActions:
 
     def test_declared_actions(self):
         assert set(PersonProfileHandler.CAPABILITIES.actions) == {
-            "add_interaction", "add_followup", "set_followup_status", "add_item", "add_history", "set_history_status",
-            "remove_item", "set_photo",
+            "add_interaction", "add_followup", "set_followup_status", "add_item", "set_goal_status", "add_history",
+            "set_history_status", "edit_position", "set_hidden", "remove_item", "set_photo",
         }
 
 

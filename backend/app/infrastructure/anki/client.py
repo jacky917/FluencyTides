@@ -1081,6 +1081,45 @@ class AnkiClient:
             "modelFieldRemove", modelName=model_name, fieldName=field_name
         )
 
+    async def rename_model_template(
+        self, model_name: str, old_template_name: str, new_template_name: str
+    ) -> None:
+        """重新命名模型的卡片模板（AnkiWeb 會要求完整同步）。
+
+        Rename a card template of the given model (forces a full sync).
+
+        Args:
+            model_name: 模型名稱。Model name.
+            old_template_name: 原本的模板名稱。The old template name.
+            new_template_name: 新的模板名稱。The new template name.
+
+        Raises:
+            AnkiConnectError: API 請求失敗時。Raised when the API request fails.
+        """
+        await self.sync()
+        await self._invoke(
+            "modelTemplateRename",
+            modelName=model_name,
+            oldTemplateName=old_template_name,
+            newTemplateName=new_template_name,
+        )
+
+    async def remove_model_template(self, model_name: str, template_name: str) -> None:
+        """刪除模型的卡片模板：所有筆記的那一種卡（與複習紀錄）一起刪掉，AnkiWeb 會要求完整同步。
+
+        Remove a card template; every card of that template and its review
+        history goes with it, and AnkiWeb will require a full sync.
+
+        Args:
+            model_name: 模型名稱。Model name.
+            template_name: 欲刪除的模板名稱。Template name to remove.
+
+        Raises:
+            AnkiConnectError: API 請求失敗時（例如只剩這一個模板）。Raised when the request fails.
+        """
+        await self.sync()
+        await self._invoke("modelTemplateRemove", modelName=model_name, templateName=template_name)
+
     async def reposition_model_field(
         self, model_name: str, field_name: str, index: int
     ) -> None:

@@ -1,0 +1,1176 @@
+<!-- 人脈卡（Person_Profile_Dark）的正面：一個人只有這一張卡，正面就是完整資料（工作經歷計畫書 §12）。
+     背面（Person_Profile_Dark_back.html）是正面（FrontSide）包在 .pp-back 裡：同一份畫面，遮擋全部掀開。
+     註解裡不要寫欄位的雙大括號：Anki 連註解裡的也會代換。
+     版面：頭部（頭像、姓名與讀音、徽章）→ 見面前必看（一律展開）→ TG 按鈕 → 可收合區段（<details>）。
+     欄位都放在隱藏的 div，由下方的 JS 讀取後畫出；JSON 欄位解析失敗時該區段顯示「資料格式錯誤」與原文，
+     不會默默消失。模板只顯示、不寫資料：寫入交給網頁與 TG——有 Card_ID 與 TG_Bot 時，每個區塊標題的
+     「+」開啟 TG 新增（區塊有多個欄位時 TG 先問新增哪一項），長按清單項目 3 秒開啟 TG 的選單（隱藏或顯示、
+     劃掉〔只有會變的欄位；職位叫離職〕、目標的達成或放棄、刪除；刪除 TG 會再確認一次）、長按文字欄位（名字、
+     出身、備註等）與頭像 3 秒開啟 TG 的選單（修改或換照片、隱藏或顯示），「劃掉」開啟 TG 把那筆標成失效。
+     沒有內容的區段只在有 TG 時顯示（才有「+」可按）。
+     會變的欄位（興趣、職位、現居地等）是 JSON 清單，每筆 {value, added, ended}（職位是 {company, title, …}）：
+     全部顯示，有效的在前，劃掉的接在後面（刪除線、附登錄日與失效日）。職位就是工作經歷：現職（沒有離職年月、
+     沒有劃掉）在上面、標「現職」，以前的工作在下面、附任職期間；同一段裡照清單順序（在網頁調整）。
+     在卡面隱藏的（清單項目有 hidden: true；文字欄位與照片有「人脈卡隱藏::欄位名」標籤）在正面變成遮擋塊，
+     點一下才看得到；要考什麼就隱藏什麼（隱藏名字＝認人，隱藏上次的互動＝見面前複習）。同一個欄位出現在別處時
+     也要遮（例如生日也出現在頭部的徽章）。名字只有 Display_Name 一個開關，遮整個名字區。 -->
+<div class="card person-card" id="person-root">
+    <div id="person-header"></div>
+    <div id="person-must-see"></div>
+    <div id="person-tg"></div>
+    <div id="person-sections"></div>
+</div>
+
+<div style="display:none;">
+    <div id="f-Tags">{{Tags}}</div>
+    <div id="f-Display_Name">{{Display_Name}}</div>
+    <div id="f-Name_ZH">{{Name_ZH}}</div>
+    <div id="f-Name_EN">{{Name_EN}}</div>
+    <div id="f-Name_JA">{{Name_JA}}</div>
+    <div id="f-Name_JA_Kana">{{Name_JA_Kana}}</div>
+    <div id="f-Name_Romaji">{{Name_Romaji}}</div>
+    <div id="f-Honorific">{{Honorific}}</div>
+    <div id="f-Name_Memo">{{Name_Memo}}</div>
+    <div id="f-Photo">{{Photo}}</div>
+    <div id="f-Appearance">{{Appearance}}</div>
+    <div id="f-Birthday">{{Birthday}}</div>
+    <div id="f-Hometown">{{Hometown}}</div>
+    <div id="f-Residence">{{Residence}}</div>
+    <div id="f-Languages">{{Languages}}</div>
+    <div id="f-Timezone">{{Timezone}}</div>
+    <div id="f-Met_Date">{{Met_Date}}</div>
+    <div id="f-Met_Where">{{Met_Where}}</div>
+    <div id="f-Met_Via">{{Met_Via}}</div>
+    <div id="f-Introducer_Note_ID">{{Introducer_Note_ID}}</div>
+    <div id="f-Relationship">{{Relationship}}</div>
+    <div id="f-Closeness">{{Closeness}}</div>
+    <div id="f-First_Impression">{{First_Impression}}</div>
+    <div id="f-Company">{{Company}}</div>
+    <div id="f-Title">{{Title}}</div>
+    <div id="f-Work_Detail">{{Work_Detail}}</div>
+    <div id="f-Education">{{Education}}</div>
+    <div id="f-Interests">{{Interests}}</div>
+    <div id="f-Food_Drink">{{Food_Drink}}</div>
+    <div id="f-Dislikes">{{Dislikes}}</div>
+    <div id="f-Dietary">{{Dietary}}</div>
+    <div id="f-Personality_Values">{{Personality_Values}}</div>
+    <div id="f-Praise">{{Praise}}</div>
+    <div id="f-Ask_Advice">{{Ask_Advice}}</div>
+    <div id="f-Needs">{{Needs}}</div>
+    <div id="f-Common_Ground">{{Common_Ground}}</div>
+    <div id="f-Sensitive">{{Sensitive}}</div>
+    <div id="f-Comm_Prefs">{{Comm_Prefs}}</div>
+    <div id="f-Notes">{{Notes}}</div>
+    <div id="f-Interactions_JSON">{{Interactions_JSON}}</div>
+    <div id="f-Followups_JSON">{{Followups_JSON}}</div>
+    <div id="f-Family_JSON">{{Family_JSON}}</div>
+    <div id="f-Gifts_JSON">{{Gifts_JSON}}</div>
+    <div id="f-Key_Dates_JSON">{{Key_Dates_JSON}}</div>
+    <div id="f-Contacts_JSON">{{Contacts_JSON}}</div>
+    <div id="f-Goals_JSON">{{Goals_JSON}}</div>
+    <div id="f-Last_Contact">{{Last_Contact}}</div>
+    <div id="f-Contact_Cadence">{{Contact_Cadence}}</div>
+    <div id="f-Card_ID">{{Card_ID}}</div>
+    <div id="f-TG_Bot">{{TG_Bot}}</div>
+    <div id="f-Updated_At">{{Updated_At}}</div>
+</div>
+
+<script>
+(function () {
+    // ============================
+    // 讀欄位
+    // ============================
+
+    /** 欄位的純文字（`&quot;` 等跳脫會還原、HTML 標籤會去掉）。 */
+    function readField(name) {
+        var el = document.getElementById('f-' + name);
+        return el ? (el.textContent || '').replace(/ /g, ' ').trim() : '';
+    }
+
+    /** 文字區段的 HTML（保留自己在 Anki 編輯器寫的條列）；只有空白或空標籤時視為空。 */
+    function readHtml(name) {
+        var el = document.getElementById('f-' + name);
+        if (!el) return '';
+        var text = (el.textContent || '').replace(/ /g, ' ').trim();
+        if (!text && !el.querySelector('img')) return '';
+        return el.innerHTML.trim();
+    }
+
+    /**
+     * JSON 陣列欄位：比照後端 AnkiJsonFieldManager.parse_field_string，容忍 Anki 編輯器插入的
+     * <div>、<br>、不換行空白。空欄位回傳 []；格式錯誤回傳 { error, raw }，由區段顯示錯誤與原文。
+     */
+    function readJsonList(name) {
+        var raw = readField(name);
+        if (!raw) return [];
+        try {
+            var data = JSON.parse(raw);
+            if (Object.prototype.toString.call(data) !== '[object Array]') {
+                return { error: '不是 JSON 陣列', raw: raw };
+            }
+            return data;
+        } catch (e) {
+            return { error: '資料格式錯誤', raw: raw };
+        }
+    }
+
+    function isError(list) {
+        return list && !(Object.prototype.toString.call(list) === '[object Array]');
+    }
+
+    // ============================
+    // 小工具
+    // ============================
+
+    function el(tag, className, text) {
+        var node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined && text !== null) node.textContent = String(text);
+        return node;
+    }
+
+    function htmlNode(tag, className, html) {
+        var node = el(tag, className);
+        node.innerHTML = html;
+        return node;
+    }
+
+    /** 同一個名字永遠得到同一個顏色（與「見面前複習」正面相同的算法）。 */
+    function avatarColor(name) {
+        var hash = 0;
+        for (var i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) % 360;
+        return 'hsl(' + hash + ', 45%, 32%)';
+    }
+
+    function pad2(n) {
+        return (n < 10 ? '0' : '') + n;
+    }
+
+    function today() {
+        var now = new Date();
+        return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    }
+
+    /** `YYYY-MM-DD` 或 `--MM-DD` → { year|null, month, day }；格式不對回傳 null。 */
+    function parseDate(text) {
+        var m = /^(\d{4}|--)-?(\d{2})-(\d{2})$/.exec((text || '').trim());
+        if (!m) return null;
+        var month = parseInt(m[2], 10);
+        var day = parseInt(m[3], 10);
+        if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+        return { year: m[1] === '--' ? null : parseInt(m[1], 10), month: month, day: day };
+    }
+
+    var DAY_MS = 86400000;
+
+    /** 距今幾天（過去為正）；年份不明時回傳 null。 */
+    function daysSince(text) {
+        var d = parseDate(text);
+        if (!d || d.year === null) return null;
+        return Math.round((today() - new Date(d.year, d.month - 1, d.day)) / DAY_MS);
+    }
+
+    /** 下一次這個月日還有幾天（今天為 0）。 */
+    function daysUntilNext(d) {
+        var t = today();
+        var next = new Date(t.getFullYear(), d.month - 1, d.day);
+        if (next < t) next = new Date(t.getFullYear() + 1, d.month - 1, d.day);
+        return Math.round((next - t) / DAY_MS);
+    }
+
+    /** 一次性日期距今還有幾天（已過為負）。 */
+    function daysUntil(d) {
+        if (d.year === null) return daysUntilNext(d);
+        return Math.round((new Date(d.year, d.month - 1, d.day) - today()) / DAY_MS);
+    }
+
+    function age(d) {
+        if (!d || d.year === null) return null;
+        var t = today();
+        var years = t.getFullYear() - d.year;
+        if (t.getMonth() + 1 < d.month || (t.getMonth() + 1 === d.month && t.getDate() < d.day)) years--;
+        return years;
+    }
+
+    function shortDate(text) {
+        var d = parseDate(text);
+        return d ? pad2(d.month) + '/' + pad2(d.day) : text;
+    }
+
+    function byDateDesc(a, b) {
+        return String(b.date || '').localeCompare(String(a.date || ''));
+    }
+
+    /** 日文姓名加上讀音：漢字與讀音用空白分段且段數相同時逐段標，否則整段標。 */
+    function furiganaName(kanji, kana) {
+        var wrap = el('span');
+        if (!kana) {
+            wrap.textContent = kanji;
+            return wrap;
+        }
+        var ks = kanji.split(/\s+/);
+        var rs = kana.split(/\s+/);
+        var pairs = ks.length === rs.length ? ks.map(function (k, i) { return [k, rs[i]]; }) : [[kanji, kana]];
+        pairs.forEach(function (pair, i) {
+            if (i > 0) wrap.appendChild(document.createTextNode(' '));
+            var ruby = el('ruby', null, pair[0]);
+            ruby.appendChild(el('rt', null, pair[1]));
+            wrap.appendChild(ruby);
+        });
+        return wrap;
+    }
+
+    /** 以 AnkiConnect 打開另一張筆記（桌面版開瀏覽器；網頁版在網頁裡切換過去）。 */
+    function browseNote(noteId) {
+        fetch('http://127.0.0.1:8765', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'guiBrowse', version: 6, params: { query: 'nid:' + noteId } })
+        }).catch(function () {});
+    }
+
+    // ============================
+    // TG 深連結：Anki app 的寫入入口（需要 Card_ID 與 TG_Bot）
+    // 格式 {動作}-{欄位}-{序號}-{Card_ID}，與後端 app/bot/person_profile 的解析一致
+    // ============================
+
+    var tgCardId = readField('Card_ID');
+    var tgBot = readField('TG_Bot').replace(/^@/, '');
+    var tgEnabled = /^[A-Za-z0-9_]+$/.test(tgCardId) && /^[A-Za-z0-9_]+$/.test(tgBot);
+
+    function tgUrl(action, field, index) {
+        return 'https://t.me/' + tgBot + '?start=' + action + '-' + field + '-' + index + '-' + tgCardId;
+    }
+
+    /**
+     * 一筆 JSON 項目的指紋（djb2，UTF-16 碼元，36 進位），與後端 item_fingerprint 相同算法。
+     * 長按選單、標成完成、劃掉時附在序號後面：卡片上的序號可能過時（別處新增或刪除、尚未同步），TG 據此確認
+     * 要動的還是同一筆。added、ended、start、end、note、hidden 都不放進指紋：劃掉、補年月、隱藏後指紋不變。
+     */
+    function itemFingerprint(item) {
+        var keys = ['date', 'item', 'topics', 'name', 'label', 'handle', 'relation', 'channel'];
+        var key = keys.map(function (k) {
+            return item && item[k] !== undefined && item[k] !== null ? String(item[k]) : '';
+        }).join('|');
+        // 會變的欄位的項目：有這些鍵時才接上（與後端 FINGERPRINT_EXTRA_KEYS 相同）
+        ['value', 'company', 'title'].forEach(function (k) {
+            if (item && item[k] !== undefined && item[k] !== null) key += '|' + String(item[k]);
+        });
+        var h = 5381;
+        for (var i = 0; i < key.length; i++) h = ((h * 33) ^ key.charCodeAt(i)) >>> 0;
+        return h.toString(36);
+    }
+
+    function itemRef(index, item) {
+        return index + '_' + itemFingerprint(item);
+    }
+
+    function tgLink(text, url, className) {
+        var a = el('a', className || 'tg-link', text);
+        a.href = url;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.addEventListener('click', function (e) { e.stopPropagation(); });
+        return a;
+    }
+
+    /**
+     * AI 分析時內文遮不遮名字的開關（只有圖示，像密碼欄的顯示／隱藏）：劃線的眼睛＝遮（預設，灰），
+     * 睜開的眼睛＝不遮（橘）。狀態存在標籤「AI內文不遮名字」（與後端 TEXT_UNMASKED_TAG 相同）；
+     * 點它開 TG 切換成另一個狀態。
+     */
+    function maskToggle() {
+        var unmasked = readField('Tags').split(/\s+/).indexOf('AI內文不遮名字') >= 0;
+        var a = tgLink('', tgUrl('pmask', 'Display_Name', unmasked ? 'on' : 'off'),
+            'mask-toggle' + (unmasked ? ' is-unmasked' : ''));
+        a.title = unmasked ? 'AI 分析：內文不遮名字（點一下改成遮）' : 'AI 分析：內文遮名字（點一下改成不遮）';
+        a.setAttribute('aria-label', a.title);
+        var eye = '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>';
+        var slash = '<line x1="3" y1="3" x2="21" y2="21"/>';
+        a.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" '
+            + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            + eye + (unmasked ? '' : slash) + '</svg>';
+        return a;
+    }
+
+    /**
+     * 區塊標題的「+」：target.field 直接開 TG 新增到那個欄位；target.section 是有多個欄位的區塊，
+     * TG 先問新增哪一項（後端 SECTION_FIELDS）。放在 summary 裡時，點它不會展開或收合區段。
+     */
+    function addLink(target, label) {
+        var url = target.section ? tgUrl('psec', target.section, 'none') : tgUrl('padd', target.field, 'none');
+        var a = tgLink('+', url, 'add-link');
+        a.title = '在 TG 新增' + (label || '');
+        return a;
+    }
+
+    function openUrl(url) {
+        var a = el('a');
+        a.href = url;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
+
+    var LONG_PRESS_MS = 3000;
+
+    // ============================
+    // 在卡面隱藏（只影響卡面；AI 分析照樣讀得到）
+    // ============================
+
+    // 文字欄位的隱藏記在標籤（與後端 HIDDEN_TAG_PREFIX 相同）
+    var HIDDEN_TAG_PREFIX = '人脈卡隱藏::';
+    var hiddenFields = {};
+    readField('Tags').split(/\s+/).forEach(function (tag) {
+        if (tag.indexOf(HIDDEN_TAG_PREFIX) === 0) hiddenFields[tag.slice(HIDDEN_TAG_PREFIX.length)] = true;
+    });
+
+    function isHiddenItem(item) {
+        return Boolean(item) && typeof item === 'object' && item.hidden === true;
+    }
+
+    /**
+     * 隱藏的內容蓋上一塊明顯的斜線遮擋，點一下才看得到（翻下一張就恢復）。label 預設「已隱藏・點一下看」，
+     * 標籤這種小東西用短的「隱藏」。同一個節點也要長按時，先呼叫 longPress 再呼叫這裡：長按觸發後的那一下
+     * click 先由 longPress 吞掉（它要重設自己的狀態），遮擋再順便掀開；反過來的話 longPress 收不到那一下，
+     * 之後一次正常的點擊會被它吞掉。正面兩份模板各有一份同樣的寫法，改這裡時一起改。
+     */
+    function coverIfHidden(node, hidden, label) {
+        if (!hidden || !node) return node;
+        node.className += ' is-hidden';
+        node.appendChild(el('span', 'hidden-cover', label || '已隱藏・點一下看'));
+        // 捕獲階段先攔下：第一下只是掀開，不要展開區段、開 TG 或翻面。背面（.pp-back）的遮擋由 CSS 拿掉，不攔
+        node.addEventListener('click', function (e) {
+            if (node.className.indexOf('is-revealed') >= 0 || onBackSide(node)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            node.className += ' is-revealed';
+        }, true);
+        return node;
+    }
+
+    /** 在背面（Person_Profile_Dark_back.html 把正面包在 .pp-back 裡）：遮擋全部掀開。 */
+    function onBackSide(node) {
+        for (var n = node; n; n = n.parentNode) {
+            if (n.className && String(n.className).indexOf('pp-back') >= 0) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 清單的一筆：在卡面隱藏的蓋上遮擋（cover 指定要蓋的節點，預設就是 node），並且長按 3 秒開啟 TG 的選單
+     * （隱藏或顯示、劃掉、刪除，見 longPress）。沒有 TG 連結時只處理遮擋。
+     */
+    function longPressItem(node, field, index, item, cover) {
+        longPress(node, tgUrl('pitm', field, itemRef(index, item)), '長按 3 秒：在 TG 隱藏、刪除等',
+            '在 TG 開啟選單', '');
+        coverIfHidden(cover || node, isHiddenItem(item));
+        return node;
+    }
+
+    /**
+     * 文字欄位（出身、備註等）：有隱藏標籤的蓋上遮擋，並且長按 3 秒開啟 TG 的選單（修改、隱藏或顯示）。
+     */
+    function longPressField(node, field) {
+        longPress(node, tgUrl('pfld', field, 'none'), '長按 3 秒：在 TG 修改或隱藏', '在 TG 開啟選單', ' lp-edit');
+        return coverIfHidden(node, hiddenFields[field] === true);
+    }
+
+    /**
+     * 長按 3 秒開啟 TG：按住時下緣出現進度條，放開、移動或捲動就取消；滿 3 秒開啟 url，
+     * 並在旁邊留一個連結（有些 App 不允許程式自動開連結，這時點它）。extraClass 決定進度條的顏色。
+     */
+    function longPress(node, url, title, revealText, extraClass) {
+        if (!tgEnabled || !node) return node;
+        node.className += ' lp-target' + extraClass;
+        node.setAttribute('role', 'button');
+        node.setAttribute('title', title);
+        var timer = null;
+        var fired = false;
+        var startX = 0;
+        var startY = 0;
+
+        function cancel() {
+            if (timer) clearTimeout(timer);
+            timer = null;
+            node.className = node.className.replace(/\s*lp-active/g, '');
+        }
+
+        node.addEventListener('pointerdown', function (e) {
+            if (e.button) return;
+            fired = false;
+            startX = e.clientX;
+            startY = e.clientY;
+            node.className += ' lp-active';
+            timer = setTimeout(function () {
+                cancel();
+                fired = true;
+                if (navigator.vibrate) {
+                    try { navigator.vibrate(30); } catch (err) { /* 不支援震動 */ }
+                }
+                if (!node.querySelector('.lp-reveal')) node.appendChild(tgLink(revealText, url, 'lp-reveal'));
+                openUrl(url);
+            }, LONG_PRESS_MS);
+        });
+        node.addEventListener('pointermove', function (e) {
+            if (timer && (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10)) cancel();
+        });
+        ['pointerup', 'pointerleave', 'pointercancel'].forEach(function (type) {
+            node.addEventListener(type, cancel);
+        });
+        node.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+        // 長按觸發後的那一下點擊，不要再展開、收合或翻面
+        node.addEventListener('click', function (e) {
+            if (!fired) return;
+            fired = false;
+            e.preventDefault();
+            e.stopPropagation();
+        }, true);
+        return node;
+    }
+
+    /** 陣列加上原本的序號（排序後顯示，刪除時仍要用存放的位置）。 */
+    function withIndex(list) {
+        return list.map(function (item, index) { return { item: item, index: index }; });
+    }
+
+    // ============================
+    // 可收合區段
+    // ============================
+
+    var STORAGE_PREFIX = 'person_profile_open_';
+
+    function storedOpen(key, fallback) {
+        try {
+            var v = window.localStorage.getItem(STORAGE_PREFIX + key);
+            return v === null ? fallback : v === '1';
+        } catch (e) {
+            return fallback;
+        }
+    }
+
+    function rememberOpen(key, open) {
+        try {
+            window.localStorage.setItem(STORAGE_PREFIX + key, open ? '1' : '0');
+        } catch (e) {
+            // 只影響下次的預設展開狀態
+        }
+    }
+
+    /**
+     * 產生一個可收合區段。addTarget：summary 上的「+」（見 addLink）。沒有內容時：有 TG 而且有「+」就顯示
+     * 「還沒有資料」（才有地方按「+」），否則回傳 null。
+     */
+    function section(key, title, color, nodes, count, addTarget) {
+        nodes = nodes.filter(Boolean);
+        var canAdd = Boolean(addTarget) && tgEnabled;
+        if (nodes.length === 0) {
+            if (!canAdd) return null;
+            nodes = [el('div', 'empty-hint', '還沒有資料，按標題的「+」新增')];
+        }
+        var details = el('details', 'p-section');
+        details.style.borderLeftColor = color;
+        details.open = storedOpen(key, false);
+        var summary = el('summary');
+        summary.appendChild(el('span', null, title));
+        if (count) summary.appendChild(el('span', 'p-section-count', count));
+        if (canAdd) summary.appendChild(addLink(addTarget, title));
+        summary.appendChild(el('span', 'accordion-arrow', '▸'));
+        details.appendChild(summary);
+        var body = el('div', 'p-section-body');
+        nodes.forEach(function (node) { body.appendChild(node); });
+        details.appendChild(body);
+        details.addEventListener('toggle', function () { rememberOpen(key, details.open); });
+        return details;
+    }
+
+    /** 一列「標籤：內容」；內容為空時回傳 null。value 可以是文字或節點。 */
+    function row(label, value) {
+        if (value === null || value === undefined || value === '') return null;
+        var r = el('div', 'p-row');
+        if (label) r.appendChild(el('div', 'p-label', label));
+        var v = el('div', 'p-value');
+        if (typeof value === 'string') v.textContent = value;
+        else v.appendChild(value);
+        r.appendChild(v);
+        return r;
+    }
+
+    /** 文字區段欄位的一列，照 HTML 顯示。 */
+    function htmlRow(label, name) {
+        var html = readHtml(name);
+        if (!html) return null;
+        return row(label, htmlNode('div', null, html));
+    }
+
+    // ============================
+    // 會變的欄位：每筆 {value, added, ended}；職位 {company, title, start, end, note, added, ended}；
+    // 每一筆都可能有 hidden: true
+    // ============================
+
+    // 與後端 PERSON_HISTORY_FIELDS 相同（tests/test_person_profile_template.py 比對）
+    var HISTORY_FIELDS = ['Interests', 'Food_Drink', 'Dislikes', 'Dietary', 'Company', 'Work_Detail', 'Education',
+        'Personality_Values', 'Praise', 'Ask_Advice', 'Needs', 'Common_Ground', 'Comm_Prefs', 'Residence', 'Languages',
+        'Timezone', 'Relationship', 'Closeness', 'Sensitive'];
+    var historyLists = {};
+    HISTORY_FIELDS.forEach(function (name) { historyLists[name] = readJsonList(name); });
+
+    /** 目前有效：沒有劃掉；職位另外要沒有離職年月（與後端 is_active 相同）。 */
+    function isActiveEntry(item) {
+        return Boolean(item) && typeof item === 'object' && !String(item.ended || '').trim()
+            && !String(item.end || '').trim();
+    }
+
+    /** 職位的任職期間：「2021-04～」「2019～2021」「～？」；劃掉卻沒有離職年月時用劃掉的月份（與後端 position_period 相同）。 */
+    function positionPeriod(item) {
+        if (!item || typeof item !== 'object') return '';
+        var start = String(item.start || '').trim();
+        var end = String(item.end || '').trim();
+        if (!end && String(item.ended || '').trim()) end = String(item.ended).trim().slice(0, 7);
+        if (end === '?') end = '？';
+        return start || end ? start + '～' + end : '';
+    }
+
+    /** 一筆的文字：職位是「公司・職稱」，其他是內容（與後端 entry_text 相同）。 */
+    function entryText(name, item) {
+        if (!item || typeof item !== 'object') return String(item === null || item === undefined ? '' : item);
+        if (name === 'Company') {
+            return [item.company, item.title].map(function (s) { return String(s || '').trim(); })
+                .filter(Boolean).join('・');
+        }
+        return String(item.value || '').trim();
+    }
+
+    /** 物件且有內容的每一筆（附序號）；清單格式壞掉時為空。 */
+    function historyEntries(name) {
+        var list = historyLists[name];
+        if (isError(list)) return [];
+        return withIndex(list).filter(function (e) { return isEntry(e.item) && entryText(name, e.item); });
+    }
+
+    function isEntry(item) {
+        return Boolean(item) && typeof item === 'object' && Object.prototype.toString.call(item) !== '[object Array]';
+    }
+
+    /** 格式不對的項目（不是物件、或沒有內容）：不算有效也不算劃掉，另外列出。 */
+    function malformedEntries(name) {
+        var list = historyLists[name];
+        if (isError(list)) return [];
+        return withIndex(list).filter(function (e) { return !isEntry(e.item) || !entryText(name, e.item); });
+    }
+
+    function activeEntries(name) {
+        return historyEntries(name).filter(function (e) { return isActiveEntry(e.item); });
+    }
+
+    /** 「劃掉」：開 TG 把這筆標成失效（失效日＝今天，保留紀錄）；職位叫「離職」（另外補上離職年月）。 */
+    function endLink(name, entry) {
+        var leave = name === 'Company';
+        var a = tgLink(leave ? '離職' : '劃掉', tgUrl('pend', name, itemRef(entry.index, entry.item)), 'done-link');
+        a.title = leave ? '在 TG 標成離職（保留在工作經歷裡）' : '在 TG 劃掉（不再適用，保留成過去的紀錄）';
+        return a;
+    }
+
+    /** 劃掉的那筆附的日期：「登錄日・失效日 劃掉」。 */
+    function endedNote(item) {
+        var added = String(item.added || '');
+        return (added ? added + ' 登錄' : '日期不明') + '・' + String(item.ended || '') + ' 劃掉';
+    }
+
+    /** 格式不對的項目：不算有效也不算劃掉，另外列出；長按開的選單只有刪除（隱藏、劃掉都要改那一筆的鍵）。 */
+    function malformedNodes(name) {
+        return malformedEntries(name).map(function (e) {
+            var bad = el('div', 'json-error', '這筆格式不對（請在網頁修正）：' + JSON.stringify(e.item));
+            return longPressItem(bad, name, e.index, e.item);
+        });
+    }
+
+    /**
+     * 會變的欄位的一列：全部顯示，有效的在前、劃掉的接在後面（刪除線、附登錄日與失效日）；opts.chips 顯示成標籤。
+     * 有 TG 時有效的那筆旁有「劃掉」（標籤沒有，長按開選單再劃掉），每筆都能長按開選單。
+     * opts.blur：內容模糊，點了才清楚（敏感話題）。沒有任何紀錄時回傳 null。
+     */
+    function historyRow(label, name, opts) {
+        opts = opts || {};
+        var list = historyLists[name];
+        if (isError(list)) return row(label, errorNode(list));
+        var entries = historyEntries(name);
+        var malformed = malformedNodes(name);
+        if (!entries.length && !malformed.length) return null;
+        var active = entries.filter(function (e) { return isActiveEntry(e.item); });
+        var ended = entries.filter(function (e) { return !isActiveEntry(e.item); });
+
+        var content = el('div', 'p-value');
+        if (opts.chips) {
+            var chipRow = el('div', 'chip-row');
+            active.concat(ended).forEach(function (e) {
+                var isEnded = !isActiveEntry(e.item);
+                var chip = el('span', 'chip' + (isEnded ? ' is-ended' : ''), entryText(name, e.item));
+                if (isEnded) chip.title = endedNote(e.item);
+                longPress(chip, tgUrl('pitm', name, itemRef(e.index, e.item)), '長按 3 秒：在 TG 隱藏、劃掉等',
+                    '在 TG 開啟選單', '');
+                chipRow.appendChild(coverIfHidden(chip, isHiddenItem(e.item), '隱藏'));
+            });
+            content.appendChild(chipRow);
+        } else {
+            active.forEach(function (e) {
+                var line = el('div', 'hist-line');
+                line.appendChild(el('span', 'hist-text', entryText(name, e.item)));
+                if (tgEnabled) line.appendChild(endLink(name, e));
+                content.appendChild(longPressItem(line, name, e.index, e.item));
+            });
+            ended.forEach(function (e) {
+                var line = el('div', 'hist-line is-ended');
+                line.appendChild(el('span', 'hist-text', entryText(name, e.item)));
+                line.appendChild(el('span', 'hist-date', endedNote(e.item)));
+                content.appendChild(longPressItem(line, name, e.index, e.item));
+            });
+        }
+        malformed.forEach(function (node) { content.appendChild(node); });
+
+        var r = el('div', 'p-row');
+        if (label) r.appendChild(el('div', 'p-label', label));
+
+        if (opts.blur) {
+            content.className += ' blur-reveal';
+            content.setAttribute('role', 'button');
+            content.addEventListener('click', function (ev) {
+                if (content.className.indexOf('blur-reveal') < 0) return;
+                ev.stopPropagation();
+                ev.preventDefault();
+                content.className = content.className.replace(/\s*blur-reveal/, ' revealed');
+            }, true);
+        }
+        r.appendChild(content);
+        return r;
+    }
+
+    /**
+     * 工作經歷（職位 Company）：現職在上（「現職」標籤、字大一級、旁邊有「離職」），以前的工作在下（較淡、
+     * 附任職期間）；同一段裡照清單順序（網頁的上移、下移）。每筆附說明（note），都能長按開選單。
+     */
+    function careerRow() {
+        var name = 'Company';
+        var list = historyLists[name];
+        if (isError(list)) return row('工作經歷', errorNode(list));
+        var entries = historyEntries(name);
+        var malformed = malformedNodes(name);
+        if (!entries.length && !malformed.length) return null;
+        var content = el('div', 'p-value career');
+
+        function line(e, current) {
+            var item = e.item;
+            var node = el('div', 'career-item ' + (current ? 'is-current' : 'is-past'));
+            var head = el('div', 'career-head');
+            if (current) head.appendChild(el('span', 'career-badge', '現職'));
+            head.appendChild(el('span', 'career-name', entryText(name, item)));
+            var period = positionPeriod(item);
+            if (period) head.appendChild(el('span', 'career-period', period));
+            if (current && tgEnabled) head.appendChild(endLink(name, e));
+            node.appendChild(head);
+            var note = String(item.note || '').trim();
+            if (note) node.appendChild(el('div', 'career-note', note));
+            return longPressItem(node, name, e.index, item);
+        }
+
+        var current = entries.filter(function (e) { return isActiveEntry(e.item); });
+        var past = entries.filter(function (e) { return !isActiveEntry(e.item); });
+        current.forEach(function (e) { content.appendChild(line(e, true)); });
+        if (past.length) {
+            content.appendChild(el('div', 'career-past-label', current.length ? '以前' : '以前（目前沒有現職）'));
+            past.forEach(function (e) { content.appendChild(line(e, false)); });
+        }
+        malformed.forEach(function (node) { content.appendChild(node); });
+
+        var r = el('div', 'p-row');
+        r.appendChild(el('div', 'p-label', '工作經歷'));
+        r.appendChild(content);
+        return r;
+    }
+
+    /** 進行中的目標（與後端 is_open_goal 相同）。 */
+    function isOpenGoal(item) {
+        return Boolean(item) && typeof item === 'object' && String(item.status || 'open') === 'open';
+    }
+
+    var GOAL_STATUS = { done: '達成', dropped: '放棄' };
+
+    /** 目標區塊的每一列：進行中的在前（目標時間近的先，沒有時間的最後）；過期或 60 天內到期的標色。 */
+    function goalNodes() {
+        if (isError(goals)) return [errorNode(goals)];
+        var entries = withIndex(goals).filter(function (e) { return isEntry(e.item) && e.item.item; });
+        var open = entries.filter(function (e) { return isOpenGoal(e.item); });
+        var closed = entries.filter(function (e) { return !isOpenGoal(e.item); });
+        open.sort(function (a, b) {
+            var at = String(a.item.target || ''), bt = String(b.item.target || '');
+            if (!at || !bt) return at ? -1 : bt ? 1 : 0;
+            return at.localeCompare(bt);
+        });
+        return open.concat(closed).map(function (e) {
+            var g = e.item;
+            var node = el('div', 'goal-item' + (isOpenGoal(g) ? '' : ' is-closed'));
+            node.appendChild(el('span', 'goal-kind', String(g.kind || '目標')));
+            node.appendChild(el('span', 'goal-text', String(g.item)));
+            var target = String(g.target || '');
+            if (target) {
+                var t = el('span', 'goal-target', '目標 ' + target);
+                var d = parseDate(target);
+                // 只有年或年月時以那段的最後一天算（2026-12 → 12/31 前都不算過期）
+                var until = d ? daysUntil(d) : null;
+                if (!d && /^\d{4}(-\d{2})?$/.test(target)) {
+                    var parts = target.split('-');
+                    var last = parts.length === 1 ? new Date(+parts[0], 11, 31) : new Date(+parts[0], +parts[1], 0);
+                    until = Math.round((last - today()) / DAY_MS);
+                }
+                if (isOpenGoal(g) && until !== null) {
+                    if (until < 0) t.className += ' is-overdue';
+                    else if (until <= 60) t.className += ' is-soon';
+                }
+                node.appendChild(t);
+            }
+            if (!isOpenGoal(g)) {
+                node.appendChild(el('span', 'goal-status', (GOAL_STATUS[g.status] || g.status) + (g.closed ? ' ' + g.closed : '')));
+            }
+            return longPressItem(node, 'Goals_JSON', e.index, g);
+        });
+    }
+
+    function errorNode(list) {
+        var box = el('div', 'json-error', '資料格式錯誤：' + list.error + '（請在網頁或 TG 修正，或在 Anki 編輯器檢查原文）');
+        box.appendChild(el('pre', null, list.raw));
+        return box;
+    }
+
+    // ============================
+    // 資料
+    // ============================
+
+    var displayName = readField('Display_Name');
+    var photoHtml = readHtml('Photo');
+    var interactions = readJsonList('Interactions_JSON');
+    var followups = readJsonList('Followups_JSON');
+    var family = readJsonList('Family_JSON');
+    var gifts = readJsonList('Gifts_JSON');
+    var keyDates = readJsonList('Key_Dates_JSON');
+    var contacts = readJsonList('Contacts_JSON');
+    var goals = readJsonList('Goals_JSON');
+    var nameHidden = hiddenFields.Display_Name === true;
+
+    // ============================
+    // 頭部
+    // ============================
+    (function renderHeader() {
+        var header = el('div', 'person-header');
+
+        var avatar = el('div', 'avatar-md');
+        if (photoHtml) {
+            avatar.innerHTML = photoHtml;
+        } else {
+            // 名字隱藏時首字也會洩漏名字：正面改成問號、灰底；背面照常顯示
+            var maskInitial = nameHidden && !onBackSide(document.getElementById('person-root'));
+            avatar.textContent = displayName && !maskInitial ? displayName.charAt(0) : '?';
+            avatar.style.backgroundColor = maskInitial ? 'hsl(0, 0%, 30%)' : avatarColor(displayName);
+        }
+        // 長按頭像：TG 的照片選單（換照片、移除、隱藏或顯示）
+        longPress(avatar, tgUrl('pfld', 'Photo', 'none'), '長按 3 秒：在 TG 換照片或隱藏', '在 TG 開啟選單', ' lp-edit');
+        header.appendChild(coverIfHidden(avatar, Boolean(photoHtml) && hiddenFields.Photo === true, '隱藏'));
+
+        var names = el('div', 'person-names');
+        // 名字區（稱呼、日文名與讀音、其他語言的名字、敬稱）：一個開關（Display_Name）整塊遮
+        var nameBox = el('div', 'person-name-box');
+        var nameJa = readField('Name_JA');
+        var display = el('div', 'person-display');
+        // 有日文姓名時以它（加讀音）為主，否則用稱呼
+        display.appendChild(nameJa ? furiganaName(nameJa, readField('Name_JA_Kana')) : el('span', null, displayName));
+        nameBox.appendChild(display);
+
+        var alt = [];
+        if (nameJa && displayName) alt.push(displayName);
+        ['Name_ZH', 'Name_EN', 'Name_Romaji'].forEach(function (f) {
+            var v = readField(f);
+            if (v && alt.indexOf(v) < 0 && v !== nameJa) alt.push(v);
+        });
+        var honorific = readField('Honorific');
+        if (honorific) alt.push(honorific);
+        if (alt.length) nameBox.appendChild(el('div', 'person-alt', alt.join(' · ')));
+        // 同 longPressField，只是遮擋的字寫明是名字（先長按再遮擋，理由見 coverIfHidden）
+        longPress(nameBox, tgUrl('pfld', 'Display_Name', 'none'), '長按 3 秒：在 TG 修改或隱藏', '在 TG 開啟選單', ' lp-edit');
+        names.appendChild(coverIfHidden(nameBox, nameHidden, '名字・點一下看'));
+
+        // 名字記法有自己的開關；名字隱藏時也跟著遮（記法會洩漏名字）
+        var memo = readField('Name_Memo');
+        if (memo) {
+            var memoNode = longPressField(el('div', 'person-memo', '名字記法：' + memo), 'Name_Memo');
+            names.appendChild(coverIfHidden(memoNode, nameHidden && hiddenFields.Name_Memo !== true, '隱藏'));
+        }
+
+        // 現職（隱藏的那份蓋上遮擋，仍佔一個位置）
+        var jobs = activeEntries('Company');
+        if (jobs.length) {
+            var work = el('div', 'person-work');
+            jobs.forEach(function (e, i) {
+                if (i > 0) work.appendChild(document.createTextNode('／'));
+                work.appendChild(coverIfHidden(el('span', null, entryText('Company', e.item)), isHiddenItem(e.item), '隱藏'));
+            });
+            names.appendChild(work);
+        }
+
+        var badges = el('div', 'badge-row');
+        activeEntries('Relationship').forEach(function (e) {
+            badges.appendChild(coverIfHidden(el('span', 'pane-badge badge-blue', entryText('Relationship', e.item)),
+                isHiddenItem(e.item), '隱藏'));
+        });
+
+        // 理論上只有一筆有效；取消劃掉或網頁編輯可能留下多筆，取最後新增的
+        var closenessEntries = activeEntries('Closeness');
+        var closenessItem = closenessEntries.length ? closenessEntries[closenessEntries.length - 1].item : null;
+        var closeness = closenessItem ? parseInt(entryText('Closeness', closenessItem), 10) : NaN;
+        if (closeness >= 1 && closeness <= 5) {
+            var dots = '';
+            for (var i = 1; i <= 5; i++) dots += i <= closeness ? '●' : '○';
+            badges.appendChild(coverIfHidden(el('span', 'pane-badge closeness-dots', dots), isHiddenItem(closenessItem),
+                '隱藏'));
+        }
+
+        var birthday = parseDate(readField('Birthday'));
+        if (birthday) {
+            var untilBirthday = daysUntilNext(birthday);
+            var years = age(birthday);
+            var text = untilBirthday === 0 ? '今天生日' : '生日還有 ' + untilBirthday + ' 天';
+            if (years !== null) text += '（' + (untilBirthday === 0 ? years : years + 1) + ' 歲）';
+            // 生日設成隱藏時，徽章也遮（否則看得出生日與年齡）
+            badges.appendChild(coverIfHidden(el('span', 'pane-badge ' + (untilBirthday <= 14 ? 'badge-yellow' : ''), text),
+                hiddenFields.Birthday === true, '隱藏'));
+        }
+
+        var since = daysSince(readField('Last_Contact'));
+        if (since !== null) {
+            var cadence = parseInt(readField('Contact_Cadence'), 10);
+            var tone = '';
+            if (cadence > 0) tone = since > cadence ? 'badge-red' : since > cadence / 2 ? 'badge-yellow' : 'badge-green';
+            badges.appendChild(el('span', 'pane-badge ' + tone, (since <= 0 ? '今天聯絡過' : '上次聯絡 ' + since + ' 天前')));
+        }
+        if (badges.childNodes.length) names.appendChild(badges);
+
+        header.appendChild(names);
+        document.getElementById('person-header').appendChild(header);
+    })();
+
+    // ============================
+    // 見面前必看
+    // ============================
+    (function renderMustSee() {
+        var box = el('div', 'must-see');
+        var title = el('div', 'must-see-title', '見面前必看');
+        if (tgEnabled) title.appendChild(addLink({ section: 'must' }, '待追蹤或飲食限制'));
+        box.appendChild(title);
+        var any = false;
+
+        // 一列：小字標題在上、內容在下（與下面各區塊的「標籤：內容」同一種樣式）
+        function mustRow(label, content) {
+            var r = el('div', 'must-row');
+            r.appendChild(el('div', 'p-label', label));
+            r.appendChild(content);
+            box.appendChild(r);
+            any = true;
+        }
+
+        if (isError(followups)) {
+            mustRow('待追蹤', errorNode(followups));
+        } else {
+            var groups = [
+                ['ask', '下次要問'],
+                ['my_promise', '我答應的'],
+                ['their_promise', '對方答應的']
+            ];
+            groups.forEach(function (group) {
+                var open = withIndex(followups).filter(function (entry) {
+                    var f = entry.item;
+                    return (f.type || 'ask') === group[0] && (f.status || 'open') !== 'done';
+                });
+                if (!open.length) return;
+                var list = el('ul', 'followup-list');
+                open.forEach(function (entry) {
+                    var f = entry.item;
+                    var li = el('li', null, f.item || '');
+                    var note = f.due ? '期限 ' + shortDate(f.due) : f.added ? shortDate(f.added) + ' 記' : '';
+                    if (note) li.appendChild(el('span', 'followup-date', note));
+                    list.appendChild(longPressItem(li, 'Followups_JSON', entry.index, f));
+                    if (tgEnabled) {
+                        // 點一下開 TG，TG 先問要不要標成完成（不直接標）；長按 3 秒仍是選單。
+                        // 在 longPressItem 之後註冊：長按觸發後的那次點擊已被它 preventDefault、掀開遮擋的那一下
+                        // 已被 stopImmediatePropagation，這裡就不開
+                        var doneUrl = tgUrl('pdone', 'Followups_JSON', itemRef(entry.index, f));
+                        li.className += ' tap-target';
+                        li.setAttribute('title', '點一下在 TG 標成完成（會先確認）；長按 3 秒開選單');
+                        li.addEventListener('click', function (e) {
+                            if (e.defaultPrevented) return;
+                            e.stopPropagation();
+                            openUrl(doneUrl);
+                        });
+                    }
+                });
+                mustRow(group[1], list);
+            });
+        }
+
+        if (isError(historyLists.Dietary)) {
+            mustRow('飲食', errorNode(historyLists.Dietary));
+        } else {
+            // 一筆一行，隱藏的那筆蓋上遮擋（過敏仍看得出「有一筆被隱藏」）
+            var dietary = activeEntries('Dietary');
+            if (dietary.length) {
+                var warn = el('div', 'warn-box');
+                dietary.forEach(function (e) {
+                    warn.appendChild(longPressItem(el('div', 'hist-text', entryText('Dietary', e.item)), 'Dietary',
+                        e.index, e.item));
+                });
+                mustRow('飲食限制', warn);
+            }
+        }
+
+        if (isError(interactions)) {
+            mustRow('上次', errorNode(interactions));
+        } else if (interactions.length) {
+            var last = interactions.slice().sort(byDateDesc)[0];
+            var lastText = el('div', null, (last.topics || '') + (last.updates ? '｜' + last.updates : ''));
+            mustRow('上次（' + shortDate(last.date || '') + '）', coverIfHidden(lastText, isHiddenItem(last)));
+        }
+
+        if (!isError(keyDates)) {
+            var soon = keyDates
+                .map(function (k) {
+                    var d = parseDate(k.date);
+                    if (!d) return null;
+                    var until = k.yearly ? daysUntilNext(d) : daysUntil(d);
+                    return until >= 0 && until <= 60 ? { label: k.label, date: d, until: until, hidden: isHiddenItem(k) } : null;
+                })
+                .filter(Boolean);
+            // 有完整日期、60 天內到期的進行中目標（例如考試當天）
+            if (!isError(goals)) {
+                goals.forEach(function (g) {
+                    var d = isOpenGoal(g) ? parseDate(g.target) : null;
+                    if (!d || d.year === null) return;
+                    var until = daysUntil(d);
+                    if (until >= 0 && until <= 60) soon.push({ label: g.item, date: d, until: until, hidden: isHiddenItem(g) });
+                });
+            }
+            soon.sort(function (a, b) { return a.until - b.until; });
+            if (soon.length) {
+                var list = el('ul', 'followup-list');
+                soon.forEach(function (s) {
+                    list.appendChild(coverIfHidden(el('li', null, s.label + '（' + pad2(s.date.month) + '/' + pad2(s.date.day) +
+                        (s.until === 0 ? '，就是今天' : '，還有 ' + s.until + ' 天') + '）'), s.hidden));
+                });
+                mustRow('近期', list);
+            }
+        }
+
+        if (!any) box.appendChild(el('div', 'empty-hint', '還沒有要注意的事'));
+        document.getElementById('person-must-see').appendChild(box);
+    })();
+
+    // ============================
+    // TG 深連結（Anki app 的寫入入口；需要 Card_ID 與 TG_Bot）
+    // ============================
+    (function renderTgLinks() {
+        if (!tgEnabled) return;
+        // 新增一律從各區塊標題的「+」；這裡只留不屬於某個區塊的操作
+        var wrap = el('div', 'tg-actions');
+        wrap.appendChild(tgLink('改資料', tgUrl('pview', 'Display_Name', 'none')));
+        wrap.appendChild(tgLink('照片', tgUrl('pphoto', 'Photo', 'none')));
+        wrap.appendChild(tgLink('AI 分析與話題', tgUrl('ptopic', 'Display_Name', 'none')));
+        wrap.appendChild(maskToggle());
+        wrap.appendChild(el('span', 'tg-hint', '點待追蹤：在 TG 標成完成｜長按 3 秒：在 TG 隱藏、劃掉、刪除或修改（名字、頭像也可以）'));
+        document.getElementById('person-tg').appendChild(wrap);
+    })();
+
+    // ============================
+    // 可收合區段
+    // ============================
+    (function renderSections() {
+        var mount = document.getElementById('person-sections');
+        var sections = [];
+
+        // 共同點（開話題用，放最前面）
+        sections.push(section('common', '共同點', '#f39c12', [historyRow(null, 'Common_Ground')], '',
+            { field: 'Common_Ground' }));
+
+        // 興趣與喜好
+        sections.push(section('interests', '興趣與喜好', '#2ecc71', [
+            historyRow('興趣', 'Interests', { chips: true }),
+            historyRow('飲食', 'Food_Drink', { chips: true }),
+            historyRow('不喜歡的事', 'Dislikes', { chips: true })
+        ], '', { section: 'interests' }));
+
+        // 工作
+        sections.push(section('work', '工作', '#3498db', [
+            careerRow(),
+            historyRow('工作內容', 'Work_Detail'),
+            historyRow('學歷', 'Education')
+        ], '', { section: 'work' }));
+
+        // 目標：進行中的依目標時間由近到遠（沒有時間的最後），達成、放棄的接在後面
+        sections.push(section('goals', '目標', '#16a085', goalNodes(), isError(goals) ? '' : goals.filter(isOpenGoal).length || '',
+            { field: 'Goals_JSON' }));
+
+        // 家庭
+        var familyNodes = [];
+        if (isError(family)) {
+            familyNodes.push(errorNode(family));
+        } else {
+            family.forEach(function (m, index) {
+                var parts = [m.name];
+                if (m.birth_year) parts.push(m.birth_year + ' 年生（' + (today().getFullYear() - m.birth_year) + ' 歲）');
+                var r = row(m.relation || '家人', parts.filter(Boolean).join('・') + (m.note ? '｜' + m.note : ''));
+                familyNodes.push(longPressItem(r, 'Family_JSON', index, m));
+            });
+        }
+        sections.push(section('family', '家庭', '#e91e63', familyNodes, isError(family) ? '' : family.length || '',
+            { field: 'Family_JSON' }));
+
+        // 個性與價值觀
+        sections.push(section('personality', '個性與價值觀', '#9b59b6', [
+            historyRow('個性・價值觀・夢想・煩惱', 'Personality_Values'),
+            historyRow('讚美素材', 'Praise'),
+            historyRow('可以請教的事', 'Ask_Advice'),
+            historyRow('對方需要的幫助', 'Needs')
+        ], '', { section: 'personality' }));
+
+        // 互動紀錄（時間軸，最新一筆展開）與已完成的待追蹤
+        var interactionNodes = [];
+        if (isError(interactions)) {
+            interactionNodes.push(errorNode(interactions));
+        } else if (interactions.length) {
+            var timeline = el('div', 'timeline');
+            withIndex(interactions).sort(function (a, b) { return byDateDesc(a.item, b.item); }).forEach(function (entry, order) {
+                var it = entry.item;
+                var item = el('details', 'timeline-item');
+                // 隱藏的那筆不自動展開：遮擋只蓋在標題列，展開前要先掀開
+                item.open = order === 0 && !isHiddenItem(it);
+                var summary = el('summary');
+                summary.appendChild(el('span', 'timeline-date', it.date || '日期不明'));
+                summary.appendChild(el('span', 'timeline-topics', it.topics || it.place || ''));
+                item.appendChild(longPressItem(summary, 'Interactions_JSON', entry.index, it));
+                var body = el('div', 'timeline-body');
+                if (it.place) body.appendChild(row('地點', it.place));
+                if (it.updates) body.appendChild(row('對方的近況', it.updates));
+                if (it.quote) body.appendChild(el('div', 'quote', '「' + it.quote + '」'));
+                item.appendChild(body);
+                timeline.appendChild(item);
+            });
+            interactionNodes.push(timeline);
+        }
+        if (!isError(followups)) {
+            var done = withIndex(followups).filter(function (entry) { return entry.item.status === 'done'; });
+            if (done.length) {
+                var doneList = el('ul', 'followup-list');
+                done.forEach(function (entry) {
+                    var li = el('li', 'followup-done', entry.item.item || '');
+                    doneList.appendChild(longPressItem(li, 'Followups_JSON', entry.index, entry.item));
+                });
+                interactionNodes.push(row('已完成的待追蹤', doneList));
+            }
+        }
+        sections.push(section('interactions', '互動紀錄', '#e67e22', interactionNodes,
+            isError(interactions) ? '' : interactions.length || '', { field: 'Interactions_JSON' }));
+
+        // 禮物
+        var giftNodes = [];
+        if (isError(gifts)) {
+            giftNodes.push(errorNode(gifts));
+        } else {
+            // 想要的（禮物靈感）在最上面，送出、收到的依日期新到舊
+            withIndex(gifts).sort(function (a, b) {
+                var ai = a.item.direction === 'idea' ? 0 : 1;
+                var bi = b.item.direction === 'idea' ? 0 : 1;
+                return ai - bi || byDateDesc(a.item, b.item);
+            }).forEach(function (entry) {
+                var g = entry.item;
+                var direction = g.direction === 'received' ? '收到' : g.direction === 'idea' ? '想要的' : '送出';
+                var label = direction + (g.date ? '・' + g.date : '');
+                var r = row(label, (g.item || '') + (g.reaction ? '｜' + g.reaction : ''));
+                giftNodes.push(longPressItem(r, 'Gifts_JSON', entry.index, g));
+            });
+        }
+        sections.push(section('gifts', '禮物', '#f1c40f', giftNodes, isError(gifts) ? '' : gifts.length || '',
+            { field: 'Gifts_JSON' }));
+
+        // 重要日期（含生日）
+        var dateNodes = [];
+        var birthdayText = readField('Birthday');
+        var birthdayDate = parseDate(birthdayText);
+        if (birthdayDate) {
+            var birthdayAge = age(birthdayDate);
+            dateNodes.push(longPressField(row('生日', (birthdayDate.year !== null ? birthdayText : pad2(birthdayDate.month) + '/' + pad2(birthdayDate.day)) +
+                (birthdayAge !== null ? '（' + birthdayAge + ' 歲）' : '') + '・還有 ' + daysUntilNext(birthdayDate) + ' 天'), 'Birthday'));
+        } else if (birthdayText) {
+            dateNodes.push(longPressField(row('生日', birthdayText), 'Birthday'));
+        }
+        if (isError(keyDates)) {
+            dateNodes.push(errorNode(keyDates));
+        } else {
+            keyDates.forEach(function (k, index) {
+                var r = row(k.label || '日子', (k.date || '') + (k.yearly ? '（每年）' : ''));
+                dateNodes.push(longPressItem(r, 'Key_Dates_JSON', index, k));
+            });
+        }
+        // 「+」可新增生日（沒填時卡片上沒有那一列可以長按）或重要日期
+        sections.push(section('dates', '重要日期', '#1abc9c', dateNodes, '', { section: 'dates' }));
+
+        // 聯絡方式
+        var contactNodes = [];
+        if (isError(contacts)) {
+            contactNodes.push(errorNode(contacts));
+        } else {
+            contacts.forEach(function (c, index) {
+                var r = row(c.channel || '聯絡方式', (c.handle || '') + (c.preferred ? '（偏好）' : ''));
+                contactNodes.push(longPressItem(r, 'Contacts_JSON', index, c));
+            });
+        }
+        contactNodes.push(historyRow('溝通偏好', 'Comm_Prefs'));
+        sections.push(section('contacts', '聯絡方式', '#5dade2', contactNodes, '', { section: 'contacts' }));
+
+        // 認識脈絡與基本資料
+        var introducer = readField('Introducer_Note_ID');
+        var introducerNode = null;
+        if (/^\d+$/.test(introducer)) {
+            introducerNode = el('span', 'mini-action-btn', '查看介紹人');
+            introducerNode.setAttribute('role', 'button');
+            introducerNode.addEventListener('click', function (e) {
+                e.stopPropagation();
+                browseNote(introducer);
+            });
+        }
+        sections.push(section('context', '認識脈絡與基本資料', '#95a5a6', [
+            // 文字欄位：長按開 TG 選單（修改、隱藏或顯示；認識日期與場合分成兩列，各自對應一個欄位）
+            longPressField(row('認識日期', readField('Met_Date')), 'Met_Date'),
+            longPressField(row('認識場合', readField('Met_Where')), 'Met_Where'),
+            longPressField(row('管道', readField('Met_Via')), 'Met_Via'),
+            introducerNode ? longPressField(row('介紹人', introducerNode), 'Introducer_Note_ID') : null,
+            longPressField(htmlRow('第一印象', 'First_Impression'), 'First_Impression'),
+            longPressField(htmlRow('外貌特徵', 'Appearance'), 'Appearance'),
+            longPressField(row('出身', readField('Hometown')), 'Hometown'),
+            historyRow('現居', 'Residence'),
+            historyRow('語言', 'Languages', { chips: true }),
+            historyRow('時區', 'Timezone'),
+            historyRow('關係', 'Relationship'),
+            historyRow('親密度（1–5）', 'Closeness')
+        ], '', { section: 'context' }));
+
+        // 備註
+        sections.push(section('notes', '備註', '#7f8c8d', [
+            longPressField(htmlRow(null, 'Notes'), 'Notes'),
+            row('資料更新', readField('Updated_At'))
+        ]));
+
+        // 敏感話題（模糊顯示，點了才清楚）
+        sections.push(section('sensitive', '敏感話題', '#c0392b', [
+            historyRow('不要主動提', 'Sensitive', { blur: true })
+        ], '', { field: 'Sensitive' }));
+
+        sections.forEach(function (s) { if (s) mount.appendChild(s); });
+    })();
+})();
+</script>

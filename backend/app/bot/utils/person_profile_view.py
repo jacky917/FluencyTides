@@ -6,7 +6,8 @@ functions, independent of aiogram.
 
 - 搜尋：用名字找人的 Anki 查詢。
 - 顯示：摘要（見面前必看）、全部資料、清單的每一筆。會變的欄位（興趣、職位等）摘要與全部資料只顯示
-  有效的，清單裡列出全部（附登錄日，劃掉的附失效日）。
+  有效的（職位是現職；全部資料另列以前的工作），清單裡列出全部（附登錄日，劃掉的附失效日；職位附任職期間）。
+  在卡面隱藏的那一筆，清單裡標「卡面隱藏」（TG 照樣顯示內容）。
 - 輸入：新增一筆時各清單要問的步驟、日期的寫法、文字欄位轉成 Anki 的 HTML。
 
 計畫書 ``docs/archive/person_profile_card_FEAT_2026-10-23.md`` §3.13、
@@ -19,6 +20,7 @@ import html
 import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from typing import Literal
 
 from app.bot.utils.formatting import anki_field_to_tg_text, escape_tg
 from app.core.exceptions import AnkiFieldCorruptedError
@@ -26,14 +28,22 @@ from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.anki.search import escape_search_value, note_type_term
 from app.schemas.llm.person_profile import LLMPersonTopicsResult
 from app.schemas.person_profile import (
+    GOAL_KINDS,
+    GOAL_STATUSES,
+    HIDEABLE_TEXT_FIELDS,
     PERSON_HISTORY_FIELDS,
     PERSON_JSON_ITEMS,
     PERSON_NOTE_TYPE,
     RETIRED_FIELDS,
     PersonCreateParams,
     active_texts,
+    entry_detail,
     entry_text,
     is_active,
+    is_hidden,
+    is_open_goal,
+    normalize_period,
+    position_period,
 )
 
 #: 用名字找人時比對的欄位。Fields a name search looks at.
@@ -43,7 +53,7 @@ NAME_FIELDS = ("Display_Name", "Name_ZH", "Name_EN", "Name_JA", "Name_JA_Kana", 
 MAX_SEARCH_RESULTS = 10
 
 #: callback data 裡的清單代號（callback data 上限 64 bytes），順序同「清單」選單。
-#: 前六個是原本的 JSON 清單，其餘是會變的欄位。Short list codes for callback data, in menu order.
+#: 前七個是 JSON 清單（目標是後來加的），其餘是會變的欄位。Short list codes for callback data, in menu order.
 LIST_CODES = {
     "F": "Followups_JSON",
     "I": "Interactions_JSON",
@@ -51,8 +61,10 @@ LIST_CODES = {
     "G": "Gifts_JSON",
     "D": "Key_Dates_JSON",
     "C": "Contacts_JSON",
+    "GL": "Goals_JSON",
     "IN": "Interests",
     "FD": "Food_Drink",
+    "DL": "Dislikes",
     "DT": "Dietary",
     "CO": "Company",
     "WK": "Work_Detail",
@@ -60,6 +72,8 @@ LIST_CODES = {
     "PV": "Personality_Values",
     "PR": "Praise",
     "AA": "Ask_Advice",
+    "ND": "Needs",
+    "CG": "Common_Ground",
     "CP": "Comm_Prefs",
     "RS": "Residence",
     "LG": "Languages",
@@ -76,9 +90,9 @@ CODE_OF_LIST = {name: code for code, name in LIST_CODES.items()}
 #: 只對應一個欄位的區塊（家庭、互動等）直接用 ``padd``。The fields behind each section's "+".
 SECTION_FIELDS: dict[str, tuple[str, ...]] = {
     "must": ("Followups_JSON", "Dietary"),
-    "interests": ("Interests", "Food_Drink"),
+    "interests": ("Interests", "Food_Drink", "Dislikes"),
     "work": ("Company", "Work_Detail", "Education"),
-    "personality": ("Personality_Values", "Praise", "Ask_Advice"),
+    "personality": ("Personality_Values", "Praise", "Ask_Advice", "Needs"),
     "contacts": ("Contacts_JSON", "Comm_Prefs"),
     # 生日是文字欄位：沒填時卡片上沒有那一列可以長按，從這裡新增（走改資料）
     "dates": ("Birthday", "Key_Dates_JSON"),
@@ -106,8 +120,8 @@ DISPLAY_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("外貌與基本資料", ("Appearance", "Birthday", "Hometown", "Residence", "Languages", "Timezone")),
     ("認識", ("Met_Date", "Met_Where", "Met_Via", "Introducer_Note_ID", "Relationship", "Closeness", "First_Impression")),
     ("工作", ("Company", "Work_Detail", "Education")),
-    ("興趣與飲食", ("Interests", "Food_Drink", "Dietary")),
-    ("個性與價值觀", ("Personality_Values", "Praise", "Ask_Advice", "Sensitive")),
+    ("興趣與飲食", ("Interests", "Food_Drink", "Dislikes", "Dietary")),
+    ("個性與價值觀", ("Personality_Values", "Praise", "Ask_Advice", "Needs", "Common_Ground", "Sensitive")),
     ("聯絡與其他", ("Comm_Prefs", "Notes", "Last_Contact", "Contact_Cadence")),
 )
 
@@ -286,6 +300,15 @@ def summary_text(fields: dict[str, str], lists: dict[str, list[object]], today: 
         if 0 <= until <= 60:
             soon.append((until, f"{escape_tg(str(item.get('label', '')), 40)}（{month:02d}/{day:02d}，"
                                 f"{'就是今天' if until == 0 else f'還有 {until} 天'}）"))
+    for goal in lists.get("Goals_JSON", []):
+        # 有完整日期、60 天內到期的進行中目標（例如考試當天）也算近期
+        parsed = parse_date(str(goal.get("target", ""))) if is_open_goal(goal) else None
+        if not parsed or parsed[0] is None:
+            continue
+        until = (date(*parsed) - today).days  # type: ignore[arg-type]
+        if 0 <= until <= 60:
+            soon.append((until, f"{escape_tg(str(goal.get('item', '')), 40)}（{parsed[1]:02d}/{parsed[2]:02d}，"
+                                f"{'就是今天' if until == 0 else f'還有 {until} 天'}）"))
     if soon:
         must.append("<b>近期</b>：" + "；".join(text for _, text in sorted(soon)))
     lines.append("")
@@ -299,7 +322,10 @@ def _active(lists: dict[str, list[object]], name: str, separator: str, limit: in
 
 
 def full_text(fields: dict[str, str], lists: dict[str, list[object]]) -> str:
-    """全部資料：所有有值的一般欄位、會變的欄位（有效的）與各清單的筆數。Every non-empty field and list counts."""
+    """全部資料：所有有值的一般欄位、會變的欄位（有效的；工作另列以前的工作）與各清單的筆數。
+
+    Every non-empty field, the current history entries (plus past jobs) and list counts.
+    """
     lines = [name_line(fields), ""]
     broken = broken_lists(fields)
     for group, names in DISPLAY_GROUPS:
@@ -309,6 +335,10 @@ def full_text(fields: dict[str, str], lists: dict[str, list[object]]) -> str:
             for name in names
         }
         rows = [f"• {field_title(name)}：{value}" for name, value in values.items() if value]
+        if "Company" in names and "Company" not in broken:
+            past = [_position_text(item) for item in lists.get("Company", []) if not is_active(item)]
+            if past := [text for text in past if text]:
+                rows.append(f"• 以前的工作：{escape_tg('、'.join(past), 300)}")
         if rows:
             lines.append(f"<b>{group}</b>")
             lines.extend(rows)
@@ -318,10 +348,52 @@ def full_text(fields: dict[str, str], lists: dict[str, list[object]]) -> str:
     return truncate("\n".join(lines))
 
 
+def _position_text(item: object) -> str:
+    """職位的文字加任職期間：「QBC・QA（2025～）」（未轉義）。A position with its period, unescaped."""
+    text = entry_text("Company", item)
+    period = position_period(item)
+    return f"{text}（{period}）" if text and period else text
+
+
+def is_hideable_field(name: str) -> bool:
+    """卡面能隱藏的文字欄位（TG 只對這些顯示隱藏開關）。Whether the card can hide this text field."""
+    return name in HIDEABLE_TEXT_FIELDS
+
+
+def goal_buttons(status: str) -> tuple[tuple[str, str], ...]:
+    """目標一筆的狀態按鈕：(按鈕文字, 代碼)；進行中可以達成或放棄，結束的可以重開。The status buttons of a goal."""
+    if status == "open":
+        return (("達成", "d"), ("放棄", "x"))
+    return (("重開", "o"),)
+
+
+def history_toggle_label(field_name: str, active: bool) -> str:
+    """會變的欄位「劃掉／取消劃掉」按鈕的文字；職位是「離職／恢復現職」。The end / restore button text."""
+    if field_name == "Company":
+        return "離職" if active else "恢復現職"
+    return "劃掉" if active else "取消劃掉"
+
+
 def item_line(field_name: str, item: object) -> str:
-    """清單裡一筆的一行文字（已轉義）；會變的欄位附登錄日，劃掉的加刪除線與失效日。One item as an escaped line."""
+    """清單裡一筆的一行文字（已轉義）。One item as an escaped line.
+
+    會變的欄位附登錄日，劃掉的加刪除線與失效日；職位前面標「[現職]」或「[以前]」，附任職期間與說明，以前的工作
+    不加刪除線（期間已寫在裡面）；在卡面隱藏的加「〔卡面隱藏〕」。
+    """
+    line = _item_line(field_name, item)
+    return f"{line}〔卡面隱藏〕" if is_hidden(item) else line
+
+
+def _item_line(field_name: str, item: object) -> str:
     if not isinstance(item, dict):
         return escape_tg(str(item), 80)
+    if field_name == "Company":
+        text = escape_tg(_position_text(item), 200)
+        added = str(item.get("added") or "")
+        dates = f"{escape_tg(added, 10)} 登錄" if added else "日期不明"
+        note = f"｜{escape_tg(str(item.get('note') or ''), 120)}" if item.get("note") else ""
+        state = "現職" if is_active(item) else "以前"
+        return f"[{state}] {text}{note}（{dates}）"
     if is_history(field_name):
         text = escape_tg(entry_text(field_name, item), 200)
         added = str(item.get("added") or "")
@@ -338,8 +410,15 @@ def item_line(field_name: str, item: object) -> str:
     if field_name == "Family_JSON":
         return f"{get('relation')}：{get('name')}" + (f"（{item.get('birth_year')} 年生）" if item.get("birth_year") else "")
     if field_name == "Gifts_JSON":
-        direction = "收到" if item.get("direction") == "received" else "送出"
+        direction = {"received": "收到", "idea": "想要"}.get(str(item.get("direction") or ""), "送出")
         return f"{direction} {get('item')}" + (f"（{get('date')}）" if item.get("date") else "")
+    if field_name == "Goals_JSON":
+        status = str(item.get("status") or "open")
+        line = f"[{get('kind') or '目標'}] {get('item')}" + (f"（目標 {get('target')}）" if item.get("target") else "")
+        if status != "open":
+            closed = f" {get('closed')}" if item.get("closed") else ""
+            line = f"<s>{line}</s>（{GOAL_STATUSES.get(status, status)}{closed}）"
+        return line
     if field_name == "Key_Dates_JSON":
         return f"{get('label')}：{get('date')}" + ("（每年）" if item.get("yearly") else "")
     if field_name == "Contacts_JSON":
@@ -367,18 +446,24 @@ class Step:
     Attributes:
         key: 寫進項目的鍵；``_followups`` 為互動紀錄附帶的「下次要問」（每行一筆）。The item key.
         prompt: 問題。The prompt.
-        kind: ``text``、``date``、``int``、``choice``、``lines``。The input kind.
+        kind: ``text``、``date``、``int``、``choice``、``lines``、``period``（年、年月或日期，任職起訖用）。
+            The input kind.
         required: 必填（沒有「略過」）。Whether it can be skipped.
         choices: ``choice`` 的選項 (值, 按鈕文字)；``text`` 有選項時是建議按鈕。Choices.
         default_today: 日期步驟提供「今天」「昨天」按鈕。Offer today / yesterday buttons.
+        skip_hint: 新增時「略過」代表什麼（接在問題下面）；修改職位時略過一律是保留，由 handler 另外說明，
+            所以問題本身只寫問句與格式。What skipping means when adding.
+        allow_unknown: ``period`` 步驟也收 ``?``（已離職但不知道時間）。Accept ``?`` for a period.
     """
 
     key: str
     prompt: str
-    kind: str = "text"
+    kind: Literal["text", "date", "int", "choice", "lines", "period"] = "text"
     required: bool = False
     choices: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     default_today: bool = False
+    skip_hint: str = ""
+    allow_unknown: bool = False
 
 
 ADD_STEPS: dict[str, tuple[Step, ...]] = {
@@ -404,16 +489,22 @@ ADD_STEPS: dict[str, tuple[Step, ...]] = {
         Step("note", "備註？"),
     ),
     "Gifts_JSON": (
-        Step("direction", "送出還是收到？", kind="choice", required=True,
-             choices=(("given", "送出"), ("received", "收到"))),
+        Step("direction", "送出、收到，還是想要的（禮物靈感）？", kind="choice", required=True,
+             choices=(("given", "送出"), ("received", "收到"), ("idea", "想要的"))),
         Step("item", "什麼禮物？", required=True),
-        Step("date", "哪一天？", kind="date", default_today=True),
+        Step("date", "哪一天？（想要的禮物就略過）", kind="date", default_today=True),
         Step("reaction", "對方的反應？"),
     ),
     "Key_Dates_JSON": (
         Step("label", "什麼日子？（例如「N1 考試」）", required=True),
         Step("date", "日期？（YYYY-MM-DD）", kind="date", required=True),
         Step("yearly", "每年都有嗎？", kind="choice", required=True, choices=(("1", "每年"), ("0", "只有一次"))),
+    ),
+    "Goals_JSON": (
+        Step("kind", "哪一種目標？（可以點建議，或直接輸入）", required=True,
+             choices=tuple((kind, kind) for kind in GOAL_KINDS)),
+        Step("item", "目標是什麼？（例如「日本語能力試驗 N1」）", required=True),
+        Step("target", "目標時間？（例如 2026-12，或只寫年 2027）", kind="period", skip_hint="沒有就略過。"),
     ),
     "Contacts_JSON": (
         Step("channel", "哪種聯絡方式？", required=True,
@@ -424,11 +515,27 @@ ADD_STEPS: dict[str, tuple[Step, ...]] = {
 }
 
 
+#: 職位的任職起訖與說明：新增時接在公司、職稱後面問，修改（長按或清單的「改」）時只問這三個，儲存時也只送
+#: 這三個鍵（``POSITION_DETAIL_KEYS``）。離職那一步接受 ``?``；離職不早於到職由 handler 的 ``_store_answer``
+#: 在 ``end`` 那一步檢查。The period and note steps of a position, for adding and editing.
+POSITION_DETAIL_STEPS: tuple[Step, ...] = (
+    Step("start", "什麼時候到職？（例如 2021-04，或只寫年 2021）", kind="period", skip_hint="不知道就略過。"),
+    Step("end", "什麼時候離職？（例如 2023-03；離職了但不知道時間就寫 ?）", kind="period",
+         skip_hint="還在這裡工作就略過。", allow_unknown=True),
+    Step("note", "這份工作的說明？（例如「負責轉職顧問」「工作 7 年」）", skip_hint="沒有就略過。"),
+)
+POSITION_DETAIL_KEYS: tuple[str, ...] = tuple(step.key for step in POSITION_DETAIL_STEPS)
+
+
 def _history_steps(name: str) -> tuple[Step, ...]:
-    """會變的欄位新增時要問的：只問內容（日期由系統填）。The steps of a history field."""
+    """會變的欄位新增時要問的：登錄日由系統填；職位另問任職起訖與說明。The steps of a history field."""
     title = field_title(name)
     if name == "Company":
-        return (Step("company", "公司？（沒有就略過）"), Step("title", "職稱？（沒有就略過）"))
+        return (
+            Step("company", "公司？（沒有就略過）"),
+            Step("title", "職稱？（沒有就略過）"),
+            *POSITION_DETAIL_STEPS,
+        )
     if name == "Closeness":
         return (Step("value", "親密度？（1 最生疏、5 最親近）", kind="choice", required=True,
                      choices=tuple((str(n), str(n)) for n in range(1, 6))),)
@@ -460,6 +567,15 @@ def parse_date_input(text: str, today: date) -> str | None:
         return None
 
 
+def parse_period_input(text: str, *, allow_unknown: bool = False) -> str | None:
+    """任職起訖的輸入 → ``YYYY``、``YYYY-MM`` 或 ``YYYY-MM-DD``（規則同網頁，見 :func:`normalize_period`：
+    年份 1900–2100、要是真的日期）；``allow_unknown`` 時（離職）``?`` 也收。空白或看不懂時為 None。
+
+    Parse a typed period bound, with the same rules as the web form.
+    """
+    return normalize_period(text, allow_unknown=allow_unknown) or None
+
+
 def today_choice(today: date, offset: int) -> str:
     """「今天」「昨天」按鈕的日期。The date behind the today / yesterday buttons."""
     return (today - timedelta(days=offset)).isoformat()
@@ -486,11 +602,20 @@ def text_to_field_html(text: str) -> str:
     return html.escape(text.strip()).replace("\n", "<br>")
 
 
-def preview_item(field_name: str, item: dict[str, object]) -> str:
-    """儲存前的預覽。The preview before saving."""
+def preview_item(field_name: str, item: dict[str, object], *, editing: bool = False) -> str:
+    """儲存前的預覽；``editing`` 是修改職位的任職起訖與說明。The preview before saving."""
     title = list_title(field_name)
+    if field_name == "Company":
+        state = "現職" if is_active(item) else "以前的工作"
+        lines = [f"<b>{'修改' if editing else '新增'}{title}</b>（{state}）", escape_tg(_position_text(item), 300)]
+        if item.get("note"):
+            lines.append(f"說明：{escape_tg(str(item['note']), 200)}")
+        if not editing:
+            lines.append("<i>登錄日：今天</i>")
+        return "\n".join(lines)
     if is_history(field_name):
-        lines = [f"<b>新增{title}</b>", escape_tg(entry_text(field_name, item), 300), "<i>登錄日：今天</i>"]
+        text = entry_text(field_name, item)
+        lines = [f"<b>新增{title}</b>", escape_tg(text, 300), "<i>登錄日：今天</i>"]
         if PERSON_HISTORY_FIELDS[field_name].single:
             lines.append("<i>原本有效的那筆會自動劃掉（失效日＝今天）。</i>")
         return "\n".join(lines)
@@ -523,14 +648,20 @@ def proposal_line(kind: str, data: dict[str, object]) -> str:
         label = FOLLOWUP_TYPES.get(str(data.get("type") or "ask"), "下次要問")
         return f"<b>{label}</b>：{get('item')}" + (f"（期限 {get('due')}）" if data.get("due") else "")
     reason = f"\n    <i>（{get('reason', 120)}）</i>" if data.get("reason") else ""
+    if kind == "goal":
+        target = f"（目標 {get('target')}）" if data.get("target") else ""
+        return f"<b>目標</b> 新增：[{get('kind') or '目標'}] {get('item')}{target}" + reason
     if kind in ("history_add", "history_end"):
         name = str(data.get("field", ""))
         title = escape_tg(field_title(name))
         text = escape_tg(str(data.get("text", "") or ""), 300)
         if kind == "history_end":
-            return f"<b>{title}</b> 劃掉：<s>{text}</s>" + reason
+            return f"<b>{title}</b> {history_toggle_label(name, True)}：<s>{text}</s>" + reason
         single = PERSON_HISTORY_FIELDS.get(name)
         extra = "（原本的會劃掉）" if single and single.single else ""
+        item = data.get("item")
+        if name == "Company" and isinstance(item, dict):
+            extra = "（現職）" if is_active(item) else "（以前的工作）"
         return f"<b>{title}</b> 新增：{text}{extra}" + reason
     mode = "接在後面" if data.get("mode") == "append" else "改成"
     return f"<b>{escape_tg(field_title(str(data.get('field', ''))))}</b> {mode}：{get('value', 300)}" + reason

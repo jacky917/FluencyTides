@@ -30,6 +30,15 @@ class IngestFollowup(BaseModel):
     due: str = Field("", description="YYYY-MM-DD；有明確時間點時才填（例如考試日、約定的日期），否則空字串")
 
 
+class IngestGoal(BaseModel):
+    """一個新的目標。One new goal."""
+
+    kind: str = Field(description="類型：證照、簽證、資格、升學、職涯、努力方向、夢想、願景，或其他簡短的說法")
+    item: str = Field(description="目標的內容，例如「日本語能力試驗 N1」「拿到永住」")
+    target: str = Field("", description="目標時間：YYYY、YYYY-MM 或 YYYY-MM-DD；文中沒提就空字串")
+    reason: str = Field(description="依據文中的哪句話（簡短）")
+
+
 class IngestFieldUpdate(BaseModel):
     """建議更新的一個文字欄位。One suggested text field update."""
 
@@ -50,6 +59,11 @@ class IngestListUpdate(BaseModel):
     )
     value: str = Field("", description="add 時要新增的內容（純文字）；職位（Company）填公司名稱；end 時空字串")
     job_title: str = Field("", description="只有職位（Company）用：職稱；其他欄位空字串")
+    job_start: str = Field("", description="只有職位（Company）add 用：到職年月（YYYY、YYYY-MM）；文中沒提就空字串")
+    job_end: str = Field(
+        "", description="只有職位（Company）add 用：以前的工作的離職年月（YYYY、YYYY-MM），已離職但時間不明填 ?；現職空字串"
+    )
+    job_note: str = Field("", description="只有職位（Company）add 用：這份工作的簡短說明（做什麼、做了多久）；沒有就空字串")
     entry: int = Field(0, description="end 時要劃掉的那一筆的編號（提示中「#」後面的數字）；add 時 0")
     reason: str = Field(description="依據文中的哪句話（簡短）")
 
@@ -59,6 +73,7 @@ class LLMPersonIngestResult(BaseModel):
 
     interaction: IngestInteraction
     followups: list[IngestFollowup] = Field(default_factory=list)
+    goals: list[IngestGoal] = Field(default_factory=list)
     field_updates: list[IngestFieldUpdate] = Field(default_factory=list)
     list_updates: list[IngestListUpdate] = Field(default_factory=list)
 

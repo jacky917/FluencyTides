@@ -139,7 +139,12 @@ class TestView:
         assert view.item_line("Residence", {"value": "大阪", "added": "", "ended": "2025-03-01"}) == (
             "<s>大阪</s>（日期不明，2025-03-01 劃掉）"
         )
-        assert view.item_line("Company", {"company": "Geekly", "title": "PM", "added": ""}) == "Geekly・PM（日期不明）"
+        assert view.item_line("Company", {"company": "Geekly", "title": "PM", "added": ""}) == "[現職] Geekly・PM（日期不明）"
+        # 以前的工作（有離職年月）：不加刪除線，附任職期間與說明
+        assert view.item_line(
+            "Company", {"company": "Sony", "start": "2019", "end": "2021-03", "note": "QA", "added": "2026-01-01"}
+        ) == "[以前] Sony（2019～2021-03）｜QA（2026-01-01 登錄）"
+        assert view.item_line("Residence", {"value": "東京", "added": "", "hidden": True}) == "東京（日期不明）〔卡面隱藏〕"
 
     @pytest.mark.parametrize(
         ("typed", "expected"),
@@ -426,8 +431,26 @@ class TestAddFlow:
         typed, _ = _message("Sony")
         _run(person_profile.process_add_text(typed, state))
         _press("pp:skip", state, note_service, card_service)  # 職稱略過
+        typed, _ = _message("2021/4")  # 到職年月：整理成 2021-04
+        _run(person_profile.process_add_text(typed, state))
+        _press("pp:skip", state, note_service, card_service)  # 離職略過＝現職
+        _press("pp:skip", state, note_service, card_service)  # 說明略過
         _press("pp:save", state, note_service, card_service)
-        note_service.run_action.assert_awaited_once_with(5, "add_history", {"field": "Company", "item": {"company": "Sony"}})
+        note_service.run_action.assert_awaited_once_with(
+            5, "add_history", {"field": "Company", "item": {"company": "Sony", "start": "2021-04"}}
+        )
+
+    def test_add_position_rejects_a_bad_start(self):
+        state = _fsm()
+        message, _ = _message()
+        _run(person_profile.start_add(message, state, 5, "Company"))
+        for text in ("Sony", "PM"):
+            typed, _ = _message(text)
+            _run(person_profile.process_add_text(typed, state))
+        typed, _ = _message("去年")
+        _run(person_profile.process_add_text(typed, state))
+        assert any("看不懂" in text for text in _sent(typed.answer))
+        assert _run(state.get_data())["step"] == 2
 
     def test_add_closeness_by_button(self):
         state, note_service, card_service = _fsm(), _note_service(), _card_service()
@@ -465,7 +488,7 @@ class TestHistoryList:
         _assert_tg_html(text)
         assert "1. 登山（2026-01-01 登錄）" in text and "2. <s>攝影</s>（2025-01-01 登錄，2026-05-01 劃掉）" in text
         rows = query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard
-        assert [b.text for b in rows[0]] == ["刪 1", "劃掉 1"]
+        assert [b.text for b in rows[0]] == ["刪 1", "劃掉 1", "隱藏 1"]
         assert rows[1][1].callback_data == f"pp:hx:5:IN:1:{item_fingerprint(items[1])}:o"
 
     def test_end_button(self):

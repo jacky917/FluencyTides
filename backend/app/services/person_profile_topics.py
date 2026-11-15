@@ -30,7 +30,7 @@ from app.core.dependencies import get_template_engine
 from app.core.exceptions import LLMGenerationError
 from app.infrastructure.llm.routing import route
 from app.schemas.llm.person_profile import LLMPersonTopicsResult
-from app.schemas.person_profile import PERSON_HISTORY_FIELDS, RETIRED_FIELDS, PersonCreateParams, entry_text, is_active
+from app.schemas.person_profile import PERSON_HISTORY_FIELDS, RETIRED_FIELDS, PersonCreateParams, entry_detail, is_active
 from app.services.person_profile_ingest import WEEKDAYS, plain_text
 
 logger = logging.getLogger(__name__)
@@ -200,12 +200,23 @@ def build_prompt(
         for d in lists.get("Key_Dates_JSON", [])[:10]
         if isinstance(d, dict)
     ]
+    directions = {"received": "收到", "idea": "想要（還沒送）"}
     gifts = [
-        f"{'收到' if g.get('direction') == 'received' else '送出'}{m(str(g.get('item', '')))}"
+        f"{directions.get(str(g.get('direction') or ''), '送出')}{m(str(g.get('item', '')))}"
         + (f"（{g['date']}）" if g.get("date") else "")
-        for g in lists.get("Gifts_JSON", [])[-5:]
+        for g in lists.get("Gifts_JSON", [])[-8:]
         if isinstance(g, dict)
     ]
+    # 目標：進行中的是最好的聊天素材（「考試準備得如何」）；達成的可以恭喜，放棄的不主動提
+    goals = []
+    for goal in lists.get("Goals_JSON", []):
+        if not isinstance(goal, dict) or str(goal.get("status") or "open") == "dropped":
+            continue
+        kind = str(goal.get("kind") or "目標")
+        line = f"{kind}：{m(str(goal.get('item', '')))}" + (f"（目標 {goal['target']}）" if goal.get("target") else "")
+        if goal.get("status") == "done":
+            line += f"（已達成{'，' + str(goal['closed']) if goal.get('closed') else ''}）"
+        goals.append(line)
     prompt = get_template_engine().render(
         "prompts/anki/Person_Profile_Topics.j2",
         person_token=PERSON_TOKEN,
@@ -219,6 +230,7 @@ def build_prompt(
         followups=followups,
         key_dates=key_dates,
         gifts=gifts,
+        goals=goals,
         # 劃掉的敏感話題也算（過去的事一樣不該主動提）；欄位格式壞了讀不出清單時看原文
         has_sensitive=bool(lists.get("Sensitive")) or bool(plain_text(fields.get("Sensitive", ""))),
     )
@@ -232,13 +244,14 @@ def history_text(name: str, items: list[object]) -> str:
     """
     # 不是物件的項目是格式壞掉的（在 Anki 手改的），不當成過去的事送出
     entries = [item for item in items if isinstance(item, dict)]
-    current = [plain_text(entry_text(name, item), 200) for item in entries if is_active(item)]
+    # 職位附任職期間與說明（entry_detail），期間已經寫在裡面，不再接「到某天為止」
+    current = [plain_text(entry_detail(name, item), 200) for item in entries if is_active(item)]
     past = []
     for item in entries:
-        if is_active(item) or not (text := plain_text(entry_text(name, item), 200)):
+        if is_active(item) or not (text := plain_text(entry_detail(name, item), 200)):
             continue
         ended = str(item.get("ended") or "")
-        past.append(f"{text}（到 {ended} 為止）" if ended else text)
+        past.append(f"{text}（到 {ended} 為止）" if ended and name != "Company" else text)
     line = "、".join(text for text in current if text)
     if past:
         line += ("；" if line else "") + "以前：" + "、".join(past)

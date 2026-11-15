@@ -75,7 +75,7 @@ class TestHistoryFromText:
 
     def test_split_flags(self):
         assert {name for name, spec in PERSON_HISTORY_FIELDS.items() if spec.split} == {
-            "Interests", "Food_Drink", "Languages"
+            "Interests", "Food_Drink", "Dislikes", "Languages"
         }
         assert {name for name, spec in PERSON_HISTORY_FIELDS.items() if spec.single} == {
             "Residence", "Timezone", "Relationship", "Closeness"
