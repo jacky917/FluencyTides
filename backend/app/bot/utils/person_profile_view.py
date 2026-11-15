@@ -30,7 +30,9 @@ from app.schemas.llm.person_profile import LLMPersonTopicsResult
 from app.schemas.person_profile import (
     GOAL_KINDS,
     GOAL_STATUSES,
+    EDUCATION_LABELS,
     HIDEABLE_TEXT_FIELDS,
+    HISTORY_PERIOD_KEYS,
     PERSON_HISTORY_FIELDS,
     PERSON_JSON_ITEMS,
     PERSON_NOTE_TYPE,
@@ -39,6 +41,8 @@ from app.schemas.person_profile import (
     active_texts,
     entry_detail,
     entry_text,
+    history_from_text,
+    history_period,
     is_active,
     is_hidden,
     is_open_goal,
@@ -63,6 +67,7 @@ LIST_CODES = {
     "C": "Contacts_JSON",
     "GL": "Goals_JSON",
     "IN": "Interests",
+    "EX": "Experiences",
     "FD": "Food_Drink",
     "DL": "Dislikes",
     "DT": "Dietary",
@@ -90,7 +95,7 @@ CODE_OF_LIST = {name: code for code, name in LIST_CODES.items()}
 #: 只對應一個欄位的區塊（家庭、互動等）直接用 ``padd``。The fields behind each section's "+".
 SECTION_FIELDS: dict[str, tuple[str, ...]] = {
     "must": ("Followups_JSON", "Dietary"),
-    "interests": ("Interests", "Food_Drink", "Dislikes"),
+    "interests": ("Interests", "Experiences", "Food_Drink", "Dislikes"),
     "work": ("Company", "Work_Detail", "Education"),
     "personality": ("Personality_Values", "Praise", "Ask_Advice", "Needs"),
     "contacts": ("Contacts_JSON", "Comm_Prefs"),
@@ -120,7 +125,7 @@ DISPLAY_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("外貌與基本資料", ("Appearance", "Birthday", "Hometown", "Residence", "Languages", "Timezone")),
     ("認識", ("Met_Date", "Met_Where", "Met_Via", "Introducer_Note_ID", "Relationship", "Closeness", "First_Impression")),
     ("工作", ("Company", "Work_Detail", "Education")),
-    ("興趣與飲食", ("Interests", "Food_Drink", "Dislikes", "Dietary")),
+    ("興趣、經歷與飲食", ("Interests", "Experiences", "Food_Drink", "Dislikes", "Dietary")),
     ("個性與價值觀", ("Personality_Values", "Praise", "Ask_Advice", "Needs", "Common_Ground", "Sensitive")),
     ("聯絡與其他", ("Comm_Prefs", "Notes", "Last_Contact", "Contact_Cadence")),
 )
@@ -355,6 +360,13 @@ def _position_text(item: object) -> str:
     return f"{text}（{period}）" if text and period else text
 
 
+def _history_text(field_name: str, item: object) -> str:
+    """會變的欄位一筆的文字加事件時間：「爬過玉山（2026-10）」（未轉義）。An entry with its event time, unescaped."""
+    text = entry_text(field_name, item)
+    period = history_period(field_name, item)
+    return f"{text}（{period}）" if text and period else text
+
+
 def is_hideable_field(name: str) -> bool:
     """卡面能隱藏的文字欄位（TG 只對這些顯示隱藏開關）。Whether the card can hide this text field."""
     return name in HIDEABLE_TEXT_FIELDS
@@ -395,7 +407,7 @@ def _item_line(field_name: str, item: object) -> str:
         state = "現職" if is_active(item) else "以前"
         return f"[{state}] {text}{note}（{dates}）"
     if is_history(field_name):
-        text = escape_tg(entry_text(field_name, item), 200)
+        text = escape_tg(_history_text(field_name, item), 200)
         added = str(item.get("added") or "")
         dates = f"{escape_tg(added, 10)} 登錄" if added else "日期不明"
         if not is_active(item):
@@ -446,12 +458,12 @@ class Step:
     Attributes:
         key: 寫進項目的鍵；``_followups`` 為互動紀錄附帶的「下次要問」（每行一筆）。The item key.
         prompt: 問題。The prompt.
-        kind: ``text``、``date``、``int``、``choice``、``lines``、``period``（年、年月或日期，任職起訖用）。
+        kind: ``text``、``date``、``int``、``choice``、``lines``、``period``（年、年月或日期，事件時間用，見 :data:`HISTORY_DETAIL_STEPS`）。
             The input kind.
         required: 必填（沒有「略過」）。Whether it can be skipped.
         choices: ``choice`` 的選項 (值, 按鈕文字)；``text`` 有選項時是建議按鈕。Choices.
         default_today: 日期步驟提供「今天」「昨天」按鈕。Offer today / yesterday buttons.
-        skip_hint: 新增時「略過」代表什麼（接在問題下面）；修改職位時略過一律是保留，由 handler 另外說明，
+        skip_hint: 新增時「略過」代表什麼（接在問題下面）；修改時略過一律是保留，由 handler 另外說明，
             所以問題本身只寫問句與格式。What skipping means when adding.
         allow_unknown: ``period`` 步驟也收 ``?``（已離職但不知道時間）。Accept ``?`` for a period.
     """
@@ -526,9 +538,56 @@ POSITION_DETAIL_STEPS: tuple[Step, ...] = (
 )
 POSITION_DETAIL_KEYS: tuple[str, ...] = tuple(step.key for step in POSITION_DETAIL_STEPS)
 
+#: 會變的欄位新增後追問的事件時間（工作經歷計畫書 §15；鍵同 :data:`HISTORY_PERIOD_KEYS`），也是修改時間（長按
+#: 或清單的「改」）時問的步驟。職位另外有說明，見 :data:`POSITION_DETAIL_STEPS`。The event-time steps of each history field.
+HISTORY_DETAIL_STEPS: dict[str, tuple[Step, ...]] = {
+    "Company": POSITION_DETAIL_STEPS,
+    "Education": (
+        Step("start", "什麼時候入學？（例如 2011-09，或只寫年 2011）", kind="period", skip_hint="不知道就略過。"),
+        Step("finish", "什麼時候畢業（或離開）？（例如 2015）", kind="period", skip_hint="還在讀或不知道就略過。"),
+    ),
+    "Experiences": (
+        Step("when", "什麼時候的事？（例如 2019、2026-10）", kind="period", skip_hint="不知道就略過。"),
+    ),
+    "Praise": (
+        Step("when", "什麼時候的事？（例如 2025、2026-10）", kind="period", skip_hint="不知道就略過。"),
+    ),
+    "Interests": (
+        Step("since", "從什麼時候開始的？（例如 2015）", kind="period", skip_hint="不知道就略過。"),
+    ),
+    "Residence": (
+        Step("since", "什麼時候搬來的？（例如 2023-04）", kind="period", skip_hint="不知道就略過。"),
+    ),
+}
+# 步驟的鍵要和 HISTORY_PERIOD_KEYS 一致（職位另外多了說明，只比前面的時間）
+assert {name: tuple(step.key for step in steps)[:len(HISTORY_PERIOD_KEYS[name])]
+        for name, steps in HISTORY_DETAIL_STEPS.items()} == HISTORY_PERIOD_KEYS, "HISTORY_DETAIL_STEPS 與 HISTORY_PERIOD_KEYS 不一致"
+
+#: 有起訖的欄位：(開始的鍵, 結束的鍵, 開始的名稱, 結束的名稱)；問到結束那一步時檢查不早於開始。
+#: Fields with a start and an end, checked when the end is answered.
+PERIOD_PAIRS: dict[str, tuple[str, str, str, str]] = {
+    "Company": ("start", "end", "到職", "離職"),
+    "Education": ("start", "finish", *EDUCATION_LABELS),
+}
+assert all(pair[:2] == HISTORY_PERIOD_KEYS[name] for name, pair in PERIOD_PAIRS.items()), "PERIOD_PAIRS 的鍵與 HISTORY_PERIOD_KEYS 不一致"
+
+
+def detail_edit_label(field_name: str) -> str:
+    """長按選單「修改時間」按鈕的文字。The label of the edit-time button."""
+    return {"Company": "修改任職期間／說明", "Education": "修改入學／畢業"}.get(field_name, "修改時間")
+
+
+def skip_detail_step(field_name: str, item: dict[str, object], step: Step) -> bool:
+    """新增時跳過這一步：可切、又有事件時間的欄位（目前只有興趣）一次輸入了好幾個時不問時間（同一個時間套到
+    每一個會記錯，之後長按那一筆再補）。Skip the time step when one answer adds several entries."""
+    if step.key not in HISTORY_PERIOD_KEYS.get(field_name, ()) or not PERSON_HISTORY_FIELDS[field_name].split:
+        return False
+    return len(history_from_text(field_name, str(item.get("value") or ""), "")) > 1
+
 
 def _history_steps(name: str) -> tuple[Step, ...]:
-    """會變的欄位新增時要問的：登錄日由系統填；職位另問任職起訖與說明。The steps of a history field."""
+    """會變的欄位新增時要問的：登錄日由系統填；有事件時間的欄位接著問時間（:data:`HISTORY_DETAIL_STEPS`，
+    職位是任職起訖與說明）。The steps of a history field."""
     title = field_title(name)
     if name == "Company":
         return (
@@ -546,7 +605,7 @@ def _history_steps(name: str) -> tuple[Step, ...]:
         return (Step("value", "時區？（例如 Asia/Tokyo）", required=True,
                      choices=(("Asia/Tokyo", "Asia/Tokyo"), ("Asia/Taipei", "Asia/Taipei"))),)
     hint = "（多個用頓號或逗號分開，會存成多筆）" if PERSON_HISTORY_FIELDS[name].split else ""
-    return (Step("value", f"{title}？{hint}", required=True),)
+    return (Step("value", f"{title}？{hint}", required=True), *HISTORY_DETAIL_STEPS.get(name, ()))
 
 
 ADD_STEPS.update({name: _history_steps(name) for name in PERSON_HISTORY_FIELDS})
@@ -567,8 +626,23 @@ def parse_date_input(text: str, today: date) -> str | None:
         return None
 
 
+def parse_past_date_input(text: str, today: date) -> str | None:
+    """已經發生的日子（目標達成、放棄）：同 :func:`parse_date_input`，但只寫月日、算出來在今天之後時當成去年
+    （一月初輸入「12-28」是去年 12 月）。寫了年份的照原樣（未來的由呼叫端擋）。
+
+    Parse a past day; a month-day after today means last year.
+    """
+    value = parse_date_input(text, today)
+    if value is None or value <= today.isoformat() or re.match(r"\s*\d{4}", text or ""):
+        return value
+    try:
+        return date.fromisoformat(value).replace(year=today.year - 1).isoformat()
+    except ValueError:  # 2/29 在去年不存在
+        return None
+
+
 def parse_period_input(text: str, *, allow_unknown: bool = False) -> str | None:
-    """任職起訖的輸入 → ``YYYY``、``YYYY-MM`` 或 ``YYYY-MM-DD``（規則同網頁，見 :func:`normalize_period`：
+    """事件時間的輸入 → ``YYYY``、``YYYY-MM`` 或 ``YYYY-MM-DD``（規則同網頁，見 :func:`normalize_period`：
     年份 1900–2100、要是真的日期）；``allow_unknown`` 時（離職）``?`` 也收。空白或看不懂時為 None。
 
     Parse a typed period bound, with the same rules as the web form.
@@ -603,7 +677,7 @@ def text_to_field_html(text: str) -> str:
 
 
 def preview_item(field_name: str, item: dict[str, object], *, editing: bool = False) -> str:
-    """儲存前的預覽；``editing`` 是修改職位的任職起訖與說明。The preview before saving."""
+    """儲存前的預覽；``editing`` 是修改職位的任職起訖與說明，或其他欄位的事件時間。The preview before saving."""
     title = list_title(field_name)
     if field_name == "Company":
         state = "現職" if is_active(item) else "以前的工作"
@@ -614,8 +688,9 @@ def preview_item(field_name: str, item: dict[str, object], *, editing: bool = Fa
             lines.append("<i>登錄日：今天</i>")
         return "\n".join(lines)
     if is_history(field_name):
-        text = entry_text(field_name, item)
-        lines = [f"<b>新增{title}</b>", escape_tg(text, 300), "<i>登錄日：今天</i>"]
+        if editing:
+            return f"<b>修改{title}的時間</b>\n{escape_tg(_history_text(field_name, item), 300)}"
+        lines = [f"<b>新增{title}</b>", escape_tg(_history_text(field_name, item), 300), "<i>登錄日：今天</i>"]
         if PERSON_HISTORY_FIELDS[field_name].single:
             lines.append("<i>原本有效的那筆會自動劃掉（失效日＝今天）。</i>")
         return "\n".join(lines)

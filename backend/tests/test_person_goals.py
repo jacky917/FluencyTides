@@ -134,11 +134,17 @@ class TestGoalTg:
 
     def test_status_button_and_undo(self):
         state, note_service, card_service = _fsm(), _note_service(), _card_service()
-        query = _tap("pp:gs:5:0:abc:d", state, note_service, card_service)
+        with mock.patch.object(person_profile, "_today", return_value=TODAY):
+            asked = _tap("pp:gs:5:0:abc:d", state, note_service, card_service)
+            assert "什麼時候達成的" in _sent(asked.message.answer)[0]
+            note_service.run_action.assert_not_awaited()
+            day = asked.message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
+            assert day.callback_data == "pp:gc:5:0:abc:d:0"
+            query = _tap(day.callback_data, state, note_service, card_service)
         note_service.run_action.assert_awaited_once_with(
-            5, "set_goal_status", {"index": 0, "fingerprint": "abc", "status": "done"}
+            5, "set_goal_status", {"index": 0, "fingerprint": "abc", "status": "done", "closed": "2026-11-15"}
         )
-        assert "已標成達成" in _sent(query.message.answer)[0]
+        assert "已標成達成（2026-11-15）" in _sent(query.message.answer)[0]
         undo = query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
         assert undo.callback_data == "pp:gs:5:0:abc:o"
 

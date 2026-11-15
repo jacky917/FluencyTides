@@ -3,8 +3,9 @@
 Create parameters and JSON field item formats of the person profile card.
 
 欄位的意義與顯示見 ``docs/archive/person_profile_card_FEAT_2026-10-23.md`` §3.2、§3.3。所有日期都是
-``YYYY-MM-DD`` 文字（字典序就是時間序，也能在 Anki 搜尋）；生日不知年份時寫 ``--MM-DD``；職位的任職起訖
-可以只寫年或年月，離職可以是 ``?``（見 :func:`normalize_period`）。
+``YYYY-MM-DD`` 文字（字典序就是時間序，也能在 Anki 搜尋）；生日不知年份時寫 ``--MM-DD``；事件時間（職位的任職
+起訖、學歷的入學畢業、經歷的時間等，:data:`HISTORY_PERIOD_KEYS`）可以只寫年或年月，離職可以是 ``?``
+（見 :func:`normalize_period`）。
 JSON 項目的模型都允許多餘的鍵（``extra="allow"``）：既有資料若有模型沒列出的鍵，讀進來、存回去
 都原樣保留。
 
@@ -141,6 +142,8 @@ class PersonCreateParams(BaseModel):
     Work_Detail: str | list[str] = _rows("工作內容", "工作內容、目前的專案、職涯經歷；一件一列", multiline=True)
     Education: str | list[str] = _rows("學歷", "一個學歷一列")
     Interests: str | list[str] = _rows("興趣", "輸入後按 Enter 加入；背面也顯示成標籤", tags=True)
+    Experiences: str | list[str] = _rows("經歷", "去過的地方、做過的事、印象深的故事；一件一列（想做的記在「目標」）",
+                                         multiline=True)
     Food_Drink: str | list[str] = _rows("飲食喜好", "喜歡吃喝的東西、愛去的店；輸入後按 Enter 加入", tags=True)
     Dislikes: str | list[str] = _rows("不喜歡的事", "討厭、在意的事（吃的放飲食限制，不要提的放敏感話題）；輸入後按 Enter 加入",
                                       tags=True)
@@ -205,7 +208,7 @@ class _Item(BaseModel):
     Common item config; every item can be hidden on the card. Keys in
     ``_OMIT_WHEN_EMPTY`` are left out of the dump while empty.
 
-    後來加的選填鍵（:attr:`_OMIT_WHEN_EMPTY`：隱藏，職位另有任職起訖與說明）沒有值時不輸出。網頁整欄寫入與 TG
+    後來加的選填鍵（:attr:`_OMIT_WHEN_EMPTY`：隱藏，以及各模型自己的選填鍵，例如職位的說明、事件時間）沒有值時不輸出。網頁整欄寫入與 TG
     新增都經 ``model_dump``，所以兩條路存下來的形狀相同，也和加這些鍵以前一樣。
     ``hidden`` 是嚴格布林：卡面與 :func:`is_hidden` 只認 ``true``，``"yes"``、``1`` 這種值寫入時就擋下，
     不會在下次網頁儲存時被偷偷轉成 True。
@@ -302,8 +305,9 @@ def append_field_html(current: str, addition: str) -> str:
 #: 指紋用的鍵：每種項目的主要文字欄位（與模板 itemFingerprint 相同）。Keys the fingerprint reads.
 FINGERPRINT_KEYS = ("date", "item", "topics", "name", "label", "handle", "relation", "channel")
 #: 會變的欄位的項目另外加進指紋的鍵：只在項目有這個鍵時才接上（原有六種清單的指紋不變）。``added``、
-#: ``ended`` 刻意不放：劃掉、取消劃掉後同一筆的指紋不變，TG 的「復原」按鈕與卡片上的舊連結才對得上。職位的
-#: ``start``、``end``、``note`` 與每筆的 ``hidden`` 也刻意不放：補年月、離職、隱藏後連結仍對得上。
+#: ``ended`` 刻意不放：劃掉、取消劃掉後同一筆的指紋不變，TG 的「復原」按鈕與卡片上的舊連結才對得上。事件時間
+#: （:data:`HISTORY_PERIOD_KEYS`，含職位的 ``start``、``end``）、職位的 ``note`` 與每筆的 ``hidden`` 也刻意不放：
+#: 補時間、離職、隱藏後連結仍對得上。
 #: Extra keys of history items, appended only when present; the dates stay out so ending keeps the fingerprint.
 FINGERPRINT_EXTRA_KEYS = ("value", "company", "title")
 
@@ -392,7 +396,7 @@ class ClosenessEntry(HistoryEntry):
     value: str = Field(title="親密度", description="1–5", pattern=r"^[1-5]$")
 
 
-#: 任職起訖存放的形狀：空白、年、年月或完整日期（真實日期由 :func:`normalize_period` 檢查，pattern 只看形狀）。
+#: 事件時間存放的形狀：空白、年、年月或完整日期（真實日期由 :func:`normalize_period` 檢查，pattern 只看形狀）。
 #: The stored shape of a period bound; :func:`normalize_period` checks the date is real.
 PERIOD = r"^$|^\d{4}(-\d{2}(-\d{2})?)?$"
 #: 離職：同 :data:`PERIOD`，另外 ``?`` 表示已經離職但不知道時間。The end, where ``?`` means unknown.
@@ -406,7 +410,7 @@ _PERIOD_INPUT = re.compile(
 
 
 def normalize_period(text: str, *, allow_unknown: bool = False) -> str | None:
-    """任職起訖的寫法整理成存放的形狀：``2021``、``2021-4``、``2021/04``、``2021年4月`` → ``2021-04``；
+    """事件時間的寫法整理成存放的形狀：``2021``、``2021-4``、``2021/04``、``2021年4月`` → ``2021-04``；
     ``2021-04-01``、``2021年4月1日`` → ``2021-04-01``；空白不變。
 
     Normalize a period bound to ``YYYY``, ``YYYY-MM`` or ``YYYY-MM-DD``.
@@ -439,14 +443,15 @@ def normalize_period(text: str, *, allow_unknown: bool = False) -> str | None:
     return f"{year}-{int(month):02d}" + (f"-{int(day):02d}" if day else "")
 
 
-def period_order_error(start: str, end: str) -> str | None:
-    """離職早於到職時的錯誤訊息；其他情況（任一邊空白或看不懂、離職是 ``?``）為 None。
+def period_order_error(start: str, end: str, *, labels: tuple[str, str] = ("到職", "離職")) -> str | None:
+    """結束早於開始時的錯誤訊息（預設是職位的「離職早於到職」，學歷傳「入學」「畢業」）；其他情況（任一邊空白或
+    看不懂、結束是 ``?``）為 None。
 
-    The error when the end is before the start, else None.
+    The error when the end is before the start, else None. ``labels`` names the two bounds.
 
     比較的是補零後的字串（字典序就是時間序），所以先各自經 :func:`normalize_period` 整理：卡上手改留下的
     ``2021/4`` 這種寫法直接比會比錯。看不懂的值不在這裡報（由格式檢查報）。精度不同（2021 對 2021-04）時
-    比共同的前綴：同一年算合理。所有離職先後檢查都用這裡，訊息一致。
+    比共同的前綴：同一年算合理。所有起訖先後檢查（職位、學歷）都用這裡，訊息一致。
     """
     start_value = normalize_period(start)
     end_value = normalize_period(end, allow_unknown=True)
@@ -454,7 +459,7 @@ def period_order_error(start: str, end: str) -> str | None:
         return None
     size = min(len(start_value), len(end_value))
     if end_value[:size] < start_value[:size]:
-        return f"離職（{end_value}）不能早於到職（{start_value}）"
+        return f"{labels[1]}（{end_value}）不能早於{labels[0]}（{start_value}）"
     return None
 
 
@@ -500,6 +505,82 @@ class Position(_Item):
         return self
 
 
+def _period_value(value: object, what: str) -> object:
+    """事件時間的輸入整理成存放的形狀（:func:`normalize_period`）；看不懂時丟 ValueError（驗證錯誤）。
+
+    Normalize an event time, raising ValueError when it cannot be read.
+    """
+    if not isinstance(value, str):
+        return value
+    normalized = normalize_period(value)
+    if normalized is None:
+        raise ValueError(f"{what}「{value.strip()}」看不懂，請寫 2021、2021-04 或 2021-04-01")
+    return normalized
+
+
+class WhenNote(HistoryNote):
+    """有發生時間的一筆（經歷、讚美素材）：``when`` 是那件事的時間（年、年月或日期，可空），
+    和登錄日（記下的那天）不同（工作經歷計畫書 §15）。
+
+    A history note with the time the thing happened.
+    """
+
+    _OMIT_WHEN_EMPTY: ClassVar[tuple[str, ...]] = ("hidden", "when")
+
+    when: str = Field("", title="時間", description="那件事的時間：年、年月或日期，例如 2019、2026-10", pattern=PERIOD)
+
+    @field_validator("when", mode="before")
+    @classmethod
+    def _normalize_when(cls, value: object) -> object:
+        return _period_value(value, "時間")
+
+
+class SinceEntry(HistoryEntry):
+    """有開始時間的一筆（興趣從什麼時候開始、現居地什麼時候搬來）：``since``（年、年月或日期，可空）。
+
+    A history entry with the time it began.
+    """
+
+    _OMIT_WHEN_EMPTY: ClassVar[tuple[str, ...]] = ("hidden", "since")
+
+    since: str = Field("", title="開始", description="從什麼時候開始：年、年月或日期，例如 2015", pattern=PERIOD)
+
+    @field_validator("since", mode="before")
+    @classmethod
+    def _normalize_since(cls, value: object) -> object:
+        return _period_value(value, "開始時間")
+
+
+#: 學歷起訖的名稱（訊息用）。The names of an education's bounds.
+EDUCATION_LABELS = ("入學", "畢業")
+
+
+class EducationEntry(HistoryEntry):
+    """學歷的一筆：入學 ``start``、畢業 ``finish``（年、年月或日期，都可空；畢業不能早於入學）。
+
+    One education entry with its start and finish.
+
+    畢業不叫 ``end``：``is_active`` 把有 ``end`` 的當成失效（職位的離職），畢業過的學歷仍是有效的資料。
+    """
+
+    _OMIT_WHEN_EMPTY: ClassVar[tuple[str, ...]] = ("hidden", "start", "finish")
+
+    start: str = Field("", title="入學", description="年、年月或日期，例如 2011-09", pattern=PERIOD)
+    finish: str = Field("", title="畢業", description="畢業或離開的時間；還在讀就空白", pattern=PERIOD)
+
+    @field_validator("start", "finish", mode="before")
+    @classmethod
+    def _normalize_bounds(cls, value: object, info: ValidationInfo) -> object:
+        return _period_value(value, EDUCATION_LABELS[0 if info.field_name == "start" else 1])
+
+    @model_validator(mode="after")
+    def _check_order(self) -> EducationEntry:
+        error = period_order_error(self.start, self.finish, labels=EDUCATION_LABELS)
+        if error:
+            raise ValueError(error)
+        return self
+
+
 #: 目標的類型（快速選項；也可以自己填）。Quick choices of a goal's kind.
 GOAL_KINDS = ("證照", "簽證", "資格", "升學", "職涯", "努力方向", "夢想", "願景")
 #: 目標的狀態與中文。Goal statuses.
@@ -519,7 +600,14 @@ class Goal(_Item):
         "open", title="狀態", description="open：進行中；done：達成；dropped：放棄"
     )
     added: str = _added_field()
-    closed: str = Field("", title="結束日", description="改成達成或放棄時系統填今天", pattern=OPTIONAL_DATE)
+    closed: str = Field("", title="結束日", description="達成或放棄的那天（TG 按的時候問，預設今天）", pattern=OPTIONAL_DATE)
+
+    @model_validator(mode="after")
+    def _open_has_no_closed(self) -> Goal:
+        # 進行中的目標沒有結束日：網頁把狀態改回進行中時，留著的結束日會讓卡面寫成「進行中 2026-11-01」
+        if self.status == "open":
+            self.closed = ""
+        return self
 
     @field_validator("target", mode="before")
     @classmethod
@@ -573,20 +661,21 @@ class HistoryField:
 
 #: 改成清單的欄位（登錄日計畫書 D4），大致依卡片背面的區塊（``Dietary`` 在見面前必看）。The history fields.
 PERSON_HISTORY_FIELDS: dict[str, HistoryField] = {
-    "Interests": HistoryField(HistoryEntry, "興趣", split=True),
+    "Interests": HistoryField(SinceEntry, "興趣", split=True),
+    "Experiences": HistoryField(WhenNote, "經歷"),
     "Food_Drink": HistoryField(HistoryEntry, "飲食喜好", split=True),
     "Dislikes": HistoryField(HistoryEntry, "不喜歡的事", split=True),
     "Dietary": HistoryField(HistoryNote, "飲食限制"),
     "Company": HistoryField(Position, "職位"),
     "Work_Detail": HistoryField(HistoryNote, "工作內容"),
-    "Education": HistoryField(HistoryEntry, "學歷"),
+    "Education": HistoryField(EducationEntry, "學歷"),
     "Personality_Values": HistoryField(HistoryNote, "個性與價值觀"),
-    "Praise": HistoryField(HistoryNote, "讚美素材"),
+    "Praise": HistoryField(WhenNote, "讚美素材"),
     "Ask_Advice": HistoryField(HistoryNote, "可以請教的事"),
     "Needs": HistoryField(HistoryNote, "對方需要的幫助"),
     "Common_Ground": HistoryField(HistoryNote, "共同點"),
     "Comm_Prefs": HistoryField(HistoryNote, "溝通偏好"),
-    "Residence": HistoryField(HistoryEntry, "現居地", single=True),
+    "Residence": HistoryField(SinceEntry, "現居地", single=True),
     "Languages": HistoryField(HistoryEntry, "語言", split=True),
     "Timezone": HistoryField(HistoryEntry, "時區", single=True),
     "Relationship": HistoryField(HistoryEntry, "關係", single=True),
@@ -597,6 +686,18 @@ PERSON_HISTORY_FIELDS: dict[str, HistoryField] = {
 #: 不再使用的欄位：職稱併進 ``Company`` 的職位（筆記類型的欄位保留，刪欄位要完整同步）。
 #: The retired field; the note type keeps it.
 RETIRED_FIELDS = ("Title",)
+
+#: 會變的欄位裡記「事件時間」的鍵（工作經歷計畫書 §15）：那件事的時間，和系統填的登錄日、劃掉日不同。
+#: 順序是新增時追問的順序；「用一段話記錄」的 ``start`` 對應第一個、``end`` 對應第二個。
+#: The event-time keys of each history field, in asking order.
+HISTORY_PERIOD_KEYS: dict[str, tuple[str, ...]] = {
+    "Company": ("start", "end"),
+    "Education": ("start", "finish"),
+    "Experiences": ("when",),
+    "Praise": ("when",),
+    "Interests": ("since",),
+    "Residence": ("since",),
+}
 
 # 會變的欄位必須是建立參數裡的文字欄位，而且不能和原本的 JSON 清單重名（打錯欄位名時 import 就失敗）
 assert set(PERSON_HISTORY_FIELDS) <= set(PersonCreateParams.model_fields), "PERSON_HISTORY_FIELDS 有不存在的欄位"
@@ -679,17 +780,35 @@ def entry_text(field: str, item: object) -> str:
     return str(item.get("value") or "").strip()
 
 
-def entry_detail(field: str, item: object) -> str:
-    """一筆給人（或 LLM）看的完整文字：職位另外附任職期間與說明（「QBC・QA（2025～）：測試」），
-    其他同 :func:`entry_text`。比對、去重一律用 :func:`entry_text`。
+def history_period(field: str, item: object) -> str:
+    """一筆的事件時間文字（:data:`HISTORY_PERIOD_KEYS`）：職位「2021-04～」、學歷「2011～2015」、
+    經歷與讚美素材「2019」、興趣與現居地「2015 起」；沒有時為空。
 
-    The readable text of an entry; positions add their period and note.
+    The event time of an entry as text, or empty.
+    """
+    if not isinstance(item, dict) or field not in HISTORY_PERIOD_KEYS:
+        return ""
+    if field == "Company":
+        return position_period(item)
+    values = [str(item.get(key) or "").strip() for key in HISTORY_PERIOD_KEYS[field]]
+    if len(values) == 2:
+        return f"{values[0]}～{values[1]}" if any(values) else ""
+    if not values[0]:
+        return ""
+    return f"{values[0]} 起" if HISTORY_PERIOD_KEYS[field][0] == "since" else values[0]
+
+
+def entry_detail(field: str, item: object) -> str:
+    """一筆給人（或 LLM）看的完整文字：附事件時間（:func:`history_period`），職位另外附說明
+    （「QBC・QA（2025～）：測試」「爬過玉山（2026-10）」）。比對、去重一律用 :func:`entry_text`。
+
+    The readable text of an entry with its event time; positions add their note.
     """
     text = entry_text(field, item)
-    if field != "Company" or not text or not isinstance(item, dict):
+    if not text or not isinstance(item, dict):
         return text
-    period = position_period(item)
-    note = str(item.get("note") or "").strip()
+    period = history_period(field, item)
+    note = str(item.get("note") or "").strip() if field == "Company" else ""
     return text + (f"（{period}）" if period else "") + (f"：{note}" if note else "")
 
 

@@ -810,6 +810,21 @@ class TestSaveFailureKeepsAnswers:
         return state
 
     def test_failed_write_stays_on_confirm(self):
+        from app.infrastructure.anki.client import AnkiConnectError
+
+        note_service = _note_service()
+        note_service.run_action = mock.AsyncMock(side_effect=AnkiConnectError("Anki 沒有回應"))
+        card_service = _card_service(_note(Company=json.dumps([QBC])))
+        state = self._ready(note_service, card_service)
+        query = _tap("pp:save", state, note_service, card_service)
+        sent = _sent(query.message.answer)
+        assert any("回答都還在" in text for text in sent)
+        assert _run(state.get_state()) == person_profile.PersonStates.add_confirm.state
+        retry = query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        assert retry.callback_data == "pp:save"
+
+    def test_changed_entry_ends_the_step(self):
+        """這一筆在別處被改過：再按儲存也不會成功，結束這一步、請使用者重新打開清單。"""
         from app.core.exceptions import JsonItemChangedError
 
         note_service = _note_service()
@@ -818,10 +833,10 @@ class TestSaveFailureKeepsAnswers:
         state = self._ready(note_service, card_service)
         query = _tap("pp:save", state, note_service, card_service)
         sent = _sent(query.message.answer)
-        assert any("別處被改過" in text for text in sent) and any("回答都還在" in text for text in sent)
-        assert _run(state.get_state()) == person_profile.PersonStates.add_confirm.state
-        retry = query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
-        assert retry.callback_data == "pp:save"
+        assert any("別處被改過" in text for text in sent) and not any("回答都還在" in text for text in sent)
+        assert _run(state.get_state()) is None
+        reopen = query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        assert reopen.callback_data == "pp:ls:5:CO"
 
     def test_summary_failure_after_a_write_still_says_updated(self):
         from app.infrastructure.anki.client import AnkiConnectError
@@ -887,7 +902,7 @@ class TestEditPositionGuards:
         past = {**QBC, "start": "2015", "end": "2018"}
         state, _, _, _ = _edit_session([past, QBC], index=1)
         data = _run(state.get_data())
-        assert data["edit"]["index"] == 1 and data["edit"]["end"] == ""
+        assert data["edit"]["index"] == 1 and data["edit"]["expected"] == {"start": "2025", "end": ""}
 
 
 class TestHideToggleKeepsTheEdit:
