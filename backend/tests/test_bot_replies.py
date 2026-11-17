@@ -30,6 +30,9 @@ from app.infrastructure.anki.client import AnkiConnectError
 from app.services.task_handlers.registry import handler_registry
 
 CHAT_ID = 7
+#: 假訊息共用的訊息 ID：送出的提問與之後按的按鈕預設是同一則（人脈卡只認目前提問訊息上的按鈕）。
+#: 要模擬舊訊息或連點，測試自己改 ``query.message.message_id``。
+MESSAGE_ID = 100
 NASTY = "A<b>&C"  # 含 < 與 &：不轉義的話 Telegram 會拒收整則訊息
 
 _ALLOWED_TAG = re.compile(r"</?(b|i|u|s|code|pre|blockquote|a)( [^<>]*)?>")
@@ -53,7 +56,9 @@ def _message(text: str = "", user_id: int = 1):
     message.text = text
     message.chat.id = CHAT_ID
     message.from_user.id = user_id
+    message.message_id = MESSAGE_ID
     status = mock.MagicMock()
+    status.message_id = MESSAGE_ID
     status.edit_text = mock.AsyncMock()
     status.delete = mock.AsyncMock()
     message.answer = mock.AsyncMock(return_value=status)
@@ -68,10 +73,12 @@ def _callback(data: str, user_id: int = 1):
     query.data = data
     query.from_user.id = user_id
     query.message.chat.id = CHAT_ID
+    query.message.message_id = MESSAGE_ID
     query.message.edit_text = mock.AsyncMock()
     query.message.edit_reply_markup = mock.AsyncMock()
     query.message.delete = mock.AsyncMock()
     query.message.answer = mock.AsyncMock()
+    query.message.answer.return_value.message_id = MESSAGE_ID
     query.answer = mock.AsyncMock()
     return query
 

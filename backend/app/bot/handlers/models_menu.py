@@ -54,6 +54,7 @@ from aiogram.types import (
     User,
 )
 
+from app.bot.utils.callback_reply import answer_callback
 from app.core.config import settings
 from app.core.exceptions import InvalidRouteError, RouteNotFoundError, RouteStoreUnavailableError
 from app.infrastructure.llm import routing
@@ -713,9 +714,9 @@ async def handle_close(callback_query: CallbackQuery) -> None:
     """關閉選單。Close the menu."""
     denial = admin_denial(callback_query.from_user)
     if denial is not None:
-        await callback_query.answer(denial, show_alert=True)
+        await answer_callback(callback_query, denial, show_alert=True)
         return
-    await callback_query.answer()
+    await answer_callback(callback_query)
     message = callback_query.message
     if message is None or isinstance(message, InaccessibleMessage):
         return
@@ -735,7 +736,7 @@ _LEGACY_SETCONFIG_PREFIXES = ("setconfig_", "setcfg_val:")
 @router.callback_query(F.data.startswith(_LEGACY_SETCONFIG_PREFIXES))
 async def handle_legacy_setconfig(callback_query: CallbackQuery) -> None:
     """舊 ``/setconfig`` 選單的按鈕。Buttons left over from the removed ``/setconfig`` menu."""
-    await callback_query.answer(_STALE_ALERT, show_alert=True)
+    await answer_callback(callback_query, _STALE_ALERT, show_alert=True)
 
 
 @router.callback_query(F.data.startswith(f"{PREFIX}:") & (F.data != CLOSE_DATA))
@@ -749,14 +750,14 @@ async def handle_menu(callback_query: CallbackQuery, app: Any = None) -> None:
     """
     denial = admin_denial(callback_query.from_user)
     if denial is not None:
-        await callback_query.answer(denial, show_alert=True)
+        await answer_callback(callback_query, denial, show_alert=True)
         return
     if (
         callback_query.message is None
         or isinstance(callback_query.message, InaccessibleMessage)
         or callback_query.data is None
     ):
-        await callback_query.answer(_STALE_ALERT, show_alert=True)
+        await answer_callback(callback_query, _STALE_ALERT, show_alert=True)
         return
 
     ctx: MenuContext | None = None
@@ -767,7 +768,7 @@ async def handle_menu(callback_query: CallbackQuery, app: Any = None) -> None:
                 "/%s：讀不到資料庫，拒絕操作（user=%s, data=%s）",
                 COMMAND, callback_query.from_user.id, callback_query.data,
             )
-            await callback_query.answer(_DB_ALERT, show_alert=True)
+            await answer_callback(callback_query, _DB_ALERT, show_alert=True)
             return
         action, args = parse_callback(callback_query.data, ctx)
         await _dispatch(callback_query, ctx, views, action, args, app)
@@ -780,22 +781,22 @@ async def handle_menu(callback_query: CallbackQuery, app: Any = None) -> None:
             COMMAND, callback_query.from_user.id, callback_query.data, ctx.version if ctx else None,
             type(error).__name__,
         )
-        await callback_query.answer(_STALE_ALERT, show_alert=True)
+        await answer_callback(callback_query, _STALE_ALERT, show_alert=True)
         return
     except RouteStoreUnavailableError as error:
         # 讀不到（無法判斷）與寫入時出錯（結果未知、請重新查看）的訊息由服務層區分，原樣轉達
-        await callback_query.answer(f"⚠️ {error.message}"[:ALERT_TEXT_LIMIT], show_alert=True)
+        await answer_callback(callback_query, f"⚠️ {error.message}"[:ALERT_TEXT_LIMIT], show_alert=True)
         return
     except Exception as error:  # noqa: BLE001 - UI 邊界：記錄完整 traceback 並回報給管理員
         logger.exception(
             "/%s 選單操作失敗（user=%s, data=%s, 用途=%s）",
             COMMAND, callback_query.from_user.id, callback_query.data, _target_key(ctx, callback_query.data),
         )
-        await callback_query.answer(
-            f"操作失敗：{type(error).__name__}: {error}（詳見後端 log）"[:ALERT_TEXT_LIMIT], show_alert=True
+        await answer_callback(
+            callback_query, f"操作失敗：{type(error).__name__}: {error}（詳見後端 log）"[:ALERT_TEXT_LIMIT], show_alert=True
         )
         return
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 
 def _target_key(ctx: MenuContext | None, data: str) -> str | None:

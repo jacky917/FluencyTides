@@ -771,9 +771,11 @@ class TestOrderErrorWayOut:
         assert note_service.run_action.await_args.args[2]["item"]["start"] == "2020"
 
     def test_back_when_the_flow_is_over(self):
+        """流程已結束：舊訊息上的按鈕直接忽略，只拿掉它的按鈕。"""
         state, note_service, card_service = _fsm(), _note_service(), _card_service()
         query = _tap("pp:back", state, note_service, card_service)
-        assert "已結束" in _sent(query.message.answer)[0]
+        query.message.answer.assert_not_awaited()
+        query.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
 
 
 class TestOldValuesOnTheCard:

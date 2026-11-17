@@ -22,6 +22,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+from app.bot.utils.callback_reply import answer_callback
 from app.bot.utils.formatting import escape_tg
 from app.bot.utils.texts import FLOW_ENDED_ALERT, NEWCARD_RESTART, error_detail
 from app.core.config import settings
@@ -162,13 +163,13 @@ async def process_speak_cancel(callback_query: types.CallbackQuery, state: FSMCo
         None
     """
     if not await _in_flow(state):
-        await callback_query.answer(FLOW_ENDED_ALERT, show_alert=True)
+        await answer_callback(callback_query, FLOW_ENDED_ALERT, show_alert=True)
         return
     await state.clear()
     if callback_query.message:
         await callback_query.message.edit_reply_markup(reply_markup=None)
         await callback_query.message.answer("🗑️ 已取消。")
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 
 @router.callback_query(lambda c: c.data == "speak_skip_deck", SpeakingStates.waiting_for_deck)
@@ -192,7 +193,7 @@ async def process_skip_deck(callback_query: types.CallbackQuery, state: FSMConte
     await callback_query.message.answer(
         _language_prompt("Default"), reply_markup=_language_keyboard(), parse_mode="HTML"
     )
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 
 @router.message(SpeakingStates.waiting_for_deck)
@@ -229,7 +230,7 @@ async def process_lang_callback(callback_query: types.CallbackQuery, state: FSMC
     """
     lang_code = callback_query.data.replace("speak_lang_", "")
     await _handle_language_selection(lang_code, callback_query.message, state)
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 @router.message(SpeakingStates.waiting_for_language)
 async def process_lang_message(message: types.Message, state: FSMContext) -> None:
@@ -331,7 +332,7 @@ async def process_skip_back(callback_query: types.CallbackQuery, state: FSMConte
     await callback_query.message.answer(
         _ANSWERS_PROMPT, reply_markup=_step_keyboard("speak_back_back"), parse_mode="HTML"
     )
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 
 @router.message(SpeakingStates.waiting_for_back)
@@ -478,7 +479,7 @@ async def process_go_back(callback_query: types.CallbackQuery, state: FSMContext
     """
     # 舊訊息上的返回鈕在流程結束後仍按得到：那時 data 已清空，不能把 FSM 拉回中間某步
     if not await _in_flow(state):
-        await callback_query.answer(FLOW_ENDED_ALERT, show_alert=True)
+        await answer_callback(callback_query, FLOW_ENDED_ALERT, show_alert=True)
         return
 
     action = callback_query.data.replace("speak_back_", "")
@@ -512,4 +513,4 @@ async def process_go_back(callback_query: types.CallbackQuery, state: FSMContext
         await state.set_state(SpeakingStates.waiting_for_back)
         await callback_query.message.answer(_again(_BACK_PROMPT, True), reply_markup=_back_keyboard(), parse_mode="HTML")
 
-    await callback_query.answer()
+    await answer_callback(callback_query)
