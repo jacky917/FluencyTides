@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 
 from app.infrastructure.anki.search import field_term
 from app.bot.state import UserState, UserStateManager
+from app.bot.utils.callback_reply import answer_callback
 from app.bot.utils.formatting import escape_tg
 from app.bot.utils.texts import (
     CARD_NOT_FOUND,
@@ -153,12 +154,12 @@ async def handle_avatar_sys(callback: CallbackQuery, user_state_manager: UserSta
     state = user_state_manager.get_state(chat_id)
 
     if not state or state.action != "wait_avatar_selection":
-        await callback.answer(UPLOAD_EXPIRED_ALERT, show_alert=True)
+        await answer_callback(callback, UPLOAD_EXPIRED_ALERT, show_alert=True)
         return
 
     avatar_files = _system_avatars()
     if not avatar_files:
-        await callback.answer("系統目前沒有內建頭像，請選擇上傳自訂圖片。", show_alert=True)
+        await answer_callback(callback, "系統目前沒有內建頭像，請選擇上傳自訂圖片。", show_alert=True)
         return
 
     # 把這一刻的清單存進狀態，按鈕的序號就對應使用者看到的這份清單：自訂頭像也存在同一個目錄，
@@ -166,7 +167,7 @@ async def handle_avatar_sys(callback: CallbackQuery, user_state_manager: UserSta
     state.extra["avatar_files"] = avatar_files
     user_state_manager.set_state(chat_id, state)
 
-    await callback.answer()
+    await answer_callback(callback)
     buttons = [
         [InlineKeyboardButton(text=f"👤 {Path(filename).stem}"[:60], callback_data=f"avatar_sel_{index}")]
         for index, filename in enumerate(avatar_files)
@@ -212,7 +213,7 @@ async def handle_avatar_sys_select(
     state = user_state_manager.get_state(chat_id)
 
     if not state or state.action != "wait_avatar_selection":
-        await callback.answer(UPLOAD_EXPIRED_ALERT, show_alert=True)
+        await answer_callback(callback, UPLOAD_EXPIRED_ALERT, show_alert=True)
         return
 
     # 序號對應顯示選單當下存進狀態的清單（見 handle_avatar_sys），不重新列目錄
@@ -220,12 +221,12 @@ async def handle_avatar_sys_select(
     raw_index = callback.data.replace("avatar_sel_", "", 1)
     if not (raw_index.isascii() and raw_index.isdigit()) or int(raw_index) >= len(avatar_files):
         # 舊格式（以檔名當 callback data）或沒有對應的清單：當成過期，不要選錯頭像
-        await callback.answer(UPLOAD_EXPIRED_ALERT, show_alert=True)
+        await answer_callback(callback, UPLOAD_EXPIRED_ALERT, show_alert=True)
         return
     filename = avatar_files[int(raw_index)]
     speaker_name = Path(filename).stem
 
-    await callback.answer("⏳ 寫入中…")
+    await answer_callback(callback, "⏳ 寫入中…")
     await _execute_final_update(
         chat_id,
         f"⏳ 以「{escape_tg(speaker_name, 50)}」寫入 Anki 中…",
@@ -248,14 +249,14 @@ async def handle_avatar_upload(callback: CallbackQuery, user_state_manager: User
     state = user_state_manager.get_state(chat_id)
 
     if not state or state.action != "wait_avatar_selection":
-        await callback.answer(UPLOAD_EXPIRED_ALERT, show_alert=True)
+        await answer_callback(callback, UPLOAD_EXPIRED_ALERT, show_alert=True)
         return
 
     state.action = "wait_avatar_upload"
     state.expires_at = None
     user_state_manager.set_state(chat_id, state)
 
-    await callback.answer()
+    await answer_callback(callback)
     await callback.message.edit_text("🖼️ 請傳一張照片作為頭像（不要用「檔案」傳送）。")
 
 
@@ -281,10 +282,10 @@ async def handle_avatar_skip(
     state = user_state_manager.get_state(chat_id)
 
     if not state or state.action != "wait_avatar_selection":
-        await callback.answer(UPLOAD_EXPIRED_ALERT, show_alert=True)
+        await answer_callback(callback, UPLOAD_EXPIRED_ALERT, show_alert=True)
         return
 
-    await callback.answer("⏳ 寫入中…")
+    await answer_callback(callback, "⏳ 寫入中…")
     await _execute_final_update(
         chat_id,
         "⏳ 不使用頭像，寫入 Anki 中…",
@@ -307,10 +308,10 @@ async def handle_avatar_back(callback: CallbackQuery, user_state_manager: UserSt
     state = user_state_manager.get_state(chat_id)
 
     if not state or state.action != "wait_avatar_selection":
-        await callback.answer(UPLOAD_EXPIRED_ALERT, show_alert=True)
+        await answer_callback(callback, UPLOAD_EXPIRED_ALERT, show_alert=True)
         return
 
-    await callback.answer()
+    await answer_callback(callback)
     await callback.message.edit_text(AVATAR_PROMPT, reply_markup=avatar_keyboard())
 
 

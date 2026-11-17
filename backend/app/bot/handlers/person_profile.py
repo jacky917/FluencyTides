@@ -31,7 +31,7 @@ from io import BytesIO
 from typing import Any
 
 from aiogram import F, Router, types
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -39,6 +39,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pydantic import ValidationError
 
 from app.bot.utils import person_profile_view as view
+from app.bot.utils.callback_reply import answer_callback, is_not_modified
 from app.bot.utils.formatting import anki_field_to_tg_text, escape_tg
 from app.bot.utils.texts import ANKI_UNREACHABLE, CARD_NOT_FOUND, error_detail, sync_suffix
 from app.core import clock
@@ -386,18 +387,29 @@ async def on_person_button(
     card_service: CardService,
 ) -> None:
     """``pp:`` 按鈕的分派。Dispatch the ``pp:`` buttons."""
-    await callback.answer()
     message = callback.message
     # 太舊的訊息（超過 48 小時）拿不到內容，無法回覆或改寫
     if message is None or isinstance(message, types.InaccessibleMessage):
+        await answer_callback(callback)
         return
     parts = (callback.data or "").split(":")
     verb = parts[1] if len(parts) > 1 else ""
+    if verb in _PROMPT_VERBS and not await _is_current_prompt(message, state):
+        # 連點的第二下（排隊等前一下跑完時，這一步已經前進）或更早的提問訊息：不能拿來回答目前這一步。
+        # 用短提示說明（不送聊天訊息，連點也不洗版），並拿掉它的按鈕
+        logger.info("人脈卡：忽略不是目前提問訊息上的按鈕 %r（訊息 %s，狀態 %s）",
+                    callback.data, message.message_id, await state.get_state())
+        await answer_callback(callback, "這個按鈕已經不能用了，請看最新的提問。")
+        await _remove_buttons_quietly(message)
+        return
+    # 回應失敗（例如 Telegram 變慢、太久才處理到的 query is too old）不中斷：取消等操作照樣要做
+    await answer_callback(callback)
     try:
         if verb == "cancel":
             await state.clear()
-            await message.edit_reply_markup(reply_markup=None)
-            await message.answer("已取消。")
+            # 按鈕已經拿掉（連點取消的第二下）：已處理過，不再回覆
+            if await _remove_buttons(message):
+                await message.answer("已取消。")
         elif verb == "s":
             await state.clear()
             await send_summary(message, card_service, _int_arg(parts, 2))
@@ -415,10 +427,21 @@ async def on_person_button(
             )
         elif verb == "delok":
             note_id, field_name = _int_arg(parts, 2), _list_arg(parts, 3)
-            warning = await note_service.run_action(
-                note_id, "remove_item", {"field": field_name, "index": _int_arg(parts, 4), "fingerprint": _arg(parts, 5)}
-            )
-            await message.edit_reply_markup(reply_markup=None)
+            index, fingerprint = _int_arg(parts, 4), _arg(parts, 5)
+            # 先拿掉按鈕再刪：連點的第二下在這裡結束，不會再刪一次（同內容的兩筆指紋相同，可能刪到另一筆）
+            if not await _remove_buttons(message):
+                return
+            try:
+                warning = await note_service.run_action(
+                    note_id, "remove_item", {"field": field_name, "index": index, "fingerprint": fingerprint}
+                )
+            except (FluencyTidesError, AnkiConnectError) as e:
+                # 確認按鈕已經拿掉了：附上重新打開清單的按鈕，不必回 /p 重找
+                await _reply_error(message, e)
+                await message.answer("還沒刪除：要再刪一次請重新打開清單。", reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[[_button("打開清單", f"pp:ls:{note_id}:{view.CODE_OF_LIST[field_name]}"),
+                                      _button("回摘要", f"pp:s:{note_id}")]]))
+                return
             await send_summary(message, card_service, note_id, prefix="已刪除。" + sync_suffix(warning))
         elif verb == "hx":
             field_name = _list_arg(parts, 3)
@@ -465,7 +488,8 @@ async def on_person_button(
             if status not in ("done", "dropped") or offset not in ("0", "1"):
                 raise _StaleButton
             note_id, index, fingerprint = _int_arg(parts, 2), _int_arg(parts, 3), _arg(parts, 4)
-            await message.edit_reply_markup(reply_markup=None)
+            if not await _remove_buttons(message):
+                return
             await _finish_goal_closed(message, state, note_service, note_id, index, fingerprint, status,
                                       view.today_choice(_today(), int(offset)))
         elif verb == "pe":
@@ -537,6 +561,57 @@ class _StaleButton(Exception):
 
     只用在解析 callback data：執行時的錯誤不轉成這個，免得被說成「按鈕已失效」。
     """
+
+
+#: 只認「目前這一步的提問訊息」上的按鈕：選項、今天／昨天、略過、重新輸入開始、儲存、取代／接在後面、勾選、
+#: 儲存勾選的。提問訊息的 ID 記在 FSM 資料的 ``prompt_id``（:func:`_remember_prompt`）。
+_PROMPT_VERBS = frozenset({"ch", "skip", "back", "save", "em", "ig", "igsave"})
+
+
+async def _remember_prompt(state: FSMContext, sent: types.Message) -> None:
+    """記下目前這一步的提問訊息：之後只有它上面的按鈕有效，更早的提問訊息上的按鈕都忽略。
+
+    Remember the current step's prompt message; buttons on earlier prompts are ignored.
+    """
+    await state.update_data(prompt_id=sent.message_id)
+
+
+async def _is_current_prompt(message: types.Message, state: FSMContext) -> bool:
+    """按鈕所在的訊息是不是目前這一步的提問訊息。Whether the button belongs to the current prompt."""
+    return message.message_id == (await state.get_data()).get("prompt_id")
+
+
+async def _remove_buttons(message: types.Message) -> bool:
+    """拿掉訊息的按鈕；按鈕早就拿掉了（``message is not modified``，連點的第二下）時回傳 False，呼叫端直接結束。
+
+    Remove the buttons; False when they were already gone (handled before), so the caller stops.
+    """
+    return await _edit_buttons(message, None)
+
+
+async def _edit_buttons(message: types.Message, markup: InlineKeyboardMarkup | None) -> bool:
+    """改訊息的按鈕；內容沒變時回傳 False（已處理過）。Edit the buttons; False when nothing changed."""
+    try:
+        await message.edit_reply_markup(reply_markup=markup)
+    except TelegramBadRequest as e:
+        if not is_not_modified(e):
+            raise
+        logger.info("人脈卡：訊息 %s 的按鈕已處理過，這次略過", message.message_id)
+        return False
+    return True
+
+
+async def _remove_buttons_quietly(message: types.Message) -> None:
+    """盡力拿掉訊息的按鈕（過時的提問、已經寫入完成的預覽）；失敗不影響結果，只記 log。
+
+    Best-effort removal of a message's buttons.
+    """
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest as e:
+        if is_not_modified(e):
+            return  # 已經拿掉了（連點的第二下）
+        logger.info("人脈卡：拿掉訊息 %s 的按鈕失敗（不影響結果）: %s", message.message_id, e.message)
 
 
 def _arg(parts: list[str], index: int) -> str:
@@ -1161,11 +1236,12 @@ async def _ask_step(message: types.Message, state: FSMContext) -> None:
             data["step"] = step_index
     if data["step"] >= len(steps):
         await state.set_state(PersonStates.add_confirm)
-        await message.answer(
+        sent = await message.answer(
             view.preview_item(data["field"], data["item"], editing=editing),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("儲存", "pp:save"), *CANCEL_ROW]]),
             parse_mode="HTML",
         )
+        await _remember_prompt(state, sent)
         return
     step = steps[data["step"]]
     prompt = step.prompt
@@ -1190,7 +1266,8 @@ async def _ask_step(message: types.Message, state: FSMContext) -> None:
         rows.append([_button("今天", "pp:ch:t0"), _button("昨天", "pp:ch:t1")])
     last = [_button("略過", "pp:skip")] if not step.required else []
     rows.append(last + CANCEL_ROW)
-    await message.answer(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    sent = await message.answer(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await _remember_prompt(state, sent)
 
 
 async def _store_answer(message: types.Message, state: FSMContext, raw: str | None) -> None:
@@ -1248,13 +1325,15 @@ async def _store_answer(message: types.Message, state: FSMContext, raw: str | No
                                    labels=(start_label, end_label))
         if error:
             unknown = "不知道離職時間就寫 ?。" if data["field"] == "Company" else ""
-            await message.answer(
+            sent = await message.answer(
                 f"❌ {escape_tg(error)}。請重新輸入{end_label}的時間；{unknown}{start_label}打錯的話按「重新輸入{start_label}」。",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [_button(f"重新輸入{start_label}", "pp:back"), *CANCEL_ROW]
                 ]),
                 parse_mode="HTML",
             )
+            # 之後只認這一則（重新輸入開始、取消）：原提問上的「略過」對職位等於改成現職，不該再用
+            await _remember_prompt(state, sent)
             return
     if edit and raw is not None and step.key in edit.get("invalid", []):
         # 重新輸入過了：之後再回到這一步（重新輸入到職）可以略過
@@ -1274,7 +1353,8 @@ async def _back_to_start(message: types.Message, state: FSMContext) -> None:
     pair = view.PERIOD_PAIRS.get(str(data.get("field")))
     if pair is None or pair[0] not in keys:
         raise _StaleButton
-    await message.edit_reply_markup(reply_markup=None)
+    if not await _remove_buttons(message):
+        return
     await state.update_data(step=keys.index(pair[0]))
     await _ask_step(message, state)
 
@@ -1302,7 +1382,8 @@ async def _answer_step_button(
     """新增一筆時的按鈕：選項、今天／昨天、略過；建立新的人時的「略過」。Step buttons."""
     current = await state.get_state()
     if current == PersonStates.create_context.state and parts[1] == "skip":
-        await message.edit_reply_markup(reply_markup=None)
+        if not await _remove_buttons(message):
+            return
         await _create_person(message, state, note_service, card_service, context="")
         return
     if current != PersonStates.add_step.state:
@@ -1321,7 +1402,8 @@ async def _answer_step_button(
             answer = view.today_choice(_today(), int(choice[1:]))
         else:
             answer = step.choices[_index_arg(parts, 2, len(step.choices))][0]
-    await message.edit_reply_markup(reply_markup=None)
+    if not await _remove_buttons(message):
+        return
     await _store_answer(message, state, answer)
 
 
@@ -1338,7 +1420,8 @@ async def _save_item(
     data = await state.get_data()
     note_id, field_name = int(data["nid"]), str(data["field"])
     item = {k: v for k, v in dict(data["item"]).items() if not k.startswith("_")}
-    await message.edit_reply_markup(reply_markup=None)
+    if not await _remove_buttons(message):
+        return
     if data.get("edit"):
         await _save_detail_edit(message, state, note_service, card_service, note_id, field_name, data["edit"], item)
         return
@@ -1396,10 +1479,11 @@ async def _save_detail_edit(
         return
     except (FluencyTidesError, AnkiConnectError) as e:
         await _reply_error(message, e)
-        await message.answer(
+        sent = await message.answer(
             "回答都還在：要再試一次就按「儲存」，不改了就按「取消」。",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("儲存", "pp:save"), *CANCEL_ROW]]),
         )
+        await _remember_prompt(state, sent)
         return
     await state.clear()
     done = "這份工作" if field_name == "Company" else f"這一筆{view.list_title(field_name)}的時間"
@@ -1487,12 +1571,13 @@ async def process_edit_value(
     await state.update_data(value=value)
     if value and view.is_multiline(field_name) and current.strip():
         await state.set_state(PersonStates.edit_mode)
-        await message.answer(
+        sent = await message.answer(
             "要取代原本的內容，還是接在後面？",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [_button("取代", "pp:em:r"), _button("接在後面", "pp:em:a")], CANCEL_ROW,
             ]),
         )
+        await _remember_prompt(state, sent)
         return
     await _finish_edit(message, state, note_service, card_service, append=False)
 
@@ -1693,7 +1778,8 @@ async def _run_ingest(
     await state.update_data(proposals=proposals, selected=[True] * len(proposals), saved=[], overflow=overflow)
     await status.delete()
     text, keyboard = _proposal_view(await state.get_data())
-    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    sent = await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    await _remember_prompt(state, sent)
 
 
 def _ingest_failure(error: LLMServiceError | LLMGenerationError) -> str:
@@ -1791,8 +1877,9 @@ async def _set_text_mask(
     else:
         await client.add_tags([note_id], TEXT_UNMASKED_TAG)
     warning = await sync_warning(client)
-    if from_button:
-        await message.edit_reply_markup(reply_markup=_topics_keyboard(note_id, masked))
+    # 按鈕已經是切換後的樣子（連點的第二下）：已處理過，不再回覆一次
+    if from_button and not await _edit_buttons(message, _topics_keyboard(note_id, masked)):
+        return
     await message.answer(
         ("已改成：送給 AI 的內文遮名字（預設）。" if masked
          else "已改成：送給 AI 的內文不遮名字（姓名欄位照樣不送）。")
@@ -1905,7 +1992,12 @@ async def _save_proposals(
         await state.update_data(saved=sorted(saved), saving=False)
         logger.error("人脈卡整理：寫入中斷（note %s，已寫 %d/%d 項）: %s", note_id, len(saved), len(saved) + len(pending), e)
         text, keyboard = _proposal_view(await state.get_data())
-        await message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        try:
+            await message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        except TelegramBadRequest as edit_error:
+            # 第一項就失敗時預覽沒有變（message is not modified）；改不了預覽也一樣：照樣要告訴使用者還沒存
+            if not is_not_modified(edit_error):
+                logger.warning("人脈卡整理：更新預覽失敗（訊息 %s）", message.message_id, exc_info=True)
         reason = error_detail(e.message if isinstance(e, FluencyTidesError) else e)
         await message.answer(
             f"❌ 已記下 {len(saved)} 項，其餘還沒存：{reason}\n再按一次「儲存勾選的」只會補存還沒存的項目。",
@@ -1917,7 +2009,8 @@ async def _save_proposals(
         await state.update_data(saved=sorted(saved), saving=False)
         raise
     await state.clear()
-    await message.edit_reply_markup(reply_markup=None)
+    # 已經寫入了：拿不掉按鈕也照樣回覆結果（不然使用者以為沒存到而重做）
+    await _remove_buttons_quietly(message)
     prefix = f"✅ 已記下 {len(saved)} 項。" + sync_suffix(warning)
     try:
         await send_summary(message, card_service, note_id, prefix=prefix)
@@ -1938,7 +2031,7 @@ async def start_person_create(message: types.Message, state: FSMContext, *, name
     if name:
         await state.set_state(PersonStates.create_context)
         await state.update_data(name=name)
-        await _ask_context(message, name)
+        await _ask_context(message, state, name)
         return
     await state.set_state(PersonStates.create_name)
     await message.answer(
@@ -1948,12 +2041,13 @@ async def start_person_create(message: types.Message, state: FSMContext, *, name
     )
 
 
-async def _ask_context(message: types.Message, name: str) -> None:
-    await message.answer(
+async def _ask_context(message: types.Message, state: FSMContext, name: str) -> None:
+    sent = await message.answer(
         f"在哪裡認識「{escape_tg(name, 40)}」的？（例如「Geekly 面談」）",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_button("略過", "pp:skip"), *CANCEL_ROW]]),
         parse_mode="HTML",
     )
+    await _remember_prompt(state, sent)
 
 
 @router.message(PersonStates.create_name, F.text)
@@ -1964,7 +2058,7 @@ async def process_create_name(message: types.Message, state: FSMContext) -> None
         return
     await state.set_state(PersonStates.create_context)
     await state.update_data(name=name)
-    await _ask_context(message, name)
+    await _ask_context(message, state, name)
 
 
 @router.message(PersonStates.create_context, F.text)

@@ -19,6 +19,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+from app.bot.utils.callback_reply import answer_callback
 from app.bot.utils.formatting import escape_tg
 from app.bot.utils.texts import NEWCARD_RESTART, error_detail, sync_suffix
 from app.core.exceptions import FluencyTidesError
@@ -96,7 +97,7 @@ async def process_vocab_cancel(callback_query: types.CallbackQuery, state: FSMCo
         await callback_query.message.edit_reply_markup(reply_markup=None)
         await callback_query.message.answer("🗑️ 已取消。")
     await state.clear()
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 
 @router.message(VocabularyStates.waiting_for_word)

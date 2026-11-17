@@ -28,10 +28,12 @@ import logging
 import math
 
 from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 
+from app.bot.utils.callback_reply import answer_callback, is_not_modified
 from app.services.card_service import CardService
 from app.infrastructure.anki.client import AnkiClient
 
@@ -179,12 +181,17 @@ async def handle_newcard_page(callback: CallbackQuery) -> None:
     try:
         page = int(page_str)
     except ValueError:
-        await callback.answer("無效的頁碼。", show_alert=True)
+        await answer_callback(callback, "無效的頁碼。", show_alert=True)
         return
 
     keyboard = build_newcard_keyboard(page=page)
-    await callback.message.edit_reply_markup(reply_markup=keyboard)
-    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=keyboard)
+    except TelegramBadRequest as e:
+        # 連點同一顆換頁：已經是這一頁了（message is not modified），不是錯誤
+        if not is_not_modified(e):
+            raise
+    await answer_callback(callback)
 
 
 # ============================================================================
@@ -215,7 +222,7 @@ async def handle_newcard_select(
         anki_client: 注入的 AnkiClient。Injected AnkiClient instance.
     """
     card_type_key = callback.data.replace("newcard:", "", 1)
-    await callback.answer()
+    await answer_callback(callback)
 
     if card_type_key == "expression":
         from app.bot.handlers.fsm.expression_fsm import start_expression_flow
