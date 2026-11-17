@@ -276,11 +276,13 @@ class TestIngestFlow:
         assert _run(state.get_state()) == PersonStates.ingest_confirm.state
 
     def test_stale_buttons(self):
+        """流程已結束：舊預覽上的按鈕直接忽略（不回覆、不寫入），只拿掉它的按鈕。"""
         state = _fsm()
-        query = _press("pp:igsave", state)
-        assert "已結束" in _sent(query.message.answer)[0]
-        query = _press("pp:ig:0", state)
-        assert "已結束" in _sent(query.message.answer)[0]
+        for data in ("pp:igsave", "pp:ig:0"):
+            query = _press(data, state)
+            query.message.answer.assert_not_awaited()
+            query.message.edit_text.assert_not_awaited()
+            query.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
 
     def test_llm_failure_keeps_waiting(self):
         state, card_service = _fsm(), _card_service()

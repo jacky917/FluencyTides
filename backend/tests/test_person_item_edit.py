@@ -467,8 +467,10 @@ class TestTgEditReview:
         assert params["values"]["item"] == "茶" and params["expected"]["item"] == "咖啡豆"
 
     def test_stale_redo_button(self):
+        """不是目前提問訊息上的「重新修改」（連點的第二下、步驟已結束）：只用短提示說明，不送聊天訊息。"""
         query = _tap("pp:redo", _fsm())
-        assert "步驟已結束" in _sent(query.message.answer)[-1]
+        assert _sent(query.message.answer) == []
+        assert "不能用了" in query.answer.await_args.args[0]
 
     @pytest.mark.parametrize("data,reopen", [
         ("pp:delok:5:G:0:zzz", "pp:ls:5:G"),

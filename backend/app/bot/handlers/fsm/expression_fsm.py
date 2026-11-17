@@ -37,6 +37,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.infrastructure.anki.search import deck_term, field_term, note_type_term
 from app.infrastructure.anki.client import AnkiConnectError
+from app.bot.utils.callback_reply import answer_callback
 from app.bot.utils.formatting import anki_field_to_tg_text, escape_tg
 from app.bot.utils.texts import FLOW_ENDED_ALERT, NEWCARD_RESTART, error_detail, sync_suffix
 
@@ -317,7 +318,7 @@ async def process_source_tag(callback_query: types.CallbackQuery, state: FSMCont
 
     await state.set_state(ExpressionStates.waiting_for_grammar_correction)
     await callback_query.message.answer(_GRAMMAR_PROMPT, reply_markup=_grammar_keyboard())
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 @router.message(ExpressionStates.waiting_for_source_tag)
 async def process_source_tag_text(message: types.Message, state: FSMContext) -> None:
@@ -353,7 +354,7 @@ async def process_skip_grammar_correction(callback_query: types.CallbackQuery, s
         await callback_query.message.edit_reply_markup(reply_markup=None)
 
     await _prompt_reorganization(callback_query.message, state)
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 @router.message(ExpressionStates.waiting_for_grammar_correction)
 async def process_grammar_correction(message: types.Message, state: FSMContext) -> None:
@@ -400,7 +401,7 @@ async def process_skip_reorganization(callback_query: types.CallbackQuery, state
     if callback_query.message:
         await callback_query.message.edit_reply_markup(reply_markup=None)
     await _check_duplicate_before_generate(callback_query.message, state, card_service)
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 @router.message(ExpressionStates.waiting_for_reorganization)
 async def process_reorganization(message: types.Message, state: FSMContext, card_service: CardService) -> None:
@@ -535,7 +536,7 @@ async def handle_dup_overwrite(callback_query: types.CallbackQuery, state: FSMCo
     if callback_query.message:
         await callback_query.message.edit_reply_markup(reply_markup=None)
     await _generate_and_preview(callback_query.message, state, card_service)
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 @router.callback_query(lambda c: c.data == "expr_dup_allow", ExpressionStates.waiting_for_duplicate_decision)
 async def handle_dup_allow(callback_query: types.CallbackQuery, state: FSMContext, card_service: CardService) -> None:
@@ -559,7 +560,7 @@ async def handle_dup_allow(callback_query: types.CallbackQuery, state: FSMContex
     if callback_query.message:
         await callback_query.message.edit_reply_markup(reply_markup=None)
     await _generate_and_preview(callback_query.message, state, card_service)
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 @router.callback_query(lambda c: c.data == "expr_dup_cancel", ExpressionStates.waiting_for_duplicate_decision)
 async def handle_dup_cancel(callback_query: types.CallbackQuery, state: FSMContext) -> None:
@@ -580,7 +581,7 @@ async def handle_dup_cancel(callback_query: types.CallbackQuery, state: FSMConte
         await callback_query.message.edit_reply_markup(reply_markup=None)
         await callback_query.message.answer("🗑️ 已取消。")
     await state.clear()
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 async def _generate_and_preview(
     message: types.Message,
@@ -758,7 +759,7 @@ async def handle_confirm_all(
         await callback_query.message.edit_reply_markup(reply_markup=None)
 
     await _execute_card_creation(callback_query.message, state, card_service, note_service, selected_indices=None)
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 
 @router.callback_query(lambda c: c.data == "expr_abandon_all", ExpressionStates.waiting_for_card_selection)
@@ -782,7 +783,7 @@ async def handle_abandon_all(
         await callback_query.message.answer("🗑️ 已放棄，未寫入任何卡片。")
 
     await state.clear()
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 
 @router.message(ExpressionStates.waiting_for_card_selection)
@@ -989,7 +990,7 @@ async def process_go_back(callback_query: types.CallbackQuery, state: FSMContext
     # 舊訊息上的返回鈕在流程結束後仍按得到：那時 data 已清空，把 FSM 拉回中間某步只會顯示
     # 預設值、往下走還會缺欄位而失敗
     if not await _in_flow(state):
-        await callback_query.answer(FLOW_ENDED_ALERT, show_alert=True)
+        await answer_callback(callback_query, FLOW_ENDED_ALERT, show_alert=True)
         return
 
     action = callback_query.data.replace("expr_back_", "")
@@ -1025,7 +1026,7 @@ async def process_go_back(callback_query: types.CallbackQuery, state: FSMContext
         await state.set_state(ExpressionStates.waiting_for_reorganization)
         await callback_query.message.answer(_again(_REORG_PROMPT, True), reply_markup=_reorg_keyboard())
 
-    await callback_query.answer()
+    await answer_callback(callback_query)
 
 
 @router.callback_query(lambda c: c.data == "expr_cancel")
@@ -1038,7 +1039,7 @@ async def process_cancel(callback_query: types.CallbackQuery, state: FSMContext)
     another flow the user is in now.
     """
     if not await _in_flow(state):
-        await callback_query.answer(FLOW_ENDED_ALERT, show_alert=True)
+        await answer_callback(callback_query, FLOW_ENDED_ALERT, show_alert=True)
         return
     await state.clear()
     if callback_query.message:
@@ -1047,4 +1048,4 @@ async def process_cancel(callback_query: types.CallbackQuery, state: FSMContext)
         except Exception:
             pass
         await callback_query.message.answer("🗑️ 已取消。")
-    await callback_query.answer()
+    await answer_callback(callback_query)

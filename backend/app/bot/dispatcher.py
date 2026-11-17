@@ -15,6 +15,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import SimpleEventIsolation
 
 from app.bot.dependencies import ServiceInjectionMiddleware, WhitelistMiddleware
 from app.core.config import settings
@@ -34,7 +35,12 @@ def setup_dispatcher() -> Dispatcher:
     Returns:
         配置好的 Dispatcher 實例。The configured Dispatcher instance.
     """
-    dp = Dispatcher()
+    # 同一個人（bot＋聊天室＋使用者）的 update 排隊處理，不同人互不影響。
+    # 沒有它時，Telegram 變慢、使用者連點按鈕，同一個人的多個 update 會並行執行，
+    # 一個 handler 還在等送訊息時，另一個就把 FSM 狀態清掉或改掉（例如讀回時少了 field 而 KeyError）。
+    # - 鎖是記憶體裡的 asyncio.Lock，和 MemoryStorage 的 FSM 狀態一樣只在單一 process 有效（不能加 --workers）。
+    # - 代價：handler 在跑長的工作時（例如人脈卡「用一段話記錄」直接等 LLM 整理），同一個人按的其他按鈕都要等它跑完。
+    dp = Dispatcher(events_isolation=SimpleEventIsolation())
 
     # 1. 註冊 Middlewares (全域)
     # WhitelistMiddleware 必須在最外層，阻擋未授權者

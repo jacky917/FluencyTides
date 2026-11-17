@@ -478,7 +478,7 @@ class TestAddFlow:
         state, note_service, card_service = _fsm(), _note_service(), _card_service()
         query = _press("pp:save", state, note_service, card_service)
         note_service.run_action.assert_not_awaited()
-        assert "已結束" in _sent(query.message.answer)[0]
+        query.message.answer.assert_not_awaited()
 
 
 class TestHistoryList:
