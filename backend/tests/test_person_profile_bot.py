@@ -293,8 +293,8 @@ class TestDeepLinks:
         ))
         assert "要新增哪一項" in _sent(message.answer)[0]
         rows = message.answer.await_args.kwargs["reply_markup"].inline_keyboard
-        assert [r[0].callback_data for r in rows[:-1]] == ["pp:add:5:CO", "pp:add:5:WK", "pp:add:5:ED"]
-        assert rows[0][0].text == "+ 職位"
+        assert [r[0].callback_data for r in rows[:-1]] == ["pp:add:5:CO", "pp:add:5:ED"]
+        assert rows[0][0].text == "+ 工作經歷"
 
     def test_edit_link_opens_the_text_field(self):
         """長按文字欄位（出身等）：直接問那個欄位的新內容。"""
@@ -537,7 +537,15 @@ class TestHistoryList:
         query = _press("pp:lists:5", state, note_service, _card_service(_note(Interests=json.dumps(items))))
         buttons = [b for row in query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
         assert any(b.text == "興趣（2）" and b.callback_data == "pp:ls:5:IN" for b in buttons)
-        assert any(b.text == "職位（0）" for b in buttons)
+        assert any(b.text == "工作經歷（0）" for b in buttons)
+
+    def test_lists_menu_counts_every_job(self):
+        """以前的工作也是工作經歷，不是作廢的資料：筆數算全部。"""
+        jobs = [{"company": "QBC", "added": "", "ended": ""}, {"company": "Sony", "end": "2021", "added": "", "ended": ""}]
+        state, note_service = _fsm(), _note_service()
+        query = _press("pp:lists:5", state, note_service, _card_service(_note(Company=json.dumps(jobs))))
+        buttons = [b for row in query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard for b in row]
+        assert any(b.text == "工作經歷（2）" and b.callback_data == "pp:ls:5:CO" for b in buttons)
 
     def test_delete_confirmation_suggests_ending(self):
         items = _entries("東京")

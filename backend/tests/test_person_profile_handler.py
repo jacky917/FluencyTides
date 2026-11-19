@@ -20,7 +20,7 @@ from app.core.exceptions import (
 )
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.anki import AnkiNoteInfo
-from app.schemas.person_profile import PERSON_HISTORY_FIELDS, PERSON_NOTE_TYPE, PersonCreateParams, item_fingerprint
+from app.schemas.person_profile import PERSON_HISTORY_FIELDS, PERSON_NOTE_TYPE, RETIRED_FIELDS, PersonCreateParams, item_fingerprint
 from app.services.task_handlers.person_profile_handler import PersonProfileHandler, new_card_id
 from app.services.task_handlers.registry import handler_registry
 from tests.test_handler_base import FakeAnki, _card_service, _relations
@@ -90,7 +90,7 @@ class TestDeclarations:
     def test_history_fields_are_editable_on_the_web(self):
         handler = PersonProfileHandler()
         assert set(handler.JSON_FIELD_SPECS) == set(JSON_FIELDS + HISTORY_FIELDS)
-        assert handler.JSON_FIELD_SPECS["Company"].title == "職位"
+        assert handler.JSON_FIELD_SPECS["Company"].title == "工作經歷"
         # 網頁新增一筆時預填今天的標記
         schema = handler.JSON_FIELD_SPECS["Interests"].item.model_json_schema()
         assert schema["properties"]["added"]["x-default"] == "today"
@@ -104,10 +104,10 @@ class TestDeclarations:
 
     def test_create_form_has_no_system_or_locked_fields(self):
         properties = PersonCreateParams.model_json_schema()["properties"]
-        locked = {*JSON_FIELDS, "Photo", "Card_ID", "TG_Bot", "Updated_At", "Title"}
+        locked = {*JSON_FIELDS, "Photo", "Card_ID", "TG_Bot", "Updated_At", *RETIRED_FIELDS}
         for name in locked:
             assert name not in properties
-        # 其餘欄位都在表單上，順序與筆記類型相同（Title 已停用：職稱在職位的列裡）
+        # 其餘欄位都在表單上，順序與筆記類型相同（停用的職稱、工作內容不在：都併進工作經歷）
         expected = [n for n in PERSON_FIELDS if n not in locked]
         assert list(properties) == expected
 
@@ -118,7 +118,7 @@ class TestDeclarations:
         single = {name for name, spec in PERSON_HISTORY_FIELDS.items() if spec.single}
         assert rows == set(PERSON_HISTORY_FIELDS) - single
         assert properties["Languages"]["x-quick"] == ["中文", "日文", "英文"]
-        assert properties["Work_Detail"]["x-item"] == "textarea"
+        assert properties["Ask_Advice"]["x-item"] == "textarea"
         # 標籤欄位就是會用頓號、逗號切開的那幾個（每筆本來就是短值）
         tags = {name for name, prop in properties.items() if prop.get("x-item") == "tag"}
         assert tags == {name for name, spec in PERSON_HISTORY_FIELDS.items() if spec.split}
@@ -178,12 +178,12 @@ class TestCreate:
         """D6：建卡時文字轉成清單、登錄日填今天；興趣等以逗號、頓號切成多筆，其他整段一筆。"""
         anki = PersonAnki()
         fields = _create(anki, Display_Name="田中さん", Company=[{"company": "Geekly", "title": "エンジニア"}],
-                         Interests="登山, 精釀啤酒、攝影", Work_Detail="後端開發，負責 API", Closeness="4")
+                         Interests="登山, 精釀啤酒、攝影", Ask_Advice="後端開發，負責 API", Closeness="4")
         today = today_iso()
         assert AnkiJsonFieldManager.parse_field_string(fields["Interests"]) == [
             {"value": v, "added": today, "ended": ""} for v in ("登山", "精釀啤酒", "攝影")
         ]
-        assert AnkiJsonFieldManager.parse_field_string(fields["Work_Detail"]) == [
+        assert AnkiJsonFieldManager.parse_field_string(fields["Ask_Advice"]) == [
             {"value": "後端開發，負責 API", "added": today, "ended": ""}
         ]
         assert AnkiJsonFieldManager.parse_field_string(fields["Company"]) == [
@@ -199,7 +199,7 @@ class TestCreate:
         fields = _create(
             anki, Display_Name="田中さん",
             Company=[{"company": "Geekly", "title": "PM"}, {"company": "", "title": "顧問"}, {"company": " ", "title": ""}],
-            Work_Detail=["後端、API", "帶新人\n面試", "", "後端、API"],
+            Ask_Advice=["後端、API", "帶新人\n面試", "", "後端、API"],
             Languages=["中文", "日文、英文"],
         )
         today = today_iso()
@@ -208,7 +208,7 @@ class TestCreate:
             {"company": "", "title": "顧問", "added": today, "ended": ""},
         ]
         # 不切的欄位一列就是一筆（列裡的頓號、換行保留）
-        assert [e["value"] for e in AnkiJsonFieldManager.parse_field_string(fields["Work_Detail"])] == [
+        assert [e["value"] for e in AnkiJsonFieldManager.parse_field_string(fields["Ask_Advice"])] == [
             "後端、API", "帶新人\n面試",
         ]
         # 可切的欄位一列裡的頓號照樣切開
@@ -407,7 +407,7 @@ class TestActions:
     def test_declared_actions(self):
         assert set(PersonProfileHandler.CAPABILITIES.actions) == {
             "add_interaction", "add_followup", "set_followup_status", "add_item", "set_goal_status", "add_history",
-            "set_history_status", "edit_position", "edit_history_period", "set_hidden", "remove_item", "set_photo",
+            "set_history_status", "edit_position", "edit_history_period", "edit_item", "set_hidden", "remove_item", "set_photo",
         }
 
 
@@ -456,7 +456,8 @@ class TestHistory:
 
     def test_single_value_same_as_current_changes_nothing(self):
         anki = PersonAnki([person(1, Display_Name="田中さん", Residence=json.dumps([_entry("東京")]))])
-        _act(anki, 1, action="add_history", field="Residence", item={"value": "東京"})
+        with pytest.raises(InvalidNoteFieldsError, match="已經有「東京」"):
+            _act(anki, 1, action="add_history", field="Residence", item={"value": "東京"})
         assert _list(anki, 1, "Residence") == [_entry("東京")]
 
     def test_positions_are_not_single_value(self):
@@ -530,7 +531,7 @@ class TestHistory:
 
     def test_title_can_be_cleared_but_not_written(self):
         anki = PersonAnki([person(1, Display_Name="田中さん", Title="PM")])
-        with pytest.raises(FieldNotEditableError, match="職位"):
+        with pytest.raises(FieldNotEditableError, match="工作經歷"):
             _act(anki, 1, action="update_fields", fields={"Title": "部長"})
         _act(anki, 1, action="update_fields", fields={"Title": ""})
         assert anki.value(1, "Title") == ""

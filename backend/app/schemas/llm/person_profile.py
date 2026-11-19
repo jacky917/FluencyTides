@@ -57,23 +57,26 @@ class IngestListUpdate(BaseModel):
     op: Literal["add", "end"] = Field(
         description="add：新增一筆；end：劃掉目前有效的某一筆（不再適用了，例如離職、搬走、不再玩的興趣）"
     )
-    value: str = Field("", description="op 為 add 時要新增的內容（純文字）；職位（Company）填公司名稱；op 為 end 時空字串")
-    job_title: str = Field("", description="只有職位（Company）用：職稱；其他欄位空字串")
+    value: str = Field("", description="op 為 add 時要新增的內容（純文字）；工作經歷（Company）填公司名稱，不知道就空字串；op 為 end 時空字串")
+    job_title: str = Field("", description="只有工作經歷（Company）用：職稱；其他欄位空字串")
     time_start: str = Field(
         "",
         description=(
-            "op 為 add 時這一筆的時間（YYYY、YYYY-MM 或 YYYY-MM-DD）：職位是到職、學歷是入學、經歷與讚美素材是那件事的"
+            "op 為 add 時這一筆的時間（YYYY、YYYY-MM 或 YYYY-MM-DD）：工作經歷是到職、學歷是入學、經歷與讚美素材是那件事的"
             "時間、興趣是開始的時間、現居地是搬來的時間；文中沒提或其他欄位就空字串"
         ),
     )
     time_end: str = Field(
         "",
         description=(
-            "op 為 add 時的結束時間（YYYY、YYYY-MM 或 YYYY-MM-DD）：職位是以前的工作的離職（已離職但時間不明填 ?；"
+            "op 為 add 時的結束時間（YYYY、YYYY-MM 或 YYYY-MM-DD）：工作經歷是以前的工作的離職（已離職但時間不明填 ?；"
             "現職空字串）、學歷是畢業（還在讀就空字串）；其他欄位空字串。這不是「劃掉」：劃掉一筆用 op=end"
         ),
     )
-    job_note: str = Field("", description="只有職位（Company）add 用：這份工作的簡短說明（做什麼、做了多久）；沒有就空字串")
+    note: str = Field("", description=(
+        "op 為 add 時這一筆的說明：工作經歷（Company）是這份工作做什麼、負責什麼、做了多久；學歷（Education）是科系、"
+        "研究；其他欄位與沒有時空字串"
+    ))
     entry: int = Field(0, description="op 為 end 時要劃掉的那一筆的編號（提示中「#」後面的數字）；op 為 add 時 0")
     reason: str = Field(description="依據文中的哪句話（簡短）")
 

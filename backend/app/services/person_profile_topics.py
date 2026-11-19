@@ -244,7 +244,7 @@ def history_text(name: str, items: list[object]) -> str:
     """
     # 不是物件的項目是格式壞掉的（在 Anki 手改的），不當成過去的事送出
     entries = [item for item in items if isinstance(item, dict)]
-    # entry_detail 附事件時間（職位另附說明）；職位的期間已經寫在裡面，不再接「到某天為止」
+    # entry_detail 附事件時間與說明（工作經歷、學歷）；職位的期間已經寫在裡面，不再接「到某天為止」
     current = [plain_text(entry_detail(name, item), 200) for item in entries if is_active(item)]
     past = []
     for item in entries:

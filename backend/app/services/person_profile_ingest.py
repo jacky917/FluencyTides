@@ -29,6 +29,7 @@ from app.schemas.llm.person_profile import IngestListUpdate, LLMPersonIngestResu
 from app.schemas.person_profile import (
     GOAL_STATUSES,
     HISTORY_PERIOD_KEYS,
+    NOTE_FIELDS,
     PERSON_HISTORY_FIELDS,
     RETIRED_FIELDS,
     Followup,
@@ -37,10 +38,12 @@ from app.schemas.person_profile import (
     PersonCreateParams,
     append_field_html,
     entry_detail,
+    entry_key,
     entry_text,
     history_from_text,
     is_active,
     item_fingerprint,
+    merged_note,
     normalize_period,
     period_order_error,
 )
@@ -95,7 +98,7 @@ def _multiline(name: str) -> bool:
 
 def _history_lines(name: str, items: list[object]) -> tuple[list[str], list[str]]:
     """會變的欄位給 LLM 看的：有效的每筆附編號（``#序號+1``，劃掉時用），以及過去的（劃掉的，或有離職年月的
-    職位）。每筆附事件時間（:func:`entry_detail`，職位另附說明）；有效的另外附「登錄 日期」：寫法和事件時間
+    職位）。每筆附事件時間與說明（:func:`entry_detail`，工作經歷與學歷有說明）；有效的另外附「登錄 日期」：寫法和事件時間
     （「2015 起」）不同，LLM 才分得出哪個是那件事的時間、哪個只是記下的日子。
 
     The current entries numbered for "end" proposals, and the past ones.
@@ -310,6 +313,10 @@ def proposals_from(
             item = _history_item(name, change.value, change.job_title, today)
             if item is not None:
                 _add_periods(name, item, change)
+                if change.note.strip() and name in NOTE_FIELDS:
+                    item["note"] = change.note.strip()
+                elif change.note.strip():
+                    logger.warning("略過用不到的說明: %s=%r（%s）", name, change.note, change.reason)
         if item is None:
             logger.warning("略過格式不對的新增建議: %s=%r（職稱 %r；理由：%s）", name, change.value, change.job_title,
                            change.reason)
@@ -326,33 +333,38 @@ def proposals_from(
 def _already_known(name: str, items: list[object], item: dict[str, object]) -> bool:
     """新增建議是不是已經記過的（不必再列給使用者勾）。Whether a suggested entry is already recorded.
 
-    - 一般欄位：和某筆有效的內容相同，而且這次沒帶來那一筆還空著的事件時間（有的話 handler 會補進去）。
-    - 現職：同名的現職已經有，而且這次沒帶來那一筆還空著的到職年月或說明（有的話 handler 會補進去）。
+    - 一般欄位：和某筆有效的內容相同，而且這次沒帶來那一筆還空著的事件時間或新的說明（有的話 handler 會補進去）。
+    - 現職：同名的現職已經有，而且這次沒帶來那一筆還空著的到職年月或新的說明（有的話 handler 會補進去）。
     - 以前的工作：同名的還是現職（應該由 ``end`` 處理，另外新增會變成兩筆），或公司・職稱與起訖都相同。
     """
-    text = entry_text(name, item)
-    current = {entry_text(name, entry): entry for entry in items if is_active(entry)}
+    text = entry_key(name, item)
+    current = {entry_key(name, entry): entry for entry in items if is_active(entry)}
     if name != "Company":
         target = current.get(text)
         if target is None:
             return False
         keys = HISTORY_PERIOD_KEYS.get(name, ())
-        return not any(item.get(key) and isinstance(target, dict) and not str(target.get(key) or "").strip()
-                       for key in keys)
+        if not isinstance(target, dict):
+            return True
+        if merged_note(str(target.get("note") or ""), str(item.get("note") or "")) is not None:
+            return False
+        return not any(item.get(key) and not str(target.get(key) or "").strip() for key in keys)
     if not is_active(item):
         if text in current:
-            logger.warning("略過和現職同名的以前的工作（應該用 end）: %s", text)
+            logger.warning("略過和現職同名的以前的工作（應該用 end）: %s", entry_text(name, item))
             return True
         key = (text, item.get("start", ""), item.get("end", ""))
         return any(
             isinstance(entry, dict)
-            and (entry_text(name, entry), entry.get("start", ""), entry.get("end", "")) == key
+            and (entry_key(name, entry), entry.get("start", ""), entry.get("end", "")) == key
             for entry in items
         )
     target = current.get(text)
     if not isinstance(target, dict):
         return False
-    return not any(item.get(key) and not str(target.get(key) or "").strip() for key in ("start", "note"))
+    if merged_note(str(target.get("note") or ""), str(item.get("note") or "")) is not None:
+        return False
+    return not (item.get("start") and not str(target.get("start") or "").strip())
 
 
 def _position_item(change: IngestListUpdate, today: date) -> dict[str, object] | None:
@@ -361,9 +373,9 @@ def _position_item(change: IngestListUpdate, today: date) -> dict[str, object] |
 
     The suggested position; unusable periods are degraded, not the whole entry.
     """
-    item = _history_item("Company", change.value, change.job_title, today)
-    if item is None:
-        return None
+    # 公司與職稱都可以空（§17）：只有任職時間或說明的經歷也留著，整筆全空的由模型擋
+    item: dict[str, object] = {"company": change.value.strip(), "title": change.job_title.strip(),
+                               "added": today.isoformat(), "ended": ""}
     for key, raw in (("start", change.time_start), ("end", change.time_end)):
         value = normalize_period(raw, allow_unknown=key == "end")
         if value is None:
@@ -378,11 +390,12 @@ def _position_item(change: IngestListUpdate, today: date) -> dict[str, object] |
         logger.warning("略過前後顛倒的任職年月（%s）: %s", error, change.reason)
         item.pop("start", None)
         item["end"] = "?"  # 仍是以前的工作，只是不知道時間
-    if change.job_note.strip():
-        item["note"] = change.job_note.strip()
+    if change.note.strip():
+        item["note"] = change.note.strip()
     try:
         return PERSON_HISTORY_FIELDS["Company"].model.model_validate(item).model_dump()
-    except ValidationError:
+    except ValidationError as e:
+        logger.warning("略過不合格的工作經歷建議（%s）: %r（%s）", e.errors()[0].get("msg", ""), item, change.reason)
         return None
 
 

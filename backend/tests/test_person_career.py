@@ -260,7 +260,7 @@ class TestDisplay:
     def test_full_text_lists_past_jobs(self):
         text = view.full_text({"Display_Name": "陳さん"}, {"Company": [SONY, QBC, OLD]})
         _assert_tg_html(text)
-        assert "• 職位：QBC・QA" in text
+        assert "• 現職：QBC・QA" in text
         assert "• 以前的工作：Sony（2019-04～2021-03）、舊公司（～2025-01）" in text
 
     def test_new_text_is_escaped(self):
@@ -316,7 +316,7 @@ class TestLongPressMenus:
         assert [(b.text, b.callback_data) for b in rows[0]] == [
             ("在卡面隱藏", f"pp:hd:5:CO:0:{fp}:h"), ("離職", f"pp:hx:5:CO:0:{fp}:e"),
         ]
-        assert [(b.text, b.callback_data) for b in rows[1]] == [("修改任職期間／說明", f"pp:pe:5:0:{fp}")]
+        assert [(b.text, b.callback_data) for b in rows[1]] == [("修改", f"pp:ie:5:CO:0:{fp}")]
         assert rows[2][0].callback_data == f"pp:del:5:CO:0:{fp}"
 
     def test_item_menu_for_a_hidden_gift(self):
@@ -560,19 +560,24 @@ class TestTgPositionEdit:
         items = items or [entry]
         state, note_service = _fsm(), _note_service()
         card_service = _card_service(_note(Company=json.dumps(items)))
-        query = _tap(f"pp:pe:5:{items.index(entry)}:{item_fingerprint(entry)}", state, note_service, card_service)
+        first = _tap(f"pp:pe:5:{items.index(entry)}:{item_fingerprint(entry)}", state, note_service, card_service)
+        assert "<b>修改工作經歷</b>" in _sent(first.message.answer)[0]
+        # 修改先問公司、職稱（§16）：這裡的測試都保留，從到職開始
+        _tap("pp:skip", state, note_service, card_service)
+        query = _tap("pp:skip", state, note_service, card_service)
         return state, note_service, card_service, query
 
-    def test_asks_with_the_current_values_and_saves_only_period_and_note(self):
+    def test_asks_with_the_current_values_and_saves_the_editable_keys(self):
         state, note_service, card_service, query = self._begin()
-        sent = _sent(query.message.answer)
-        assert "修改職位" in sent[0] and "目前：2025" in sent[1] and "略過＝保留" in sent[1]
+        prompt = _last_prompt(query.message)
+        assert "目前：2025" in prompt and "略過＝保留" in prompt
         _tap("pp:skip", state, note_service, card_service)  # 到職保留 2025
         _type(state, "2026/10", "做測試")
         _tap("pp:save", state, note_service, card_service)
-        note_service.run_action.assert_awaited_once_with(5, "edit_position", {
-            "index": 0, "fingerprint": item_fingerprint(QBC), "start": "2025", "end": "2026-10", "note": "做測試",
-            "expected_start": "2025", "expected_end": "",
+        note_service.run_action.assert_awaited_once_with(5, "edit_item", {
+            "field": "Company", "index": 0, "fingerprint": item_fingerprint(QBC),
+            "values": {"company": "QBC", "title": "QA", "start": "2025", "end": "2026-10", "note": "做測試"},
+            "expected": {"company": "QBC", "title": "QA", "start": "2025", "end": None, "note": None},
         })
 
     def test_preview_is_an_edit_of_a_past_job(self):
@@ -581,7 +586,7 @@ class TestTgPositionEdit:
         last = _type(state, "2026-10", "做測試")
         (text,) = _sent(last.answer)
         _assert_tg_html(text)
-        assert "<b>修改職位</b>（以前的工作）" in text and "登錄日" not in text
+        assert "<b>修改工作經歷</b>（以前的工作）" in text and "登錄日" not in text
 
     def test_clear_removes_a_value(self):
         state, _, _, _ = self._begin()
@@ -594,7 +599,7 @@ class TestTgPositionEdit:
         _type(state, "2022")
         query = _tap("pp:skip", state, note_service, card_service)
         assert any("不能早於到職" in text and "寫 ?" in text for text in _sent(query.message.answer))
-        assert _run(state.get_data())["step"] == 1
+        assert _run(state.get_data())["step"] == 3
 
     def test_follows_a_moved_item(self):
         """序號過時時用指紋找到同一筆，儲存用找到的序號。"""
@@ -607,7 +612,9 @@ class TestTgPositionEdit:
         state, note_service = _fsm(), _note_service()
         card_service = _card_service(_note(Company=json.dumps([QBC])))
         query = _tap("pp:pe:5:0:zzz", state, note_service, card_service)
-        assert any("已經變了或不在了" in text for text in _sent(query.message.answer))
+        assert any("已經改過或不在了，請重新打開清單" in text for text in _sent(query.message.answer))
+        reopen = query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        assert reopen.callback_data == "pp:ls:5:CO"
         assert _run(state.get_state()) is None
 
 
@@ -628,17 +635,18 @@ class TestTgHideToggles:
         fp0, fp1 = item_fingerprint(QBC), item_fingerprint(hidden)
         assert [(b.text, b.callback_data) for b in rows[0]] == [
             ("刪 1", f"pp:del:5:CO:0:{fp0}"), ("離職 1", f"pp:hx:5:CO:0:{fp0}:e"),
-            ("隱藏 1", f"pp:hd:5:CO:0:{fp0}:h"), ("改 1", f"pp:pe:5:0:{fp0}"),
+            ("隱藏 1", f"pp:hd:5:CO:0:{fp0}:h"), ("改 1", f"pp:ie:5:CO:0:{fp0}"),
         ]
         assert (rows[1][2].text, rows[1][2].callback_data) == ("顯示 2", f"pp:hd:5:CO:1:{fp1}:s")
 
-    def test_list_of_another_field_has_no_edit_button(self):
+    def test_list_of_another_field_also_has_an_edit_button(self):
         gift = {"item": "花", "direction": "given"}
         state, note_service = _fsm(), _note_service()
         card_service = _card_service(_note(Gifts_JSON=json.dumps([gift])))
         query = _tap("pp:ls:5:G", state, note_service, card_service)
         rows = query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard
-        assert [b.text for b in rows[0]] == ["刪 1", "隱藏 1"]
+        assert [b.text for b in rows[0]] == ["刪 1", "隱藏 1", "改 1"]
+        assert rows[0][-1].callback_data == f"pp:ie:5:G:0:{item_fingerprint(gift)}"
 
     def test_list_hide_button_hides_the_item(self):
         state, note_service, card_service = _fsm(), _note_service(), _card_service()
@@ -669,10 +677,14 @@ class TestTgHideToggles:
 
 
 def _edit_session(items, index=0):
-    """從清單的「改 N」進入修改；回傳 (state, note_service, card_service, 第一則問句的 query)。"""
+    """從舊的「修改任職期間／說明」按鈕（``pp:pe``）進入修改，略過公司、職稱；回傳
+    (state, note_service, card_service, 到職那一步問句的 query)。"""
     state, note_service = _fsm(), _note_service()
     card_service = _card_service(_note(Company=json.dumps(items)))
-    query = _tap(f"pp:pe:5:{index}:{item_fingerprint(items[index])}", state, note_service, card_service)
+    _tap(f"pp:pe:5:{index}:{item_fingerprint(items[index])}", state, note_service, card_service)
+    # 修改先問公司、職稱（§16）：保留，從到職開始
+    _tap("pp:skip", state, note_service, card_service)
+    query = _tap("pp:skip", state, note_service, card_service)
     return state, note_service, card_service, query
 
 
@@ -798,16 +810,17 @@ class TestOldValuesOnTheCard:
         assert "格式不對" in _last_prompt(query.message)
         refused = _tap("pp:skip", state, note_service, card_service)
         assert any("不能保留" in text for text in _sent(refused.message.answer))
-        assert _run(state.get_data())["step"] == 0
+        assert _run(state.get_data())["step"] == 2
         _type(state, "2021-04")
-        assert _run(state.get_data())["step"] == 1
+        assert _run(state.get_data())["step"] == 3
 
 
 class TestSaveFailureKeepsAnswers:
     def _ready(self, note_service, card_service):
         state = _fsm()
         _tap(f"pp:pe:5:0:{item_fingerprint(QBC)}", state, note_service, card_service)
-        _tap("pp:skip", state, note_service, card_service)
+        for _ in range(3):  # 公司、職稱、到職保留
+            _tap("pp:skip", state, note_service, card_service)
         _type(state, "2026-10", "做測試")
         return state
 
@@ -835,7 +848,7 @@ class TestSaveFailureKeepsAnswers:
         state = self._ready(note_service, card_service)
         query = _tap("pp:save", state, note_service, card_service)
         sent = _sent(query.message.answer)
-        assert any("別處被改過" in text for text in sent) and not any("回答都還在" in text for text in sent)
+        assert any("已經改過或不在了" in text for text in sent) and not any("回答都還在" in text for text in sent)
         assert _run(state.get_state()) is None
         reopen = query.message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
         assert reopen.callback_data == "pp:ls:5:CO"
@@ -848,7 +861,7 @@ class TestSaveFailureKeepsAnswers:
         state = self._ready(note_service, card_service)
         card_service.get_note = mock.AsyncMock(side_effect=AnkiConnectError("連不上"))
         query = _tap("pp:save", state, note_service, card_service)
-        assert any("已更新這份工作" in text and "摘要暫時讀不到" in text for text in _sent(query.message.answer))
+        assert any("已修改這一筆工作經歷" in text and "摘要暫時讀不到" in text for text in _sent(query.message.answer))
         assert _run(state.get_state()) is None
 
 
@@ -904,7 +917,8 @@ class TestEditPositionGuards:
         past = {**QBC, "start": "2015", "end": "2018"}
         state, _, _, _ = _edit_session([past, QBC], index=1)
         data = _run(state.get_data())
-        assert data["edit"]["index"] == 1 and data["edit"]["expected"] == {"start": "2025", "end": ""}
+        assert data["edit"]["index"] == 1
+        assert data["edit"]["expected"] == {"company": "QBC", "title": "QA", "start": "2025", "end": None, "note": None}
 
 
 class TestHideToggleKeepsTheEdit:

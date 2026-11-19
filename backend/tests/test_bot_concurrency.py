@@ -19,7 +19,6 @@ from app.bot.dispatcher import setup_dispatcher
 from app.bot.handlers import newcard_menu, person_profile
 from app.bot.handlers.person_profile import PersonStates
 from app.bot.utils.callback_reply import answer_callback
-from app.core.exceptions import JsonItemChangedError
 from app.infrastructure.anki.client import AnkiConnectError
 from app.schemas.person_profile import item_fingerprint
 from tests.test_bot_replies import MESSAGE_ID, _callback, _fsm, _message, _run, _sent
@@ -289,7 +288,7 @@ class TestNotModified:
     def test_failed_delete_offers_the_list_again(self):
         """先拿掉確認按鈕再刪：刪除失敗時附上「打開清單」，不必回 /p 重找。"""
         note_service = _note_service()
-        note_service.run_action.side_effect = JsonItemChangedError("這一筆已經變了")
+        note_service.run_action.side_effect = AnkiConnectError("Anki 沒有回應")
         query = _callback("pp:delok:5:IN:0:abc")
         _run(person_profile.on_person_button(query, _fsm(), note_service, _card_service()))
         sent = _sent(query.message.answer)

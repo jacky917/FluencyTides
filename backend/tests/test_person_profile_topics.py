@@ -63,7 +63,7 @@ class TestMask:
         prompt, mask = topics.build_prompt(
             _fields(Notes="上次跟田中先生、Yuki Tanaka 和美咲一起吃飯，Momo 也在"),
             _lists(Interactions_JSON=[{"date": "2026-10-01", "topics": "田中 悠希的轉職", "quote": "たなか ゆうき です"}],
-                   Work_Detail=[{"value": "田中悠希負責 IT", "added": "", "ended": ""}]),
+                   Ask_Advice=[{"value": "田中悠希負責 IT", "added": "", "ended": ""}]),
             TODAY,
         )
         for name in ("田中", "悠希", "たなか ゆうき", "Yuki Tanaka", "Tanaka Yūki", "美咲", "Momo"):
@@ -109,7 +109,7 @@ class TestMask:
             TODAY,
         )
         assert "- 興趣：登山；以前：攝影（到 2026-05-01 為止）" in prompt
-        assert "- 職位：Geekly・PM" in prompt
+        assert "- 工作經歷：Geekly・PM" in prompt
         assert "- 現居地：以前：大阪（到 2025-03-01 為止）" in prompt
         assert "「以前：」後面是過去的事" in prompt
         # 敏感話題劃掉了也不送內容，但照樣提醒

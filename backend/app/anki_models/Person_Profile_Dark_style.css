@@ -545,6 +545,17 @@ details[open] > summary .accordion-arrow {
     white-space: pre-wrap;
 }
 
+/* 學歷等的說明（工作經歷的是 .career-note） */
+.hist-note {
+    color: #bdc3c7;
+    font-size: 13px;
+    white-space: pre-wrap;
+}
+
+.hist-line.is-ended .hist-note {
+    color: #7f8c8d;
+}
+
 .career-item.is-past .career-note {
     color: #7f8c8d;
 }

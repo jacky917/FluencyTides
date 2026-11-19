@@ -11,6 +11,7 @@ photo are written through named actions, not as plain text.
 """
 
 import html
+import logging
 import re
 import secrets
 from datetime import date
@@ -20,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from app.core import clock
 from app.core.exceptions import (
+    ActionContractError,
     AnkiFieldCorruptedError,
     FieldNotEditableError,
     InvalidNoteFieldsError,
@@ -28,17 +30,21 @@ from app.core.exceptions import (
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.person_profile import (
     HISTORY_PERIOD_KEYS,
+    ITEM_EDIT_KEYS,
     PERSON_HISTORY_FIELDS,
     PERSON_JSON_ITEMS,
     PERSON_NOTE_TYPE,
     RETIRED_FIELDS,
+    NOTE_FIELDS,
     PersonCreateParams,
     entry_detail,
+    entry_key,
     entry_text,
     history_from_input,
     history_from_text,
     is_active,
     item_fingerprint,
+    merged_note,
 )
 from app.services.card_service import CardService
 from app.services.relation_service import RelationService
@@ -51,6 +57,8 @@ from app.services.task_handlers.capabilities import (
     SearchField,
 )
 from app.services.task_handlers.registry import register_handler
+
+logger = logging.getLogger(__name__)
 
 #: 系統維護、不能經 ``update_fields`` 改的欄位：TG 深連結以 ``Card_ID`` 找人，改了就斷線。
 #: Fields the system owns; TG deep links find a person by ``Card_ID``.
@@ -75,6 +83,7 @@ ACTIONS = (
     "set_history_status",
     "edit_position",
     "edit_history_period",
+    "edit_item",
     "set_hidden",
     "remove_item",
     "set_photo",
@@ -182,7 +191,7 @@ class _SetHistoryStatus(_ActionParams):
 
 
 class _EditPosition(_ActionParams):
-    """改一份工作的任職起訖與說明（公司、職稱不在這裡改：改了指紋會變）。
+    """改一份工作的任職起訖與說明（舊動作：TG 已改用 ``edit_item``，§16；保留給舊的呼叫端）。
 
     三個值都必填（整組取代，空字串＝清掉），漏送不會被當成清掉。``expected_start``、``expected_end`` 是開始
     修改時看到的原值：同名的兩份工作指紋相同，序號過時可能對到另一筆，原值對不上就當成這一筆變了。
@@ -213,6 +222,26 @@ class _EditHistoryPeriod(_ActionParams):
     expected: dict[str, str] | None = None
 
 
+class _EditItem(_ActionParams):
+    """改一筆（工作經歷計畫書 §16）。
+
+    - ``values``：要剛好是那個清單能改的鍵（:data:`ITEM_EDIT_KEYS`），整組取代。文字清掉送空字串；None＝拿掉
+      那個鍵、交給模型的預設值（數字、是／否清掉，或原本就沒有這個鍵又略過時）。
+    - 其他鍵（登錄日、隱藏、狀態）照舊。劃掉日也照舊，只有職位把原本的離職年月清掉時一併清掉（改回現職）。
+    - ``expected``：開始修改時看到的原值（None、空字串、False 都算空）。同內容的兩筆指紋相同，序號過時可能對到
+      另一筆，原值對不上就當成這一筆變了。但那一筆已經是 ``values`` 的樣子時（存檔成功、回應沒送到又重按），
+      當成已經改好。
+
+    Edit one item; ``values`` replaces the list's editable keys and ``expected`` holds what was seen.
+    """
+
+    field: str
+    index: int = Field(ge=0)
+    fingerprint: str | None = None
+    values: dict[str, object]
+    expected: dict[str, object] | None = None
+
+
 class _SetHidden(_ActionParams):
     field: str
     index: int = Field(ge=0)
@@ -239,16 +268,17 @@ class PersonProfileHandler(BaseHandler):
     - 建立（網頁、TG）：參數是 ``PersonCreateParams``；自動產生 ``Card_ID``、寫入 ``TG_Bot`` 與
       ``Updated_At``、六個 JSON 欄位填 ``[]``（會變的欄位沒填時留空，見下）。允許稱呼重複（不同的人
       可以都叫「田中さん」）。
-    - 修改一般欄位：JSON 與 ``Card_ID`` 不能直接改，非空的 ``Title`` 也不行（已併進 ``Company`` 的職位，
-      清空可以）；照片只能填網頁上傳取得的檔名（media_upload 計畫書 D3）；有改動時更新 ``Updated_At``。
+    - 修改一般欄位：JSON 與 ``Card_ID`` 不能直接改，停用的欄位（:data:`RETIRED_FIELDS`：職稱、工作內容，都已
+      併進 ``Company``）也不能寫入非空的值（清空可以）；照片只能填網頁上傳取得的檔名（media_upload 計畫書 D3）；有改動時更新 ``Updated_At``。
     - 具名動作（``ACTIONS``）：追加互動紀錄（同時更新 ``Last_Contact``）、新增待追蹤、改待追蹤狀態、
       在其他清單新增一筆（目標一律進行中、登錄日今天）、改目標的狀態（``set_goal_status``：達成、放棄記下結束日，
       可以指定那天，預設今天）、
       在會變的欄位新增一筆（``add_history``）或劃掉／取消劃掉
-      （``set_history_status``；職位的劃掉＝離職，另外補上離職年月）、改一份工作的任職起訖與說明
-      （``edit_position``）、改其他欄位一筆的事件時間（``edit_history_period``）、在卡面隱藏或顯示一筆
+      （``set_history_status``；職位的劃掉＝離職，另外補上離職年月）、修改任何清單的一筆
+      （``edit_item``：內容、時間與說明）、在卡面隱藏或顯示一筆
       （``set_hidden``）、刪除一筆、設定照片。項目以 §3.3 的模型驗證；刪除、改狀態與隱藏以指紋確認
-      要動的是同一筆。每次寫入都更新 ``Updated_At``。
+      要動的是同一筆。每次寫入都更新 ``Updated_At``。舊動作 ``edit_position``、``edit_history_period``（只改
+      時間與說明）保留給舊的呼叫端，TG 已改用 ``edit_item``。
     - 會變的欄位：建立時把文字轉成清單（登錄日＝今天）；新增時登錄日、劃掉時失效日都由系統填今天；
       單值欄位（現居地、時區、關係、親密度）新增時把原本有效的那筆劃掉。清單空了時欄位寫空字串
       （和建卡時沒填的一樣；以前「認人」卡看 ``Company`` 有沒有值，``[]`` 也算有值）。
@@ -279,8 +309,9 @@ class PersonProfileHandler(BaseHandler):
     SEARCH_FIELDS = (
         SearchField("name", "名字", ("Display_Name", "Name_ZH", "Name_EN", "Name_JA", "Name_JA_Kana", "Name_Romaji")),
         SearchField("relationship", "關係", ("Relationship",)),
-        SearchField("company", "公司・職稱", ("Company",)),
-        SearchField("work", "工作", ("Work_Detail", "Education")),
+        SearchField("company", "工作經歷", ("Company",)),
+        # 鍵沿用 work（網頁記住的搜尋條件用鍵），工作內容停用後只剩學歷（§18）
+        SearchField("work", "學歷", ("Education",)),
         SearchField("interests", "興趣・經歷", ("Interests", "Experiences")),
         SearchField("food", "飲食", ("Food_Drink", "Dietary")),
         SearchField("personality", "個性", ("Personality_Values", "First_Impression", "Praise", "Ask_Advice")),
@@ -456,6 +487,8 @@ class PersonProfileHandler(BaseHandler):
             if not isinstance(items[index], dict):
                 raise InvalidNoteFieldsError(f"這一筆{PERSON_HISTORY_FIELDS[params.field].title}的格式不對，請在網頁修正。")
             set_history_status(params.field, items[index], ended=params.ended)
+            if not params.ended:
+                _check_restored(params.field, items[index])
             await _write(card_service, note_id, {params.field: _serialize(params.field, items)})
         elif action == "edit_position":
             params = _parse(_EditPosition, parameters)
@@ -463,6 +496,27 @@ class PersonProfileHandler(BaseHandler):
             index = resolve_index(items, params.index, params.fingerprint)
             items[index] = edit_position(items, index, params)
             await _write(card_service, note_id, {"Company": _serialize("Company", items)})
+        elif action == "edit_item":
+            params = _parse(_EditItem, parameters)
+            if params.field not in ITEM_EDIT_KEYS:
+                raise ActionContractError(f"{params.field} 不是人脈卡的清單")
+            current = await _read(card_service, note_id)
+            items = _list(current, params.field)
+            try:
+                index = resolve_index(items, params.index, params.fingerprint)
+            except JsonItemChangedError:
+                # 改了內容指紋就變：存檔成功、回應沒送到又重按時，序號上那一筆已經是改好的樣子，不必再寫
+                if 0 <= params.index < len(items) and _already_applied(params.field, items[params.index], params.values):
+                    logger.info("人脈卡 note %s：%s #%s 已經是要改成的樣子（重送），不再寫入", note_id, params.field,
+                                params.index + 1)
+                    return
+                raise
+            old = items[index]
+            items[index] = edit_item(params.field, items, index, params.values, params.expected)
+            changes = {params.field: _serialize(params.field, items)}
+            if params.field == "Interactions_JSON":
+                changes.update(_contact_after_edit(current, items, old, items[index]))
+            await _write(card_service, note_id, changes)
         elif action == "edit_history_period":
             params = _parse(_EditHistoryPeriod, parameters)
             if params.field == "Company" or params.field not in HISTORY_PERIOD_KEYS:
@@ -534,7 +588,8 @@ class PersonProfileHandler(BaseHandler):
         note_id: int,
         parameters: dict[str, object],
     ) -> None:
-        """修改一般欄位（標準實作）：``Card_ID`` 不能改、非空的 ``Title`` 不能寫；真的有改動時更新 ``Updated_At``。
+        """修改一般欄位（標準實作）：``Card_ID`` 不能改、停用的欄位（:data:`RETIRED_FIELDS`）不能寫入非空的值；
+        真的有改動時更新 ``Updated_At``。
 
         Plain field update; ``Card_ID`` is locked; ``Updated_At`` follows changes.
         """
@@ -546,7 +601,7 @@ class PersonProfileHandler(BaseHandler):
                 raise FieldNotEditableError(f"這些欄位由系統維護，不能直接修改：{'、'.join(locked)}")
             retired = [name for name in fields if name in RETIRED_FIELDS and field_text(fields[name]).strip()]
             if retired:
-                raise FieldNotEditableError("「職稱」已併進「職位」（Company 欄位）：請在職位的清單裡改。")
+                raise FieldNotEditableError("".join(RETIRED_FIELDS[name] for name in retired))
             current = note_field_values(await card_service.get_note(note_id))
             changed = any(field_text(value) != current.get(name) for name, value in fields.items())
         await super().execute_update(card_service, relation_service, note_id, parameters)
@@ -595,13 +650,17 @@ def add_history(field: str, items: list[object], item: dict[str, object], today:
     Add entries to a history field: dates by the system, splittable values
     split, current duplicates skipped, single-value fields end the old one.
 
-    和某筆有效的相同、但這次帶了那一筆還空著的事件時間（:data:`HISTORY_PERIOD_KEYS`，例如補上興趣開始的年份）
-    時，把時間補進那一筆，不另外新增；帶的時間和那一筆已有的不同時丟 :class:`InvalidNoteFieldsError`（不默默
-    丟掉使用者剛輸入的時間）。其他完全相同的重複照舊略過。
+    和某筆有效的相同（:func:`entry_key`）、但這次帶了那一筆還空著的事件時間（:data:`HISTORY_PERIOD_KEYS`，例如
+    補上興趣開始的年份）或新的說明（:data:`NOTE_FIELDS`，照 :func:`merged_note` 接上）時，補進那一筆，不另外
+    新增；帶的時間和那一筆已有的不同時丟 :class:`InvalidNoteFieldsError`（不默默丟掉使用者剛輸入的時間）。
+    什麼都沒新增也沒補到（完全重複）時也丟錯，免得使用者以為存了。
 
-    職位例外：和某份現職同名時不另外新增，而是把到職年月、說明補進那一筆（那一筆原本空著時）；什麼都沒補到
-    就是重複，丟 :class:`InvalidNoteFieldsError`，免得使用者以為存了。有離職年月的（以前的工作）不併進現職，
-    直接接在後面；公司・職稱與起訖都和某一筆相同時才算重複。
+    職位例外：和某份現職同名時不另外新增，而是把到職年月（那一筆原本空著時）與說明（照 :func:`merged_note`）
+    補進那一筆；到職和那一筆已有的不同時不改到職。什麼都沒補到就是重複。有離職年月的（以前的工作）不併進
+    現職，直接接在後面；:func:`entry_key` 與起訖都和某一筆相同時才算重複。
+
+    只收那個欄位能改的鍵（:data:`ITEM_EDIT_KEYS`，加上會被蓋掉的日期鍵）：別的欄位的鍵（例如興趣帶了說明）
+    存了也顯示不出來、改不到。
 
     Args:
         field: 會變的欄位。The history field.
@@ -619,6 +678,12 @@ def add_history(field: str, items: list[object], item: dict[str, object], today:
     """
     today = today or today_iso()
     data = {key: value for key, value in item.items() if key not in ("added", "ended")}
+    unknown = sorted(set(data) - set(ITEM_EDIT_KEYS[field]))
+    if unknown:
+        raise ActionContractError(
+            f"{PERSON_HISTORY_FIELDS[field].title}沒有這些鍵：{'、'.join(unknown)}（能用的是 {'、'.join(ITEM_EDIT_KEYS[field])}）"
+        )
+    original = [dict(entry) if isinstance(entry, dict) else entry for entry in items]
     if field == "Company":
         candidates = [{**data, "added": today, "ended": ""}]
     else:
@@ -626,31 +691,51 @@ def add_history(field: str, items: list[object], item: dict[str, object], today:
         texts = history_from_text(field, value, today) or [{"value": value, "added": today, "ended": ""}]
         candidates = [{**data, **text} for text in texts]
     new = [_validate_item(field, candidate) for candidate in candidates]
+    candidates_validated = list(new)
     if field == "Company" and not all(is_active(entry) for entry in new):
         # 以前的工作（有離職年月）：可以和現職同名（離開後又回去），只擋起訖也完全相同的重複
         _reject_duplicate_past(items, new)
         items.extend(new)
         return items
-    current = {entry_text(field, entry): entry for entry in items if is_active(entry)}
-    if field == "Company" and new and all(entry_text(field, entry) in current for entry in new):
+    current = {entry_key(field, entry): entry for entry in items if is_active(entry)}
+    if field == "Company" and new and all(entry_key(field, entry) in current for entry in new):
         _merge_into_current(new, current)
         return items
     conflicts = []
     for entry in new:
-        if entry_text(field, entry) in current:
-            conflicts += _fill_periods(field, entry, current[entry_text(field, entry)])
+        if entry_key(field, entry) in current:
+            conflicts += _fill_periods(field, entry, current[entry_key(field, entry)])
     if conflicts:
         raise InvalidNoteFieldsError(
             f"已經有「{'、'.join(conflicts)}」，時間和這次輸入的不同，沒有修改。"
             "要改時間請長按卡片上那一筆，或在 TG 的清單按「改」。"
         )
-    new = [entry for entry in new if entry_text(field, entry) not in current]
+    new = [entry for entry in new if entry_key(field, entry) not in current]
+    if not new and items == original:
+        names = "、".join(entry_detail(field, current[entry_key(field, entry)]) for entry in candidates_validated)
+        raise InvalidNoteFieldsError(f"已經有「{names}」，沒有新增。")
     if new and PERSON_HISTORY_FIELDS[field].single:
         for entry in items:
             if is_active(entry):
                 entry["ended"] = today  # type: ignore[index]
     items.extend(new)
     return items
+
+
+def _check_restored(field: str, entry: dict[str, object]) -> None:
+    """取消劃掉（恢復現職）之後整筆要仍然合法：只有離職時間的工作（§17）拿掉離職就什麼都沒有了。
+
+    Raises:
+        InvalidNoteFieldsError: 恢復後不合法（不寫入）。When the restored entry is invalid.
+    """
+    try:
+        _validate_item(field, entry)
+    except InvalidNoteFieldsError as e:
+        if field == "Company":
+            raise InvalidNoteFieldsError(
+                "這份工作只有離職時間，恢復成現職後就沒有內容了：請先按「修改」補上公司、職稱或說明，再恢復現職。"
+            ) from e
+        raise
 
 
 def set_history_status(field: str, entry: dict[str, object], *, ended: bool, today: str | None = None) -> None:
@@ -678,23 +763,27 @@ def set_history_status(field: str, entry: dict[str, object], *, ended: bool, tod
 
 
 def _merge_into_current(new: list[dict[str, object]], current: dict[str, object]) -> None:
-    """同名的現職：把新的到職年月、說明補進那一筆原本空著的地方。The duplicate position fills the current one.
+    """同名的現職：新的到職年月補進那一筆空著的到職（已經有不同的到職時不改，也不報錯：要改請用修改）；說明照
+    :func:`merged_note` 補（空的就填，新的內容換行接在後面，§18）。The duplicate position fills the current one.
 
     Raises:
-        InvalidNoteFieldsError: 沒有任何可以補的（完全重複，或那一筆已經有不同的值）。Nothing to fill.
+        InvalidNoteFieldsError: 沒有任何可以補的（完全重複，或到職已經有不同的值）。Nothing to fill.
     """
     filled = False
     for entry in new:
-        target = current[entry_text("Company", entry)]
+        target = current[entry_key("Company", entry)]
         assert isinstance(target, dict)  # is_active 只對 dict 成立
-        for key in ("start", "note"):
-            if entry.get(key) and not str(target.get(key) or "").strip():
-                target[key] = entry[key]
-                filled = True
+        if entry.get("start") and not str(target.get("start") or "").strip():
+            target["start"] = entry["start"]
+            filled = True
+        note = merged_note(str(target.get("note") or ""), str(entry.get("note") or ""))
+        if note is not None:
+            target["note"] = note
+            filled = True
     if not filled:
         names = "、".join(entry_text("Company", entry) for entry in new)
         raise InvalidNoteFieldsError(
-            f"已經有這份現職（{names}），沒有新增。要改到職年月或說明，請長按卡片上那一筆，或在 TG 的職位清單按「改」。"
+            f"已經有這份現職（{names}），沒有新增。要改到職年月或說明，請長按卡片上那一筆，或在 TG 的工作經歷清單按「改」。"
         )
 
 
@@ -715,30 +804,135 @@ def edit_position(items: list[object], index: int, params: _EditPosition) -> dic
     """
     entry = items[index]
     if not isinstance(entry, dict):
-        raise InvalidNoteFieldsError("這一筆職位的格式不對，請在網頁修正。")
+        raise InvalidNoteFieldsError("這一筆工作經歷的格式不對，請在網頁修正。")
     old_start, old_end = str(entry.get("start") or ""), str(entry.get("end") or "")
     if (params.expected_start is not None and params.expected_start != old_start) or (
         params.expected_end is not None and params.expected_end != old_end
     ):
-        raise JsonItemChangedError("這一筆的任職期間在別處被改過了，請重新打開職位清單再改。")
+        raise JsonItemChangedError("這一筆的任職期間在別處被改過了，請重新打開工作經歷清單再改。")
     changed = {**entry, "start": params.start, "end": params.end, "note": params.note}
     if old_end.strip() and not params.end.strip():
         changed["ended"] = ""
     # 其他鍵（公司、職稱、登錄日、隱藏）照舊；整筆再經模型驗證（年月整理、離職不早於到職）
     edited = _validate_item("Company", changed)
-    others = [item for i, item in enumerate(items) if i != index]
-    if is_active(edited):
-        text = entry_text("Company", edited)
-        if any(is_active(item) and entry_text("Company", item) == text for item in others):
-            raise InvalidNoteFieldsError(f"已經有同名的現職（{text}），沒有修改。")
-    else:
-        _reject_duplicate_past(others, [edited])
+    _reject_position_duplicate(items, index, edited)
     return edited
 
 
+def _reject_position_duplicate(items: list[object], index: int, edited: dict[str, object]) -> None:
+    """改好的職位和另一筆重複時丟 :class:`InvalidNoteFieldsError`：同名的兩份現職、或起訖完全相同的以前的
+    工作（和 :func:`add_history` 擋的一樣）。Reject an edited position duplicating another one."""
+    others = [item for i, item in enumerate(items) if i != index]
+    if is_active(edited):
+        key, text = entry_key("Company", edited), entry_text("Company", edited)
+        if any(is_active(item) and entry_key("Company", item) == key for item in others):
+            raise InvalidNoteFieldsError(f"已經有同名的現職（{text}），沒有修改。")
+    else:
+        _reject_duplicate_past(others, [edited])
+
+
+def _same(a: object, b: object) -> bool:
+    """原值比對：沒有這個鍵（None）、空字串與 False 在比對時都算空（JSON 清單存檔時這三種都不寫，見
+    :func:`_validate_item`；會變的欄位有的鍵會存成空字串）。
+
+    Compare an expected value; None, "" and False all mean empty.
+    """
+    def empty(value: object) -> bool:
+        # 用 is False：0 == False，數值 0 不算空
+        return value is None or value == "" or value is False
+
+    return (empty(a) and empty(b)) or a == b
+
+
+def _already_applied(field: str, entry: object, values: dict[str, object]) -> bool:
+    """這一筆能改的鍵已經是 ``values`` 的樣子（同一次修改重送）。Whether the edit is already in place."""
+    return isinstance(entry, dict) and set(values) == set(ITEM_EDIT_KEYS[field]) and all(
+        _same(value, entry.get(key)) for key, value in values.items()
+    )
+
+
+def _contact_after_edit(
+    values: dict[str, str], items: list[object], old: object, new: dict[str, object]
+) -> dict[str, str]:
+    """改了一筆互動之後 ``Last_Contact`` 的變更：日期往後改照新增的規則推進；原本的上次聯絡就是這一筆、日期又
+    往前更正時，改成清單裡最新的日期（不然會留著一個已經不存在的日期）。上次聯絡是別的來源時（手動填的）不往回改。
+
+    The ``Last_Contact`` change after editing an interaction.
+
+    Args:
+        values: 卡片目前的欄位值（讀 ``Last_Contact``）。The card's field values.
+        items: 改好之後的互動紀錄。The interactions after the edit.
+        old: 改之前的那一筆。The item before the edit.
+        new: 改好的那一筆。The edited item.
+    """
+    old_date = str(old.get("date") or "") if isinstance(old, dict) else ""
+    new_date = str(new.get("date") or "")
+    if old_date and new_date < old_date and old_date == values.get("Last_Contact", "").strip():
+        return {"Last_Contact": max(str(item.get("date") or "") for item in items if isinstance(item, dict))}
+    return _last_contact(values, new_date)
+
+
+def edit_item(
+    field: str, items: list[object], index: int, values: dict[str, object], expected: dict[str, object] | None
+) -> dict[str, object]:
+    """改好的那一筆（不改 ``items``）：能改的鍵（:data:`ITEM_EDIT_KEYS`）換成新的，其他鍵照舊，整筆再經模型
+    驗證（工作經歷計畫書 §16）。
+
+    The edited item; the list itself is left untouched.
+
+    - 原值（``expected``）對不上、但這一筆已經是 ``values`` 的樣子：同一次修改重送，照樣回傳（不丟錯）。
+    - 職位：清掉原本有的離職年月時改回現職（劃掉日一併清掉，同 :func:`edit_position`）；離職年月沒清掉的以前的
+      工作，劃掉日照舊。改完和另一筆重複就擋。
+    - 其他會變的欄位：可切的欄位改了內容時只能改成一個值（沒改內容的舊資料可以含頓號，只改時間）；改完和另一筆
+      有效的相同就擋。
+    - 其他清單：只經模型驗證（目標、待追蹤的狀態與結束日照舊）。
+
+    Raises:
+        JsonItemChangedError: 原值（``expected``）對不上：這一筆在別處被改過。When the item changed elsewhere.
+        InvalidNoteFieldsError: 鍵不對、格式不對，或改完和另一筆重複。On invalid keys, values or duplicates.
+    """
+    keys = ITEM_EDIT_KEYS[field]
+    title = PERSON_HISTORY_FIELDS[field].title if field in PERSON_HISTORY_FIELDS else PERSON_JSON_ITEMS[field][1]
+    if set(values) != set(keys):
+        raise ActionContractError(f"{title}能改的是 {'、'.join(keys)}，收到 {'、'.join(values) or '（沒有）'}")
+    if expected is not None and set(expected) != set(keys):
+        raise ActionContractError(f"{title}的原值要送 {'、'.join(keys)}，收到 {'、'.join(expected) or '（沒有）'}")
+    entry = items[index]
+    if not isinstance(entry, dict):
+        raise InvalidNoteFieldsError(f"這一筆{title}的格式不對，請在網頁修正。")
+    if expected is not None and not all(_same(expected[key], entry.get(key)) for key in keys):
+        if _already_applied(field, entry, values):
+            logger.info("%s #%s 已經是要改成的樣子（重送），照原樣回傳", field, index + 1)
+            return dict(entry)
+        raise JsonItemChangedError(f"這一筆{title}在別處被改過了，請重新打開清單再改。")
+    # None＝這一筆原本沒有這個鍵（或清掉了數字）：拿掉，交給模型的預設值（字串欄位是空字串）
+    changed = {key: value for key, value in {**entry, **values}.items() if not (key in keys and value is None)}
+    if field == "Company":
+        if str(entry.get("end") or "").strip() and not str(values.get("end") or "").strip():
+            changed["ended"] = ""
+        edited = _validate_item(field, changed)
+        _reject_position_duplicate(items, index, edited)
+        return edited
+    if field in PERSON_HISTORY_FIELDS:
+        value = str(values.get("value") or "")
+        if PERSON_HISTORY_FIELDS[field].split and not _same(value, entry.get("value")) \
+                and len(history_from_text(field, value, "")) > 1:
+            raise InvalidNoteFieldsError(f"修改時只能改成一個{title}；要新增好幾個請用「新增」。")
+        edited = _validate_item(field, changed)
+        text = entry_text(field, edited)
+        if is_active(edited) and any(
+            i != index and is_active(item) and entry_key(field, item) == entry_key(field, edited)
+            for i, item in enumerate(items)
+        ):
+            raise InvalidNoteFieldsError(f"已經有「{text}」這一筆{title}，沒有修改。")
+        return edited
+    return _validate_item(field, changed)
+
+
 def _fill_periods(field: str, new: dict[str, object], target: object) -> list[str]:
-    """重複的那筆（``target``）還空著的事件時間，用新的補上（職位以外；職位見 :func:`_merge_into_current`）。
-    補完整筆再經模型驗證（例如學歷原本只有畢業 2015，又補上入學 2018），不合法就不補、丟錯。
+    """重複的那筆（``target``）還空著的事件時間用新的補上，有說明的欄位（:data:`NOTE_FIELDS`）說明照
+    :func:`merged_note` 接上（職位以外；職位見 :func:`_merge_into_current`）。補完整筆再經模型驗證（例如學歷原本
+    只有畢業 2015，又補上入學 2018），不合法就不補、丟錯。
 
     Fill the empty event times of the duplicate entry, validating the result.
 
@@ -761,12 +955,16 @@ def _fill_periods(field: str, new: dict[str, object], target: object) -> list[st
             conflict = True
     if conflict:
         return [entry_detail(field, target)]
+    if field in NOTE_FIELDS:
+        note = merged_note(str(target.get("note") or ""), str(new.get("note") or ""))
+        if note is not None:
+            filled["note"] = note
     if filled != target:
         try:
             validated = _validate_item(field, filled)
         except InvalidNoteFieldsError as e:
             raise InvalidNoteFieldsError(
-                f"已經有「{entry_detail(field, target)}」，補上這次的時間會不合理（{e}）。請長按那一筆修改時間。"
+                f"已經有「{entry_detail(field, target)}」，補上這次的內容會不合理（{e}）。請長按那一筆修改。"
             ) from e
         target.update(validated)
     return []
@@ -798,14 +996,15 @@ def edit_history_period(
 
 
 def _reject_duplicate_past(items: list[object], new: list[dict[str, object]]) -> None:
-    """以前的工作：公司・職稱與任職起訖都和某一筆相同就是重複。A past job already recorded.
+    """以前的工作：:func:`entry_key`（公司・職稱；沒名字的看說明與到職）與任職起訖都和某一筆相同就是重複。
+    A past job already recorded.
 
     Raises:
         InvalidNoteFieldsError: 重複。On a duplicate.
     """
     def key(entry: object) -> tuple[str, str, str]:
         values = entry if isinstance(entry, dict) else {}
-        return (entry_text("Company", entry), str(values.get("start") or ""), str(values.get("end") or ""))
+        return (entry_key("Company", entry), str(values.get("start") or ""), str(values.get("end") or ""))
 
     existing = {key(entry) for entry in items if isinstance(entry, dict)}
     duplicates = [entry for entry in new if key(entry) in existing]

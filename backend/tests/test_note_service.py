@@ -324,7 +324,7 @@ class TestRunAction:
             ("person_profile", "set_followup_status"), ("person_profile", "add_item"),
             ("person_profile", "set_goal_status"),
             ("person_profile", "add_history"), ("person_profile", "set_history_status"),
-            ("person_profile", "edit_position"), ("person_profile", "edit_history_period"), ("person_profile", "set_hidden"), ("person_profile", "remove_item"), ("person_profile", "set_photo"),
+            ("person_profile", "edit_position"), ("person_profile", "edit_history_period"), ("person_profile", "edit_item"), ("person_profile", "set_hidden"), ("person_profile", "remove_item"), ("person_profile", "set_photo"),
         }
 
 
