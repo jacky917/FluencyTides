@@ -4,10 +4,7 @@ Batch script that imports SQL dump files into MySQL, splitting large
 dumps into chunks to stay under the max_allowed_packet limit.
 """
 
-import os
 import sys
-import glob
-import asyncio
 from pathlib import Path
 
 # 統一 bootstrap：向上尋找第一個含 app/ 的目錄即為 backend 根，與檔案深度無關；
@@ -71,26 +68,47 @@ def chunk_sql_statements(filepath, max_chunk_size=2 * 1024 * 1024):
         if chunk.strip():
             yield chunk
 
-def import_sql_files():
-    """投入位於 ../../sql 目錄下的所有 .sql 檔案。
+def import_sql_files(sql_files: list[Path], *, execute: bool) -> int:
+    """Import the given SQL dump files into MySQL, stopping at the first failure.
 
-    Import every .sql file found in the ../../sql directory into MySQL.
+    將指定的 SQL Dump 檔匯入 MySQL，遇到第一個失敗就停止。
+
+    The files must be named explicitly: dumps routinely contain
+    ``DROP TABLE`` or ``DELETE``, so importing whatever happens to sit in
+    a directory can destroy data. Without ``execute`` this only lists the
+    files and their sizes. Statements run with autocommit, so chunks that
+    already ran before a failure stay applied.
+
+    必須明確指定檔案：dump 常含 ``DROP TABLE`` 或 ``DELETE``，把某個目錄裡剛好有的檔案全部匯入可能毀掉資料。
+    沒有 ``execute`` 時只列出檔案與大小。語句以 autocommit 執行，所以失敗之前已執行的區塊仍會生效。
+
+    Args:
+        sql_files: the ``.sql`` files to import, in order
+            要匯入的 ``.sql`` 檔，依序匯入
+        execute: whether to actually run the statements; ``False`` only
+            prints the plan
+            是否真的執行語句；``False`` 時只印出計畫
+
+    Returns:
+        the process exit code: ``0`` on success or in plan mode, ``1`` if a
+        file is missing or any chunk fails
+        行程結束碼：成功或只印計畫時為 ``0``；檔案不存在或任一區塊失敗時為 ``1``
     """
-    # 由統一 bootstrap 推導 SQL 目錄（專案根目錄下的 sql/），不再各自硬算路徑。
-    # Derive the SQL directory (sql/ at the project root) from the backend
-    # root resolved by the unified bootstrap instead of re-computing it.
-    sql_dir = _BACKEND_DIR.parent / "sql"
-    if not sql_dir.exists():
-        print(f"❌ 找不到 SQL 目錄: {sql_dir}")
-        return
+    missing = [p for p in sql_files if not p.is_file()]
+    if missing:
+        for p in missing:
+            print(f"❌ 找不到檔案: {p}")
+        return 1
 
-    sql_files = list(sql_dir.glob("*.sql"))
-    if not sql_files:
-        print(f"⚠️ 在 {sql_dir} 找不到任何 .sql 檔案")
-        return
+    print(f"🎯 目標 MySQL: {settings.MYSQL_HOST}:{settings.MYSQL_PORT}")
+    for p in sql_files:
+        print(f"   - {p} ({p.stat().st_size / 1024 / 1024:.2f} MB)")
+    if not execute:
+        print("🧪 只列出計畫，沒有執行。確認檔案內容後加上 --yes 才會真的匯入。")
+        return 0
 
     print(f"🔌 正在連線至 MySQL 準備匯入資料 ({settings.MYSQL_HOST}:{settings.MYSQL_PORT})...")
-    
+
     try:
         # 開啟 MULTI_STATEMENTS 支援以一次執行多條 SQL
         conn = pymysql.connect(
@@ -113,22 +131,40 @@ def import_sql_files():
                     
                     try:
                         cursor.execute(chunk)
+                        # With MULTI_STATEMENTS every statement leaves a result;
+                        # drain them all, otherwise the next execute fails with
+                        # "commands out of sync" and later errors go unseen.
+                        # 開啟 MULTI_STATEMENTS 時每道語句都有結果，要全部讀完，
+                        # 否則下一次 execute 會出現 commands out of sync，後面語句的錯誤也看不到。
+                        while cursor.nextset():
+                            pass
                         print(f"  ✅ 成功執行區塊 #{chunk_index} (約 {len(chunk.encode('utf-8')) / 1024:.1f} KB)")
                         chunk_index += 1
                     except Exception as e:
-                        print(f"  ❌ 區塊 #{chunk_index} 執行失敗: {e}")
-                        # 可以考慮在這裡寫入錯誤日誌或停止
-                
+                        print(f"  ❌ 區塊 #{chunk_index} 執行失敗，停止匯入: {e}")
+                        print("  ⚠️ 失敗之前的區塊已經寫入（autocommit），請檢查資料庫狀態。")
+                        return 1
+
                 print(f"🎉 檔案 {sql_file.name} 匯入完成！")
-                
+
     except pymysql.MySQLError as e:
         print(f"❌ 資料庫連線或操作失敗: {e}")
+        return 1
     finally:
         if 'conn' in locals() and conn.open:
             conn.close()
             print("🧹 已關閉資料庫連線。")
+    return 0
 
 if __name__ == "__main__":
+    import argparse
+
     if sys.platform == 'win32':
         sys.stdout.reconfigure(encoding='utf-8')
-    import_sql_files()
+    parser = argparse.ArgumentParser(
+        description="將指定的 SQL Dump 檔分塊匯入 MySQL（預設只列計畫，加 --yes 才執行）。",
+    )
+    parser.add_argument("files", nargs="+", type=Path, help="要匯入的 .sql 檔（依序匯入）")
+    parser.add_argument("--yes", action="store_true", help="確認後真的執行匯入")
+    args = parser.parse_args()
+    sys.exit(import_sql_files(args.files, execute=args.yes))

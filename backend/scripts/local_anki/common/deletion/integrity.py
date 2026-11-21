@@ -321,6 +321,13 @@ async def run_integrity_check(
                 unpaired_reasons[ctx_nid] = "沒有對應的 Cloze 卡片指向此 Context"
 
         # ---------- 處理可修復的配對 ----------
+        # Cards whose pair is intact in Anki but whose DB record cannot be
+        # rebuilt (no verb_lemma, or the line is not found or excluded from
+        # the corpus) are kept and reported, never deleted: they are live
+        # cards, and the failure is on the lookup side.
+        # Anki 端配對完整、只是 DB 紀錄重建不了（取不到 verb_lemma、查不到台詞或台詞不在語料庫）的卡片，
+        # 一律保留並回報，不刪除：卡片本身是健在的，失敗的是查詢那一端。
+        kept_orphans: dict[int, str] = {}
         if paired_repairs:
             logger.info(f"   => 發現 {len(paired_repairs)} 組可修復的孤兒子卡片配對，正在驗證...")
             async with corpus_async_session_factory() as session:
@@ -340,11 +347,9 @@ async def run_integrity_check(
                         )
                         repaired_cloze_ids.discard(cloze_nid)
                         repaired_context_ids.discard(ctx_nid)
-                        unpaired_orphans.append(cloze_nid)
-                        unpaired_reasons[cloze_nid] = "修復失敗：無法取得 verb_lemma"
+                        kept_orphans[cloze_nid] = "修復失敗：無法取得 verb_lemma"
                         if ctx_nid not in db_contexts:
-                            unpaired_orphans.append(ctx_nid)
-                            unpaired_reasons[ctx_nid] = "修復失敗：對應的 Cloze 卡片缺少 verb_lemma"
+                            kept_orphans[ctx_nid] = "修復失敗：對應的 Cloze 卡片缺少 verb_lemma"
                         continue
 
                     # 萃取 Audio 欄位（前綴決定遊戲），反查 game_lines
@@ -399,11 +404,9 @@ async def run_integrity_check(
                         )
                         repaired_cloze_ids.discard(cloze_nid)
                         repaired_context_ids.discard(ctx_nid)
-                        unpaired_orphans.append(cloze_nid)
-                        unpaired_reasons[cloze_nid] = f"修復失敗：{why}"
+                        kept_orphans[cloze_nid] = f"修復失敗：{why}"
                         if ctx_nid not in db_contexts:
-                            unpaired_orphans.append(ctx_nid)
-                            unpaired_reasons[ctx_nid] = "修復失敗：對應的 Cloze 卡片找不到對應台詞"
+                            kept_orphans[ctx_nid] = "修復失敗：對應的 Cloze 卡片找不到對應台詞"
                         continue
 
                     # 檢查 card_gen_log 是否已有紀錄 (可能是軟刪除的)
@@ -485,7 +488,15 @@ async def run_integrity_check(
                             issues["orphan_cloze"].append(f"Cloze 卡片 {cloze_nid} 在資料庫中沒有對應的紀錄 (可修復)")
 
         # ---------- 處理不可修復的孤兒 ----------
-        unpaired_orphans_unique = list(set(unpaired_orphans) - repaired_context_ids - repaired_cloze_ids)
+        unpaired_orphans_unique = list(
+            set(unpaired_orphans) - repaired_context_ids - repaired_cloze_ids - set(kept_orphans)
+        )
+
+        for nid, reason in kept_orphans.items():
+            kind, bucket = ("Context", "orphan_context") if nid in anki_contexts else ("Cloze", "orphan_cloze")
+            issues[bucket].append(
+                f"{kind} 卡片 {nid} 在資料庫中沒有對應的紀錄 (保留，不刪除 - 原因：{reason}；需人工處理)"
+            )
 
         for nid in unpaired_orphans_unique:
             reason = unpaired_reasons.get(nid, "未知原因")
