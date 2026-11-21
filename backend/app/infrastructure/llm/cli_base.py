@@ -1,5 +1,25 @@
-"""
+"""Abstract intermediate layer for headless-CLI LLM providers (plan D3).
+
 Headless CLI 型 LLM provider 的抽象中間層（計畫 D3）。
+
+The fixed flow shared by every provider that "drives a local CLI through subprocess for structured generation"
+(Claude Code's ``claude -p`` and Antigravity's ``agy``, the latter through stream-json stdin rather than
+``-p``) lives here, organized as a template method:
+
+- ``generate_structured_data``: the repair-retry loop with error feedback; transient failures (such as the
+  service being unavailable) back off between attempts, and exhaustion is reported as "service unavailable"
+  rather than "empty content"
+- ``_invoke_cli``: ``asyncio.to_thread`` + ``subprocess.run``, UTF-8 decoding, timeout
+- ``_validate_payload``: fence cleanup → ``json.loads`` → dict check → ``jsonschema`` re-validation
+- CLI path / working directory / audit directory resolution, and writing audit records
+
+The parts that truly differ between CLIs are hooks supplied by subclasses: the command line
+(``_build_command``), the subprocess environment (``_build_env``), the stdin content (``_build_stdin``), and
+envelope parsing with failure triage (``_extract_result``).
+
+An implementation constraint that must not change (2026-08-27 plan D5): ``_invoke_cli`` must use
+``asyncio.to_thread`` + synchronous ``subprocess.run``, never ``create_subprocess_exec``; the latter raises
+``NotImplementedError`` under the Windows selector event loop (used by most scripts in this project).
 
 所有「以 subprocess 驅動本機 CLI 做結構化生成」的 provider（Claude Code 的
 ``claude -p``、Antigravity 的 ``agy``——後者經 stream-json stdin，不用 ``-p``）
@@ -19,13 +39,6 @@ subprocess 環境（``_build_env``）、stdin 內容（``_build_stdin``）、信
 ``asyncio.to_thread`` + 同步 ``subprocess.run``，不可改 ``create_subprocess_exec``
 ——後者在 Windows 的 selector event loop（本專案多數腳本採用）下拋
 ``NotImplementedError``。
-
-English summary:
-    Abstract intermediate layer for subprocess-driven CLI providers. The
-    invariant pipeline (repair-retry loop, process invocation, payload
-    validation, path resolution, auditing) lives here as a template method;
-    per-CLI differences (argv, environment, stdin composition, envelope
-    parsing) are abstract hooks.
 """
 
 import abc
@@ -57,18 +70,19 @@ _BACKEND_DIR = Path(__file__).resolve().parents[3]
 
 
 class _RetryableCliError(Exception):
-    """代表可透過重試（含帶回饋修復）挽救的失敗。
+    """A failure that a retry (including a repair with feedback) can rescue.
 
-    Internal marker for failures worth retrying, optionally with
-    error feedback appended to the prompt.
+    代表可透過重試（含帶回饋修復）挽救的失敗。
 
     Attributes:
-        feedback: 附回 prompt 的修復說明；None 表示原樣重送。Repair
-            feedback appended to the prompt, or None to resend as-is.
-        transient: 是否為暫時性失敗（服務端不可用、CLI 中途結束），與輸出內容
+        feedback: the repair note appended to the prompt; ``None`` means resend as is
+            附回 prompt 的修復說明；None 表示原樣重送
+        transient: whether the failure is transient (service unavailable, CLI exiting midway), unrelated to the
+            output content. When ``True``, back off before retrying, and on exhaustion do not report "empty
+            content", which would make the generation scripts record an infrastructure fault as a content problem.
+            是否為暫時性失敗（服務端不可用、CLI 中途結束），與輸出內容
             無關。為 True 時重試前先退避，且耗盡後不以「空內容」回報——那會讓
-            生成腳本把基礎設施故障記成內容問題。Whether the failure is
-            transient (service-side), unrelated to the model's output.
+            生成腳本把基礎設施故障記成內容問題。
     """
 
     def __init__(
@@ -81,19 +95,21 @@ class _RetryableCliError(Exception):
 
 @dataclass(frozen=True)
 class CliRuntime:
-    """子類從自己的 ``LLM_<PROVIDER>_*`` 設定組出的執行參數。
+    """Runtime parameters a subclass assembles from its own ``LLM_<PROVIDER>_*`` settings.
 
-    Runtime parameters a subclass assembles from its own settings block, so
-    the base never reads provider-specific settings directly.
+    子類從自己的 ``LLM_<PROVIDER>_*`` 設定組出的執行參數。
 
     Attributes:
-        cli_path_setting: 設定的執行檔路徑；空字串＝自動探測。Configured
-            binary path; empty means auto-probe.
-        workdir_setting: 設定的工作目錄；空字串＝預設。Configured workdir.
-        timeout_seconds: 單次呼叫超時秒數。Per-call timeout.
-        audit_dir_setting: 審計目錄；空字串＝關閉。Audit dir; empty disables.
-        effort_setting: 設定檔中的 effort（無覆寫時使用）。Effort from
-            settings, used when no override is given.
+        cli_path_setting: the configured binary path; an empty string means auto-probe
+            設定的執行檔路徑；空字串＝自動探測
+        workdir_setting: the configured working directory; an empty string means the default
+            設定的工作目錄；空字串＝預設
+        timeout_seconds: the timeout of a single call in seconds
+            單次呼叫超時秒數
+        audit_dir_setting: the audit directory; an empty string disables auditing
+            審計目錄；空字串＝關閉
+        effort_setting: the effort from the settings (used when there is no override)
+            設定檔中的 effort（無覆寫時使用）
     """
 
     cli_path_setting: str
@@ -104,24 +120,29 @@ class CliRuntime:
 
 
 class HeadlessCliLLMClient(BaseLLMClient):
-    """subprocess 驅動 headless CLI 的抽象客戶端。
+    """Abstract client that drives a headless CLI through subprocess.
 
-    Abstract client driving a headless CLI through subprocess.
+    subprocess 驅動 headless CLI 的抽象客戶端。
 
     Attributes:
-        BINARY_NAME: 執行檔名（不含副檔名），用於 PATH 探測。Binary name.
-        DISPLAY_NAME: 錯誤訊息用的人類可讀名稱。Human-readable name.
-        SETTINGS_PREFIX: 該 provider 的設定前綴（錯誤訊息用）。Settings
-            prefix, e.g. ``LLM_CLAUDE_CODE``.
-        VALID_EFFORTS: 該 CLI 接受的 effort 白名單。Effort whitelist.
-        SCRUBBED_ENV_VARS: 一律從 subprocess 環境剔除的變數。Env vars
-            always scrubbed from the subprocess.
-        INSTALL_HINT: 探測失敗時附在錯誤訊息的安裝指引。Install hint.
-        MAX_RETRIES: 總嘗試次數（含第一次）。Total attempts, including the
-            first.
-        TRANSIENT_BACKOFF_SECONDS: 暫時性失敗後、下一次嘗試前的等待秒數，依
-            第幾次失敗取值（超出取最後一個）。Waits before retrying after a
-            transient failure, indexed by failure count.
+        BINARY_NAME: the executable name (without extension), used for the PATH probe
+            執行檔名（不含副檔名），用於 PATH 探測
+        DISPLAY_NAME: the human-readable name for error messages
+            錯誤訊息用的人類可讀名稱
+        SETTINGS_PREFIX: the provider's settings prefix (for error messages), for example ``LLM_CLAUDE_CODE``
+            該 provider 的設定前綴（錯誤訊息用），例如 ``LLM_CLAUDE_CODE``
+        VALID_EFFORTS: the effort allowlist this CLI accepts
+            該 CLI 接受的 effort 白名單
+        SCRUBBED_ENV_VARS: the variables always removed from the subprocess environment
+            一律從 subprocess 環境剔除的變數
+        INSTALL_HINT: the install guidance appended to the error message when probing fails
+            探測失敗時附在錯誤訊息的安裝指引
+        MAX_RETRIES: the total number of attempts (including the first)
+            總嘗試次數（含第一次）
+        TRANSIENT_BACKOFF_SECONDS: the seconds to wait after a transient failure before the next attempt, picked by
+            the failure's ordinal (beyond the end, the last value)
+            暫時性失敗後、下一次嘗試前的等待秒數，依
+            第幾次失敗取值（超出取最後一個）
     """
 
     SUPPORTS_EFFORT: ClassVar[bool] = True
@@ -146,26 +167,31 @@ class HeadlessCliLLMClient(BaseLLMClient):
         effort: EffortArg = None,
         endpoint: Endpoint | None = None,
     ) -> None:
-        """驗證 effort 與憑證、解析 CLI 路徑與目錄。
+        """Validate effort and credentials, then resolve the CLI path and directories.
 
-        Validate effort and credentials, then resolve the CLI path and
-        directories.
+        驗證 effort 與憑證、解析 CLI 路徑與目錄。
 
-        檢查順序：effort 白名單 → 憑證（子類 hook）→ 模型名（基底）→ CLI 路徑。
+        Check order: endpoint type → effort allowlist → credentials (subclass hook) → model name (base) → CLI path.
+        This is not quite the same as before the hierarchy, when the CLI path was checked before the model name; the
+        first error message shown differs only when "the model name is empty and the CLI cannot be found" both hold.
+        The working directory is created if needed.
+
+        檢查順序：端點類型 → effort 白名單 → 憑證（子類 hook）→ 模型名（基底）→ CLI 路徑。
         與層級化前不完全相同——層級化前 CLI 路徑在模型名之前檢查；只在「模型名
-        為空且找不到 CLI」同時成立時，最先看到的錯誤訊息不同。
-        Order: effort, credentials, model name, CLI path. The pre-refactor
-        client checked the CLI path before the model name; the first error
-        shown differs only when both are missing.
+        為空且找不到 CLI」同時成立時，最先看到的錯誤訊息不同。必要時會建立工作目錄。
 
         Args:
-            model: 覆寫模型名。Model override.
-            effort: 覆寫思考深度；None 沿用設定檔，:data:`OMIT_EFFORT` 不傳。
-                Effort override; None uses the setting, OMIT_EFFORT sends none.
-            endpoint: 內建 CLI 端點（只影響標籤前綴）。The built-in endpoint.
+            model: the model-name override
+                覆寫模型名
+            effort: the thinking-depth override; ``None`` uses the settings file, :data:`OMIT_EFFORT` sends none
+                覆寫思考深度；None 沿用設定檔，``OMIT_EFFORT`` 不傳
+            endpoint: the built-in CLI endpoint (affects only the label prefix)
+                內建 CLI 端點（只影響標籤前綴）
 
         Raises:
-            LLMServiceError: effort 非白名單值、憑證不合格、或找不到執行檔時。
+            LLMServiceError: if the endpoint type mismatches, effort is not an allowlisted value, the credentials are
+                invalid, the model name is empty, or the executable cannot be found
+                若端點類型不符、effort 非白名單值、憑證不合格、模型名為空，或找不到執行檔
         """
         self._check_endpoint_type(endpoint)
         runtime = self._runtime()
@@ -183,15 +209,31 @@ class HeadlessCliLLMClient(BaseLLMClient):
 
     @property
     def cli_path(self) -> str:
-        """已解析的執行檔絕對路徑。Resolved absolute binary path."""
+        """The resolved path of the executable.
+
+        已解析的執行檔路徑。
+
+        It is absolute unless ``*_CLI_PATH`` was configured as a relative path, which is returned as given.
+
+        除非 ``*_CLI_PATH`` 設成相對路徑（此時原樣回傳），否則為絕對路徑。
+        """
         return self._cli_path
 
     @classmethod
     def default_effort(cls) -> str | None:
-        """未帶覆寫時的 effort，來源與 ``__init__`` 驗證的是同一個 ``CliRuntime``。
+        """Return the effort used when no override is given.
 
-        The default effort, read from the same ``CliRuntime`` the constructor
-        validates — one source, so script-side labels cannot diverge.
+        回傳未帶覆寫時的 effort。
+
+        It comes from the same ``CliRuntime`` that ``__init__`` validates, so there is one source and script-side
+        labels cannot diverge. The raw setting is returned without validation or normalization.
+
+        來源與 ``__init__`` 驗證的是同一個 ``CliRuntime``，只有一個來源，腳本端的標籤因此不會分歧。
+        回傳原始設定值，不驗證也不正規化。
+
+        Returns:
+            the effort from the settings
+            設定檔中的 effort
         """
         return cls._runtime().effort_setting
 
@@ -202,41 +244,53 @@ class HeadlessCliLLMClient(BaseLLMClient):
     @classmethod
     @abc.abstractmethod
     def _runtime(cls) -> CliRuntime:
-        """從該 provider 自己的 ``LLM_<PROVIDER>_*`` 設定組出執行參數。
+        """Assemble the runtime parameters from the provider's own ``LLM_<PROVIDER>_*`` settings.
 
-        Assemble runtime parameters from the provider's own settings block.
+        從該 provider 自己的 ``LLM_<PROVIDER>_*`` 設定組出執行參數。
+
+        This is the only way the base obtains provider-specific settings.
+
         這是基底唯一取得 provider 專屬設定的途徑。
         """
 
     @abc.abstractmethod
     def _build_command(self, system_prompt: str, schema_text: str) -> list[str]:
-        """組裝 CLI 命令列參數。Assemble the CLI argument vector."""
+        """Assemble the CLI command-line arguments.
+
+        組裝 CLI 命令列參數。
+        """
 
     @abc.abstractmethod
     def _extract_result(self, stdout_text: str, stderr_text: str) -> str:
-        """從 CLI 輸出取出模型回答的原始文字，並分流失敗形態。
+        """Extract the raw text of the model's answer from the CLI output, and triage the failure forms.
 
-        Extract the model's raw answer from CLI output and triage failures.
+        從 CLI 輸出取出模型回答的原始文字，並分流失敗形態。
 
         Raises:
-            LLMServiceError: 不可重試的致命失敗（認證、設定、額度）。
-            _RetryableCliError: 可重試的失敗。
+            LLMServiceError: on a fatal failure that must not be retried (authentication, settings, quota)
+                不可重試的致命失敗（認證、設定、額度）
+            _RetryableCliError: on a retryable failure
+                可重試的失敗
         """
 
     def _check_credentials(self) -> None:
-        """建構期的憑證格式檢查；預設不檢查。
+        """Check the credential format at construction time; no check by default.
 
-        Construction-time credential validation; no-op by default. Runs after
-        the effort whitelist and before the model name / CLI path probes.
+        建構期的憑證格式檢查；預設不檢查。
+
+        Runs after the effort allowlist and before the model name / CLI path probes.
+
+        在 effort 白名單之後、模型名與 CLI 路徑探測之前執行。
 
         Raises:
-            LLMServiceError: 子類判定憑證不合格時。
+            LLMServiceError: if the subclass judges the credentials invalid
+                子類判定憑證不合格時
         """
 
     def _build_env(self) -> dict[str, str]:
-        """複製當前環境並剔除 ``SCRUBBED_ENV_VARS``。
+        """Copy the current environment and remove ``SCRUBBED_ENV_VARS``.
 
-        Copy the current environment minus ``SCRUBBED_ENV_VARS``.
+        複製當前環境並剔除 ``SCRUBBED_ENV_VARS``。
         """
         env = os.environ.copy()
         for name in self.SCRUBBED_ENV_VARS:
@@ -244,18 +298,21 @@ class HeadlessCliLLMClient(BaseLLMClient):
         return env
 
     def _build_stdin(self, system_prompt: str, user_prompt: str) -> str:
-        """組出經 stdin 送入的內容；預設只送 user prompt。
+        """Compose the content sent through stdin; by default only the user prompt.
 
-        Compose the stdin payload; by default only the user prompt (the
-        system prompt travels as a flag). CLIs without a system-prompt flag
-        override this to fold both together.
+        組出經 stdin 送入的內容；預設只送 user prompt。
+
+        The system prompt travels as a flag by default. CLIs without a system-prompt flag override this to fold
+        both together.
+
+        系統提示預設以旗標傳遞；沒有系統提示旗標的 CLI 覆寫此方法，把兩者合併。
         """
         return user_prompt
 
     def _extra_cli_candidates(self) -> list[Path]:
-        """PATH 探測失敗後的額外候選路徑（預設無）。
+        """Return extra candidate paths tried after the PATH probe fails (none by default).
 
-        Extra candidate paths tried after the PATH probe (none by default).
+        PATH 探測失敗後的額外候選路徑（預設無）。
         """
         return []
 
@@ -264,16 +321,30 @@ class HeadlessCliLLMClient(BaseLLMClient):
     # ------------------------------------------------------------------
 
     def _validate_effort(self, override: EffortArg, setting_value: str) -> str | None:
-        """以白名單驗證 effort，一律在送出前攔截。
+        """Validate effort against the allowlist, always intercepting it before it is sent.
 
-        Whitelist-validate effort before it ever reaches the CLI.
+        以白名單驗證 effort，一律在送出前攔截。
 
-        ``override`` 為 :data:`OMIT_EFFORT` 時回 None（命令列省略 ``--effort``）。
-        Returns None for :data:`OMIT_EFFORT` so the flag is omitted.
+        When ``override`` is :data:`OMIT_EFFORT`, return ``None`` (the command line omits ``--effort``).
+
+        ``override`` 為 ``OMIT_EFFORT`` 時回 None（命令列省略 ``--effort``）。
+
+        In practice claude silently falls back to the default effort on an invalid value without reporting an error;
+        agy's behavior is unverified and is intercepted up front as well. The error message keeps claude's
+        pre-hierarchy wording (plan D10: messages of existing raise points stay unchanged), in which the sentence
+        "the CLI silently falls back" is an unverified assumption for agy.
 
         claude 實測對非法值會靜默回退到預設力度而不報錯；agy 的行為未驗證，
         同樣前置攔截。錯誤訊息沿用層級化前 claude 的原文（計畫 D10：既有拋錯點
         的訊息不變），其中「CLI 會靜默回退」一句對 agy 屬未驗證的推定。
+
+        Returns:
+            the validated effort, stripped and lowercased; ``None`` for ``OMIT_EFFORT``
+            驗證後的 effort（去空白、小寫）；``OMIT_EFFORT`` 時為 None
+
+        Raises:
+            LLMServiceError: if the value is not in ``VALID_EFFORTS``
+                若值不在 ``VALID_EFFORTS`` 內
         """
         if override is OMIT_EFFORT:
             return None
@@ -290,9 +361,13 @@ class HeadlessCliLLMClient(BaseLLMClient):
         return value
 
     def _default_cli_candidates(self) -> list[Path]:
-        """原生安裝的標準路徑，依平台只回一個候選。
+        """Return the standard native-install path, a single candidate per platform.
 
-        Standard native-install location, one candidate per platform.
+        原生安裝的標準路徑，依平台只回一個候選。
+
+        Windows accepts only ``.exe``: the pre-hierarchy probe order is ``~/.local/bin/<name>.exe`` → PATH, and no
+        extension-less candidate may be inserted before PATH (it would pick up a leftover shim).
+
         Windows 只認 ``.exe``：層級化前的探測順序是 ``~/.local/bin/<name>.exe``
         → PATH，不可在 PATH 之前多插一個無副檔名的候選（會撿到殘留的 shim）。
         """
@@ -301,13 +376,17 @@ class HeadlessCliLLMClient(BaseLLMClient):
         return [local_bin / binary]
 
     def _resolve_cli_path(self, configured: str) -> str:
-        """依序探測執行檔：設定值 → 原生安裝路徑 → PATH → 子類額外候選。
+        """Probe for the executable in order: setting → native install path → PATH → subclass extra candidates.
 
-        Locate the binary: explicit setting, native install path, PATH,
-        then subclass-provided candidates.
+        依序探測執行檔：設定值 → 原生安裝路徑 → PATH → 子類額外候選。
+
+        A non-empty setting is used as is and must point to an existing file; no fallback probing happens then.
+
+        設定值非空時原樣使用，且必須指向存在的檔案；此時不再往下探測。
 
         Raises:
-            LLMServiceError: 全部探測失敗時。When every probe fails.
+            LLMServiceError: if the configured file does not exist, or every probe fails
+                若設定的檔案不存在，或全部探測失敗
         """
         configured = (configured or "").strip()
         if configured:
@@ -332,10 +411,14 @@ class HeadlessCliLLMClient(BaseLLMClient):
         raise LLMServiceError(f"找不到 {self.BINARY_NAME} 執行檔。{self.INSTALL_HINT}")
 
     def _resolve_workdir(self, configured: str) -> str:
-        """取得（必要時建立）CLI 執行用的專用空目錄。
+        """Return (creating it if needed) the dedicated empty directory the CLI runs in.
 
-        Return (creating if needed) the dedicated empty working directory.
-        以空目錄作為 cwd，確保不會意外載入專案脈絡。
+        取得（必要時建立）CLI 執行用的專用空目錄。
+
+        Using an empty directory as cwd makes sure no project context is loaded by accident. A relative path is
+        resolved against ``backend/``.
+
+        以空目錄作為 cwd，確保不會意外載入專案脈絡。相對路徑以 ``backend/`` 為基準。
         """
         configured = (configured or "").strip()
         default_name = f".{self.PROVIDER_NAME.replace('-', '_')}_workdir"
@@ -347,9 +430,13 @@ class HeadlessCliLLMClient(BaseLLMClient):
 
     @staticmethod
     def _resolve_audit_dir(configured: str) -> Path | None:
-        """取得審計目錄；設定為空字串時代表關閉審計。
+        """Return the audit directory; an empty setting means auditing is disabled.
 
-        Return the audit directory, or None when auditing is disabled.
+        取得審計目錄；設定為空字串時代表關閉審計。
+
+        A relative path is resolved against ``backend/``; the directory is not created here.
+
+        相對路徑以 ``backend/`` 為基準；此處不建立目錄。
         """
         configured = (configured or "").strip()
         if not configured:
@@ -369,18 +456,38 @@ class HeadlessCliLLMClient(BaseLLMClient):
         user_prompt: str,
         response_schema: dict[str, object],
     ) -> LLMGenerateResult:
-        """呼叫 CLI 並取得符合 ``response_schema`` 的 JSON 資料。
+        """Invoke the CLI and obtain JSON data that conforms to ``response_schema``.
 
-        Invoke the CLI and obtain JSON conforming to ``response_schema``.
+        呼叫 CLI 並取得符合 ``response_schema`` 的 JSON 資料。
+
+        Three lines of defence: the CLI's own schema enforcement, this method's ``jsonschema`` re-validation, and
+        the caller's handler validating business semantics with a Pydantic model. When validation fails, the reason
+        is appended to the prompt for a repair retry.
 
         三道防線：CLI 自身的 schema 強制、本方法以 ``jsonschema`` 複核、
         呼叫端 handler 再以 Pydantic 模型驗證業務語義。驗證失敗時把原因附回
         prompt 做修復重試。
 
+        Args:
+            system_prompt: the system prompt
+                系統提示
+            user_prompt: the user input
+                使用者輸入
+            response_schema: the JSON Schema definition dict
+                JSON Schema 定義字典
+
+        Returns:
+            an ``LLMGenerateResult`` instance
+            ``LLMGenerateResult`` 實例
+
         Raises:
-            LLMRetryExhaustedError: 所有嘗試後仍無合規 JSON（最後一次為內容問題）。
-            LLMServiceUnavailableError: 最後一次仍是暫時性失敗（服務不可用）。
-            LLMServiceError: 致命失敗或超時。
+            LLMRetryExhaustedError: if no compliant JSON is obtained after every attempt (the last one being a
+                content problem)
+                若所有嘗試後仍無合規 JSON（最後一次為內容問題）
+            LLMServiceError: on a fatal failure or a timeout
+                致命失敗或超時
+            LLMServiceUnavailableError: if the last attempt is still a transient failure (service unavailable)
+                若最後一次仍是暫時性失敗（服務不可用）
         """
         logger.info(
             "LLM 結構化生成請求 -> model: %s, user_prompt 長度: %d 字元",
@@ -461,21 +568,30 @@ class HeadlessCliLLMClient(BaseLLMClient):
     # ------------------------------------------------------------------
 
     async def _sleep(self, seconds: float) -> None:
-        """暫時性失敗之間的等待；獨立成方法讓測試能局部替換，不必全域竄改 asyncio。
+        """Wait between transient failures.
 
-        Wait between transient failures; a method so tests can stub it locally.
+        暫時性失敗之間的等待。
+
+        It is a separate method so tests can replace it locally without patching asyncio globally.
+
+        獨立成方法讓測試能局部替換，不必全域竄改 asyncio。
         """
         await asyncio.sleep(seconds)
 
     async def _invoke_cli(
         self, system_prompt: str, stdin_text: str, schema_text: str
     ) -> tuple[str, str]:
-        """實際執行 CLI 並取回 stdout / stderr。
+        """Actually run the CLI and return its stdout / stderr.
 
-        Run the CLI and return decoded stdout/stderr.
+        實際執行 CLI 並取回 stdout / stderr。
+
+        Returns:
+            ``(stdout, stderr)``, decoded as UTF-8 with invalid bytes replaced
+            ``(stdout, stderr)``，以 UTF-8 解碼，無效位元組以替代字元取代
 
         Raises:
-            LLMServiceError: 執行超時或無法啟動進程時。
+            LLMServiceError: if execution times out or the process cannot be started
+                執行超時或無法啟動進程時
         """
         command = self._build_command(system_prompt, schema_text)
         # 每次呼叫才讀設定（不在建構時快取）：測試或執行期改了 settings，下一次呼叫即生效
@@ -515,10 +631,17 @@ class HeadlessCliLLMClient(BaseLLMClient):
     def _validate_payload(
         raw_content: str, resolved_schema: dict[str, object]
     ) -> dict[str, object]:
-        """fence 清理 → ``json.loads`` → dict 檢查 → ``jsonschema`` 複核。
+        """Validate the raw output: fence cleanup → ``json.loads`` → dict check → ``jsonschema`` re-validation.
+
+        fence 清理 → ``json.loads`` → dict 檢查 → ``jsonschema`` 複核。
+
+        Returns:
+            the parsed JSON object
+            解析後的 JSON 物件
 
         Raises:
-            _RetryableCliError: 任一步驟失敗（附修復回饋）。
+            _RetryableCliError: if any step fails (with repair feedback)
+                任一步驟失敗（附修復回饋）
         """
         cleaned = strip_markdown_fences(raw_content)
 
@@ -550,10 +673,13 @@ class HeadlessCliLLMClient(BaseLLMClient):
     def _write_audit(
         self, system_prompt: str, user_prompt: str, raw_content: str, attempt: int
     ) -> None:
-        """將本次呼叫的 prompt 與輸出寫入審計目錄；失敗只記警告。
+        """Write this call's prompt and output to the audit directory; a failure only logs a warning.
 
-        Persist this call's prompt and output; audit failures never break
-        generation.
+        將本次呼叫的 prompt 與輸出寫入審計目錄；失敗只記警告。
+
+        Audit failures never interrupt generation. Nothing is written when auditing is disabled.
+
+        審計失敗不會中斷生成。審計關閉時不寫入任何東西。
         """
         if self._audit_dir is None:
             return

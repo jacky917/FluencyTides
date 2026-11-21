@@ -1,28 +1,37 @@
-"""
+"""MinIO object storage business service module.
+
 MinIO 物件存儲業務服務模組。
+
+This module adds business logic on top of the infrastructure-layer MinioClient, including automatically ensuring
+the bucket exists, normalized object naming, and generating a presigned URL after upload.
 
 本模組在 Infrastructure 層的 MinioClient 之上添加業務邏輯，
 包括自動確保 Bucket 存在、檔案命名規範化、上傳後自動產生預簽名 URL 等。
+
+Current role (Phase 2):
+    - A basic utility that "lays the foundation", providing standalone media upload / download / list / delete APIs.
+    - Not yet integrated with the card generation flow (audio generation → MinIO upload → Anki reference).
 
 當前定位（Phase 2）：
     - 作為基礎工具類「打地基」，提供獨立的媒體上傳/下載/列表/刪除 API。
     - 尚未與卡片生成流程整合（音檔生成 → MinIO 上傳 → Anki 引用）。
 
+Future ideas:
+    - Upload speech synthesis results (VOICEPEAK .wav) to MinIO and put the permanent link in the note.
+    - Audio sent to the Telegram Bot → convert → upload to MinIO.
+
 未來設想：
     - 語音合成結果（VOICEPEAK .wav）上傳至 MinIO，將永久鏈接放入筆記。
     - Telegram Bot 傳入音檔 → 轉換 → 上傳至 MinIO。
 
+Design principles:
+    - This module belongs to the Service layer and performs all storage operations through the injected
+      MinioClient.
+    - Never create MinIO SDK connections or read environment variables directly here.
+
 設計原則：
     - 此模組屬於 Service 層，透過注入 MinioClient 完成所有存儲操作。
     - 禁止在此處直接建立 MinIO SDK 連線或讀取環境變數。
-
-MinIO object storage business service module.
-
-Adds business logic on top of the infrastructure-layer MinioClient:
-auto-ensuring bucket existence, normalized object naming, and presigned
-URL generation after upload. As a Service-layer module it performs all
-storage operations through the injected MinioClient and never creates
-MinIO SDK connections or reads environment variables directly.
 """
 
 import logging
@@ -40,32 +49,35 @@ logger = logging.getLogger(__name__)
 
 
 class StorageService:
-    """MinIO 物件存儲業務服務。
+    """The MinIO object storage business service.
 
-    MinIO object storage business service.
+    MinIO 物件存儲業務服務。
+
+    On top of the infrastructure-layer MinioClient it adds:
+    - Automatically ensuring the bucket exists (idempotent).
+    - Normalized object naming (a date prefix plus a UUID to avoid collisions).
+    - Generating and returning a presigned URL after upload.
 
     在 Infrastructure 層的 MinioClient 之上添加：
     - 自動確保 Bucket 存在（冪等操作）。
     - 檔案命名規範化（日期前綴 + UUID 避衝突）。
     - 上傳後自動產生預簽名 URL 並回傳。
 
-    On top of the infrastructure MinioClient it adds: idempotent bucket
-    existence checks, normalized object naming (date prefix + UUID), and
-    automatic presigned URL generation after upload.
-
     Attributes:
-        _minio_client: 注入的 MinioClient 實例。Injected MinioClient.
-        _default_bucket: 預設儲存桶名稱（從 Settings 讀取）。Default bucket
-            name read from Settings.
+        _minio_client: the injected MinioClient instance
+            注入的 MinioClient 實例
+        _default_bucket: the default bucket name (read from Settings)
+            預設儲存桶名稱（從 Settings 讀取）
     """
 
     def __init__(self, minio_client: MinioClient) -> None:
-        """初始化 StorageService。
+        """Initialize the StorageService.
 
-        Initialize the StorageService.
+        初始化 StorageService。
 
         Args:
-            minio_client: 注入的 MinioClient 實例。Injected MinioClient.
+            minio_client: the injected MinioClient instance
+                注入的 MinioClient 實例
         """
         self._minio_client = minio_client
         self._default_bucket = settings.MINIO_DEFAULT_BUCKET
@@ -76,34 +88,37 @@ class StorageService:
         bucket_name: str | None = None,
         object_name_prefix: str | None = None,
     ) -> MinioUploadResult:
-        """上傳媒體檔案至 MinIO。
+        """Upload a media file to MinIO.
 
-        Upload a media file to MinIO.
+        上傳媒體檔案至 MinIO。
+
+        Handled automatically:
+        1. Ensure the target bucket exists.
+        2. Generate a normalized object name (``{prefix}{date}/{8-character UUID}_{original file name}``).
+        3. Stage the UploadFile in a temporary file, then upload it.
+        4. Generate a presigned URL after upload.
 
         自動處理：
         1. 確保目標 Bucket 存在。
-        2. 生成規範化的物件名稱（日期/UUID_原始檔名）。
+        2. 生成規範化的物件名稱（``{前綴}{日期}/{8 碼 UUID}_{原始檔名}``）。
         3. 將 UploadFile 暫存至臨時檔案後上傳。
         4. 上傳後自動產生預簽名 URL。
 
-        Automatically ensures the bucket exists, generates a normalized
-        object name (date/UUID_filename), stages the UploadFile in a temp
-        file, uploads it, then generates a presigned URL.
-
         Args:
-            file: FastAPI UploadFile 物件。FastAPI UploadFile object.
-            bucket_name: 目標儲存桶名稱。若為 None，使用預設桶。Target
-                bucket; defaults to the default bucket when None.
-            object_name_prefix: 物件名稱前綴（如 'voice/'）。Object name
-                prefix (e.g. 'voice/').
+            file: the FastAPI UploadFile; a missing file name becomes ``unnamed_file``
+                FastAPI UploadFile 物件；沒有檔名時用 ``unnamed_file``
+            bucket_name: the target bucket; ``None`` uses the default bucket
+                目標儲存桶名稱；若為 ``None``，使用預設桶
+            object_name_prefix: the object name prefix (for example ``voice/``)
+                物件名稱前綴（如 ``voice/``）
 
         Returns:
-            MinioUploadResult，包含 presigned_url。MinioUploadResult with
-            presigned_url filled in.
+            the MinioUploadResult with ``presigned_url`` filled in
+            包含 ``presigned_url`` 的 MinioUploadResult
 
         Raises:
-            StorageServiceError: 上傳過程中任何步驟失敗時。When any upload
-                step fails.
+            StorageServiceError: if any MinIO step of the upload fails
+                若上傳過程中任何 MinIO 步驟失敗
         """
         target_bucket = bucket_name or self._default_bucket
         original_filename = file.filename or "unnamed_file"
@@ -168,20 +183,23 @@ class StorageService:
         prefix: str | None = None,
         bucket_name: str | None = None,
     ) -> list[MinioObjectInfo]:
-        """列出儲存桶內的媒體檔案。
+        """List the media files in the bucket.
 
-        List media files in the bucket.
+        列出儲存桶內的媒體檔案。
 
         Args:
-            prefix: 物件名稱前綴過濾。Object name prefix filter.
-            bucket_name: 目標儲存桶名稱。若為 None，使用預設桶。Target
-                bucket; defaults to the default bucket when None.
+            prefix: the object name prefix to filter by; ``None`` lists everything
+                物件名稱前綴過濾；``None`` 時列出全部
+            bucket_name: the target bucket; ``None`` uses the default bucket
+                目標儲存桶名稱；若為 ``None``，使用預設桶
 
         Returns:
-            MinioObjectInfo 列表。List of MinioObjectInfo.
+            the MinioObjectInfo list
+            MinioObjectInfo 串列
 
         Raises:
-            StorageServiceError: 列舉失敗時。When listing fails.
+            StorageServiceError: if listing fails
+                若列舉失敗
         """
         target_bucket = bucket_name or self._default_bucket
 
@@ -201,23 +219,25 @@ class StorageService:
         bucket_name: str | None = None,
         expires_days: int = 7,
     ) -> str:
-        """取得媒體檔案的預簽名下載 URL。
+        """Get a presigned download URL for a media file.
 
-        Get a presigned download URL for a media file.
+        取得媒體檔案的預簽名下載 URL。
 
         Args:
-            object_name: 物件名稱（含路徑前綴）。Object name including path
-                prefix.
-            bucket_name: 目標儲存桶名稱。若為 None，使用預設桶。Target
-                bucket; defaults to the default bucket when None.
-            expires_days: URL 有效天數，預設 7 天。URL validity in days,
-                default 7.
+            object_name: the object name, including its path prefix
+                物件名稱（含路徑前綴）
+            bucket_name: the target bucket; ``None`` uses the default bucket
+                目標儲存桶名稱；若為 ``None``，使用預設桶
+            expires_days: how many days the URL is valid
+                URL 有效天數
 
         Returns:
-            預簽名下載 URL 字串。Presigned download URL string.
+            the presigned download URL
+            預簽名下載 URL 字串
 
         Raises:
-            StorageServiceError: 產生 URL 失敗時。When URL generation fails.
+            StorageServiceError: if generating the URL fails
+                若產生 URL 失敗
         """
         target_bucket = bucket_name or self._default_bucket
 
@@ -237,18 +257,19 @@ class StorageService:
         object_name: str,
         bucket_name: str | None = None,
     ) -> None:
-        """刪除儲存桶內的媒體檔案。
+        """Delete a media file from the bucket.
 
-        Delete a media file from the bucket.
+        刪除儲存桶內的媒體檔案。
 
         Args:
-            object_name: 物件名稱（含路徑前綴）。Object name including path
-                prefix.
-            bucket_name: 目標儲存桶名稱。若為 None，使用預設桶。Target
-                bucket; defaults to the default bucket when None.
+            object_name: the object name, including its path prefix
+                物件名稱（含路徑前綴）
+            bucket_name: the target bucket; ``None`` uses the default bucket
+                目標儲存桶名稱；若為 ``None``，使用預設桶
 
         Raises:
-            StorageServiceError: 刪除失敗時。When deletion fails.
+            StorageServiceError: if deletion fails
+                若刪除失敗
         """
         target_bucket = bucket_name or self._default_bucket
 

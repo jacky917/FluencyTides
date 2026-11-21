@@ -1,14 +1,28 @@
-"""
-人脈卡在 TG 上的顯示與輸入規則（純函式，與 aiogram 無關，方便測試）。
+"""Display and input rules of the person profile card on Telegram.
 
-Display and input rules of the person profile card on Telegram: pure
-functions, independent of aiogram.
+人脈卡在 TG 上的顯示與輸入規則。
+
+Pure functions, independent of aiogram, so they are easy to test.
+
+純函式，與 aiogram 無關，方便測試。
+
+- Search: the Anki query that finds a person by name.
+- Display: the summary (must-see before meeting), the full data, and each entry of a list. For fields that
+  change over time (interests, positions and so on), the summary and full data show only the valid entries
+  (for positions, the current job; the full data also lists past jobs), while the list shows all of them
+  (with the date added; struck-out entries also show the date ended; positions show their tenure).
+  An entry hidden on the card face is marked 「卡面隱藏」 in the list (Telegram still shows its content).
+- Input: the steps each list asks when adding an entry, how dates are written, and converting text fields
+  into Anki HTML.
 
 - 搜尋：用名字找人的 Anki 查詢。
 - 顯示：摘要（見面前必看）、全部資料、清單的每一筆。會變的欄位（興趣、職位等）摘要與全部資料只顯示
   有效的（職位是現職；全部資料另列以前的工作），清單裡列出全部（附登錄日，劃掉的附失效日；職位附任職期間）。
   在卡面隱藏的那一筆，清單裡標「卡面隱藏」（TG 照樣顯示內容）。
 - 輸入：新增一筆時各清單要問的步驟、日期的寫法、文字欄位轉成 Anki 的 HTML。
+
+Plans: ``docs/archive/person_profile_card_FEAT_2026-10-23.md`` §3.13,
+``docs/wip/person_field_history_FEAT_2026-11-07.md`` §4.5.
 
 計畫書 ``docs/archive/person_profile_card_FEAT_2026-10-23.md`` §3.13、
 ``docs/wip/person_field_history_FEAT_2026-11-07.md`` §4.5。
@@ -53,14 +67,18 @@ from app.schemas.person_profile import (
     position_period,
 )
 
-#: 用名字找人時比對的欄位。Fields a name search looks at.
+#: Fields matched when searching for a person by name.
+#: 用名字找人時比對的欄位。
 NAME_FIELDS = ("Display_Name", "Name_ZH", "Name_EN", "Name_JA", "Name_JA_Kana", "Name_Romaji")
 
-#: 一次最多列幾個搜尋結果。Most search results listed as buttons.
+#: The most search results listed at once.
+#: 一次最多列幾個搜尋結果。
 MAX_SEARCH_RESULTS = 10
 
+#: Short list codes used in callback data (callback data is limited to 64 bytes), in the order of the
+#: "lists" menu. The first seven are JSON lists (goals were added later); the rest are history fields.
 #: callback data 裡的清單代號（callback data 上限 64 bytes），順序同「清單」選單。
-#: 前七個是 JSON 清單（目標是後來加的），其餘是會變的欄位。Short list codes for callback data, in menu order.
+#: 前七個是 JSON 清單（目標是後來加的），其餘是會變的欄位。
 LIST_CODES = {
     "F": "Followups_JSON",
     "I": "Interactions_JSON",
@@ -91,10 +109,15 @@ LIST_CODES = {
 }
 CODE_OF_LIST = {name: code for code, name in LIST_CODES.items()}
 
+#: The fields behind the "+" of each section on the card back (deep link ``psec``): when there are several,
+#: Telegram first asks which one to add (date-added plan §4.4). Keys must match the codes in the template's
+#: ``addLink({ section: ... })``. Besides lists, text fields (``EDITABLE_FIELDS``) may be listed too; their
+#: button opens that field in "edit data". Sections that map to a single field (family, interactions and so
+#: on) use ``padd`` directly.
 #: 卡片背面區塊的「+」（深連結 ``psec``）對應的欄位：多個時 TG 先問新增哪一項（登錄日計畫書 §4.4）。
 #: 鍵要與模板 ``addLink({ section: ... })`` 的代號相同。清單之外也可以放文字欄位（``EDITABLE_FIELDS``），
 #: 按鈕會進「改資料」的那個欄位。
-#: 只對應一個欄位的區塊（家庭、互動等）直接用 ``padd``。The fields behind each section's "+".
+#: 只對應一個欄位的區塊（家庭、互動等）直接用 ``padd``。
 SECTION_FIELDS: dict[str, tuple[str, ...]] = {
     "must": ("Followups_JSON", "Dietary"),
     "interests": ("Interests", "Experiences", "Food_Drink", "Dislikes"),
@@ -106,14 +129,19 @@ SECTION_FIELDS: dict[str, tuple[str, ...]] = {
     "context": ("Residence", "Languages", "Timezone", "Relationship", "Closeness"),
 }
 
+#: Plain fields editable through Telegram's "edit data": history fields go through list operations and
+#: ``Title`` is no longer used. The order follows the create parameters, and callback data refers to a field
+#: by index, so adding, removing or reordering fields makes old "edit data" buttons in the chat history point
+#: at another field (the edit screen shows the field name first, so this is noticeable).
 #: 一般欄位（能經 TG「改資料」改的）：會變的欄位走清單操作，``Title`` 已不使用；順序同建立參數，
 #: callback data 以序號指欄位——增刪或調整順序會讓聊天紀錄裡舊的「改資料」按鈕指到別的欄位
-#: （編輯畫面會先顯示欄位名稱，看得出來）。Editable text fields, by index.
+#: （編輯畫面會先顯示欄位名稱，看得出來）。
 EDITABLE_FIELDS: tuple[str, ...] = tuple(
     name for name in PersonCreateParams.model_fields if name not in PERSON_HISTORY_FIELDS and name not in RETIRED_FIELDS
 )
 
-#: 改資料的分組（只有文字欄位）。Field groups of the edit menu (text fields only).
+#: Field groups of the "edit data" menu (text fields only).
+#: 改資料的分組（只有文字欄位）。
 FIELD_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("姓名", ("Display_Name", "Name_ZH", "Name_EN", "Name_JA", "Name_JA_Kana", "Name_Romaji", "Honorific", "Name_Memo")),
     ("外貌與基本資料", ("Appearance", "Birthday", "Hometown")),
@@ -121,7 +149,8 @@ FIELD_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("聯絡與其他", ("Notes", "Last_Contact", "Contact_Cadence")),
 )
 
-#: 「全部資料」的分組：文字欄位與會變的欄位（只列有效的）。Groups of the full view.
+#: Groups of the "full data" view: text fields and history fields (only valid entries are listed).
+#: 「全部資料」的分組：文字欄位與會變的欄位（只列有效的）。
 DISPLAY_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     FIELD_GROUPS[0],
     ("外貌與基本資料", ("Appearance", "Birthday", "Hometown", "Residence", "Languages", "Timezone")),
@@ -134,14 +163,28 @@ DISPLAY_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 FOLLOWUP_TYPES = {"ask": "下次要問", "my_promise": "我答應的", "their_promise": "對方答應的"}
 
-#: TG 訊息長度上限（留一點餘裕）。Telegram's message limit, with margin.
+#: Telegram's message length limit, with some margin.
+#: TG 訊息長度上限（留一點餘裕）。
 MESSAGE_LIMIT = 3800
 
 
 def field_title(name: str) -> str:
-    """欄位的中文名稱：會變的欄位取它的標題（``Company`` 是「工作經歷」，和卡面相同），其他取自建立參數。
+    """Return the Chinese display title of a field.
 
-    The display title of a field.
+    回傳欄位的中文名稱。
+
+    History fields use their own title (``Company`` is 「工作經歷」, the same as on the card face); other
+    fields take the title from the create parameters.
+
+    會變的欄位取它的標題（``Company`` 是「工作經歷」，和卡面相同），其他取自建立參數。
+
+    Args:
+        name: the Anki field name
+            Anki 欄位名稱
+
+    Returns:
+        the title, or ``name`` itself when no title is defined
+        欄位標題；沒有定義標題時為 ``name`` 本身
     """
     if name in PERSON_HISTORY_FIELDS:
         return PERSON_HISTORY_FIELDS[name].title
@@ -150,24 +193,61 @@ def field_title(name: str) -> str:
 
 
 def list_title(name: str) -> str:
-    """清單（JSON 清單或會變的欄位）的中文名稱。The title of a list."""
+    """Return the Chinese title of a list (a JSON list or a history field).
+
+    回傳清單（JSON 清單或會變的欄位）的中文名稱。
+
+    Args:
+        name: the Anki field name of the list
+            清單的 Anki 欄位名稱
+
+    Returns:
+        the list title
+        清單名稱
+    """
     return PERSON_JSON_ITEMS[name][1] if name in PERSON_JSON_ITEMS else field_title(name)
 
 
 def is_history(name: str) -> bool:
-    """會變的欄位（每筆附登錄日與失效日）。Whether a list is a history field."""
+    """Return whether a list is a history field (each entry has a date added and a date ended).
+
+    回傳清單是否為會變的欄位（每筆附登錄日與失效日）。
+
+    Args:
+        name: the Anki field name
+            Anki 欄位名稱
+
+    Returns:
+        ``True`` for a history field
+        會變的欄位時為 ``True``
+    """
     return name in PERSON_HISTORY_FIELDS
 
 
-#: 清單格式壞了時的說明（不要顯示成「還沒有」）。Shown for a broken list.
+#: The note shown when a list's format is broken (instead of showing it as empty).
+#: 清單格式壞了時的說明（不要顯示成「還沒有」）。
 BROKEN_NOTE = "⚠️ 資料格式壞了（可能是還沒轉換的舊文字），請在網頁或 Anki 修正"
 
 
 def broken_lists(fields: dict[str, str]) -> frozenset[str]:
-    """格式壞掉、解析不了的清單（六種 JSON 清單與會變的欄位）。The lists that fail to parse.
+    """Return the lists whose format is broken and cannot be parsed (JSON lists and history fields).
+
+    回傳格式壞掉、解析不了的清單（JSON 清單與會變的欄位）。
+
+    Telegram reads them as empty lists (the summary and so on still display), and display code uses this to
+    mark them so they do not look like missing data. For example, old text not yet run through the
+    conversion script must not make dietary restrictions silently vanish from the must-see section.
 
     TG 讀取時把它們當成空清單（摘要等照常顯示），顯示的地方用這個標出來，免得看起來像沒有資料
     ——例如還沒跑轉換腳本的舊文字，飲食限制不能就這樣從「見面前必看」消失。
+
+    Args:
+        fields: the note's raw field values
+            筆記的原始欄位值
+
+    Returns:
+        the names of the lists that fail to parse
+        解析失敗的清單名稱
     """
     broken = set()
     for name in (*PERSON_JSON_ITEMS, *PERSON_HISTORY_FIELDS):
@@ -179,7 +259,18 @@ def broken_lists(fields: dict[str, str]) -> frozenset[str]:
 
 
 def is_multiline(name: str) -> bool:
-    """文字區段（多行）欄位：TG 上可以選「接在後面」。Whether a field is a multi-line text section."""
+    """Return whether a field is a multi-line text section, which offers "append" on Telegram.
+
+    回傳欄位是否為文字區段（多行）欄位：TG 上可以選「接在後面」。
+
+    Args:
+        name: the Anki field name
+            Anki 欄位名稱
+
+    Returns:
+        ``True`` if the create parameter is rendered as a textarea
+        建立參數以 textarea 呈現時為 ``True``
+    """
     info = PersonCreateParams.model_fields.get(name)
     extra = info.json_schema_extra if info else None
     return isinstance(extra, dict) and extra.get("x-ui") == "textarea"
@@ -191,15 +282,18 @@ def is_multiline(name: str) -> bool:
 
 
 def search_query(text: str) -> str:
-    """用名字找人的 Anki 查詢：在姓名相關欄位做「包含」比對。
+    """Return the Anki query that finds people by name, with a "contains" match on the name fields.
 
-    The Anki query finding people whose name fields contain the text.
+    回傳用名字找人的 Anki 查詢：在姓名相關欄位做「包含」比對。
 
     Args:
-        text: 使用者輸入的名字（照字面比對，萬用字元會跳脫）。The name, matched literally.
+        text: the name the user typed; matched literally (wildcards are escaped) after stripping
+            surrounding whitespace
+            使用者輸入的名字（去掉前後空白後照字面比對，萬用字元會跳脫）
 
     Returns:
-        例如 ``note:"Person\\_Profile\\_Dark" ("Display_Name:*田中*" OR ...)``。The query.
+        the query, for example ``note:"Person\\_Profile\\_Dark" ("Display_Name:*田中*" OR ...)``
+        查詢字串，例如 ``note:"Person\\_Profile\\_Dark" ("Display_Name:*田中*" OR ...)``
     """
     value = escape_search_value(text.strip())
     terms = " OR ".join(f'"{name}:*{value}*"' for name in NAME_FIELDS)
@@ -207,7 +301,18 @@ def search_query(text: str) -> str:
 
 
 def card_id_query(card_id: str) -> str:
-    """以 ``Card_ID`` 找人的查詢。The query finding a person by Card_ID."""
+    """Return the Anki query that finds a person by ``Card_ID``.
+
+    回傳以 ``Card_ID`` 找人的 Anki 查詢。
+
+    Args:
+        card_id: the card ID, matched exactly (escaped for Anki search)
+            卡片 ID，完全比對（會為 Anki 搜尋跳脫）
+
+    Returns:
+        the query string
+        查詢字串
+    """
     return f'{note_type_term(PERSON_NOTE_TYPE)} "Card_ID:{escape_search_value(card_id)}"'
 
 
@@ -217,12 +322,27 @@ def card_id_query(card_id: str) -> str:
 
 
 def _plain(fields: dict[str, str], name: str, limit: int = 200) -> str:
-    """欄位轉成 TG 純文字（去 HTML、已轉義）。A field as escaped Telegram text."""
+    """Return a field as Telegram plain text (HTML stripped, escaped).
+
+    回傳欄位轉成的 TG 純文字（去 HTML、已轉義）。
+    """
     return anki_field_to_tg_text(fields.get(name, ""), limit)
 
 
 def parse_date(text: str) -> tuple[int | None, int, int] | None:
-    """``YYYY-MM-DD`` 或 ``--MM-DD`` → (年|None, 月, 日)；不對時為 None。Parse a stored date."""
+    """Parse a stored date, ``YYYY-MM-DD`` or ``--MM-DD``, into (year or ``None``, month, day).
+
+    把儲存的日期 ``YYYY-MM-DD`` 或 ``--MM-DD`` 解析成（年或 ``None``, 月, 日）。
+
+    Args:
+        text: the stored date; surrounding whitespace is ignored and ``None`` or empty is accepted
+            儲存的日期；忽略前後空白，接受 ``None`` 或空字串
+
+    Returns:
+        ``(year, month, day)`` with ``year`` ``None`` for the year-less form; ``None`` if the text does not
+        match or is not a real date (February 29 is accepted without a year)
+        ``(年, 月, 日)``，沒有年份的寫法年為 ``None``；格式不符或不是真的日期時為 ``None``（沒有年份時接受 2/29）
+    """
     m = re.fullmatch(r"(\d{4}|-)-(\d{2})-(\d{2})", (text or "").strip())
     if not m:
         return None
@@ -236,7 +356,22 @@ def parse_date(text: str) -> tuple[int | None, int, int] | None:
 
 
 def days_until(month: int, day: int, today: date) -> int:
-    """下一次這個月日還有幾天（今天為 0；2/29 在平年視為 3/1）。Days until the next occurrence."""
+    """Return the number of days until the next occurrence of this month and day.
+
+    回傳下一次這個月日還有幾天。
+
+    Args:
+        month: the month
+            月
+        day: the day of the month; February 29 counts as March 1 in common years
+            日；2/29 在平年視為 3/1
+        today: the reference date
+            今天的日期
+
+    Returns:
+        the number of days; ``0`` if it is today
+        天數；今天為 ``0``
+    """
 
     def occurrence(year: int) -> date:
         try:
@@ -251,7 +386,23 @@ def days_until(month: int, day: int, today: date) -> int:
 
 
 def name_line(fields: dict[str, str]) -> str:
-    """「田中さん（田中 悠希・たなか ゆうき）」。The name line."""
+    """Return the name line, for example 「田中さん（田中 悠希・たなか ゆうき）」.
+
+    回傳姓名那一行，例如「田中さん（田中 悠希・たなか ゆうき）」。
+
+    The display name is bold; the Japanese, kana, Chinese and English names follow in parentheses, skipping
+    empty ones and those equal to the display name or an earlier one.
+
+    顯示名稱為粗體；日文、假名、中文、英文名接在括號裡，略過空的以及與顯示名稱或前面重複的。
+
+    Args:
+        fields: the note's field values
+            筆記的欄位值
+
+    Returns:
+        the name line in Telegram HTML
+        Telegram HTML 格式的姓名行
+    """
     display = _plain(fields, "Display_Name", 60)
     others = [_plain(fields, name, 60) for name in ("Name_JA", "Name_JA_Kana", "Name_ZH", "Name_EN")]
     others = [o for i, o in enumerate(others) if o and o != display and o not in others[:i]]
@@ -259,15 +410,22 @@ def name_line(fields: dict[str, str]) -> str:
 
 
 def summary_text(fields: dict[str, str], lists: dict[str, list[object]], today: date) -> str:
-    """摘要：姓名、工作與關係、見面前必看（同卡片背面）。The summary (the card's must-see part).
+    """Return the summary: name, work and relationship, and the must-see part (same as the card back).
+
+    回傳摘要：姓名、工作與關係、見面前必看（同卡片背面）。
 
     Args:
-        fields: 筆記的欄位值。The note's field values.
-        lists: 解析好的清單（解析失敗的欄位是空清單，另以 :func:`broken_lists` 標出）。Parsed lists.
-        today: 今天。Today.
+        fields: the note's field values
+            筆記的欄位值
+        lists: the parsed lists; a field that failed to parse is an empty list and is marked separately with
+            :func:`broken_lists`
+            解析好的清單（解析失敗的欄位是空清單，另以 ``broken_lists`` 標出）
+        today: today's date
+            今天
 
     Returns:
-        TG HTML 訊息。The Telegram HTML message.
+        the Telegram HTML message
+        TG HTML 訊息
     """
     lines = [name_line(fields)]
     meta = [x for x in (_active(lists, "Company", "／", 80), _active(lists, "Relationship", "・", 20)) if x]
@@ -324,14 +482,32 @@ def summary_text(fields: dict[str, str], lists: dict[str, list[object]], today: 
 
 
 def _active(lists: dict[str, list[object]], name: str, separator: str, limit: int) -> str:
-    """會變的欄位目前有效的內容（已轉義）。The current entries of a history field, escaped."""
+    """Return the currently valid entries of a history field, joined and escaped.
+
+    回傳會變的欄位目前有效的內容（已轉義）。
+    """
     return escape_tg(separator.join(active_texts(name, lists.get(name, []))), limit)
 
 
 def full_text(fields: dict[str, str], lists: dict[str, list[object]]) -> str:
-    """全部資料：所有有值的一般欄位、會變的欄位（有效的；工作另列以前的工作）與各清單的筆數。
+    """Return the full data view.
 
-    Every non-empty field, the current history entries (plus past jobs) and list counts.
+    回傳全部資料。
+
+    Lists every non-empty plain field, the history fields (valid entries only; work also lists past jobs)
+    and the number of entries in each JSON list. Truncated to the message limit.
+
+    列出所有有值的一般欄位、會變的欄位（有效的；工作另列以前的工作）與各 JSON 清單的筆數。超過訊息上限時截斷。
+
+    Args:
+        fields: the note's field values
+            筆記的欄位值
+        lists: the parsed lists
+            解析好的清單
+
+    Returns:
+        the Telegram HTML message
+        TG HTML 訊息
     """
     lines = [name_line(fields), ""]
     broken = broken_lists(fields)
@@ -358,43 +534,101 @@ def full_text(fields: dict[str, str], lists: dict[str, list[object]]) -> str:
 
 
 def _position_text(item: object) -> str:
-    """職位的文字加任職期間：「QBC・QA（2025～）」（未轉義）。A position with its period, unescaped."""
+    """Return a position's text with its tenure, for example 「QBC・QA（2025～）」 (unescaped).
+
+    回傳職位的文字加任職期間：「QBC・QA（2025～）」（未轉義）。
+    """
     text = entry_text("Company", item)
     period = position_period(item)
     return f"{text}（{period}）" if text and period else text
 
 
 def _history_text(field_name: str, item: object) -> str:
-    """會變的欄位一筆的文字加事件時間：「爬過玉山（2026-10）」（未轉義）。An entry with its event time, unescaped."""
+    """Return one history entry's text with its event time, for example 「爬過玉山（2026-10）」 (unescaped).
+
+    回傳會變的欄位一筆的文字加事件時間：「爬過玉山（2026-10）」（未轉義）。
+    """
     text = entry_text(field_name, item)
     period = history_period(field_name, item)
     return f"{text}（{period}）" if text and period else text
 
 
 def is_hideable_field(name: str) -> bool:
-    """卡面能隱藏的文字欄位（TG 只對這些顯示隱藏開關）。Whether the card can hide this text field."""
+    """Return whether the card face can hide this text field (Telegram shows the hide toggle only for these).
+
+    回傳是否為卡面能隱藏的文字欄位（TG 只對這些顯示隱藏開關）。
+
+    Args:
+        name: the Anki field name
+            Anki 欄位名稱
+
+    Returns:
+        ``True`` if the field can be hidden
+        可以隱藏時為 ``True``
+    """
     return name in HIDEABLE_TEXT_FIELDS
 
 
 def goal_buttons(status: str) -> tuple[tuple[str, str], ...]:
-    """目標一筆的狀態按鈕：(按鈕文字, 代碼)；進行中可以達成或放棄，結束的可以重開。The status buttons of a goal."""
+    """Return the status buttons of a goal.
+
+    回傳目標一筆的狀態按鈕。
+
+    Args:
+        status: the goal's status; ``open`` means in progress
+            目標的狀態；``open`` 表示進行中
+
+    Returns:
+        ``(button text, code)`` pairs: an open goal can be achieved or abandoned, a closed one reopened
+        ``(按鈕文字, 代碼)``：進行中可以達成或放棄，結束的可以重開
+    """
     if status == "open":
         return (("達成", "d"), ("放棄", "x"))
     return (("重開", "o"),)
 
 
 def history_toggle_label(field_name: str, active: bool) -> str:
-    """會變的欄位「劃掉／取消劃掉」按鈕的文字；職位是「離職／恢復現職」。The end / restore button text."""
+    """Return the text of a history field's "strike out / restore" button.
+
+    回傳會變的欄位「劃掉／取消劃掉」按鈕的文字。
+
+    Args:
+        field_name: the history field; for ``Company`` the texts are 「離職／恢復現職」
+            會變的欄位；``Company`` 的文字是「離職／恢復現職」
+        active: whether the entry is currently valid
+            這一筆目前是否有效
+
+    Returns:
+        the button text
+        按鈕文字
+    """
     if field_name == "Company":
         return "離職" if active else "恢復現職"
     return "劃掉" if active else "取消劃掉"
 
 
 def item_line(field_name: str, item: object) -> str:
-    """清單裡一筆的一行文字（已轉義）。One item as an escaped line.
+    """Return one list entry as a single escaped line.
+
+    回傳清單裡一筆的一行文字（已轉義）。
+
+    History fields show the date added; struck-out entries get a strikethrough and the date ended; education
+    shows its note. Positions are prefixed with 「[現職]」 or 「[以前]」 and show their tenure and note; past
+    jobs are not struck through (the period is already included). Entries hidden on the card face get
+    「〔卡面隱藏〕」. A multi-line note is joined into one line.
 
     會變的欄位附登錄日，劃掉的加刪除線與失效日，學歷附說明；職位前面標「[現職]」或「[以前]」，附任職期間與
     說明，以前的工作不加刪除線（期間已寫在裡面）；在卡面隱藏的加「〔卡面隱藏〕」。多行的說明接成一行。
+
+    Args:
+        field_name: the list the entry belongs to
+            這一筆所屬的清單
+        item: the entry; a non-dict entry is shown as its string
+            這一筆；不是字典時顯示其字串
+
+    Returns:
+        the line in Telegram HTML
+        Telegram HTML 格式的一行
     """
     line = _item_line(field_name, item)
     return f"{line}〔卡面隱藏〕" if is_hidden(item) else line
@@ -445,7 +679,20 @@ def _item_line(field_name: str, item: object) -> str:
 
 
 def truncate(text: str, limit: int = MESSAGE_LIMIT) -> str:
-    """超過 TG 上限時截斷（在換行處），加上「…」。Truncate at a line break when too long."""
+    """Truncate the text at a line break when it exceeds the Telegram limit, appending 「…」.
+
+    超過 TG 上限時截斷（在換行處），加上「…」。
+
+    Args:
+        text: the message text
+            訊息文字
+        limit: the maximum length; when no line break precedes it, the text is cut at the limit itself
+            長度上限；上限之前沒有換行時直接在上限處截斷
+
+    Returns:
+        ``text`` unchanged if it fits, otherwise the truncated text followed by a line with 「…」
+        放得下時為原本的 ``text``，否則為截斷後的文字並另起一行加「…」
+    """
     if len(text) <= limit:
         return text
     cut = text.rfind("\n", 0, limit)
@@ -459,20 +706,42 @@ def truncate(text: str, limit: int = MESSAGE_LIMIT) -> str:
 
 @dataclass(frozen=True)
 class Step:
-    """新增或修改一筆時的一個問題（修改沿用新增的步驟，見 :func:`edit_steps`）。One question when adding or editing.
+    """One question asked when adding or editing an entry.
+
+    新增或修改一筆時的一個問題。
+
+    Editing reuses the adding steps; see :func:`edit_steps`.
+
+    修改沿用新增的步驟，見 ``edit_steps``。
 
     Attributes:
-        key: 寫進項目的鍵；``_followups`` 為互動紀錄附帶的「下次要問」（每行一筆）。The item key.
-        prompt: 問題。The prompt.
-        kind: ``text``、``date``、``int``、``choice``、``lines``、``period``（年、年月或日期，事件時間用，見 :data:`HISTORY_DETAIL_STEPS`）。
-            The input kind.
-        required: 必填：新增時沒有「略過」；修改時可以略過（＝保留目前的值），但不能清空。Whether it is required.
-        choices: ``choice`` 的選項 (值, 按鈕文字)；``text`` 有選項時是建議按鈕。Choices.
-        default_today: 日期步驟提供「今天」「昨天」按鈕。Offer today / yesterday buttons.
-        skip_hint: 新增時「略過」代表什麼（接在問題下面，必填的不顯示）；修改時略過一律是保留，由 handler 另外
-            說明，所以問題本身只寫問句與格式。What skipping means when adding.
-        add_hint: 只有新增時接在問題下面的說明（例如「多個用頓號分開」：修改時只能改成一個）。A hint for adding only.
-        allow_unknown: ``period`` 步驟也收 ``?``（已離職但不知道時間）。Accept ``?`` for a period.
+        key: the key written into the entry; ``_followups`` is the "ask next time" list attached to an
+            interaction (one per line)
+            寫進項目的鍵；``_followups`` 為互動紀錄附帶的「下次要問」（每行一筆）
+        prompt: the question
+            問題
+        kind: the input kind: ``text``, ``date``, ``int``, ``choice``, ``lines`` or ``period`` (a year,
+            year-month or date, used for event times; see :data:`HISTORY_DETAIL_STEPS`)
+            輸入種類：``text``、``date``、``int``、``choice``、``lines``、``period``（年、年月或日期，事件時間用，
+            見 ``HISTORY_DETAIL_STEPS``）
+        required: whether it is required: no "skip" when adding; when editing it can be skipped (keeping the
+            current value) but not cleared
+            必填：新增時沒有「略過」；修改時可以略過（＝保留目前的值），但不能清空
+        choices: the options of a ``choice`` step as (value, button text); for a ``text`` step they are
+            suggestion buttons
+            ``choice`` 的選項 (值, 按鈕文字)；``text`` 有選項時是建議按鈕
+        default_today: whether a date step offers "today" and "yesterday" buttons
+            日期步驟是否提供「今天」「昨天」按鈕
+        skip_hint: what "skip" means when adding (shown below the question, not shown for required steps);
+            when editing, skipping always means keeping the value and the handler explains that separately,
+            so the question itself only states the question and format
+            新增時「略過」代表什麼（接在問題下面，必填的不顯示）；修改時略過一律是保留，由 handler 另外
+            說明，所以問題本身只寫問句與格式
+        allow_unknown: whether a ``period`` step also accepts ``?`` (left the job but the time is unknown)
+            ``period`` 步驟是否也收 ``?``（已離職但不知道時間）
+        add_hint: a note shown below the question only when adding (for example "separate several with 、":
+            editing can only change it to one)
+            只有新增時接在問題下面的說明（例如「多個用頓號分開」：修改時只能改成一個）
     """
 
     key: str
@@ -535,8 +804,11 @@ ADD_STEPS: dict[str, tuple[Step, ...]] = {
 }
 
 
+#: The tenure (start and end) and note steps of a position, asked after company and title when adding and
+#: editing. The end step accepts ``?``; the handler's ``_store_answer`` checks at the ``end`` step that the
+#: end is not before the start.
 #: 職位的任職起訖與說明：新增與修改時接在公司、職稱後面問。離職那一步接受 ``?``；離職不早於到職由 handler 的
-#: ``_store_answer`` 在 ``end`` 那一步檢查。The period and note steps of a position.
+#: ``_store_answer`` 在 ``end`` 那一步檢查。
 POSITION_DETAIL_STEPS: tuple[Step, ...] = (
     Step("start", "什麼時候到職？（例如 2021-04，或只寫年 2021）", kind="period", skip_hint="不知道就略過。"),
     Step("end", "什麼時候離職？（例如 2023-03；離職了但不知道時間就寫 ?）", kind="period",
@@ -544,9 +816,11 @@ POSITION_DETAIL_STEPS: tuple[Step, ...] = (
     Step("note", "這份工作做什麼？（可以多行，例如「前端開發」「負責轉職顧問，工作 7 年」）", skip_hint="沒有就略過。"),
 )
 
+#: The event-time steps asked after the content when adding a history field (work-history plan §15; keys as
+#: in :data:`HISTORY_PERIOD_KEYS`), also asked when editing (§16). Fields with a note (:data:`NOTE_FIELDS`:
+#: positions and education) then ask for the note after the time (§18).
 #: 會變的欄位新增時接在內容後面追問的事件時間（工作經歷計畫書 §15；鍵同 :data:`HISTORY_PERIOD_KEYS`），修改
 #: （§16）也問。有說明的欄位（:data:`NOTE_FIELDS`：職位、學歷）時間後面再問說明（§18）。
-#: The event-time (and note) steps of each history field.
 HISTORY_DETAIL_STEPS: dict[str, tuple[Step, ...]] = {
     "Company": POSITION_DETAIL_STEPS,
     "Education": (
@@ -571,8 +845,9 @@ HISTORY_DETAIL_STEPS: dict[str, tuple[Step, ...]] = {
 assert {name: tuple(step.key for step in steps)[:len(HISTORY_PERIOD_KEYS[name])]
         for name, steps in HISTORY_DETAIL_STEPS.items()} == HISTORY_PERIOD_KEYS, "HISTORY_DETAIL_STEPS 與 HISTORY_PERIOD_KEYS 不一致"
 
+#: Fields with a start and an end: (start key, end key, start label, end label); when the end step is answered,
+#: it is checked not to be earlier than the start.
 #: 有起訖的欄位：(開始的鍵, 結束的鍵, 開始的名稱, 結束的名稱)；問到結束那一步時檢查不早於開始。
-#: Fields with a start and an end, checked when the end is answered.
 PERIOD_PAIRS: dict[str, tuple[str, str, str, str]] = {
     "Company": ("start", "end", "到職", "離職"),
     "Education": ("start", "finish", *EDUCATION_LABELS),
@@ -581,16 +856,46 @@ assert all(pair[:2] == HISTORY_PERIOD_KEYS[name] for name, pair in PERIOD_PAIRS.
 
 
 def skip_detail_step(field_name: str, item: dict[str, object], step: Step) -> bool:
-    """新增時跳過這一步：可切、又有事件時間的欄位（目前只有興趣）一次輸入了好幾個時不問時間（同一個時間套到
-    每一個會記錯，之後長按那一筆再補）。Skip the time step when one answer adds several entries."""
+    """Return whether to skip this step when adding.
+
+    回傳新增時是否跳過這一步。
+
+    For a splittable field that also has an event time (currently only interests), the time is not asked
+    when one answer adds several entries: applying the same time to each would record it wrongly, and it
+    can be filled in later by long-pressing that entry.
+
+    可切、又有事件時間的欄位（目前只有興趣）一次輸入了好幾個時不問時間（同一個時間套到
+    每一個會記錯，之後長按那一筆再補）。
+
+    Args:
+        field_name: the list being added to
+            正在新增的清單
+        item: the answers collected so far; ``value`` holds the content
+            目前收集到的回答；``value`` 是內容
+        step: the step about to be asked
+            準備要問的步驟
+
+    Returns:
+        ``True`` if the step should be skipped
+        應該跳過時為 ``True``
+    """
     if step.key not in HISTORY_PERIOD_KEYS.get(field_name, ()) or not PERSON_HISTORY_FIELDS[field_name].split:
         return False
     return len(history_from_text(field_name, str(item.get("value") or ""), "")) > 1
 
 
 def _history_steps(name: str) -> tuple[Step, ...]:
-    """會變的欄位新增（與修改）時要問的：登錄日由系統填；有事件時間的欄位接著問時間，有說明的欄位再問說明
-    （:data:`HISTORY_DETAIL_STEPS`；職位是公司、職稱、任職起訖與說明）。The steps of a history field."""
+    """Return the steps asked when adding (and editing) a history field.
+
+    回傳會變的欄位新增（與修改）時要問的步驟。
+
+    The date added is filled in by the system; fields with an event time then ask for the time, and fields
+    with a note then ask for the note (:data:`HISTORY_DETAIL_STEPS`; a position asks company, title, tenure
+    and note).
+
+    登錄日由系統填；有事件時間的欄位接著問時間，有說明的欄位再問說明
+    （``HISTORY_DETAIL_STEPS``；職位是公司、職稱、任職起訖與說明）。
+    """
     title = field_title(name)
     if name == "Company":
         return (
@@ -615,8 +920,23 @@ ADD_STEPS.update({name: _history_steps(name) for name in PERSON_HISTORY_FIELDS})
 
 
 def edit_steps(name: str) -> tuple[Step, ...]:
-    """修改一筆時問的步驟（工作經歷計畫書 §16）：同新增，但不問 ``_`` 開頭的附帶步驟（不是這一筆的鍵，目前只有
-    互動附帶的「下次要問」）。The steps of editing an item."""
+    """Return the steps asked when editing an entry (work-history plan §16).
+
+    回傳修改一筆時問的步驟（工作經歷計畫書 §16）。
+
+    Same as adding, but without the attached steps whose key starts with ``_`` (they are not keys of this
+    entry; currently only the "ask next time" list attached to an interaction).
+
+    同新增，但不問 ``_`` 開頭的附帶步驟（不是這一筆的鍵，目前只有互動附帶的「下次要問」）。
+
+    Args:
+        name: the list name; must be a key of ``ADD_STEPS``
+            清單名稱；必須是 ``ADD_STEPS`` 的鍵
+
+    Returns:
+        the editing steps in order
+        依序的修改步驟
+    """
     return tuple(step for step in ADD_STEPS[name] if not step.key.startswith("_"))
 
 
@@ -625,16 +945,31 @@ assert {name: tuple(step.key for step in edit_steps(name)) for name in ADD_STEPS
     "修改的步驟與 ITEM_EDIT_KEYS 不一致"
 
 
+#: The yes / no steps: answers become booleans (:func:`coerce_answer`); ``False`` is not written when saving, so
+#: a missing key means "no".
 #: 是／否的步驟：回答轉成布林（:func:`coerce_answer`）；存檔時 False 不寫，所以沒有這個鍵就是「否」。
-#: The yes / no steps, stored as booleans.
 BOOL_STEP_KEYS = ("yearly", "preferred")
 
 
 def current_value_text(step: Step, value: object) -> str:
-    """修改時「目前：」顯示的值（未轉義）：選擇題顯示按鈕文字（每年、偏好等；是／否的沒有值就是「否」），
-    其他沒有值時為空字串。
+    """Return the value shown after 「目前：」 while editing (unescaped).
 
-    The current value shown while editing, unescaped.
+    回傳修改時「目前：」顯示的值（未轉義）。
+
+    Choice steps show the button text (every year, preferred and so on; a yes / no step with no value is
+    「否」); other steps give an empty string when there is no value.
+
+    選擇題顯示按鈕文字（每年、偏好等；是／否的沒有值就是「否」），其他沒有值時為空字串。
+
+    Args:
+        step: the step being edited
+            正在修改的步驟
+        value: the entry's current value for ``step.key``; may be ``None``
+            這一筆 ``step.key`` 目前的值，可為 ``None``
+
+    Returns:
+        the display text; the raw value as a string when no choice matches
+        顯示文字；沒有對應的選項時為原值的字串
     """
     if step.key in BOOL_STEP_KEYS:
         value = bool(value)
@@ -649,9 +984,24 @@ def current_value_text(step: Step, value: object) -> str:
 
 
 def parse_date_input(text: str, today: date) -> str | None:
-    """使用者輸入的日期 → ``YYYY-MM-DD``：接受 ``2026-10-01``、``2026/10/1``、``10-01``、``10/1``（今年）。
+    """Parse a date typed by the user into ``YYYY-MM-DD``.
 
-    Parse a typed date; month-day alone means this year. None when invalid.
+    把使用者輸入的日期轉成 ``YYYY-MM-DD``。
+
+    Accepts ``2026-10-01``, ``2026/10/1``, ``10-01`` and ``10/1`` (this year); ``.`` also works as the
+    separator.
+
+    接受 ``2026-10-01``、``2026/10/1``、``10-01``、``10/1``（今年）；分隔符號也可以用 ``.``。
+
+    Args:
+        text: the typed text; ``None`` or empty is accepted
+            輸入的文字，接受 ``None`` 或空字串
+        today: the reference date whose year is used when the year is omitted
+            參考日期，省略年份時用它的年份
+
+    Returns:
+        the ISO date, or ``None`` if the text does not match or is not a real date
+        ISO 日期；格式不符或不是真的日期時為 ``None``
     """
     m = re.fullmatch(r"\s*(?:(\d{4})[-/.])?(\d{1,2})[-/.](\d{1,2})\s*", text or "")
     if not m:
@@ -664,10 +1014,26 @@ def parse_date_input(text: str, today: date) -> str | None:
 
 
 def parse_past_date_input(text: str, today: date) -> str | None:
-    """已經發生的日子（目標達成、放棄）：同 :func:`parse_date_input`，但只寫月日、算出來在今天之後時當成去年
+    """Parse a day that has already happened (a goal achieved or abandoned).
+
+    解析已經發生的日子（目標達成、放棄）。
+
+    Same as :func:`parse_date_input`, but when only the month and day are written and the result falls
+    after today, it is taken as last year (typing 「12-28」 in early January means last December). A date
+    with an explicit year is returned as-is (the caller rejects future dates).
+
+    同 ``parse_date_input``，但只寫月日、算出來在今天之後時當成去年
     （一月初輸入「12-28」是去年 12 月）。寫了年份的照原樣（未來的由呼叫端擋）。
 
-    Parse a past day; a month-day after today means last year.
+    Args:
+        text: the typed text
+            輸入的文字
+        today: today's date
+            今天
+
+    Returns:
+        the ISO date, or ``None`` if invalid (including February 29 moved to a common year)
+        ISO 日期；無效時為 ``None``（包含移到平年的 2/29）
     """
     value = parse_date_input(text, today)
     if value is None or value <= today.isoformat() or re.match(r"\s*\d{4}", text or ""):
@@ -679,24 +1045,69 @@ def parse_past_date_input(text: str, today: date) -> str | None:
 
 
 def parse_period_input(text: str, *, allow_unknown: bool = False) -> str | None:
-    """事件時間的輸入 → ``YYYY``、``YYYY-MM`` 或 ``YYYY-MM-DD``（規則同網頁，見 :func:`normalize_period`：
-    年份 1900–2100、要是真的日期）；``allow_unknown`` 時（離職）``?`` 也收。空白或看不懂時為 None。
+    """Parse a typed event time into ``YYYY``, ``YYYY-MM`` or ``YYYY-MM-DD``.
 
-    Parse a typed period bound, with the same rules as the web form.
+    把事件時間的輸入轉成 ``YYYY``、``YYYY-MM`` 或 ``YYYY-MM-DD``。
+
+    Uses the same rules as the web form (see :func:`normalize_period`: the year is 1900–2100 and the date
+    must be real).
+
+    規則同網頁（見 ``normalize_period``：年份 1900–2100、要是真的日期）。
+
+    Args:
+        text: the typed text
+            輸入的文字
+        allow_unknown: also accept ``?`` (used for leaving a job)
+            也收 ``?``（離職用）
+
+    Returns:
+        the normalized period, or ``None`` if blank or not understood
+        正規化後的時間；空白或看不懂時為 ``None``
     """
     return normalize_period(text, allow_unknown=allow_unknown) or None
 
 
 def today_choice(today: date, offset: int) -> str:
-    """「今天」「昨天」按鈕的日期。The date behind the today / yesterday buttons."""
+    """Return the date behind the "today" and "yesterday" buttons.
+
+    回傳「今天」「昨天」按鈕的日期。
+
+    Args:
+        today: today's date
+            今天
+        offset: how many days before today; ``0`` is today, ``1`` is yesterday
+            今天往前幾天；``0`` 是今天，``1`` 是昨天
+
+    Returns:
+        the ISO date
+        ISO 日期
+    """
     return (today - timedelta(days=offset)).isoformat()
 
 
 def coerce_answer(step: Step, value: str) -> object:
-    """把一個回答轉成要存的值（選項 1/0 轉布林、出生年轉整數）。Turn an answer into the stored value.
+    """Turn one answer into the value to store.
+
+    把一個回答轉成要存的值。
+
+    Yes / no options ``1``/``0`` become booleans and a birth year becomes an integer; other answers are
+    stripped of surrounding whitespace.
+
+    選項 1/0 轉布林、出生年轉整數；其他回答去掉前後空白。
+
+    Args:
+        step: the step being answered
+            正在回答的步驟
+        value: the answer text or button value
+            回答的文字或按鈕值
+
+    Returns:
+        the value to store
+        要存的值
 
     Raises:
-        ValueError: 整數或日期格式不對。On a malformed number.
+        ValueError: if an ``int`` answer is not an integer or is outside 1900–2100
+            若 ``int`` 步驟的回答不是整數，或不在 1900–2100 之間
     """
     if step.key in BOOL_STEP_KEYS:
         return value == "1"
@@ -709,12 +1120,38 @@ def coerce_answer(step: Step, value: str) -> object:
 
 
 def text_to_field_html(text: str) -> str:
-    """TG 輸入的文字 → Anki 欄位 HTML（轉義、換行變 ``<br>``）。Typed text as Anki field HTML."""
+    """Convert text typed in Telegram into Anki field HTML (escaped, line breaks become ``<br>``).
+
+    把 TG 輸入的文字轉成 Anki 欄位 HTML（轉義、換行變 ``<br>``）。
+
+    Args:
+        text: the typed text; surrounding whitespace is stripped
+            輸入的文字，會去掉前後空白
+
+    Returns:
+        the field HTML
+        欄位 HTML
+    """
     return html.escape(text.strip()).replace("\n", "<br>")
 
 
 def preview_item(field_name: str, item: dict[str, object], *, editing: bool = False) -> str:
-    """儲存前的預覽；``editing`` 是修改一筆（§16）。The preview before saving."""
+    """Return the preview shown before saving an entry.
+
+    回傳儲存前的預覽。
+
+    Args:
+        field_name: the list the entry belongs to
+            這一筆所屬的清單
+        item: the collected entry; keys starting with ``_`` are attachments such as ``_followups``
+            收集好的這一筆；``_`` 開頭的鍵是附帶資料，例如 ``_followups``
+        editing: whether this edits an existing entry (§16) rather than adding one
+            是否為修改一筆（§16）而非新增
+
+    Returns:
+        the preview in Telegram HTML
+        Telegram HTML 格式的預覽
+    """
     title = list_title(field_name)
     if field_name == "Company":
         state = "現職" if is_active(item) else "以前的工作"
@@ -750,7 +1187,21 @@ def preview_item(field_name: str, item: dict[str, object], *, editing: bool = Fa
 
 
 def proposal_line(kind: str, data: dict[str, object]) -> str:
-    """一項建議的文字（已轉義）。One proposal as escaped text."""
+    """Return the text of one proposal from the LLM (escaped).
+
+    回傳 LLM 一項建議的文字（已轉義）。
+
+    Args:
+        kind: the proposal kind: ``interaction``, ``followup``, ``goal``, ``history_add``, ``history_end``;
+            anything else is treated as a text-field update
+            建議種類：``interaction``、``followup``、``goal``、``history_add``、``history_end``；其他視為文字欄位更新
+        data: the proposal's data
+            建議的資料
+
+    Returns:
+        the proposal in Telegram HTML, possibly over several lines
+        Telegram HTML 格式的建議，可能有多行
+    """
     get = lambda key, limit=200: escape_tg(str(data.get(key, "") or ""), limit)  # noqa: E731
     if kind == "interaction":
         lines = [f"<b>互動</b> {get('date')}：{get('topics')}"]
@@ -781,10 +1232,12 @@ def proposal_line(kind: str, data: dict[str, object]) -> str:
     return f"<b>{escape_tg(field_title(str(data.get('field', ''))))}</b> {mode}：{get('value', 300)}" + reason
 
 
-#: 預覽與按鈕上的勾選記號（文字，不用 emoji）。Check marks used in the preview and buttons.
+#: Check marks used in the preview and on buttons (text, not emoji).
+#: 預覽與按鈕上的勾選記號（文字，不用 emoji）。
 CHECKED, UNCHECKED, SAVED = "✓", "－", "已存"
 
-#: 預覽的開頭與結尾提示（放不下、已儲存的說明）預留的字數。Room kept for the preview's header and notes.
+#: Characters reserved for the preview's header and closing notes (overflow and already-saved notes).
+#: 預覽的開頭與結尾提示（放不下、已儲存的說明）預留的字數。
 _PREVIEW_RESERVE = 300
 
 
@@ -794,7 +1247,22 @@ def _proposal_entry(index: int, proposal: dict[str, object], mark: str) -> str:
 
 
 def fitting_count(proposals: list[dict[str, object]]) -> int:
-    """一則訊息放得下前幾項建議（勾選記號的長度固定，切換勾選不影響）。How many proposals fit in one message."""
+    """Return how many leading proposals fit in one message.
+
+    回傳一則訊息放得下前幾項建議。
+
+    The check marks have a fixed length, so toggling selections does not change the result.
+
+    勾選記號的長度固定，切換勾選不影響。
+
+    Args:
+        proposals: the proposals
+            建議
+
+    Returns:
+        the number of proposals that fit, counted from the start
+        從頭算起放得下的項數
+    """
     used = _PREVIEW_RESERVE
     for index, proposal in enumerate(proposals):
         used += len(_proposal_entry(index, proposal, CHECKED)) + 1
@@ -806,13 +1274,23 @@ def fitting_count(proposals: list[dict[str, object]]) -> int:
 def ingest_preview(
     proposals: list[dict[str, object]], selected: list[bool], *, saved: frozenset[int] = frozenset(), overflow: int = 0
 ) -> str:
-    """整理結果的預覽：每項前面標勾選狀態與編號。The proposals with their checkboxes.
+    """Return the preview of the organized proposals, each prefixed with its check state and number.
+
+    回傳整理結果的預覽：每項前面標勾選狀態與編號。
 
     Args:
-        proposals: 建議（呼叫端先用 :func:`fitting_count` 截到放得下的數量）。The proposals.
-        selected: 每項是否勾選。Whether each is picked.
-        saved: 已經寫入的項目（上次儲存中途失敗時）。Proposals already written.
-        overflow: 放不下、沒有列出的項數。How many were left out.
+        proposals: the proposals; the caller first cuts them to what fits with :func:`fitting_count`
+            建議（呼叫端先用 ``fitting_count`` 截到放得下的數量）
+        selected: whether each proposal is selected
+            每項是否勾選
+        saved: indexes of proposals already written (when the previous save failed midway)
+            已經寫入的項目索引（上次儲存中途失敗時）
+        overflow: how many proposals did not fit and are not listed
+            放不下、沒有列出的項數
+
+    Returns:
+        the preview in Telegram HTML
+        Telegram HTML 格式的預覽
     """
     lines = ["<b>整理好了</b>，勾選要記下的項目（點下面的編號切換）：", ""]
     for index, (proposal, chosen) in enumerate(zip(proposals, selected)):
@@ -831,7 +1309,20 @@ def ingest_preview(
 
 
 def topics_text(fields: dict[str, str], result: LLMPersonTopicsResult) -> str:
-    """分析與話題的訊息（已轉義）。The insight and topics as a Telegram HTML message."""
+    """Return the insight and topic suggestions as a Telegram HTML message (escaped).
+
+    回傳分析與話題的訊息（已轉義）。
+
+    Args:
+        fields: the note's field values (for the display name)
+            筆記的欄位值（取顯示名稱）
+        result: the LLM's insight and topics
+            LLM 產生的分析與話題
+
+    Returns:
+        the message, truncated to the message limit
+        訊息，超過上限時截斷
+    """
     insight = result.insight
     lines = [f"<b>{_plain(fields, 'Display_Name', 60)} 是個怎樣的人</b>", escape_tg(insight.portrait, 600), ""]
     for label, text in (("在意的事", insight.values), ("相處方式", insight.communication),

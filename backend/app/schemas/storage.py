@@ -1,32 +1,33 @@
-"""
+"""Pydantic V2 schemas for MinIO object storage.
+
 MinIO 物件存儲相關 Pydantic V2 Schema 定義模組。
 
-Pydantic V2 schemas for MinIO object storage.
+Defines all data structures needed to interact with MinIO (S3-compatible)
+object storage, covering cross-boundary validation of upload results, object
+information, and bucket-policy settings.
 
 本模組定義了與 MinIO (S3 相容) 物件存儲交互所需的所有資料結構，
 涵蓋上傳結果、物件資訊、以及桶策略設定等跨邊界資料驗證。
 
-Defines all data structures for interacting with MinIO (S3-compatible)
-object storage: upload results, object info, and bucket-policy settings.
+All cross-boundary data structures are strongly validated with Pydantic V2;
+raw dicts and ``typing.Any`` are strictly forbidden.
 
 所有跨邊界交互的資料結構均透過 Pydantic V2 進行強型別驗證，
-嚴禁使用裸字典 (raw dict) 或 typing.Any。
+嚴禁使用裸字典 (raw dict) 或 ``typing.Any``。
 
-All cross-boundary data structures are strongly validated with Pydantic V2;
-raw dicts and typing.Any are strictly forbidden.
+Design decisions:
+    - Multi-model pattern (consistent with schemas/anki.py): request and
+      response structures are defined separately so the API contract stays
+      clear.
+    - ``MinioObjectInfo.last_modified`` is ``str | None`` rather than
+      ``datetime`` because the time format returned by the MinIO SDK may vary
+      with the configuration; converting in the service layer is safer.
 
 設計決策：
     - 採用 Multi-Model 模式（與 schemas/anki.py 一致），
       將「請求」與「回應」結構分開定義，確保 API 合約清晰。
-    - MinioObjectInfo 的 last_modified 使用 Optional[str] 而非 datetime，
+    - ``MinioObjectInfo`` 的 ``last_modified`` 使用 ``str | None`` 而非 ``datetime``，
       是因為 MinIO SDK 回傳的時間格式可能因設定而異，在 Service 層再做轉換更安全。
-
-Design decisions:
-    - Multi-model pattern (consistent with schemas/anki.py): request and
-      response structures are defined separately for clear API contracts.
-    - MinioObjectInfo.last_modified is Optional[str] rather than datetime
-      because the MinIO SDK's time format may vary; converting in the
-      service layer is safer.
 """
 
 from datetime import timedelta
@@ -39,22 +40,20 @@ from pydantic import BaseModel, Field
 # ============================================================================
 
 class MinioUploadResult(BaseModel):
-    """MinIO 檔案上傳完成後的結果結構。
+    """The result structure after a MinIO file upload completes.
 
-    Result structure returned after a MinIO file upload.
+    MinIO 檔案上傳完成後的結果結構。
+
+    Wraps the information returned by the upload for the service layer to
+    assemble API responses.
 
     封裝上傳操作的回傳資訊，供 Service 層組裝 API 回應使用。
 
-    Wraps the upload result for the service layer to assemble API responses.
-
     Attributes:
-        bucket_name: 目標儲存桶名稱。Target bucket name.
-        object_name: 上傳後在 MinIO 上的物件名稱（含路徑前綴）。Object name
-            on MinIO after upload (including path prefix).
-        file_size_bytes: 上傳檔案的大小（位元組）。Uploaded file size in
-            bytes.
-        presigned_url: 預簽名下載 URL（若有產生）。Presigned download URL,
-            if generated.
+        bucket_name: the target bucket name
+            目標儲存桶名稱
+        object_name: the object name on MinIO after the upload, including the path prefix
+            上傳後在 MinIO 上的物件名稱（含路徑前綴）
     """
 
     bucket_name: str
@@ -75,21 +74,17 @@ class MinioUploadResult(BaseModel):
 # ============================================================================
 
 class MinioObjectInfo(BaseModel):
-    """MinIO 物件的基本資訊結構。
+    """Basic information about a MinIO object.
 
-    Basic MinIO object information.
+    MinIO 物件的基本資訊結構。
 
-    用於 list_objects 操作的回傳值，封裝每個物件的元資料。
+    The return value of ``list_objects``, wrapping each object's metadata.
 
-    Return value of list_objects, wrapping each object's metadata.
+    用於 ``list_objects`` 操作的回傳值，封裝每個物件的元資料。
 
     Attributes:
-        object_name: 物件名稱（含路徑前綴）。Object name (with path prefix).
-        size_bytes: 物件大小（位元組）。Object size in bytes.
-        last_modified: 最後修改時間的 ISO 格式字串。Last-modified time as
-            an ISO string.
-        content_type: 物件的 MIME 類型（若可偵測）。MIME type, if
-            detectable.
+        object_name: the object name, including the path prefix
+            物件名稱（含路徑前綴）
     """
 
     object_name: str
@@ -113,21 +108,22 @@ class MinioObjectInfo(BaseModel):
 # ============================================================================
 
 class MinioPresignedUrlRequest(BaseModel):
-    """產生 MinIO 預簽名 URL 的請求參數結構。
+    """The request parameters for generating a MinIO presigned URL.
 
-    Request parameters for generating a MinIO presigned URL.
+    產生 MinIO 預簽名 URL 的請求參數結構。
+
+    Wraps all parameters needed to generate a presigned URL, so that the valid
+    range of ``expires`` is validated at the service layer. MinIO's limit is
+    usually 7 days.
 
     封裝產生預簽名 URL 時所需的所有參數，
-    確保 expires 的合法範圍在 Service 層即被驗證。
-
-    Wraps all parameters needed to generate a presigned URL, so the valid
-    expires range is validated at the service layer.
+    確保 ``expires`` 的合法範圍在 Service 層即被驗證。MinIO 的上限通常為 7 天。
 
     Attributes:
-        bucket_name: 目標儲存桶名稱。Target bucket name.
-        object_name: 物件名稱（含路徑前綴）。Object name (with path prefix).
-        expires: URL 有效期限。MinIO 的上限通常為 7 天。URL validity
-            duration; MinIO's limit is typically 7 days.
+        bucket_name: the target bucket name
+            目標儲存桶名稱
+        object_name: the object name, including the path prefix
+            物件名稱（含路徑前綴）
     """
 
     bucket_name: str
@@ -143,16 +139,19 @@ class MinioPresignedUrlRequest(BaseModel):
 # ============================================================================
 
 class MinioBucketPolicyStatement(BaseModel):
-    """S3 標準桶策略中的單一 Statement 結構。
+    """A single Statement in a standard S3 bucket policy.
 
-    Single Statement in a standard S3 bucket policy.
+    S3 標準桶策略中的單一 Statement 結構。
 
     Attributes:
-        Effect: 策略效果（Allow / Deny）。Policy effect (Allow / Deny).
-        Principal: 策略適用主體。Policy principal.
-        Action: 允許的操作列表。Allowed actions.
-        Resource: 策略適用的資源 ARN 列表。Resource ARNs the policy applies
-            to.
+        Effect: the policy effect (Allow / Deny)
+            策略效果（Allow / Deny）
+        Principal: the principal the policy applies to
+            策略適用主體
+        Action: the allowed actions
+            允許的操作列表
+        Resource: the ARNs of the resources the policy applies to
+            策略適用的資源 ARN 列表
     """
 
     Effect: str = "Allow"
@@ -164,18 +163,19 @@ class MinioBucketPolicyStatement(BaseModel):
 
 
 class MinioBucketPolicy(BaseModel):
-    """S3 標準桶策略的完整結構。
+    """The full structure of a standard S3 bucket policy.
 
-    Full standard S3 bucket-policy structure.
+    S3 標準桶策略的完整結構。
 
-    用於 set_bucket_policy 操作，確保策略格式合法。
+    Used by ``set_bucket_policy`` to make sure the policy format is valid.
 
-    Used by set_bucket_policy to guarantee a valid policy format.
+    用於 ``set_bucket_policy`` 操作，確保策略格式合法。
 
     Attributes:
-        Version: 策略版本，固定為 '2012-10-17'。Policy version, fixed at
-            '2012-10-17'.
-        Statement: 策略聲明列表。Policy statements.
+        Version: the policy version, fixed at ``'2012-10-17'``
+            策略版本，固定為 ``'2012-10-17'``
+        Statement: the policy statements
+            策略聲明列表
     """
 
     Version: str = "2012-10-17"

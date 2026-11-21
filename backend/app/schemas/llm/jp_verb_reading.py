@@ -1,9 +1,13 @@
-"""日文同表層多讀動詞的讀音判讀——請求、回應與 LLM 輸出 schema。
+"""Request, response, and LLM-output schemas for judging Japanese verb readings.
 
-Request / response / LLM-output schemas for judging the reading of a
-Japanese verb whose kanji surface has multiple readings.
+日文同表層多讀動詞的讀音判讀——請求、回應與 LLM 輸出 schema。
 
-對應計畫 docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.2。
+The verbs judged are those whose kanji surface has multiple readings. See the
+plan docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.2. The endpoint is
+project-agnostic: a request contains only the line, its context, the surface,
+and the candidate readings.
+
+判讀對象是同一表層有多種讀音的動詞。對應計畫 docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.2。
 端點與專案無關：請求只含台詞、上下文、表層與候選讀音。
 """
 
@@ -16,7 +20,10 @@ MAX_ITEMS_PER_REQUEST = 40
 
 
 class JudgeReadingItem(BaseModel):
-    """一句待判的台詞。One line to judge."""
+    """One line to judge.
+
+    一句待判的台詞。
+    """
 
     script_id: int = Field(..., description="台詞 ID（game_lines.id，沿用舊 scripts.id）")
     surface: str = Field(..., min_length=1, max_length=32, description="同表層多讀的表層，如 汚す")
@@ -27,14 +34,19 @@ class JudgeReadingItem(BaseModel):
 
 
 class JudgeReadingsRequest(BaseModel):
-    """判讀請求。Judge request.
+    """The judge request.
+
+    判讀請求。
+
+    The model is decided by the route setting of the ``jp_verb_reading`` route
+    key (Telegram ``/setconfig`` or ``/api/v1/capability-routes``) and cannot be
+    overridden by the request. Extra fields are always rejected (422): an old
+    script that sends ``model`` / ``effort`` fails explicitly, instead of being
+    silently ignored and leading people to think the given model was used.
 
     模型由用途鍵 ``jp_verb_reading`` 的路由設定決定（TG ``/setconfig`` 或 ``/api/v1/capability-routes``），
     請求不能覆寫。多餘欄位一律拒收（422）：舊版腳本帶 ``model`` / ``effort`` 時會明確失敗，
     不會被默默忽略、讓人以為用了指定的模型。
-
-    The model comes from the ``jp_verb_reading`` route; unknown fields
-    (including the removed ``model`` / ``effort`` overrides) are rejected.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -56,7 +68,10 @@ class ReadingJudgmentLLMOutput(BaseModel):
 
 
 class JudgeReadingsResponse(BaseModel):
-    """端點回應。Endpoint response."""
+    """The endpoint response.
+
+    端點回應。
+    """
 
     llm_model: str = Field(..., description="實際使用的模型標籤（用途鍵 jp_verb_reading 生效的設定）")
     results: list[ReadingJudgment]

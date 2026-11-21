@@ -1,19 +1,24 @@
-"""
+"""Telegram Bot command handler module.
+
 Telegram Bot 命令處理模組。
 
-處理所有以 '/' 開頭的指令，涵蓋三大工作流：
-- Workflow A: /newcard — 無狀態卡片新增
-- Workflow B: /start rec_{Card_ID} — 啟動錄音評分流程
-- Workflow C: /start del_{Section}_{Index}_{Card_ID} — 刪除特定 JSON 條目
-- 基礎指令: /start, /help, /sync
+Handles ``/start`` (with its deep links), ``/help``, and ``/sync``. The deep links of ``/start`` cover these workflows:
 
-Telegram Bot command handler module.
+- Workflow B: /start rec-{FieldName}-{Index}-{Card_ID} — start the recording evaluation flow
+- Workflow C: /start del-{FieldName}-{Index}-{Card_ID} — delete a specific JSON entry
+- /start addaudio-{FieldName}-{Index}-{Card_ID} — upload an existing audio file
+- Person-card links (pview, padd, …) — handed to ``person_profile.handle_person_link``
 
-Handles all commands starting with '/', covering three main workflows:
-- Workflow A: /newcard — stateless card creation
-- Workflow B: /start rec_{Card_ID} — start the recording evaluation flow
-- Workflow C: /start del_{Section}_{Index}_{Card_ID} — delete a JSON entry
-- Basic commands: /start, /help, /sync
+Workflow A (/newcard, card creation) lives in ``newcard_menu.py``.
+
+處理 ``/start``（含 Deep Link）、``/help`` 與 ``/sync``。``/start`` 的 Deep Link 涵蓋以下工作流：
+
+- Workflow B: /start rec-{FieldName}-{Index}-{Card_ID} — 啟動錄音評分流程
+- Workflow C: /start del-{FieldName}-{Index}-{Card_ID} — 刪除特定 JSON 條目
+- /start addaudio-{FieldName}-{Index}-{Card_ID} — 上傳現成音檔
+- 人脈卡連結（pview、padd…）— 交給 ``person_profile.handle_person_link``
+
+Workflow A（/newcard 新增卡片）在 ``newcard_menu.py``。
 """
 
 import json
@@ -77,27 +82,45 @@ async def command_start_handler(
     state: FSMContext | None = None,
     note_service: "NoteService | None" = None,
 ) -> None:
-    """處理 /start 指令與 Deep Link 邏輯。
+    """Handle the /start command and its deep link logic.
 
-    Handle the /start command and deep link logic.
-
-    根據 payload 前綴分派到不同工作流：
-    - rec-{FieldName}-{Index}-{Card_ID}: Workflow B 啟動錄音
-    - del-{FieldName}-{Index}-{Card_ID}: Workflow C 刪除條目
-    - addaudio-{FieldName}-{Index}-{Card_ID}: 上傳現成音檔
-    - 無 payload: 一般歡迎訊息
+    處理 /start 指令與 Deep Link 邏輯。
 
     Dispatches to different workflows by payload prefix:
+
     - rec-{FieldName}-{Index}-{Card_ID}: Workflow B, start recording
     - del-{FieldName}-{Index}-{Card_ID}: Workflow C, delete an entry
     - addaudio-{FieldName}-{Index}-{Card_ID}: upload an existing audio file
-    - No payload: generic welcome message
+    - person-card prefixes (pview, padd, …): handled by ``person_profile.handle_person_link``
+    - ttsaudio-… and gen_…: reply that the feature is not available yet
+    - no payload: generic welcome message
+
+    An unrecognized payload gets a reply asking the user to tap the Anki button again.
+
+    根據 payload 前綴分派到不同工作流：
+
+    - rec-{FieldName}-{Index}-{Card_ID}: Workflow B 啟動錄音
+    - del-{FieldName}-{Index}-{Card_ID}: Workflow C 刪除條目
+    - addaudio-{FieldName}-{Index}-{Card_ID}: 上傳現成音檔
+    - 人脈卡前綴（pview、padd…）: 交給 ``person_profile.handle_person_link``
+    - ttsaudio-… 與 gen_…: 回覆功能尚未開放
+    - 無 payload: 一般歡迎訊息
+
+    無法辨識的 payload 會回覆請使用者回 Anki 重新點按鈕。
 
     Args:
-        message: Telegram 訊息物件。The Telegram message object.
-        anki_client: 注入的 AnkiClient。Injected AnkiClient instance.
-        user_state_manager: 注入的使用者狀態管理器。
-            Injected UserStateManager instance.
+        message: the Telegram message
+            Telegram 訊息物件
+        anki_client: the injected AnkiConnect client
+            注入的 AnkiClient
+        user_state_manager: the injected user state manager
+            注入的使用者狀態管理器
+        card_service: the injected card service, used for deletion and person-card links
+            注入的 CardService，供刪除條目與人脈卡連結使用
+        state: the aiogram FSM context, needed by person-card links; without it they are refused
+            aiogram FSM 上下文，人脈卡連結需要它；沒有時拒絕處理
+        note_service: the injected note service, needed by person-card links; without it they are refused
+            注入的筆記服務，人脈卡連結需要它；沒有時拒絕處理
     """
     args = message.text.split()[1:] if message.text else []
 
@@ -257,27 +280,35 @@ async def _handle_delete_entry(
     card_service: "CardService",
     action: DeleteEntryAction,
 ) -> None:
-    """處理 Workflow C 的刪除邏輯。
+    """Handle the Workflow C deletion logic.
 
-    Handle the Workflow C deletion logic.
+    處理 Workflow C 的刪除邏輯。
 
-    JSON 欄位的讀寫一律經由 `AnkiJsonFieldManager`（S065）：這些欄位的儲存
-    格式並不一致——經語音流程寫入的 `Recordings_*` 是 HTML 轉義過的
-    （`&quot;`），而匯入腳本直寫的 `References_*` 是未轉義的原始 JSON。
-    直接 `json.loads` 只在後者碰巧成立，刪除錄音時必定失敗。
+    All JSON field reads and writes go through ``AnkiJsonFieldManager`` (S065): the stored format is not uniform —
+    ``Recordings_*`` written by the voice flow are HTML-escaped (``&quot;``), while ``References_*`` written directly
+    by import scripts are raw JSON. A bare ``json.loads`` only happens to work for the latter and always fails when
+    deleting a recording.
 
-    All JSON field reads and writes go through `AnkiJsonFieldManager` (S065):
-    the stored format is not uniform — `Recordings_*` written by the voice
-    flow are HTML-escaped (`&quot;`), while `References_*` written directly by
-    import scripts are raw JSON. A bare `json.loads` only happens to work for
-    the latter and always fails when deleting a recording.
+    JSON 欄位的讀寫一律經由 ``AnkiJsonFieldManager``（S065）：這些欄位的儲存
+    格式並不一致——經語音流程寫入的 ``Recordings_*`` 是 HTML 轉義過的
+    （``&quot;``），而匯入腳本直寫的 ``References_*`` 是未轉義的原始 JSON。
+    直接 ``json.loads`` 只在後者碰巧成立，刪除錄音時必定失敗。
+
+    Only References, Recordings, Prompt_Audios, and the trilingual ``References_*`` / ``Recordings_*`` fields may be
+    deleted from. The index is a number or ``last``; an out-of-range index means the card display is probably stale.
+
+    只能刪除 References、Recordings、Prompt_Audios 與三語卡的 ``References_*`` / ``Recordings_*`` 欄位。
+    索引為數字或 ``last``；越界多半代表卡片畫面還沒更新。
 
     Args:
-        message: Telegram 訊息物件。The Telegram message object.
-        anki_client: 注入的 AnkiClient。Injected AnkiClient instance.
-        card_service: 注入的 CardService，供 JSON 欄位安全寫回。Injected
-            CardService used for safe JSON field write-back.
-        action: 刪除條目的動作模型。The delete-entry action model.
+        message: the Telegram message
+            Telegram 訊息物件
+        anki_client: the injected AnkiConnect client
+            注入的 AnkiClient
+        card_service: the injected card service, used for the safe JSON field write-back
+            注入的 CardService，供 JSON 欄位安全寫回
+        action: the delete-entry action model
+            刪除條目的動作模型
     """
     from app.services.task_handlers.shared.trilingual_lang import LANG_CODES
 
@@ -396,12 +427,13 @@ async def _handle_delete_entry(
 
 @router.message(Command("help"))
 async def command_help_handler(message: Message) -> None:
-    """處理 /help 指令。
+    """Handle the /help command.
 
-    Handle the /help command.
+    處理 /help 指令。
 
     Args:
-        message: Telegram 訊息物件。The Telegram message object.
+        message: the Telegram message
+            Telegram 訊息物件
     """
     help_text = (
         "📚 <b>FluencyTides 使用指南</b>\n\n"
@@ -441,14 +473,23 @@ async def command_sync_handler(
     anki_client: AnkiClient,
     relation_service: RelationService,
 ) -> None:
-    """處理 /sync 指令，同步並清理孤兒關聯。
+    """Handle the /sync command: sync with Anki and prune orphan relations.
 
-    Handle the /sync command: sync with Anki and prune orphan relations.
+    處理 /sync 指令，同步並清理孤兒關聯。
+
+    Forced cleanup is not offered on TG; when the service layer refuses, the reply points to the web Knowledge Graph.
+    Every failure is reported as "nothing deleted", because all deletions run in one transaction.
+
+    TG 不提供強制清理；服務層拒絕時，回覆會指向網頁的 Knowledge Graph。所有刪除在同一個 transaction 裡，
+    所以任何失敗都回報「未刪除任何關聯」。
 
     Args:
-        message: Telegram 訊息物件。The Telegram message object.
-        anki_client: 注入的 AnkiClient。Injected AnkiClient instance.
-        relation_service: 注入的 RelationService。Injected RelationService.
+        message: the Telegram message
+            Telegram 訊息物件
+        anki_client: the injected AnkiConnect client
+            注入的 AnkiClient
+        relation_service: the injected relation service
+            注入的 RelationService
     """
     # 掃描 Anki 現有筆記、清掉指向已刪筆記的關聯（服務層會先與 AnkiWeb 同步一次）。
     # Anki 回 0 張、或要刪超過一半時服務層會拒絕；TG 不提供強制清理，需要時改用網頁知識圖譜的「同步」。

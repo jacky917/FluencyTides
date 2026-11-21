@@ -1,15 +1,19 @@
-"""執行期設定服務(唯讀):後端 runtime 對帳資訊。
+"""Runtime configuration service (read-only): backend runtime reconciliation info.
 
-Runtime configuration service (read-only): backend runtime reconciliation info.
+執行期設定服務(唯讀):後端 runtime 對帳資訊。
+
+Corresponds to plan docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5. The original whitelist settings
+(``MODIFY_*`` and the temporary settings of ``/setconfig``) were replaced by capability routing (capability routing
+plan capability_routing_FEAT_2026-10-19.md §7, §8.4); only the diagnostic runtime block remains in this file.
 
 對應計畫 docs/archive/runtime_config_service_FEAT_2026-08-29.md §3.5。原本的白名單設定
 (``MODIFY_*``、``/setconfig`` 的暫時設定)已由能力路由取代(能力路由計畫
 capability_routing_FEAT_2026-10-19.md §7、§8.4),本檔只剩診斷用的 runtime 區塊。
-The ``MODIFY_*`` whitelist was replaced by capability routing; only the
-diagnostics block remains.
+
+Framework-free: it does not import fastapi or aiogram; callers (the REST router) map results to HTTP semantics
+themselves.
 
 框架無關:不 import fastapi/aiogram,呼叫端(REST router)自行把結果轉成 HTTP 語意。
-Framework-free: callers map results to HTTP semantics themselves.
 """
 
 from __future__ import annotations
@@ -30,32 +34,45 @@ from app.services import capability_route_service
 logger = logging.getLogger(__name__)
 
 class RuntimeConfigService:
-    """後端 runtime 對帳資訊的讀取服務。Read service for the runtime block."""
+    """The read service for backend runtime reconciliation info.
+
+    後端 runtime 對帳資訊的讀取服務。
+    """
 
     async def get_runtime_info(
         self, app_state: Any, check_auth: bool = False
     ) -> dict[str, Any]:
-        """取得後端 runtime 對帳資訊(計畫 §3.5 的 ``runtime`` 區塊)。
+        """Get the backend runtime reconciliation info (the ``runtime`` block of plan §3.5).
 
-        Build the backend runtime reconciliation block.
+        取得後端 runtime 對帳資訊(計畫 §3.5 的 ``runtime`` 區塊)。
 
         Args:
-            app_state: FastAPI 的 ``app.state``(取活的 llm_client 用)。
-                The FastAPI ``app.state`` carrying the live llm_client.
-            check_auth: True 時實際打一次最小 model request(haiku)驗證
-                token 認證——會消耗一次極小的訂閱請求,故由呼叫端明確
-                要求才做。When True, fire one minimal haiku request to
-                genuinely verify authentication (costs one tiny request).
+            app_state: the FastAPI ``app.state`` (used to get the live llm_client)
+                FastAPI 的 ``app.state``(取活的 llm_client 用)
+            check_auth: if ``True``, actually send one minimal model request (haiku) to verify token
+                authentication; it costs one tiny subscription request, so it is done only when the caller
+                explicitly asks
+                ``True`` 時實際打一次最小 model request(haiku)驗證 token 認證——會消耗一次極小的訂閱請求,
+                故由呼叫端明確要求才做
 
         Returns:
-            dict: ``llm_label``(全域 client 算好的顯示標籤,client 為 None
-            時為 None)、``llm_client_matches_global``(該 client 是否與全域 * 目前的設定
-            一致;無法比對時為 None)、``llm_provider``(全域設定生效的端點 ID;組不出
+            a dict with ``llm_label`` (the display label computed by the global client; ``None`` when the client is
+            ``None``), ``llm_client_matches_global`` (whether that client matches the current global ``*``
+            setting; ``None`` when they cannot be compared), ``llm_provider`` (the endpoint ID the global setting
+            resolves to; falls back to ``LLM_PROVIDER`` in .env when the list cannot be built),
+            ``anki_connect_url`` (the Anki endpoint the backend actually connects to, for script start-up
+            reconciliation), the ``claude_code`` environment diagnostic block when the global endpoint is a CLI
+            type (``None`` otherwise), and the capability routing ``capability_routes`` (the effective setting and
+            source of each capability of each route) and ``llm_endpoints`` (endpoints and whitelists, without
+            keys)
+            dict:``llm_label``(全域 client 算好的顯示標籤,client 為 ``None``
+            時為 ``None``)、``llm_client_matches_global``(該 client 是否與全域 * 目前的設定
+            一致;無法比對時為 ``None``)、``llm_provider``(全域設定生效的端點 ID;組不出
             清單時退回 .env 的 ``LLM_PROVIDER``)、
             ``anki_connect_url``(後端實際連線的 Anki 端點,供腳本啟動對帳)、
-            全域端點為 CLI 型時的 ``claude_code`` 環境診斷區塊(其他為 None),
+            全域端點為 CLI 型時的 ``claude_code`` 環境診斷區塊(其他為 ``None``),
             以及能力路由的 ``capability_routes``(每個用途各能力生效的設定與來源)
-            與 ``llm_endpoints``(端點與白名單,不含金鑰)。
+            與 ``llm_endpoints``(端點與白名單,不含金鑰)
         """
         llm_client = getattr(app_state, "llm_client", None)
         # model_label 是 BaseLLMClient 的公開標籤屬性;過渡期仍容忍只有
@@ -97,11 +114,15 @@ class RuntimeConfigService:
 
     @staticmethod
     async def _capability_routes() -> tuple[dict[str, Any], dict[str, Any] | None]:
-        """各用途生效的設定(與 ``GET /api/v1/capability-routes`` 的 ``routes`` 同格式)。
+        """Return every route's effective setting (same format as ``routes`` of ``GET /api/v1/capability-routes``).
 
-        Every route's effective setting, plus the global ``llm`` state itself.
+        回傳各用途生效的設定(與 ``GET /api/v1/capability-routes`` 的 ``routes`` 同格式)。
 
         Returns:
+            ``({"routes": [...], "db_unavailable": bool}, llm state of the global *)``. When the list cannot be
+            built (an unexpected error, including the global * missing from the list), returns
+            ``({"error": "<type>: <message>"}, None)`` and logs the traceback, because the diagnostic endpoint
+            must still report while degraded instead of failing entirely because of this block.
             ``({"routes": [...], "db_unavailable": bool}, 全域 * 的 llm 狀態)``。組不出清單時
             (非預期錯誤,含清單裡找不到全域 *)回 ``({"error": "<型別>: <訊息>"}, None)`` 並記下
             traceback——診斷端點要能帶病回報,不因這一塊整個失敗。
@@ -119,9 +140,13 @@ class RuntimeConfigService:
 
     @staticmethod
     def _llm_endpoints() -> dict[str, Any]:
-        """端點與白名單(不含金鑰),以及設定有誤被跳過的端點與原因。
+        """Return the endpoints and their whitelists (without keys), plus misconfigured endpoints that were skipped.
 
-        Every endpoint and its whitelist (never keys), plus skipped ones.
+        回傳端點與白名單(不含金鑰),以及設定有誤被跳過的端點與原因。
+
+        Returns:
+            ``{"endpoints": [...], "skipped": ...}``; endpoints are sorted by ID
+            ``{"endpoints": [...], "skipped": ...}``;端點依 ID 排序
         """
         return {
             "endpoints": [
@@ -143,30 +168,43 @@ class RuntimeConfigService:
     async def _probe_claude_code(
         llm_client: Any, check_auth: bool = False, provider: str = CLAUDE_CODE_PROVIDER
     ) -> dict[str, Any]:
-        """探測 claude-code 執行環境(CLI 路徑/版本/認證模式)。
+        """Probe the claude-code runtime environment (CLI path / version / credential mode).
 
-        Probe the claude-code runtime environment (CLI path, version,
-        credential mode).
+        探測 claude-code 執行環境(CLI 路徑/版本/認證模式)。
+
+        The version probe actually runs ``claude --version`` (the core of deployment verification: it proves the
+        binary exists in the container and can run); on failure the error summary goes into ``cli_version_error``
+        instead of raising, because the diagnostic endpoint must still report "what is broken" when the
+        environment is broken.
 
         版本探測實際執行 ``claude --version``(部署驗證的核心:證明容器內
         binary 存在且可執行);失敗時把錯誤摘要放進 ``cli_version_error``
         而不拋例外——診斷端點必須在環境壞掉時仍能回報「壞在哪」。
-        The version probe actually executes ``claude --version``; failures
-        are reported in-band so the endpoint stays useful when the
-        environment is broken.
 
         Args:
-            llm_client: 診斷用的全域 LLM client(取已解析的 CLI 路徑);None 表示
-                啟動時或最後一次改全域 * 後建立失敗。The global client, or None
-                when building it failed.
-            provider: 全域端點的類型(claude-code / antigravity),決定是否做
-                claude 專屬的探測。The global endpoint's type.
+            llm_client: the global LLM client used for diagnosis (to get the resolved CLI path); ``None`` means
+                building it failed at start-up or after the last change to the global *
+                診斷用的全域 LLM client(取已解析的 CLI 路徑);``None`` 表示
+                啟動時或最後一次改全域 * 後建立失敗
+            check_auth: if ``True``, also send one minimal haiku request to verify authentication (claude only)
+                ``True`` 時另外打一次最小 haiku 請求驗證認證(僅 claude)
+            provider: the global endpoint's type (claude-code / antigravity), which decides whether the
+                claude-specific probes run
+                全域端點的類型(claude-code / antigravity),決定是否做
+                claude 專屬的探測
 
         Returns:
-            dict: ``client_initialized`` / ``cli_path`` / ``cli_version``
+            a dict with ``client_initialized`` / ``cli_path`` / ``cli_version`` (or ``cli_version_error``) /
+            ``effort`` / ``oauth_token_configured`` (bool, never leaking the token value) /
+            ``oauth_token_format_ok`` and ``oauth_token_format_error`` / ``auth_check`` / ``account`` (the
+            subscription plan, see :meth:`_probe_account`); for non-claude CLI providers ``account`` (and
+            ``auth_check`` when requested) is ``unsupported``
+            dict:``client_initialized`` / ``cli_path`` / ``cli_version``
             (或 ``cli_version_error``)/ ``effort`` /
             ``oauth_token_configured``(bool,不洩漏 token 值)/
-            ``account``(訂閱方案,見 :meth:`_probe_account`)。
+            ``oauth_token_format_ok`` 與 ``oauth_token_format_error`` / ``auth_check`` /
+            ``account``(訂閱方案,見 ``_probe_account``);非 claude 的 CLI provider 的 ``account``
+            (有要求時連同 ``auth_check``)為 ``unsupported``
         """
         # 通用部分(CLI 路徑 / 版本 / effort)適用任何 CLI provider;token 格式、
         # `auth status --json`、haiku 實打三項是 claude 專屬,其他 CLI provider
@@ -283,16 +321,31 @@ class RuntimeConfigService:
 
     @staticmethod
     async def _probe_account(cli_path: str, llm_client: Any) -> dict[str, Any]:
-        """探測登入帳號的訂閱方案(``claude auth status --json``)。
+        """Probe the signed-in account's subscription plan (``claude auth status --json``).
 
-        Probe the signed-in account's subscription plan.
+        探測登入帳號的訂閱方案(``claude auth status --json``)。
+
+        Only **non-identifying** fields are kept: whether signed in, subscription type, auth method, and API
+        provider. The CLI also returns email / orgId / orgName, which are always dropped: this block is returned
+        publicly by an unauthenticated diagnostic endpoint, and the plan is operational info while account
+        identity is not.
 
         只取**非識別性**欄位:是否登入、訂閱型別、認證方式、API 供應方。
         CLI 同時會回傳 email / orgId / orgName,那些一律丟棄——本區塊由
         無認證的診斷端點對外回傳,方案是運維資訊,帳號識別不是。
-        Only non-identifying fields are kept; the email / org identifiers
-        the CLI also returns are dropped, because this block is exposed by
-        an unauthenticated diagnostic endpoint.
+
+        Two limits (measured 2026-09-04):
+        1. The granularity is only ``max`` / ``pro``; it **does not distinguish Max 5x from 20x**, because the
+           multiplier is not in any non-interactive output.
+        2. **Under injected-token auth the whole account profile is absent from the output.** Measured field
+           sets: on-disk credential mode returns 8 fields (including email / orgId / orgName /
+           subscriptionType), injected-token mode returns only 4 (``loggedIn`` / ``authMethod`` /
+           ``apiProvider`` / ``analyticsDisabled``), and the profile **keys do not exist at all**. A reasonable
+           explanation is that the profile is saved to disk by the desktop sign-in flow, while a bare token has
+           no such record and ``auth status`` makes no network request for it (inferred from the field sets, not
+           from reading the CLI source). Container deployment is the latter, so the plan is ``None``; this is the
+           CLI's behavior, not a probe failure. Also note that in that mode ``loggedIn: true`` only means "a token
+           is set"; proving the token really authenticates still needs the real request of ``auth_check``.
 
         兩層限制(2026-09-04 實測):
         1. 粒度只到 ``max`` / ``pro``,**不區分 Max 5x 與 20x**——倍率不在
@@ -307,27 +360,32 @@ class RuntimeConfigService:
            原始碼)。容器部署正是後者,故方案為 None——CLI 的行為,不是探測
            失敗。另注意該模式的 ``loggedIn: true`` 只代表「token 已設定」,
            要證明 token 真能通過認證仍得靠 ``auth_check`` 的實打請求。
-        Neither the Max multiplier nor, under injected-token auth, the
-        subscription type itself is exposed by the CLI.
+
+        What it does not do: when token mode yields no plan, it does **not** re-probe with the default
+        environment. On-disk credentials may belong to another account, and reporting that account's plan would be
+        reporting wrong information.
 
         不做的事:token 模式拿不到方案時**不**改用預設環境重探。落盤憑證
         可能屬於另一個帳號,回報那個帳號的方案等於報錯資訊。
-        Deliberately does not re-probe without the injected credentials:
-        on-disk credentials may belong to a different account.
+
+        It runs with the client's credential environment: the container authenticates with an injected token and
+        has no on-disk credentials, so the default environment would misreport it as signed out.
 
         帶著 client 的認證環境跑:容器以注入 token 認證、沒有落盤憑證,
         用預設環境會誤報未登入。
-        Runs with the client's credential environment so headless
-        token-based setups are not misreported as signed out.
 
         Args:
-            cli_path: 已解析的 CLI 路徑。Resolved CLI path.
-            llm_client: 活的 LLM client(取認證環境)。The live client.
+            cli_path: the resolved CLI path
+                已解析的 CLI 路徑
+            llm_client: the live LLM client (for the credential environment)
+                活的 LLM client(取認證環境)
 
         Returns:
-            dict: ``status`` 為 ``ok`` 時帶 ``logged_in`` /
+            a dict; when ``status`` is ``ok`` it carries ``logged_in`` / ``subscription_type`` / ``auth_method`` /
+            ``api_provider``; when the probe fails it is ``unknown`` plus ``detail``
+            dict:``status`` 為 ``ok`` 時帶 ``logged_in`` /
             ``subscription_type`` / ``auth_method`` / ``api_provider``;
-            探測不到時為 ``unknown`` 加 ``detail``。
+            探測不到時為 ``unknown`` 加 ``detail``
         """
         env = llm_client._build_env() if hasattr(llm_client, "_build_env") else None
 

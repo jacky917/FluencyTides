@@ -1,4 +1,4 @@
-"""Telegram Bot 套件。
+"""Telegram Bot package.
 
-Telegram Bot package.
+Telegram Bot 套件。
 """

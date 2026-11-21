@@ -1,29 +1,28 @@
-"""
+"""MinIO media access REST API router module.
+
 MinIO 媒體存取 REST API 路由模組。
-
-本模組定義了 /api/v1/storage/ 前綴下的所有端點，
-提供媒體檔案的上傳、列表、預簽名 URL 取得、刪除等功能。
-
-當前定位（Phase 2）：獨立的媒體存取 API，尚未與卡片生成流程整合。
-
-設計原則（嚴格遵守 Clean Architecture）：
-    - Controller 層零業務邏輯：僅負責接收請求、委託 Service、回傳結果。
-    - 所有業務邏輯封裝在 StorageService 中。
-    - 所有端點均受 API Key 認證保護。
-
-MinIO media access REST API router module.
 
 This module defines all endpoints under the /api/v1/storage/ prefix,
 providing media file upload, listing, presigned URL retrieval, and deletion.
 
+本模組定義了 /api/v1/storage/ 前綴下的所有端點，
+提供媒體檔案的上傳、列表、預簽名 URL 取得、刪除等功能。
+
 Current positioning (Phase 2): a standalone media access API, not yet
 integrated with the card generation flow.
+
+當前定位（Phase 2）：獨立的媒體存取 API，尚未與卡片生成流程整合。
 
 Design principles (strict Clean Architecture):
     - Zero business logic in controllers: they only receive requests,
       delegate to the service, and return results.
     - All business logic is encapsulated in StorageService.
     - Every endpoint is protected by API key authentication.
+
+設計原則（嚴格遵守 Clean Architecture）：
+    - Controller 層零業務邏輯：僅負責接收請求、委託 Service、回傳結果。
+    - 所有業務邏輯封裝在 StorageService 中。
+    - 所有端點均受 API Key 認證保護。
 """
 
 import logging
@@ -66,20 +65,21 @@ async def upload_file(
     ),
     storage_service: StorageService = Depends(get_storage_service),
 ) -> StorageUploadResponse:
-    """上傳媒體檔案的 Controller 端點。
+    """Upload a media file.
 
-    Controller endpoint for uploading a media file.
+    上傳媒體檔案。
 
     Args:
-        file: 上傳的檔案。The uploaded file.
-        prefix: 物件名稱前綴。Object name prefix.
-        storage_service: 注入的 StorageService 實例。
-            Injected StorageService instance.
+        file: the uploaded file
+            上傳的檔案
+        prefix: the object name prefix; an empty string means no prefix
+            物件名稱前綴；空字串表示不加前綴
+        storage_service: the injected StorageService instance
+            注入的 StorageService 實例
 
     Returns:
-        StorageUploadResponse 包含物件名稱、大小與預簽名 URL。
-        StorageUploadResponse containing the object name, size, and
-        presigned URL.
+        the object name, bucket name, size, and presigned URL (empty string if none was generated)
+        物件名稱、儲存桶名稱、大小與預簽名 URL（未產生時為空字串）
     """
     result = await storage_service.upload_media(
         file=file,
@@ -109,18 +109,19 @@ async def list_files(
     ),
     storage_service: StorageService = Depends(get_storage_service),
 ) -> StorageListResponse:
-    """列出媒體檔案的 Controller 端點。
+    """List media files.
 
-    Controller endpoint for listing media files.
+    列出媒體檔案。
 
     Args:
-        prefix: 物件名稱前綴過濾。Object name prefix filter.
-        storage_service: 注入的 StorageService 實例。
-            Injected StorageService instance.
+        prefix: the object name prefix to filter by; ``None`` means all files
+            物件名稱前綴過濾；``None`` 為全部檔案
+        storage_service: the injected StorageService instance
+            注入的 StorageService 實例
 
     Returns:
-        StorageListResponse 包含檔案列表與總數。
-        StorageListResponse containing the file list and total count.
+        the file list and total count
+        檔案列表與總數
     """
     files = await storage_service.list_media(prefix=prefix)
     return StorageListResponse(
@@ -148,19 +149,21 @@ async def get_presigned_url(
     ),
     storage_service: StorageService = Depends(get_storage_service),
 ) -> StoragePresignedUrlResponse:
-    """取得預簽名 URL 的 Controller 端點。
+    """Return a presigned download URL.
 
-    Controller endpoint for obtaining a presigned download URL.
+    取得預簽名下載 URL。
 
     Args:
-        object_name: 物件名稱（含路徑前綴）。Object name (with path prefix).
-        expires_days: URL 有效天數。Number of days the URL stays valid.
-        storage_service: 注入的 StorageService 實例。
-            Injected StorageService instance.
+        object_name: the object name (with its path prefix)
+            物件名稱（含路徑前綴）
+        expires_days: the number of days the URL stays valid, 1 to 7
+            URL 有效天數，1 到 7
+        storage_service: the injected StorageService instance
+            注入的 StorageService 實例
 
     Returns:
-        StoragePresignedUrlResponse 包含 URL 與有效期限。
-        StoragePresignedUrlResponse containing the URL and its expiry.
+        the URL and its validity period
+        URL 與有效期限
     """
     url = await storage_service.get_download_url(
         object_name=object_name,
@@ -186,13 +189,14 @@ async def delete_file(
     object_name: str,
     storage_service: StorageService = Depends(get_storage_service),
 ) -> None:
-    """刪除媒體檔案的 Controller 端點。
+    """Delete a media file.
 
-    Controller endpoint for deleting a media file.
+    刪除媒體檔案。
 
     Args:
-        object_name: 物件名稱（含路徑前綴）。Object name (with path prefix).
-        storage_service: 注入的 StorageService 實例。
-            Injected StorageService instance.
+        object_name: the object name (with its path prefix)
+            物件名稱（含路徑前綴）
+        storage_service: the injected StorageService instance
+            注入的 StorageService 實例
     """
     await storage_service.delete_media(object_name=object_name)

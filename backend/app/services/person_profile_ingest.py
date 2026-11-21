@@ -1,10 +1,20 @@
-"""
-人脈卡「用一段話記錄」：一段文字（或語音轉成的文字）經 LLM 整理成一筆互動、待追蹤與人物資料的
+"""Person card "record in one paragraph": the LLM turns a text into suggestions the user picks before writing.
+
+人脈卡「用一段話記錄」：一段文字經 LLM 整理成建議，使用者勾選後才寫入。
+
+A text (or text transcribed from speech) is structured by the LLM into suggestions for one interaction, follow-ups,
+and profile data; nothing is written until the user picks them (person card plan §3.13 P5).
+
+一段文字（或語音轉成的文字）經 LLM 整理成一筆互動、待追蹤與人物資料的
 建議；使用者勾選後才寫入（人脈卡計畫書 §3.13 P5）。
 
-Person profile "record in one paragraph": an LLM turns free text into an
-interaction, follow-ups and profile suggestions; nothing is written until
-the user picks them.
+- The LLM and speech-to-text use the capability routing route key ``person_profile`` (configurable through
+  ``/setconfig``).
+- The LLM's suggestions get a format check here first (invalid ones are dropped), and the handler validates them
+  once more when writing.
+- A text field suggestion either replaces the field or is appended to it; a suggestion for a changing field
+  (interests, position, and so on) either "adds an entry" or "strikes out an entry", and the dates are always
+  filled in by the system (registration date plan §4.6).
 
 - LLM 與語音轉文字走能力路由的用途鍵 ``person_profile``（``/setconfig`` 可設定）。
 - LLM 的建議在這裡先過一次格式檢查（不合格的丟掉），寫入時 handler 還會再驗證一次。
@@ -54,8 +64,11 @@ INGEST_ROUTE = route("person_profile", "人脈卡：整理一段話", capabiliti
 
 WEEKDAYS = "一二三四五六日"
 
+#: The text fields the LLM may suggest replacing or appending to. The display name and contact dates are maintained
+#: by the user or the system; the introducer is another note's ID, which the LLM cannot know; changing fields go
+#: through the add / strike-out of :data:`PERSON_HISTORY_FIELDS`.
 #: LLM 可以建議取代或接在後面的文字欄位。稱呼與聯絡日由使用者或系統維護；介紹人是另一筆筆記的 ID，
-#: LLM 無從得知；會變的欄位走 :data:`PERSON_HISTORY_FIELDS` 的新增、劃掉。Text fields the LLM may suggest.
+#: LLM 無從得知；會變的欄位走 ``PERSON_HISTORY_FIELDS`` 的新增、劃掉。
 UPDATABLE_FIELDS: tuple[str, ...] = tuple(
     name
     for name in PersonCreateParams.model_fields
@@ -70,13 +83,20 @@ _TAG = re.compile(r"<[^>]+>")
 
 @dataclass(frozen=True)
 class Proposal:
-    """一項建議。One suggestion.
+    """One suggestion.
+
+    一項建議。
 
     Attributes:
-        kind: ``interaction``、``followup``、``goal``、``field``、``history_add`` 或 ``history_end``。The kind.
-        data: 互動、待追蹤或目標的項目（已驗證；目標另附 ``reason``）；文字欄位的建議為 ``{"field", "value", "mode", "reason"}``；
-            新增一筆為 ``{"field", "item", "text", "reason"}``（``item`` 交給 ``add_history``）；
-            劃掉一筆為 ``{"field", "index", "fingerprint", "text", "reason"}``。
+        kind: ``interaction``, ``followup``, ``goal``, ``field``, ``history_add``, or ``history_end``
+            ``interaction``、``followup``、``goal``、``field``、``history_add`` 或 ``history_end``
+        data: the interaction, follow-up, or goal item (validated; a goal also carries ``reason``); a text field
+            suggestion is ``{"field", "value", "mode", "reason"}``; adding an entry is
+            ``{"field", "item", "text", "reason"}`` (``item`` goes to ``add_history``); striking out an entry is
+            ``{"field", "index", "fingerprint", "text", "reason"}``
+            互動、待追蹤或目標的項目（已驗證；目標另附 ``reason``）；文字欄位的建議為
+            ``{"field", "value", "mode", "reason"}``；新增一筆為 ``{"field", "item", "text", "reason"}``
+            （``item`` 交給 ``add_history``）；劃掉一筆為 ``{"field", "index", "fingerprint", "text", "reason"}``
     """
 
     kind: str
@@ -84,7 +104,24 @@ class Proposal:
 
 
 def plain_text(value: str, limit: int = 300) -> str:
-    """欄位 HTML 轉成一行純文字（給 LLM 看）。A field's HTML as one line of text."""
+    """Convert a field's HTML to one line of plain text (for the LLM).
+
+    欄位 HTML 轉成一行純文字（給 LLM 看）。
+
+    Line breaks become 「；」, tags are removed, entities are unescaped, and whitespace is collapsed.
+
+    換行變成「；」，去掉標籤、還原實體字元、合併空白。
+
+    Args:
+        value: the field HTML; may be empty
+            欄位 HTML；可為空
+        limit: the maximum length; longer text is cut and ends with 「…」
+            最長長度；超過時截斷並加「…」
+
+    Returns:
+        the plain text
+        純文字
+    """
     text = html.unescape(_TAG.sub("", _BREAK.sub("；", value or "")))
     text = re.sub(r"\s+", " ", text).strip(" ；")
     return text if len(text) <= limit else text[:limit] + "…"
@@ -97,11 +134,19 @@ def _multiline(name: str) -> bool:
 
 
 def _history_lines(name: str, items: list[object]) -> tuple[list[str], list[str]]:
-    """會變的欄位給 LLM 看的：有效的每筆附編號（``#序號+1``，劃掉時用），以及過去的（劃掉的，或有離職年月的
-    職位）。每筆附事件時間與說明（:func:`entry_detail`，工作經歷與學歷有說明）；有效的另外附「登錄 日期」：寫法和事件時間
-    （「2015 起」）不同，LLM 才分得出哪個是那件事的時間、哪個只是記下的日子。
+    """Return what the LLM sees of a changing field: the active entries and the past ones.
 
-    The current entries numbered for "end" proposals, and the past ones.
+    回傳會變的欄位給 LLM 看的：有效的與過去的項目。
+
+    Each active entry is numbered (``#index+1``, used when striking it out); past entries are struck-out ones or
+    positions with an end date. Each entry carries its event time and description (:func:`entry_detail`; work
+    history and education have descriptions); active ones also carry 「登錄 日期」, written differently from the
+    event time (「2015 起」) so the LLM can tell which is the time of the event and which is just the day it was
+    recorded.
+
+    有效的每筆附編號（``#序號+1``，劃掉時用），以及過去的（劃掉的，或有離職年月的職位）。每筆附事件時間與說明
+    （``entry_detail``，工作經歷與學歷有說明）；有效的另外附「登錄 日期」：寫法和事件時間
+    （「2015 起」）不同，LLM 才分得出哪個是那件事的時間、哪個只是記下的日子。
     """
     current, past = [], []
     for index, item in enumerate(items):
@@ -119,9 +164,31 @@ def _history_lines(name: str, items: list[object]) -> tuple[list[str], list[str]
 
 
 def build_prompt(fields: dict[str, str], lists: dict[str, list[object]], text: str, today: date) -> str:
-    """組出提示：今天、這個人目前已知的資料（避免重複建議）、使用者記下的話、可更新的欄位。
+    """Render the prompt: today, what is already known about this person, the user's text, and updatable fields.
 
-    Render the prompt with today, the known profile, the text and the fields.
+    組出提示：今天、這個人目前已知的資料、使用者記下的話、可更新的欄位。
+
+    The known data is included to avoid repeated suggestions.
+
+    已知資料是為了避免重複建議。
+
+    Args:
+        fields: the person's current fields
+            這個人目前的欄位
+        lists: the parsed lists
+            解析好的清單
+        text: the text the user recorded
+            使用者記下的話
+        today: today's date
+            今天
+
+    Returns:
+        the prompt
+        提示
+
+    Raises:
+        TemplateEngineError: if the prompt template is broken
+            若提示詞模板有誤
     """
     known = [
         (name, PersonCreateParams.model_fields[name].title or name, plain_text(fields.get(name, "")))
@@ -171,12 +238,31 @@ def build_prompt(fields: dict[str, str], lists: dict[str, list[object]], text: s
 async def ingest(
     fields: dict[str, str], lists: dict[str, list[object]], text: str, today: date
 ) -> LLMPersonIngestResult:
-    """呼叫 LLM 整理一段話。Ask the LLM to structure the text.
+    """Ask the LLM to structure a text.
+
+    呼叫 LLM 整理一段話。
+
+    Args:
+        fields: the person's current fields
+            這個人目前的欄位
+        lists: the parsed lists
+            解析好的清單
+        text: the text the user recorded
+            使用者記下的話
+        today: today's date
+            今天
+
+    Returns:
+        the validated LLM result; turn it into proposals with :func:`proposals_from`
+        驗證過的 LLM 結果；以 ``proposals_from`` 整理成建議
 
     Raises:
-        LLMServiceError 等：LLM 呼叫失敗。When the LLM call fails.
-        LLMGenerationError: LLM 回傳的格式不符（訊息帶模型名稱）。On a malformed response.
-        TemplateEngineError: 提示詞模板有誤（程式或部署錯誤）。When the prompt template is broken.
+        LLMGenerationError: if the LLM response does not match the format (the message names the model)
+            若 LLM 回傳的格式不符（訊息帶模型名稱）
+        LLMServiceError: if the LLM call fails (or a related error)
+            若 LLM 呼叫失敗（或同類錯誤）
+        TemplateEngineError: if the prompt template is broken (a code or deployment error)
+            若提示詞模板有誤（程式或部署錯誤）
     """
     client = await INGEST_ROUTE.client()
     result = await client.generate_structured_data(
@@ -195,10 +281,25 @@ async def ingest(
 
 
 async def transcribe(audio: bytes, filename: str) -> str:
-    """語音轉文字（用途鍵 ``person_profile`` 的 ``stt`` 設定）。Speech to text.
+    """Transcribe speech to text (with the ``stt`` setting of route key ``person_profile``).
+
+    語音轉文字（用途鍵 ``person_profile`` 的 ``stt`` 設定）。
+
+    Args:
+        audio: the audio content
+            音檔內容
+        filename: the audio file name
+            音檔檔名
+
+    Returns:
+        the transcribed text
+        轉出的文字
 
     Raises:
-        STTServiceError、AudioEvaluatorUnavailableError：語音轉文字無法使用。When STT is unavailable.
+        AudioEvaluatorUnavailableError: if speech-to-text is unavailable
+            若語音轉文字無法使用
+        STTServiceError: if speech-to-text is unavailable
+            若語音轉文字無法使用
     """
     from app.infrastructure.audio_evaluator.factory import build_whisper
 
@@ -209,18 +310,28 @@ async def transcribe(audio: bytes, filename: str) -> str:
 def proposals_from(
     result: LLMPersonIngestResult, fields: dict[str, str], lists: dict[str, list[object]], today: date
 ) -> list[Proposal]:
-    """把 LLM 的結果整理成可勾選的建議：格式不對的丟掉（日期不對的互動改成今天）。
+    """Turn the LLM result into proposals the user can pick, dropping malformed ones.
 
-    Turn the LLM result into proposals, dropping malformed ones.
+    把 LLM 的結果整理成可勾選的建議：格式不對的丟掉。
+
+    An interaction whose date is invalid gets today's date instead.
+
+    日期不對的互動改成今天。
 
     Args:
-        result: LLM 的結果。The LLM result.
-        fields: 這個人目前的欄位（判斷文字欄位的建議是否重複）。The current fields.
-        lists: 解析好的清單（會變的欄位：找出要劃掉的那筆、判斷新增是否重複）。The parsed lists.
-        today: 今天。Today.
+        result: the LLM result
+            LLM 的結果
+        fields: the person's current fields (to tell whether a text field suggestion is a repeat)
+            這個人目前的欄位（判斷文字欄位的建議是否重複）
+        lists: the parsed lists (for changing fields: find the entry to strike out and tell whether an addition is
+            a repeat)
+            解析好的清單（會變的欄位：找出要劃掉的那筆、判斷新增是否重複）
+        today: today's date
+            今天
 
     Returns:
-        建議，依互動、待追蹤、目標、文字欄位、會變的欄位的順序。The proposals.
+        the proposals, in the order interaction, follow-ups, goals, text fields, changing fields
+        建議，依互動、待追蹤、目標、文字欄位、會變的欄位的順序
     """
     proposals: list[Proposal] = []
     interaction = result.interaction.model_dump()
@@ -331,7 +442,16 @@ def proposals_from(
 
 
 def _already_known(name: str, items: list[object], item: dict[str, object]) -> bool:
-    """新增建議是不是已經記過的（不必再列給使用者勾）。Whether a suggested entry is already recorded.
+    """Return whether a suggested entry is already recorded (no need to list it for the user to pick).
+
+    回傳新增建議是不是已經記過的（不必再列給使用者勾）。
+
+    - Ordinary fields: it matches an active entry, and this time it brings neither an event time that entry still
+      lacks nor a new description (if it does, the handler fills them in).
+    - Current position: a current position with the same name exists, and this time it brings neither a start date
+      that entry still lacks nor a new description (if it does, the handler fills them in).
+    - Past position: one with the same name is still current (that should be handled by ``end``; adding another
+      would make two entries), or company, job title, start, and end are all the same.
 
     - 一般欄位：和某筆有效的內容相同，而且這次沒帶來那一筆還空著的事件時間或新的說明（有的話 handler 會補進去）。
     - 現職：同名的現職已經有，而且這次沒帶來那一筆還空著的到職年月或新的說明（有的話 handler 會補進去）。
@@ -368,10 +488,16 @@ def _already_known(name: str, items: list[object], item: dict[str, object]) -> b
 
 
 def _position_item(change: IngestListUpdate, today: date) -> dict[str, object] | None:
-    """職位的新增建議：公司、職稱，加上任職起訖與說明。年月有問題時不丟掉整筆：看不懂的到職拿掉；看不懂的
-    離職填 ``?``（LLM 給了離職就是以前的工作，拿掉會變成現職）；前後顛倒時拿掉到職、離職改成 ``?``。
+    """Build the suggested position entry: company and job title, plus start, end, and description.
 
-    The suggested position; unusable periods are degraded, not the whole entry.
+    職位的新增建議：公司、職稱，加上任職起訖與說明。
+
+    A problem with the dates does not drop the whole entry: an unreadable start is removed; an unreadable end
+    becomes ``?`` (an end from the LLM means a past position, and removing it would make it current); when start and
+    end are reversed, the start is removed and the end becomes ``?``.
+
+    年月有問題時不丟掉整筆：看不懂的到職拿掉；看不懂的
+    離職填 ``?``（LLM 給了離職就是以前的工作，拿掉會變成現職）；前後顛倒時拿掉到職、離職改成 ``?``。
     """
     # 公司與職稱都可以空（§17）：只有任職時間或說明的經歷也留著，整筆全空的由模型擋
     item: dict[str, object] = {"company": change.value.strip(), "title": change.job_title.strip(),
@@ -400,7 +526,23 @@ def _position_item(change: IngestListUpdate, today: date) -> dict[str, object] |
 
 
 def _add_periods(name: str, item: dict[str, object], change: IngestListUpdate) -> None:
-    """職位以外的事件時間（:data:`HISTORY_PERIOD_KEYS`）：``time_start`` 放第一個鍵、``time_end`` 放第二個
+    """Put the suggested event times of a non-position field (:data:`HISTORY_PERIOD_KEYS`) on the entry.
+
+    職位以外的事件時間（``HISTORY_PERIOD_KEYS``）放進項目。
+
+    ``time_start`` goes to the first key and ``time_end`` to the second (graduation for education). Unusable times
+    are degraded rather than dropping the whole entry (times can be added later with a long press), and each case is
+    logged to help tune the prompt:
+
+    - An unreadable time is skipped.
+    - When the whole entry fails validation (for example graduation before enrollment), all times are removed.
+    - Times the field does not use (``time_end`` for a field with one time key, any time for a field without
+      times) are not used.
+    - When a splittable field suggests several items at once (「登山、潛水」), no time is set: writing splits them
+      into several entries, and the same time on each would be recorded wrongly (TG does not ask for times when
+      several interests are entered at once either).
+
+    ``time_start`` 放第一個鍵、``time_end`` 放第二個
     （學歷的畢業）。降級而不丟掉整筆（時間之後可以長按補），每種都記 log 方便調提示詞：
 
     - 看不懂的那個時間略過。
@@ -408,8 +550,6 @@ def _add_periods(name: str, item: dict[str, object], change: IngestListUpdate) -
     - 這個欄位用不到的時間（只有一個時間鍵的欄位給了 ``time_end``、沒有時間的欄位給了時間）不用。
     - 可切的欄位一次建議了好幾項（「登山、潛水」）時不放時間：寫入時會切成多筆，同一個時間套到每一筆會記錯
       （TG 一次輸入多個興趣時也不問時間）。
-
-    Put the suggested times on the entry; unusable times are dropped, not the entry.
     """
     keys = HISTORY_PERIOD_KEYS.get(name, ())
     raws = (change.time_start, change.time_end)
@@ -437,7 +577,14 @@ def _add_periods(name: str, item: dict[str, object], change: IngestListUpdate) -
 
 
 def _history_item(name: str, value: str, job_title: str, today: date) -> dict[str, object] | None:
-    """新增建議的一筆（以該欄位的模型檢查，日期由系統填）；格式不對時為 None。The entry, or None."""
+    """Build one entry for an add suggestion, checked with the field's model and dated by the system.
+
+    新增建議的一筆（以該欄位的模型檢查，日期由系統填）。
+
+    Returns ``None`` if the value is malformed.
+
+    格式不對時為 ``None``。
+    """
     entries = history_from_text(name, value, today.isoformat(), title=job_title)
     if not entries:
         return None
@@ -454,6 +601,24 @@ def _history_item(name: str, value: str, job_title: str, today: date) -> dict[st
 
 
 def field_html(field: str, current: str, value: str, mode: str) -> str:
-    """欄位建議要寫入的 HTML（接在後面的分隔見 :func:`append_field_html`）。The field HTML to write."""
+    """Return the HTML to write for a field suggestion.
+
+    回傳欄位建議要寫入的 HTML。
+
+    Args:
+        field: the field name (currently unused)
+            欄位名稱（目前沒有用到）
+        current: the field's current HTML
+            欄位目前的 HTML
+        value: the suggested plain text; it is escaped and line breaks become ``<br>``
+            建議的純文字；會跳脫並把換行換成 ``<br>``
+        mode: ``append`` to append to ``current`` (the separator is described in :func:`append_field_html`);
+            anything else replaces it
+            ``append`` 時接在 ``current`` 後面（分隔見 ``append_field_html``）；其他值則取代
+
+    Returns:
+        the field HTML to write
+        要寫入的欄位 HTML
+    """
     new = html.escape(value.strip()).replace("\n", "<br>")
     return append_field_html(current, new) if mode == "append" else new

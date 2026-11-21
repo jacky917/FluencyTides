@@ -1,12 +1,48 @@
-"""
+"""Text structured-output client over the native Gemini SDK (google-genai) (plan D7).
+
 Gemini 原生 SDK（google-genai）文字結構化輸出客戶端（計畫 D7）。
+
+``LLM_PROVIDER=google`` goes through Google's OpenAI-compatible endpoint, which does not recognize
+``safety_settings`` (sending it gives a straight 400), so the safety thresholds are always Google's defaults;
+yet galgame lines are exactly the content most likely to trigger refusals. The native SDK's
+``GenerateContentConfig`` accepts ``safety_settings`` directly, and this client sets all four categories to
+``BLOCK_NONE``.
+
+Differences from the OpenAI-compatible :class:`~app.infrastructure.llm.client.LLMClient`:
+
+- the system prompt goes through ``system_instruction``, is not merged into contents, and the schema is not
+  copied into the prompt (native structured output is enforced server-side, so the relays' second safeguard is
+  unnecessary)
+- the schema is sent as ``response_json_schema``, flattened first with ``resolve_json_schema``. Tests on
+  2026-10-14 (google-genai 2.10.0 / gemini-3.1-pro-preview) of four combinations (``response_json_schema`` /
+  ``response_schema`` × raw ``$defs`` / flattened) were all accepted, with output passing Pydantic validation;
+  flattening is done to send the same schema as the other providers, ruling out ``$ref`` resolution differences
+  as a variable
+- transport-level transient errors (5xx, dropped connections, transport-layer timeouts) use the exponential
+  backoff of ``BaseLLMClient._retry_transient`` (1 second, 2 seconds). The SDK's tenacity retry is off by
+  default, but when aiohttp is installed the SDK's async requests always go through aiohttp, and the aiohttp path
+  has its own built-in retry for connection errors (waiting a random 1–10 seconds first, which cannot be turned
+  off); this client's backoff stacks on top of it
+- 429 / RESOURCE_EXHAUSTED is **not** retried here and raises ``LLMQuotaError`` directly: when the quota or the
+  per-minute rate is exhausted, second-level backoff cannot outlast the quota window, and the generation scripts'
+  grading table pauses for 60 seconds
+
+Content-level failures (empty content, truncation, bad JSON, refusal) use the same retry count and interval as
+``LLMClient`` (3 attempts, a fixed 2 seconds), and the last attempt's failure form decides the exception
+subclass; when comparing refusal rates against the google path, the retry counts must match to be comparable.
+The two sides do not define a refusal exactly the same way (see ``_REFUSAL_REASONS`` and the main loop's
+comments), which must be accounted for in the comparison.
+
+Dependencies:
+    - google-genai: the native Gemini SDK (this module is loaded only when the factory selects it)
+    - aiohttp / httpx: the SDK's two transport layers, used to recognize connection-type transient errors
 
 ``LLM_PROVIDER=google`` 走的是 Google 的 OpenAI 相容端點，該端點不認識
 ``safety_settings``（傳了直接 400），安全閾值永遠是 Google 預設——而 galgame
 台詞正是最容易觸發拒答的內容。原生 SDK 的 ``GenerateContentConfig`` 直接收
 ``safety_settings``，本客戶端四類一律 ``BLOCK_NONE``。
 
-與 OpenAI 相容 :class:`~app.infrastructure.llm.client.LLMClient` 的差異：
+與 OpenAI 相容 ``LLMClient`` 的差異：
 
 - system prompt 走 ``system_instruction``，不併入 contents，也不把 schema 抄進
   prompt（原生 structured output 由服務端強制，不需要中轉站那層雙重保險）
@@ -27,18 +63,9 @@ Gemini 原生 SDK（google-genai）文字結構化輸出客戶端（計畫 D7）
 時，重試次數須一致才可比。拒答的認定兩邊並不完全相同（見 ``_REFUSAL_REASONS``
 與主迴圈的註解），比對時要把這點算進去。
 
-English summary:
-    Structured-output client over the native google-genai SDK. Unlike the
-    OpenAI-compatible path it can send ``safety_settings`` (all four
-    categories at ``BLOCK_NONE``), uses ``system_instruction`` and
-    ``response_json_schema``. Transport-level transient errors use the base
-    exponential-backoff helper; quota errors surface immediately as
-    ``LLMQuotaError``; content-level failures retry like ``LLMClient`` and
-    the last attempt's failure picks the exception subclass.
-
-Dependencies:
-    - google-genai: 原生 Gemini SDK（本模組只在被工廠選中時才載入）。
-    - aiohttp / httpx: SDK 的兩種傳輸層，用於辨識連線類瞬時錯誤。
+依賴：
+    - google-genai：原生 Gemini SDK（本模組只在被工廠選中時才載入）
+    - aiohttp / httpx：SDK 的兩種傳輸層，用於辨識連線類瞬時錯誤
 """
 
 import asyncio
@@ -135,10 +162,14 @@ _ERROR_MESSAGE_LIMIT = 500
 
 
 def _is_transient(error: BaseException) -> bool:
-    """網路層瞬時錯誤：5xx 與連線 / 逾時類傳輸例外。429 刻意不在此列（見模組說明）。
+    """Return whether an error is a transport-level transient error: 5xx or a connection / timeout exception.
 
-    Transport-level transient errors: 5xx and connection/timeout transport
-    exceptions. 429 is deliberately excluded (see module docstring).
+    回傳是否為網路層瞬時錯誤：5xx 與連線 / 逾時類傳輸例外。
+
+    429 is deliberately excluded (see the module docstring), and the deterministic subclasses in
+    ``_NON_TRANSIENT_TRANSPORT_ERRORS`` are never transient.
+
+    429 刻意不在此列（見模組說明）；``_NON_TRANSIENT_TRANSPORT_ERRORS`` 中的確定性子類一律不算瞬時。
     """
     if isinstance(error, _NON_TRANSIENT_TRANSPORT_ERRORS):
         return False
@@ -146,9 +177,13 @@ def _is_transient(error: BaseException) -> bool:
 
 
 def _reason_name(reason: object) -> str:
-    """把 SDK 的 enum 轉成大寫名稱；None 回空字串。純字串也能正規化（防禦性）。
+    """Convert an SDK enum to its upper-case name; ``None`` gives an empty string.
 
-    Normalize an SDK enum to its upper-case name; also accepts plain strings.
+    把 SDK 的 enum 轉成大寫名稱；None 回空字串。
+
+    Plain strings are normalized too (defensively).
+
+    純字串也能正規化（防禦性）。
     """
     if reason is None:
         return ""
@@ -156,22 +191,27 @@ def _reason_name(reason: object) -> str:
 
 
 def _api_error_summary(error: errors.APIError) -> str:
-    """APIError 的精簡描述：狀態碼、狀態名、人看的訊息。
+    """Return a compact description of an APIError: status code, status name, and the human-readable message.
 
-    Compact ``code status: message`` description of an APIError.
+    APIError 的精簡描述：狀態碼、狀態名、人看的訊息。
+
+    ``str(error)`` is deliberately not used: it embeds the whole response JSON, and the generation scripts grade by
+    substring matching (``"429"`` / ``"PROHIBITED_CONTENT"``), so these strings appearing by chance in the details
+    would cause misjudgments. The full content is written to the log separately. The message is truncated to
+    ``_ERROR_MESSAGE_LIMIT`` characters.
 
     刻意不用 ``str(error)``：它會嵌入整包回應 JSON，而生成腳本以子字串比對
     分級（``"429"`` / ``"PROHIBITED_CONTENT"``），details 裡碰巧出現這些字就會
-    誤判。完整內容另寫進 log。
+    誤判。完整內容另寫進 log。訊息截斷到 ``_ERROR_MESSAGE_LIMIT`` 字元。
     """
     message = (error.message or "（無訊息）")[:_ERROR_MESSAGE_LIMIT]
     return f"{error.code} {error.status or 'UNKNOWN'}: {message}"
 
 
 def _describe_error(error: BaseException) -> str:
-    """網路層重試耗盡時寫進訊息的錯誤描述（交給 ``_retry_transient``）。
+    """Return the error description written into the message when transport-level retries are exhausted.
 
-    Error description for the transient-retry exhaustion message.
+    網路層重試耗盡時寫進訊息的錯誤描述（交給 ``_retry_transient``）。
     """
     if isinstance(error, errors.APIError):
         return _api_error_summary(error)
@@ -179,9 +219,13 @@ def _describe_error(error: BaseException) -> str:
 
 
 def _client_error_hint(error: errors.APIError) -> str | None:
-    """依 details 的 ErrorInfo.reason（優先）或狀態碼給出設定提示。
+    """Return a configuration hint based on ErrorInfo.reason in the details (preferred) or the status code.
 
-    Configuration hint from ErrorInfo.reason (preferred) or the status code.
+    依 details 的 ErrorInfo.reason（優先）或狀態碼給出設定提示。
+
+    Returns ``None`` when there is no hint for the error.
+
+    沒有對應提示時回 None。
     """
     body = error.details if isinstance(error.details, dict) else {}
     error_body = body.get("error")
@@ -195,12 +239,25 @@ def _client_error_hint(error: errors.APIError) -> str | None:
 
 
 class GeminiNativeLLMClient(BaseLLMClient):
-    """使用 google-genai 原生 SDK 的結構化輸出客戶端。
+    """Structured-output client that uses the native google-genai SDK.
 
-    Structured-output client using the native google-genai SDK.
+    使用 google-genai 原生 SDK 的結構化輸出客戶端。
 
     Attributes:
-        _client: google-genai Client 實例。The google-genai client.
+        MAX_RETRIES: the number of content-level attempts (empty content / truncation / bad JSON / refusal), the
+            same as ``LLMClient``
+            內容層重試次數（空內容 / 截斷 / 壞 JSON / 拒答），與 LLMClient 相同
+        RETRY_DELAY_SECONDS: the fixed wait between content-level attempts, in seconds
+            內容層嘗試之間的固定等待秒數
+        TRANSIENT_MAX_RETRIES: the number of transport-level transient attempts inside each content-level attempt
+            每次內容層嘗試內部的網路層瞬時錯誤重試次數
+        TRANSIENT_BASE_DELAY_SECONDS: the first transport-level backoff in seconds, doubled each time
+            網路層首次退避秒數，之後每次加倍
+        REQUEST_TIMEOUT_SECONDS: the absolute limit of a single request (including SDK-internal behavior), applied
+            with ``asyncio.timeout`` around the whole call
+            單次請求（含 SDK 內部行為）的絕對上限，以 ``asyncio.timeout`` 包住整次呼叫
+        _client: the google-genai Client instance
+            google-genai Client 實例
     """
 
     PROVIDER_NAME: ClassVar[str] = "gemini-native"
@@ -226,22 +283,28 @@ class GeminiNativeLLMClient(BaseLLMClient):
         effort: EffortArg = None,
         endpoint: Endpoint | None = None,
     ) -> None:
-        """以端點的金鑰（或 ``LLM_API_KEY``）建立 google-genai Client。
+        """Create the google-genai Client with the endpoint's key (or ``LLM_API_KEY``).
 
-        Create the google-genai client from the endpoint's key, or from
-        ``LLM_API_KEY`` when no endpoint is given.
+        以端點的金鑰（或 ``LLM_API_KEY``）建立 google-genai Client。
+
+        Without an endpoint the key is ``LLM_API_KEY`` (the Google native and OpenAI-compatible endpoints share the
+        same key); a URL means nothing for this provider and is ignored.
 
         未指定端點時金鑰沿用 ``LLM_API_KEY``（Google 原生與 OpenAI 相容端點共用
         同一把 key）；網址對此 provider 無意義，忽略。
 
         Args:
-            model: 覆寫模型名；None 沿用 ``LLM_MODEL_NAME``。Model override.
-            effort: 本 provider 不支援；給值即拋錯。Unsupported; rejected.
-            endpoint: 端點；None 讀 ``LLM_API_KEY``。The endpoint, or None.
+            model: the model-name override; ``None`` keeps ``LLM_MODEL_NAME``
+                覆寫模型名；None 沿用 ``LLM_MODEL_NAME``
+            effort: not supported by this provider; giving a value raises
+                本 provider 不支援；給值即拋錯
+            endpoint: the endpoint; ``None`` reads ``LLM_API_KEY``
+                端點；None 讀 ``LLM_API_KEY``
 
         Raises:
-            LLMServiceError: 端點類型不符、effort 給值、金鑰未設定、模型名為空，
-                或 SDK Client 建立失敗時。
+            LLMServiceError: if the endpoint type mismatches, effort is given, the key is not set, the model name is
+                empty, or creating the SDK Client fails
+                若端點類型不符、effort 給值、金鑰未設定、模型名為空，或 SDK Client 建立失敗
         """
         self._check_endpoint_type(endpoint)
         if endpoint is not None:
@@ -274,23 +337,32 @@ class GeminiNativeLLMClient(BaseLLMClient):
         user_prompt: str,
         response_schema: dict[str, object],
     ) -> LLMGenerateResult:
-        """呼叫 Gemini 並取得嚴格符合 ``response_schema`` 的 JSON 資料。
+        """Call Gemini and obtain JSON data that strictly conforms to ``response_schema``.
 
-        Call Gemini and obtain JSON strictly conforming to the schema.
+        呼叫 Gemini 並取得嚴格符合 ``response_schema`` 的 JSON 資料。
 
         Args:
-            system_prompt: 系統提示，走 ``system_instruction``。System prompt.
-            user_prompt: 使用者輸入。User input.
-            response_schema: JSON Schema 定義字典。JSON Schema dict.
+            system_prompt: the system prompt, sent as ``system_instruction``
+                系統提示，走 ``system_instruction``
+            user_prompt: the user input
+                使用者輸入
+            response_schema: the JSON Schema definition dict
+                JSON Schema 定義字典
 
         Returns:
-            LLMGenerateResult 實例。An LLMGenerateResult.
+            an ``LLMGenerateResult`` instance
+            ``LLMGenerateResult`` 實例
 
         Raises:
-            LLMRefusalError: 最後一次嘗試仍為安全拒答。
-            LLMRetryExhaustedError: 多次重試後仍為空內容、截斷或非有效 JSON。
-            LLMQuotaError: 429 / 額度耗盡。
-            LLMServiceError: 其他 API 失敗（含瞬時錯誤重試耗盡、逾時、設定錯誤）。
+            LLMQuotaError: on 429 / exhausted quota
+                429 / 額度耗盡
+            LLMRefusalError: if the last attempt is still a safety refusal
+                若最後一次嘗試仍為安全拒答
+            LLMRetryExhaustedError: if empty content, truncation, or invalid JSON persists after every retry
+                若多次重試後仍為空內容、截斷或非有效 JSON
+            LLMServiceError: on other API failures (including exhausted transient retries, timeouts, configuration
+                errors)
+                其他 API 失敗（含瞬時錯誤重試耗盡、逾時、設定錯誤）
         """
         logger.info(
             "LLM 結構化生成請求 -> model: %s, user_prompt 長度: %d 字元",
@@ -375,15 +447,21 @@ class GeminiNativeLLMClient(BaseLLMClient):
     async def _request(
         self, user_prompt: str, config: types.GenerateContentConfig
     ) -> types.GenerateContentResponse:
-        """送出一次請求（含網路層瞬時重試），把 SDK 例外映射成 LLMServiceError 族。
+        """Send one request (with transport-level transient retries), mapping SDK exceptions to LLMServiceError types.
 
-        Send one request (with transport-level transient retries) and map SDK
-        exceptions onto the ``LLMServiceError`` family.
+        送出一次請求（含網路層瞬時重試），把 SDK 例外映射成 LLMServiceError 族。
+
+        Returns:
+            the SDK response
+            SDK 回應
 
         Raises:
-            LLMQuotaError: 429 / RESOURCE_EXHAUSTED（不重試）。
-            LLMServiceError: 瞬時錯誤重試耗盡、逾時、其他 4xx（附設定提示），
-                或任何非預期例外（訊息帶型別名，log 帶 traceback）。
+            LLMQuotaError: on 429 / RESOURCE_EXHAUSTED (not retried)
+                429 / RESOURCE_EXHAUSTED（不重試）
+            LLMServiceError: on exhausted transient retries, a timeout, other 4xx (with a configuration hint), or any
+                unexpected exception (the message carries the type name, the log carries the traceback)
+                瞬時錯誤重試耗盡、逾時、其他 4xx（附設定提示），
+                或任何非預期例外（訊息帶型別名，log 帶 traceback）
         """
         try:
             return await self._retry_transient(
@@ -423,10 +501,13 @@ class GeminiNativeLLMClient(BaseLLMClient):
 
     @staticmethod
     def _refusal_or_finish_reason(response: types.GenerateContentResponse) -> str:
-        """取出停止原因：prompt 被擋時回 block_reason，否則回首個候選的 finish_reason。
+        """Return the stop reason: block_reason when the prompt was blocked, otherwise the first finish_reason.
 
-        Return the prompt's block_reason when the prompt itself was blocked,
-        otherwise the first candidate's finish_reason (upper-case name).
+        取出停止原因：prompt 被擋時回 block_reason，否則回首個候選的 finish_reason。
+
+        The value is the upper-case name; an empty string when there is no candidate.
+
+        值為大寫名稱；沒有候選時為空字串。
         """
         feedback = response.prompt_feedback
         block_reason = _reason_name(feedback.block_reason if feedback else None)
@@ -437,12 +518,15 @@ class GeminiNativeLLMClient(BaseLLMClient):
 
     @staticmethod
     def _reason_message(response: types.GenerateContentResponse) -> str:
-        """Google 附的人讀原因（block_reason_message / finish_message），供 log 用。
+        """Return Google's human-readable reason (block_reason_message / finish_message), for the log.
 
-        Google's human-readable block/finish message, if any.
+        Google 附的人讀原因（block_reason_message / finish_message），供 log 用。
+
+        For blocks such as JAILBREAK / OTHER / LANGUAGE, the reason code alone does not explain the cause; these two
+        fields are the only explanation Google gives. An empty string when neither is present.
 
         JAILBREAK / OTHER / LANGUAGE 等封鎖只有 reason 代碼時無從判斷原因，
-        這兩個欄位是 Google 給的唯一解釋。
+        這兩個欄位是 Google 給的唯一解釋。兩者皆無時為空字串。
         """
         feedback = response.prompt_feedback
         if feedback and feedback.block_reason_message:
@@ -452,17 +536,22 @@ class GeminiNativeLLMClient(BaseLLMClient):
 
     @staticmethod
     def _raise_final(reason: str, failure: str) -> None:
-        """依最後一次嘗試的失敗型態拋出對應子類，訊息一律帶 finish_reason。
+        """Raise the subclass matching the last attempt's failure form; every message carries the finish_reason.
 
-        Raise the subclass matching the last attempt's failure; every message
-        carries the finish/block reason.
+        依最後一次嘗試的失敗型態拋出對應子類，訊息一律帶 finish_reason。
+
+        The refusal and empty-content messages contain the skip-sentence marker string of the generation scripts'
+        grading table; bad JSON (including half JSON from truncation) keeps LLMClient's original wording without the
+        marker and takes the scripts' general failure path.
 
         拒答與空內容的訊息含生成腳本分級表的跳句識別字串；壞 JSON（含截斷造成的
         半截 JSON）沿用 LLMClient 的原句，不含識別字串，走腳本的一般失敗路徑。
 
         Raises:
-            LLMRefusalError: 安全拒答。
-            LLMRetryExhaustedError: 空內容、截斷或壞 JSON。
+            LLMRefusalError: on a safety refusal
+                安全拒答
+            LLMRetryExhaustedError: on empty content, truncation, or bad JSON
+                空內容、截斷或壞 JSON
         """
         reason_text = reason or "UNKNOWN"
         if failure == "refusal":

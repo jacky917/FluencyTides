@@ -1,10 +1,48 @@
-"""
+"""Structured-output client module for the Antigravity CLI (headless) (plan D8).
+
 Antigravity CLI (headless) 結構化輸出客戶端模組（計畫 D8）。
+
+Uses the locally logged-in Antigravity CLI (``agy``) for structured generation, with exactly the same external
+interface as the other providers. The subprocess call, schema flattening, payload re-validation, repair retries,
+path resolution, and audit writing all live in :class:`~app.infrastructure.llm.cli_base.HeadlessCliLLMClient`;
+this class only provides agy's own command line, stdin format, environment isolation, and envelope triage.
+
+The usage boundary is the same as claude-code: only for user-initiated, finite batch jobs of one's own.
+
+Key design decisions (all backed by measurements on 2026-10-14, see the "measurement record" in §D8 of the plan
+``llm_provider_hierarchy_FEAT_2026-09-06.md``):
+
+- **stdin uses stream-json**: ``-p`` requires a value and does not read stdin (the ``-`` in ``-p -`` is taken as
+  a literal prompt), and putting a long prompt on the command line hits the Windows command-line length limit.
+  ``--input-format stream-json`` is used instead, with stdin sending one line ``{"event":"user",...}``; the
+  output is stream-json as well (NDJSON, split only on ``\\n``), and the last ``event=result`` line is taken
+- **read ``structured_output``, not ``response``**: ``--json-schema`` is enforced by the CLI, the model takes an
+  extra step calling the ``finish`` tool, and the result is placed in the envelope's separate
+  ``structured_output``; the ``response`` text mixes prose with extra fields such as ``toolAction``
+- **the system prompt is folded into stdin**: agy has no ``--system-prompt``, so it goes as a
+  ``<system>…</system>`` block before the user prompt (end-to-end tests produced compliant output)
+- **HOME / USERPROFILE isolation**: print mode reads ``~/.gemini/GEMINI.md`` (in tests the model quoted the
+  user's development rules verbatim) and stores sessions under ``~/.gemini``. Pointing them at a dedicated
+  directory isolates both; on Windows the credentials are in the system keyring, so authentication is unaffected
+- **tools**: print mode opens about 60 tools by default; writing files inside the workspace needs no permission,
+  and running commands is denied automatically (the envelope carries ``denied_actions``, and ``status`` is still
+  SUCCESS but without a result). The workdir must be a dedicated empty directory; a denial without a result is
+  treated as a retryable failure, and leftover files in the workdir log a warning
+- **auto-update disabled**: during testing agy upgraded itself from 1.1.27 to 1.3.5, and flag behavior changed
+  with it. ``AGY_CLI_DISABLE_AUTO_UPDATE=1`` is set, and the user updates the version manually with
+  ``agy update``
+- **``--model`` takes the base name** (``gemini-3.8-flash``), with thinking depth given separately as
+  ``--effort``; the ``-<effort>`` suffix listed by ``agy models`` is a combined display name, and passing it to
+  ``--model`` is rejected
+- **error triage looks at the gRPC status name**: the ``error`` field's fixed form is
+  ``<STATUS_NAME> (code N)``, and matching the status name is more stable than guessing English wording; stderr
+  is consulted only when ``error`` is empty. Temporary service unavailability (on the test day about 40% of calls
+  hit 503) is marked as a transient failure, retried by the base after backing off
 
 以本機已登入的 Antigravity CLI（``agy``）完成結構化生成，對外介面與其他
 provider 完全相同。subprocess 呼叫、schema 展平、payload 複核、修復重試、
 路徑解析與審計落盤都在
-:class:`~app.infrastructure.llm.cli_base.HeadlessCliLLMClient`；本類只提供
+``HeadlessCliLLMClient``；本類只提供
 agy 專屬的命令列、stdin 格式、環境隔離與信封分流。
 
 使用邊界與 claude-code 相同：僅供使用者手動發起、有始有終的自有批次任務。
@@ -35,14 +73,6 @@ agy 專屬的命令列、stdin 格式、環境隔離與信封分流。
   ``<STATUS_NAME> (code N)``，比對狀態名比猜英文措辭穩定；只有 ``error`` 為空時
   才退回看 stderr。服務端暫時不可用（實測當天約四成呼叫遇到 503）標為暫時性
   失敗，由基底退避後重試
-
-English summary:
-    Headless Antigravity CLI client. Sends the prompt over stream-json
-    stdin (``-p`` cannot read stdin), reads the CLI-enforced
-    ``structured_output`` instead of the free-text ``response``, folds the
-    system prompt into stdin, isolates HOME so the user's GEMINI.md and
-    conversation history stay out, disables the CLI's self-update, and
-    triages errors by their gRPC status name.
 """
 
 import json
@@ -111,14 +141,17 @@ _NO_TOOLS_FEEDBACK = (
 
 
 class AntigravityLLMClient(HeadlessCliLLMClient):
-    """以 Antigravity CLI (headless) 產生結構化 JSON 的客戶端。
+    """Client that produces structured JSON through the Antigravity CLI (headless).
 
-    Client producing structured JSON via the headless Antigravity CLI.
+    以 Antigravity CLI (headless) 產生結構化 JSON 的客戶端。
 
     Attributes:
-        _cli_path: 已解析的 agy 執行檔絕對路徑。Resolved CLI path.
-        _model_name: 送給 ``--model`` 的基底模型名。Base model name.
-        _effort: 送給 ``--effort`` 的力度。Effort level.
+        _cli_path: the resolved path of the agy executable
+            已解析的 agy 執行檔路徑
+        _model_name: the base model name sent to ``--model``
+            送給 ``--model`` 的基底模型名
+        _effort: the effort sent to ``--effort``; ``None`` omits the flag
+            送給 ``--effort`` 的力度；None 時省略此旗標
     """
 
     PROVIDER_NAME: ClassVar[str] = "antigravity"
@@ -147,22 +180,32 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
         effort: EffortArg = None,
         endpoint: Endpoint | None = None,
     ) -> None:
-        """驗證與路徑解析全在基底；本覆寫另建專用 home 並記初始化 log。
+        """Initialize the client; validation and path resolution all happen in the base.
 
-        Validation and path resolution happen in the base (effort, model
-        name, CLI path); this override prepares the dedicated home.
+        驗證與路徑解析全在基底；本覆寫另建專用 home 並記初始化 log。
+
+        The base handles effort, model name, and CLI path; this override also creates the dedicated home (when HOME
+        isolation is enabled) and logs the initialization.
+
+        基底處理 effort、模型名與 CLI 路徑；本覆寫另建專用 home（啟用 HOME 隔離時）並記初始化 log。
 
         Args:
-            model: 覆寫模型名（基底名，如 ``gemini-3.8-flash``）；None 沿用
-                ``LLM_MODEL_NAME``。Model override.
-            effort: 覆寫思考深度；None 沿用 ``LLM_ANTIGRAVITY_EFFORT``，
-                ``OMIT_EFFORT`` 不傳 ``--effort``。Effort override.
-            endpoint: 內建 ``antigravity`` 端點。The built-in endpoint.
+            model: the model-name override (the base name, for example ``gemini-3.8-flash``); ``None`` keeps
+                ``LLM_MODEL_NAME``
+                覆寫模型名（基底名，如 ``gemini-3.8-flash``）；None 沿用 ``LLM_MODEL_NAME``
+            effort: the thinking-depth override; ``None`` keeps ``LLM_ANTIGRAVITY_EFFORT``, ``OMIT_EFFORT`` sends no
+                ``--effort``
+                覆寫思考深度；None 沿用 ``LLM_ANTIGRAVITY_EFFORT``，``OMIT_EFFORT`` 不傳 ``--effort``
+            endpoint: the built-in ``antigravity`` endpoint
+                內建 ``antigravity`` 端點
 
         Raises:
-            LLMServiceError: effort 非白名單值、模型名為空、
+            LLMServiceError: if the endpoint type mismatches, effort is not an allowlisted value, the model name is
+                empty, ``LLM_ANTIGRAVITY_CLI_PATH`` points to a missing file, the agy executable cannot be found, or
+                the dedicated home cannot be created
+                若端點類型不符、effort 非白名單值、模型名為空、
                 ``LLM_ANTIGRAVITY_CLI_PATH`` 指向不存在的檔案、找不到 agy 執行檔，
-                或無法建立專用 home 時。
+                或無法建立專用 home
         """
         super().__init__(model=model, effort=effort, endpoint=endpoint)
         if settings.LLM_ANTIGRAVITY_ISOLATE_HOME:
@@ -175,9 +218,13 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
 
     @property
     def home_dir(self) -> Path:
-        """隔離用的專用 home：工作目錄旁的 ``<workdir>_home``。
+        """The dedicated home used for isolation: ``<workdir>_home`` next to the working directory.
 
-        The dedicated home used for isolation, next to the workdir.
+        隔離用的專用 home：工作目錄旁的 ``<workdir>_home``。
+
+        Deliberately not inside the workdir: the workdir is agy's workspace, where the model can list and write
+        files, and it should not see its own session records. It starts empty, then each call accumulates one
+        session file, which is never cleaned up automatically.
 
         刻意不放在 workdir 裡面：workdir 是 agy 的 workspace，模型可以列出與寫入
         其中檔案，不該看得到自己的會話紀錄。初始為空，之後每次呼叫累積一個會話
@@ -192,7 +239,10 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
 
     @classmethod
     def _runtime(cls) -> CliRuntime:
-        """從 ``LLM_ANTIGRAVITY_*`` 設定組出執行參數。Runtime from settings."""
+        """Assemble the runtime parameters from the ``LLM_ANTIGRAVITY_*`` settings.
+
+        從 ``LLM_ANTIGRAVITY_*`` 設定組出執行參數。
+        """
         return CliRuntime(
             cli_path_setting=settings.LLM_ANTIGRAVITY_CLI_PATH,
             workdir_setting=settings.LLM_ANTIGRAVITY_WORKDIR,
@@ -202,11 +252,16 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
         )
 
     def _extra_cli_candidates(self) -> list[Path]:
-        """Windows 安裝路徑 ``%LOCALAPPDATA%\\agy\\bin\\agy.exe``。
+        """Return the Windows install path ``%LOCALAPPDATA%\\agy\\bin\\agy.exe``.
 
-        The Windows install location (2026-10-14 實測 A8). 官方安裝會把它加入
-        使用者 PATH，但在安裝前就已啟動的程序（後端、終端機）拿不到新的 PATH，
-        故留這個兜底。
+        Windows 安裝路徑 ``%LOCALAPPDATA%\\agy\\bin\\agy.exe``。
+
+        Measured on 2026-10-14 (A8). The official installer adds it to the user PATH, but processes started before
+        the install (the backend, terminals) do not get the new PATH, hence this fallback. Empty on non-Windows
+        systems or when ``LOCALAPPDATA`` is unset.
+
+        2026-10-14 實測 A8。官方安裝會把它加入使用者 PATH，但在安裝前就已啟動的程序（後端、終端機）
+        拿不到新的 PATH，故留這個兜底。非 Windows 或未設 ``LOCALAPPDATA`` 時為空。
         """
         local_appdata = os.environ.get("LOCALAPPDATA")
         if os.name != "nt" or not local_appdata:
@@ -214,9 +269,13 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
         return [Path(local_appdata) / "agy" / "bin" / "agy.exe"]
 
     def _build_command(self, system_prompt: str, schema_text: str) -> list[str]:
-        """組裝 CLI 命令列參數；system prompt 走 stdin（見 ``_build_stdin``）。
+        """Assemble the CLI command-line arguments; the system prompt goes through stdin (see ``_build_stdin``).
 
-        Assemble the CLI argument vector; the system prompt travels on stdin.
+        組裝 CLI 命令列參數；system prompt 走 stdin（見 ``_build_stdin``）。
+
+        When ``self._effort`` is ``None`` (``OMIT_EFFORT`` was received at construction), ``--effort`` is omitted and
+        agy uses its own default (verified to complete normally on 2026-10-15).
+
         ``self._effort`` 為 None（建構時收到 ``OMIT_EFFORT``）時省略 ``--effort``，
         由 agy 用自己的預設（2026-10-15 實測可正常完成）。
         """
@@ -236,27 +295,36 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
         ]
 
     def _build_stdin(self, system_prompt: str, user_prompt: str) -> str:
-        """組出一行 stream-json 使用者訊息，system prompt 以區塊併入。
+        """Compose one line of stream-json user message, with the system prompt folded in as a block.
 
-        Compose one stream-json user message with the system prompt folded in
-        as a delimited block (agy has no ``--system-prompt``). ``json.dumps``
-        會把內容中的 ``\\n`` 跳脫，整則訊息保證只佔一行。
+        組出一行 stream-json 使用者訊息，system prompt 以區塊併入。
+
+        agy has no ``--system-prompt``. ``json.dumps`` escapes the ``\\n`` in the content, so the whole message is
+        guaranteed to occupy one line (terminated by ``\\n``).
+
+        agy 沒有 ``--system-prompt``。``json.dumps`` 會把內容中的 ``\\n`` 跳脫，
+        整則訊息保證只佔一行（以 ``\\n`` 結尾）。
         """
         content = f"<system>\n{system_prompt}\n</system>\n\n{user_prompt}"
         message = {"event": "user", "message": {"role": "user", "content": content}}
         return json.dumps(message, ensure_ascii=False) + "\n"
 
     def _build_env(self) -> dict[str, str]:
-        """剔除 IDE 變數、關閉自動更新，並（預設）隔離 HOME。
+        """Scrub the IDE variables, disable auto-update, and (by default) isolate HOME.
 
-        Scrub IDE variables, disable self-update and, by default, isolate HOME.
+        剔除 IDE 變數、關閉自動更新，並（預設）隔離 HOME。
+
+        The base ``SCRUBBED_ENV_VARS`` is not used: the variable names the IDE sets are not fixed (tests saw only
+        some of them), so they are scrubbed by prefix. The isolation switch is read from settings on every call;
+        when it is off, GEMINI.md enters the generation context.
 
         不用基底的 ``SCRUBBED_ENV_VARS``：IDE 設的變數名不固定（實測只看到其中
         一部分），改以前綴剔除。隔離開關每次呼叫才讀設定；關閉時 GEMINI.md 會
         進入生成脈絡。
 
         Raises:
-            LLMServiceError: 無法建立專用 home 時。
+            LLMServiceError: if the dedicated home cannot be created
+                無法建立專用 home 時
         """
         env = super()._build_env()
         for name in list(env):
@@ -272,9 +340,13 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
     async def _invoke_cli(
         self, system_prompt: str, stdin_text: str, schema_text: str
     ) -> tuple[str, str]:
-        """執行 CLI 後檢查 workdir 是否仍為空。
+        """Run the CLI, then check whether the workdir is still empty.
 
-        Run the CLI, then check the workdir is still empty.
+        執行 CLI 後檢查 workdir 是否仍為空。
+
+        Writing files inside the workspace needs no permission (measurement A4): leftover files are seen by the
+        model on the next call, polluting context across calls, yet they never appear in ``denied_actions``. This
+        only logs a warning and deletes nothing, leaving the decision to the user.
 
         workspace 內寫檔不需許可（實測 A4）：留下的檔案會被下一次呼叫的模型看到，
         跨呼叫污染脈絡，卻不會出現在 ``denied_actions``。這裡只記警告、不刪除，
@@ -295,17 +367,21 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
         return output
 
     def _extract_result(self, stdout_text: str, stderr_text: str) -> str:
-        """取最後一個 ``event=result``，分流失敗，回傳 ``structured_output`` 的 JSON 文字。
+        """Take the last ``event=result``, triage failures, and return ``structured_output`` as JSON text.
 
-        Take the last ``event=result``, triage failures, and return the
-        ``structured_output`` serialized as JSON text.
+        取最後一個 ``event=result``，分流失敗，回傳 ``structured_output`` 的 JSON 文字。
 
         Raises:
-            LLMServiceError: 沒有任何事件（用法錯誤）、status 不明、模型選擇被拒、
-                未登入、CLI 自身逾時等致命失敗。
-            LLMQuotaError: 額度或速率限制。
-            _RetryableCliError: 服務暫時不可用、CLI 中途結束（暫時性）；工具被拒、
-                缺少結構化結果（附修復回饋）。
+            LLMQuotaError: on a quota or rate limit
+                額度或速率限制
+            LLMServiceError: on fatal failures such as no events at all (usage error), an unknown status, a rejected
+                model selection, not being logged in, or the CLI's own timeout
+                沒有任何事件（用法錯誤）、status 不明、模型選擇被拒、
+                未登入、CLI 自身逾時等致命失敗
+            _RetryableCliError: if the service is temporarily unavailable or the CLI ends midway (transient); or a
+                tool was denied or the structured result is missing (with repair feedback)
+                服務暫時不可用、CLI 中途結束（暫時性）；工具被拒、
+                缺少結構化結果（附修復回饋）
         """
         result = self._find_result_event(stdout_text, stderr_text)
 
@@ -348,7 +424,12 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
     # ------------------------------------------------------------------
 
     def _print_timeout_seconds(self) -> int:
-        """傳給 ``--print-timeout`` 的秒數：比 subprocess 逾時早觸發。
+        """Return the seconds passed to ``--print-timeout``, which fires before the subprocess timeout.
+
+        傳給 ``--print-timeout`` 的秒數：比 subprocess 逾時早觸發。
+
+        Settings are read on every call, so a settings change takes effect on the next one. The lower bound is 1
+        second, because agy 1.3.5 interprets 0 as unlimited.
 
         每次呼叫才讀設定，settings 改了下一次即生效。下限 1 秒——agy 1.3.5
         把 0 解讀為不限。
@@ -358,10 +439,18 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
         return max(1, math.floor(timeout - margin))
 
     def _ensure_home_dir(self) -> Path:
-        """建立（若不存在）專用 home。
+        """Create the dedicated home if it does not exist.
+
+        建立（若不存在）專用 home。
+
+        Returns:
+            the dedicated home path
+            專用 home 的路徑
 
         Raises:
-            LLMServiceError: 無法建立時——不讓它被基底包成「無法啟動 CLI」。
+            LLMServiceError: if it cannot be created; raised here so the base does not wrap it as "cannot start the
+                CLI"
+                無法建立時——不讓它被基底包成「無法啟動 CLI」
         """
         home = self.home_dir
         try:
@@ -375,18 +464,29 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
 
     @staticmethod
     def _find_result_event(stdout_text: str, stderr_text: str) -> dict[str, object]:
-        """從 stream-json 輸出由後往前找最後一個 ``event=result``。
+        """Search the stream-json output backwards for the last ``event=result``.
 
-        Find the last ``event=result`` event in the stream-json output.
+        從 stream-json 輸出由後往前找最後一個 ``event=result``。
+
+        Lines are split only on ``\\n`` (the NDJSON line boundary): ``str.splitlines()`` also splits on characters
+        such as U+2028 / U+0085, which would cut the result line when the generated content contains them.
 
         只以 ``\\n`` 分行（NDJSON 的行界）：``str.splitlines()`` 還會在
         U+2028 / U+0085 等字元切行，生成內容含這些字元時會把 result 行切斷。
 
+        Returns:
+            the ``result`` dict of that event
+            該事件的 ``result`` 字典
+
         Raises:
-            LLMServiceError: 一個事件、一行 JSON 都沒有——實測唯一觀察到的形態是
-                用法錯誤（只寫 stderr），屬確定性錯誤，不論 exit code 一律不重試。
-            _RetryableCliError: 有其他事件或被截斷的 JSON 行但沒有 result（CLI 中途
-                結束、輸出被截斷），視為暫時性失敗。
+            LLMServiceError: if there is not a single event or JSON line; the only form observed in tests is a usage
+                error (written only to stderr), a deterministic error that is never retried regardless of exit code
+                一個事件、一行 JSON 都沒有——實測唯一觀察到的形態是
+                用法錯誤（只寫 stderr），屬確定性錯誤，不論 exit code 一律不重試
+            _RetryableCliError: if there are other events or truncated JSON lines but no result (the CLI ended
+                midway, the output was truncated); treated as a transient failure
+                有其他事件或被截斷的 JSON 行但沒有 result（CLI 中途
+                結束、輸出被截斷），視為暫時性失敗
         """
         seen_events: list[str] = []
         undecodable = 0
@@ -419,10 +519,23 @@ class AntigravityLLMClient(HeadlessCliLLMClient):
         )
 
     def _raise_for_error_result(self, result: dict[str, object], stderr_text: str) -> None:
-        """分流 ``status=ERROR`` 的 result。Triage an error result.
+        """Triage a ``status=ERROR`` result; this method always raises.
+
+        分流 ``status=ERROR`` 的 result；此方法一律拋出例外。
+
+        The gRPC status name in the ``error`` field is checked first, then the wording; stderr is used only when
+        ``error`` is empty, because stderr mixes help text and logs whose numbers or words cause misjudgments.
 
         優先看 ``error`` 欄位的 gRPC 狀態名，再看措辭；只有 ``error`` 為空時才
         退回 stderr——stderr 混有說明與 log，裡面的數字或字眼會造成誤判。
+
+        Raises:
+            LLMQuotaError: on a quota or rate limit
+                額度或速率限制
+            LLMServiceError: if the model selection is rejected, authentication fails, or the CLI's own timeout hit
+                模型選擇被拒、認證失敗，或 CLI 自身逾時
+            _RetryableCliError: for every other error, as a transient failure
+                其餘錯誤，視為暫時性失敗
         """
         error_text = str(result.get("error") or "")
         source = error_text or stderr_text.strip()

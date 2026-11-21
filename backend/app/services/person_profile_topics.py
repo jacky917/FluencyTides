@@ -1,8 +1,15 @@
-"""
+"""Person card "AI insight and topics": the LLM first analyzes the person as a counselor, then suggests topics.
+
 人脈卡「AI 分析與話題」：LLM 以諮商師的角度先分析這個人，再推薦見面時可以聊的話題。
 
-Person profile "AI insight and topics": the LLM first reads the person like
-a counselor, then suggests conversation topics.
+Privacy: before anything is sent to the LLM, the names of the person and their family are replaced with tokens
+(``〔本人〕``, ``〔家人1〕``), and the real display names are restored afterwards. It is the most basic string
+matching: the full values of the name fields (the display name and its form without an honorific, the names in each
+language, the reading) and of family names, plus the given name alone (taken from fields written as "family given"
+separated by a space); kana names also get hiragana and katakana variants; any occurrence is replaced. Names of
+unregistered third parties are not masked. Fields unrelated to topics, such as contact details, sensitive topics,
+name mnemonics, and appearance, are not sent. For changing fields (interests, position, and so on), active entries
+are sent as usual, and struck-out ones are also sent, marked 「以前：」 (past events are conversation material too).
 
 隱私：送給 LLM 前，本人與家人的名字換成代號（``〔本人〕``、``〔家人1〕``），回來後再換回真正的稱呼。
 做法是最基本的字串比對：姓名欄位（稱呼與去掉敬稱的部分、各語言的姓名、讀音）與家人名字的完整值，
@@ -10,8 +17,8 @@ a counselor, then suggests conversation topics.
 沒有登記的第三者名字不會被遮。聯絡方式、敏感話題、名字記憶法、外貌等與話題無關的欄位不送。
 會變的欄位（興趣、職位等）有效的照常送，劃掉的也送並標成「以前：」（過去的事也是聊天素材）。
 
-Names of the person and their family are replaced with tokens before the
-LLM sees them and restored afterwards.
+- The LLM uses the capability routing route key ``person_profile.topics`` (falling back to ``person_profile`` when
+  not set separately).
 
 - LLM 走能力路由的用途鍵 ``person_profile.topics``（沒有另外設定時沿用 ``person_profile``）。
 """
@@ -37,31 +44,42 @@ logger = logging.getLogger(__name__)
 
 TOPICS_ROUTE = route("person_profile.topics", "人脈卡：分析與想話題", capabilities={"llm"})
 
-#: 本人的代號。The person's token.
+#: The person's token.
+#: 本人的代號。
 PERSON_TOKEN = "〔本人〕"
 
-#: 本人的姓名欄位（全部遮起來，不另外送）。The person's name fields.
+#: The person's name fields (all masked, never sent separately).
+#: 本人的姓名欄位（全部遮起來，不另外送）。
 NAME_FIELDS = ("Display_Name", "Name_ZH", "Name_EN", "Name_JA", "Name_JA_Kana", "Name_Romaji")
 
-#: 以空白分開「姓 名」的欄位裡，名字在第幾段（只寫名字時也要遮）。Where the given name sits.
+#: In fields written as "family given" separated by a space, which segment is the given name (also masked when
+#: written alone).
+#: 以空白分開「姓 名」的欄位裡，名字在第幾段（只寫名字時也要遮）。
 GIVEN_NAME_POSITION = {"Name_JA": -1, "Name_JA_Kana": -1, "Name_Romaji": -1, "Name_EN": 0}
 
+#: Fields never sent to the LLM: names (represented by tokens instead), data unrelated to topics or that should not
+#: leave, and retired fields (``Title``).
 #: 不送給 LLM 的欄位：姓名（另以代號表示）、與話題無關或不該外送的資料、不再使用的欄位（``Title``）。
-#: Fields never sent.
 EXCLUDED_FIELDS = (*NAME_FIELDS, "Honorific", "Name_Memo", "Appearance", "Sensitive", "Introducer_Note_ID",
                    "Contact_Cadence", *RETIRED_FIELDS)
 
-#: 稱呼後面常見的敬稱：還原時避免變成「田中さんさん」。Honorific suffixes.
+#: Common honorific suffixes after a display name, so restoring does not produce 「田中さんさん」.
+#: 稱呼後面常見的敬稱：還原時避免變成「田中さんさん」。
 HONORIFICS = ("さん", "くん", "君", "ちゃん", "さま", "様", "先生", "桑", "san")
 
 @dataclass
 class NameMask:
-    """名字 ↔ 代號的對照：送出前遮名字，回來後換回稱呼。Masks names and restores them.
+    """A name ↔ token mapping: names are masked before sending and restored to display names afterwards.
+
+    名字 ↔ 代號的對照：送出前遮名字，回來後換回稱呼。
 
     Attributes:
-        names: 名字 → 代號。Name to token.
-        restore: 代號 → 要換回的稱呼。Token to the display name.
-        family: 家人的代號與關係（給提示詞說明）。Family tokens with relations.
+        names: name → token
+            名字 → 代號
+        restore: token → the display name to restore
+            代號 → 要換回的稱呼
+        family: family tokens with their relations (explained in the prompt)
+            家人的代號與關係（給提示詞說明）
     """
 
     names: dict[str, str] = field(default_factory=dict)
@@ -69,9 +87,22 @@ class NameMask:
     family: list[tuple[str, str]] = field(default_factory=list)
 
     def add(self, token: str, display: str, names: list[str]) -> None:
-        """登記一個人：這些名字（稱呼另加去掉敬稱的部分；假名另加平假名、片假名兩種寫法）換成同一個代號。
+        """Register one person: these names all map to the same token.
 
-        Register a person's names (plus hiragana/katakana variants) under one token.
+        登記一個人：這些名字換成同一個代號。
+
+        Each name also registers its form without an honorific, and kana get both hiragana and katakana variants.
+        A name already registered keeps its first token.
+
+        每個名字另加去掉敬稱的部分；假名另加平假名、片假名兩種寫法。已登記的名字保留第一次的代號。
+
+        Args:
+            token: the person's token
+                這個人的代號
+            display: the display name restored in place of the token
+                代號要換回的稱呼
+            names: the names to mask; blank ones are ignored
+                要遮的名字；空白的會忽略
         """
         self.restore[token] = display
         for name in names:
@@ -82,13 +113,44 @@ class NameMask:
                         self.names.setdefault(variant, token)
 
     def mask(self, text: str) -> str:
-        """把登記過的名字換成代號：完整字串比對，長的先換（「田中さん」先於「田中」）。Replace names."""
+        """Replace registered names with their tokens.
+
+        把登記過的名字換成代號。
+
+        Matching is on whole strings, longest first (「田中さん」 before 「田中」).
+
+        完整字串比對，長的先換（「田中さん」先於「田中」）。
+
+        Args:
+            text: the text to mask
+                要遮的文字
+
+        Returns:
+            the masked text
+            遮好的文字
+        """
         for name in sorted(self.names, key=len, reverse=True):
             text = text.replace(name, self.names[name])
         return text
 
     def unmask(self, text: str) -> str:
-        """代號換回稱呼；稱呼已含敬稱時，去掉 LLM 在代號後面多加的敬稱。Restore the names."""
+        """Restore tokens to display names.
+
+        代號換回稱呼。
+
+        When the display name already has an honorific, an honorific the LLM added after the token is dropped;
+        otherwise it is kept.
+
+        稱呼已含敬稱時，去掉 LLM 在代號後面多加的敬稱；否則保留。
+
+        Args:
+            text: the text to restore
+                要還原的文字
+
+        Returns:
+            the restored text
+            還原後的文字
+        """
         for token, display in self.restore.items():
             suffix = "|".join(re.escape(h) for h in HONORIFICS)
             has_honorific = _strip_honorific(display) != display
@@ -101,12 +163,18 @@ class NameMask:
 
 
 def _to_katakana(text: str) -> str:
-    """平假名轉片假名（其他字不變）。Hiragana to katakana."""
+    """Convert hiragana to katakana (other characters unchanged).
+
+    平假名轉片假名（其他字不變）。
+    """
     return "".join(chr(ord(c) + 0x60) if "ぁ" <= c <= "ゖ" else c for c in text)
 
 
 def _to_hiragana(text: str) -> str:
-    """片假名轉平假名（其他字不變）。Katakana to hiragana."""
+    """Convert katakana to hiragana (other characters unchanged).
+
+    片假名轉平假名（其他字不變）。
+    """
     return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in text)
 
 
@@ -118,7 +186,24 @@ def _strip_honorific(name: str) -> str:
 
 
 def build_mask(fields: dict[str, str], lists: dict[str, list[object]]) -> NameMask:
-    """依本人的姓名欄位與家人清單建立對照表。Build the mask from the name fields and family."""
+    """Build the mask from the person's name fields and the family list.
+
+    依本人的姓名欄位與家人清單建立對照表。
+
+    Family members without a name are skipped; the others get ``〔家人1〕``, ``〔家人2〕``, and so on in order.
+
+    沒有名字的家人略過；其餘依序得到 ``〔家人1〕``、``〔家人2〕``……
+
+    Args:
+        fields: the card fields
+            卡片欄位
+        lists: the parsed lists; ``Family_JSON`` is read
+            解析好的清單；讀取 ``Family_JSON``
+
+    Returns:
+        the mask
+        對照表
+    """
     mask = NameMask()
     display = plain_text(fields.get("Display_Name", ""), 60)
     names = [plain_text(fields.get(name, ""), 60) for name in NAME_FIELDS]
@@ -143,14 +228,30 @@ def build_mask(fields: dict[str, str], lists: dict[str, list[object]]) -> NameMa
 def build_prompt(
     fields: dict[str, str], lists: dict[str, list[object]], today: date, *, mask_text: bool = True
 ) -> tuple[str, NameMask]:
-    """組出提示，一併回傳對照表。Render the prompt and return the mask.
+    """Render the prompt and return the mask with it.
+
+    組出提示，一併回傳對照表。
 
     Args:
-        fields: 欄位。The fields.
-        lists: 解析好的清單。The parsed lists.
-        today: 今天。Today.
-        mask_text: 內文也遮名字（預設）；False 時內文照原文送出（例如名字和一般詞同音、遮了反而看不懂），
-            姓名欄位照樣不送，回來的代號照樣換回。Mask names in the body text too (default).
+        fields: the card fields
+            欄位
+        lists: the parsed lists
+            解析好的清單
+        today: today's date
+            今天
+        mask_text: whether to mask names in the body text too (the default); when ``False`` the body text is sent
+            as is (for example when a name sounds like an ordinary word and masking makes it unreadable), the name
+            fields are still not sent, and returned tokens are still restored
+            內文也遮名字（預設）；``False`` 時內文照原文送出（例如名字和一般詞同音、遮了反而看不懂），
+            姓名欄位照樣不送，回來的代號照樣換回
+
+    Returns:
+        the prompt and the mask
+        提示與對照表
+
+    Raises:
+        TemplateEngineError: if the prompt template is broken
+            若提示詞模板有誤
     """
     mask = build_mask(fields, lists)
     m = mask.mask if mask_text else (lambda text: text)
@@ -238,9 +339,25 @@ def build_prompt(
 
 
 def history_text(name: str, items: list[object]) -> str:
-    """會變的欄位給 LLM 的一行：有效的照常列出，劃掉的標明是過去的事（也是聊天素材）。
+    """Return one line of a changing field for the LLM.
 
-    One line of a history field: current entries, then the past ones marked as such.
+    回傳會變的欄位給 LLM 的一行。
+
+    Active entries are listed as usual; struck-out ones are marked as past events after 「以前：」 (they are
+    conversation material too), with 「到…為止」 appended when they have an end date, except for ``Company``.
+
+    有效的照常列出，劃掉的接在「以前：」後面標明是過去的事（也是聊天素材）；有結束日期的另加「到…為止」，
+    ``Company`` 除外。
+
+    Args:
+        name: the field name
+            欄位名稱
+        items: the field's entries; entries that are not objects are ignored
+            欄位的項目；不是物件的項目會忽略
+
+    Returns:
+        the line; empty if there are no entries
+        這一行；沒有項目時為空字串
     """
     # 不是物件的項目是格式壞掉的（在 Anki 手改的），不當成過去的事送出
     entries = [item for item in items if isinstance(item, dict)]
@@ -261,12 +378,31 @@ def history_text(name: str, items: list[object]) -> str:
 async def suggest(
     fields: dict[str, str], lists: dict[str, list[object]], today: date, *, mask_text: bool = True
 ) -> LLMPersonTopicsResult:
-    """請 LLM 分析這個人並推薦話題；回傳的文字已換回真正的稱呼。Ask the LLM; names restored.
+    """Ask the LLM to analyze this person and suggest topics; the returned text has the real names restored.
+
+    請 LLM 分析這個人並推薦話題；回傳的文字已換回真正的稱呼。
+
+    Args:
+        fields: the card fields
+            欄位
+        lists: the parsed lists
+            解析好的清單
+        today: today's date
+            今天
+        mask_text: whether to mask names in the body text too; see :func:`build_prompt`
+            內文也遮名字；見 ``build_prompt``
+
+    Returns:
+        the analysis and topics, with names restored
+        分析與話題，名字已換回
 
     Raises:
-        LLMServiceError 等：LLM 呼叫失敗。When the LLM call fails.
-        LLMGenerationError: LLM 回傳的格式不符（訊息帶模型名稱）。On a malformed response.
-        TemplateEngineError: 提示詞模板有誤。When the prompt template is broken.
+        LLMGenerationError: if the LLM response does not match the format (the message names the model)
+            若 LLM 回傳的格式不符（訊息帶模型名稱）
+        LLMServiceError: if the LLM call fails (or a related error)
+            若 LLM 呼叫失敗（或同類錯誤）
+        TemplateEngineError: if the prompt template is broken
+            若提示詞模板有誤
     """
     prompt, mask = build_prompt(fields, lists, today, mask_text=mask_text)
     client = await TOPICS_ROUTE.client()
@@ -289,7 +425,10 @@ _Model = TypeVar("_Model", bound=BaseModel)
 
 
 def _unmask_model(model: _Model, mask: NameMask) -> _Model:
-    """把模型裡所有文字的代號換回稱呼。Restore names in every string of the model."""
+    """Restore the names in every string of the model.
+
+    把模型裡所有文字的代號換回稱呼。
+    """
 
     def walk(value: object) -> object:
         if isinstance(value, str):

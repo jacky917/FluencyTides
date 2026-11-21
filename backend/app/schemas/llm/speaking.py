@@ -1,7 +1,6 @@
-"""
-Speaking_Coach_Dark 相關的 LLM 結構化輸出 Schema。
+"""LLM structured-output schemas for Speaking_Coach_Dark.
 
-LLM structured-output schemas for Speaking_Coach_Dark.
+Speaking_Coach_Dark 相關的 LLM 結構化輸出 Schema。
 """
 
 from pydantic import BaseModel, Field

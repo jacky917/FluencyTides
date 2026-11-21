@@ -1,19 +1,19 @@
-"""
+"""Card base service (Card Service) module.
+
 卡片基礎服務 (Card Service) 模組。
+
+This module has been refactored into a pure low-level repository layer.
+Responsibilities:
+1. Provide encapsulated Anki CRUD operations.
+2. Before writing to Anki, always query Anki for the actual fields and run strict "foolproofing" and field
+   pre-validation.
+It no longer contains any LLM, prompt, or JSON Schema business logic.
 
 本模組已重構為純粹的底層 Repository 層。
 職責：
 1. 提供封裝後的 Anki CRUD 操作。
 2. 在寫入 Anki 前，強制向 Anki 查詢實際欄位，執行嚴格的「防呆」與欄位預檢。
 不再包含任何 LLM、Prompt 或 JSON Schema 等業務邏輯。
-
-Card base service (Card Service) module.
-
-This module has been refactored into a pure low-level repository layer.
-Responsibilities: (1) provide encapsulated Anki CRUD operations; (2)
-before writing to Anki, always query the actual model fields and run
-strict field pre-validation. It no longer contains any LLM, prompt, or
-JSON-schema business logic.
 """
 
 import logging
@@ -31,28 +31,32 @@ logger = logging.getLogger(__name__)
 
 
 class FieldMismatchError(AnkiServiceError):
-    """當嘗試寫入不存在的卡片欄位時拋出。
+    """Raised when attempting to write card fields that do not exist on the model.
 
-    Raised when attempting to write fields that do not exist on the model.
+    當嘗試寫入不存在的卡片欄位時拋出。
 
     Attributes:
-        invalid_fields: 無效的欄位名稱集合。Set of invalid field names.
-        available_fields: 模型實際可用的欄位清單。Fields available on the
-            model.
+        invalid_fields: the set of invalid field names
+            無效的欄位名稱集合
+        available_fields: the fields actually available on the model
+            模型實際可用的欄位清單
     """
 
     error_code = "FIELD_MISMATCH"
     status_code = 400
 
     def __init__(self, model_name: str, invalid_fields: set[str], available_fields: list[str]) -> None:
-        """初始化錯誤並組合訊息。
+        """Initialize the error and compose its message.
 
-        Initialize the error and compose its message.
+        初始化錯誤並組合訊息。
 
         Args:
-            model_name: 目標模型名稱。Target model name.
-            invalid_fields: 無效欄位集合。Invalid field names.
-            available_fields: 可用欄位清單。Available field names.
+            model_name: the target model name
+                目標模型名稱
+            invalid_fields: the invalid field names
+                無效欄位集合
+            available_fields: the available field names
+                可用欄位清單
         """
         self.invalid_fields = invalid_fields
         self.available_fields = available_fields
@@ -65,36 +69,41 @@ class FieldMismatchError(AnkiServiceError):
 
 
 class CardService:
-    """提供嚴謹防呆機制的 Anki 卡片 CRUD 基礎服務。
+    """An Anki card CRUD base service with strict foolproofing guards.
 
-    Anki card CRUD base service with strict field validation guards.
+    提供嚴謹防呆機制的 Anki 卡片 CRUD 基礎服務。
     """
 
     def __init__(self, anki_client: AnkiClient, model_manager: AnkiModelManager) -> None:
-        """初始化 CardService。
+        """Initialize the CardService.
 
-        Initialize the CardService.
+        初始化 CardService。
 
         Args:
-            anki_client: 注入的 AnkiConnect 客戶端。Injected AnkiConnect
-                client.
-            model_manager: 注入的模型管理器。Injected model manager.
+            anki_client: the injected AnkiConnect client
+                注入的 AnkiConnect 客戶端
+            model_manager: the injected model manager
+                注入的模型管理器
         """
         self.anki_client = anki_client
         self.model_manager = model_manager
 
     async def _validate_fields(self, model_name: str, fields: dict[str, str]) -> None:
-        """向 Anki 查詢實際模型欄位，驗證傳入欄位是否全部有效。
+        """Query Anki for the model's actual fields and check that every given field is valid.
 
-        Query Anki for actual model fields and validate the given ones.
+        向 Anki 查詢實際模型欄位，驗證傳入欄位是否全部有效。
 
         Args:
-            model_name: 目標模型名稱。Target model name.
-            fields: 準備寫入的欄位字典。Fields about to be written.
+            model_name: the target model name
+                目標模型名稱
+            fields: the fields about to be written
+                準備寫入的欄位字典
 
         Raises:
-            FieldMismatchError: 若傳入了不存在的欄位。If nonexistent fields
-                were provided.
+            AnkiServiceError: if the model's field list cannot be fetched from Anki
+                若無法從 Anki 取得模型的欄位清單
+            FieldMismatchError: if a field that does not exist was given
+                若傳入了不存在的欄位
         """
         try:
             available_fields = await self.anki_client.get_model_field_names(model_name)
@@ -111,9 +120,15 @@ class CardService:
     async def create_note(
         self, deck_name: str, model_name: str, fields: dict[str, str], tags: list[str], allow_duplicate: bool = False
     ) -> int:
-        """嚴謹建立新的 Anki 筆記。
+        """Create a new Anki note with strict validation.
 
-        Create a new Anki note with strict validation.
+        嚴謹建立新的 Anki 筆記。
+
+        Steps:
+        1. Ensure the deck exists.
+        2. Strictly check that the fields match the model definition.
+        3. Fill fields that were not provided with empty strings (to avoid AnkiConnect errors).
+        4. Create the card.
 
         執行步驟：
         1. 確保牌組存在。
@@ -121,25 +136,30 @@ class CardService:
         3. 將未提供的欄位自動補上空字串（避免 AnkiConnect 報錯）。
         4. 建立卡片。
 
-        Steps: ensure the deck exists, strictly validate fields against
-        the model, backfill missing fields with empty strings (to avoid
-        AnkiConnect errors), then create the note.
-
         Args:
-            deck_name: 目標牌組。Target deck.
-            model_name: 目標模型。Target model.
-            fields: 欄位資料。Field data.
-            tags: 標籤。Tags.
-            allow_duplicate: 是否允許重複建立（繞過 Anki 首欄位重複檢查）。
-                Whether to allow duplicates (bypass first-field check).
+            deck_name: the target deck
+                目標牌組
+            model_name: the target model
+                目標模型
+            fields: the field data
+                欄位資料
+            tags: the tags
+                標籤
+            allow_duplicate: whether to allow duplicates (bypassing Anki's first-field duplicate check, scoped to
+                this deck)
+                是否允許重複建立（繞過 Anki 首欄位重複檢查，範圍為此牌組）
 
         Returns:
-            成功建立的 Note ID。ID of the created note.
+            the ID of the created note
+            成功建立的 Note ID
 
         Raises:
-            FieldMismatchError: 欄位錯誤。On invalid fields.
-            DuplicateCardError: Anki 拒絕新增 (重複)。When Anki rejects the
-                note as a duplicate.
+            AnkiServiceError: if the field list cannot be fetched or AnkiConnect fails while adding the note
+                若無法取得欄位清單，或新增時 AnkiConnect 失敗
+            DuplicateCardError: if Anki rejects the note (likely a duplicate)
+                若 Anki 拒絕新增（可能是重複）
+            FieldMismatchError: if a field does not exist on the model
+                若欄位不存在於模型
         """
         await self.model_manager.ensure_deck_exists(deck_name)
         await self._validate_fields(model_name, fields)
@@ -180,18 +200,21 @@ class CardService:
             raise AnkiServiceError(f"建立卡片失敗: {e}") from e
 
     async def get_note(self, note_id: int) -> dict[str, object]:
-        """讀取單一筆記詳細資訊。
+        """Read the detailed information of a single note.
 
-        Read detailed info of a single note.
+        讀取單一筆記詳細資訊。
 
         Args:
-            note_id: 目標筆記 ID。Target note ID.
+            note_id: the target note ID
+                目標筆記 ID
 
         Returns:
-            筆記資訊字典。Note info dict.
+            the note information dict
+            筆記資訊字典
 
         Raises:
-            NoteNotFoundError: 找不到指定筆記時。When the note is not found.
+            NoteNotFoundError: if the note cannot be found
+                若找不到指定筆記
         """
         notes_info = await self.anki_client.get_notes_info([note_id])
         if not notes_info:
@@ -199,15 +222,17 @@ class CardService:
         return notes_info[0].model_dump()
 
     async def get_notes_info(self, note_ids: list[int]) -> list[dict]:
-        """批次讀取筆記資訊。
+        """Read the information of several notes in one batch.
 
-        Batch-read note info.
+        批次讀取筆記資訊。
 
         Args:
-            note_ids: 筆記 ID 列表。List of note IDs.
+            note_ids: the note IDs
+                筆記 ID 列表
 
         Returns:
-            筆記資訊字典列表。List of note info dicts.
+            the note information dicts; an empty list when ``note_ids`` is empty (Anki is not queried)
+            筆記資訊字典列表；``note_ids`` 為空時回傳空串列（不查詢 Anki）
         """
         if not note_ids:
             return []
@@ -215,34 +240,47 @@ class CardService:
         return [n.model_dump() for n in notes_info]
 
     async def find_notes(self, query: str) -> list[int]:
-        """使用 Anki 查詢語法尋找 Note IDs。
+        """Find note IDs using Anki search syntax.
 
-        Find note IDs using Anki search syntax.
+        使用 Anki 查詢語法尋找 Note IDs。
 
         Args:
-            query: Anki 查詢字串。Anki search query string.
+            query: the Anki search query string
+                Anki 查詢字串
 
         Returns:
-            符合的 Note ID 列表。Matching note IDs.
+            the matching note IDs
+            符合的 Note ID 列表
         """
         return await self.anki_client.find_notes(query)
 
     async def update_note_fields(
         self, note_id: int, fields: dict[str, str], *, model_name: str | None = None
     ) -> None:
-        """更新卡片欄位。
+        """Update a card's fields.
 
-        Update note fields.
+        更新卡片欄位。
+
+        When ``model_name`` is not given, first query Anki for the note's note type, then run strict field
+        pre-validation.
 
         沒給 ``model_name`` 時先向 Anki 查詢該 Note 的筆記類型，再進行嚴格欄位預檢。
-        Queries the note's model_name from Anki unless given, then runs strict
-        field pre-validation before updating.
 
         Args:
-            note_id: 目標筆記 ID。Target note ID.
-            fields: 欲更新的欄位字典。Fields to update.
-            model_name: 呼叫方已讀過筆記時傳入，省一次查詢。The note type, when
-                the caller has already read the note.
+            note_id: the target note ID
+                目標筆記 ID
+            fields: the fields to update
+                欲更新的欄位字典
+            model_name: the note type, passed when the caller has already read the note, to save one query
+                呼叫方已讀過筆記時傳入，省一次查詢
+
+        Raises:
+            AnkiServiceError: if the model's field list cannot be fetched
+                若無法取得模型的欄位清單
+            FieldMismatchError: if a field does not exist on the model
+                若欄位不存在於模型
+            NoteNotFoundError: if ``model_name`` is not given and the note cannot be found
+                若未給 ``model_name`` 且找不到筆記
         """
         if model_name is None:
             note_info = await self.get_note(note_id)
@@ -253,28 +291,31 @@ class CardService:
         await self.anki_client.update_note_fields(note_id=note_id, fields=fields)
 
     async def delete_note(self, note_id: int) -> None:
-        """刪除卡片。
+        """Delete a card.
 
-        Delete a note.
+        刪除卡片。
 
         Args:
-            note_id: 目標筆記 ID。Target note ID.
+            note_id: the target note ID
+                目標筆記 ID
         """
         await self.anki_client.delete_notes([note_id])
 
     async def sync_anki(self, force: bool = False) -> None:
-        """手動觸發 Anki 與 AnkiWeb 之間的同步。
+        """Manually trigger a sync between Anki and AnkiWeb.
 
-        Manually trigger a sync between Anki and AnkiWeb.
+        手動觸發 Anki 與 AnkiWeb 之間的同步。
+
+        A failure is only logged as a warning and not raised (``AnkiClient.sync()`` defaults to
+        ``raise_errors=False``), so the caller cannot tell whether the sync succeeded; when the result matters, call
+        ``AnkiClient.sync(raise_errors=True, force=True)`` instead, as ``POST /anki/sync`` does.
 
         失敗時只記 warning、不拋錯（``AnkiClient.sync()`` 的預設 ``raise_errors=False``），
         呼叫端無法得知同步是否成功；需要結果時改呼叫
         ``AnkiClient.sync(raise_errors=True, force=True)``，如 ``POST /anki/sync``。
 
-        Failures are only logged, never raised; call
-        ``AnkiClient.sync(raise_errors=True, force=True)`` when the outcome matters.
-
         Args:
-            force: 略過 10 秒防抖、一定送出同步。Bypass the 10-second debounce.
+            force: skip the 10-second debounce and always send the sync
+                略過 10 秒防抖、一定送出同步
         """
         await self.anki_client.sync(force=force)

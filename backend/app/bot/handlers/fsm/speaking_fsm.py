@@ -1,15 +1,15 @@
-"""對話卡生成 Telegram Bot FSM Handler。
+"""Speaking-card creation Telegram Bot FSM handler.
+
+對話卡生成 Telegram Bot FSM Handler。
+
+This module implements the stateful (interactive) creation flow for Speaking_Coach_Dark. It collects, in order:
+deck -> target language -> front (target sentence) -> back (context) -> reference answers. Once collected, an
+AnkiNote is assembled directly and written to Anki. Every step after the deck has a "back" button, and every step
+can be cancelled.
 
 本模組實作 Speaking_Coach_Dark 的有狀態(互動式)新增流程。
-依序收集：牌組(deck) -> 目標句(front) -> 情境(back) -> 參考回答(answers)。
-收集完畢後，直接組裝為 AnkiNote 並寫入 Anki。
-
-Speaking-card creation Telegram Bot FSM handler.
-
-This module implements the stateful (interactive) creation flow for
-Speaking_Coach_Dark. It collects, in order: deck -> front (target
-sentence) -> back (context) -> reference answers. Once collected, an
-AnkiNote is assembled directly and written to Anki.
+依序收集：牌組(deck) -> 目標語言(language) -> 目標句(front) -> 情境(back) -> 參考回答(answers)。
+收集完畢後，直接組裝為 AnkiNote 並寫入 Anki。牌組之後的每一步都有「返回上一步」，每一步都能取消。
 """
 
 import json
@@ -47,7 +47,10 @@ _ANSWERS_PROMPT = "輸入參考回答，多則請換行分隔："
 
 
 def _again(prompt: str, again: bool) -> str:
-    """從「返回」回到這一步時，在提示前加「重新」。Prefix the prompt when re-entering a step."""
+    """Return the prompt, prefixed with 「重新」 when the step is re-entered through "back".
+
+    回傳提示；從「返回」回到這一步時，在提示前加「重新」。
+    """
     return f"重新{prompt}" if again else prompt
 
 
@@ -59,9 +62,9 @@ def _deck_keyboard() -> InlineKeyboardMarkup:
 
 
 def _step_keyboard(back_data: str, *first_rows: list[InlineKeyboardButton]) -> InlineKeyboardMarkup:
-    """一步的鍵盤：額外的按鈕列，最後一列是「返回上一步」與「取消」（每一步都能直接取消）。
+    """Return a step's keyboard: the extra button rows, then a last row with "back" and "cancel".
 
-    A step's keyboard: extra rows, then back and cancel on every step.
+    回傳一步的鍵盤：額外的按鈕列，最後一列是「返回上一步」與「取消」（每一步都能直接取消）。
     """
     back = InlineKeyboardButton(text="🔙 返回上一步", callback_data=back_data)
     return InlineKeyboardMarkup(inline_keyboard=[*first_rows, [back, _CANCEL_BUTTON]])
@@ -84,34 +87,44 @@ def _back_keyboard() -> InlineKeyboardMarkup:
 
 
 def _language_prompt(deck: str, *, again: bool = False) -> str:
-    """選語言這一步的提示（牌組名是使用者輸入，要轉義）。The language step; the deck is user input."""
+    """Return the prompt of the language step; the deck name is user input, so it is escaped.
+
+    回傳選語言這一步的提示（牌組名是使用者輸入，要轉義）。
+    """
     verb = "重新選擇" if again else "選擇"
     return f"✅ 牌組：<code>{escape_tg(deck, 100)}</code>\n\n{verb}目標語言，或輸入代碼（如 <code>ko-KR</code>）："
 
 
 def _front_prompt(lang_code: str, *, again: bool = False) -> str:
-    """輸入提示句這一步的提示。The front-text step."""
+    """Return the prompt of the front-text step.
+
+    回傳輸入提示句這一步的提示。
+    """
     verb = "重新輸入" if again else "輸入"
     return f"✅ 語言：<code>{escape_tg(lang_code, 20)}</code>\n\n{verb}提示句（如對方說的話，或要翻譯的句子）："
 
 
 async def _in_flow(state: FSMContext) -> bool:
-    """目前是否在對話卡流程中（舊訊息上的按鈕在流程結束後仍按得到）。
+    """Return whether the speaking flow is currently active.
 
-    Whether the speaking flow is active; old buttons stay clickable after it ends.
+    回傳目前是否在對話卡流程中。
+
+    Buttons on old messages stay clickable after the flow ends, so handlers check this first.
+
+    舊訊息上的按鈕在流程結束後仍按得到，所以 handler 先檢查這一點。
     """
     current = await state.get_state()
     return current is not None and current.startswith(f"{SpeakingStates.__name__}:")
 
 
 class SpeakingStates(StatesGroup):
-    """對話卡生成流程的 FSM 狀態定義。
+    """FSM state definitions for the speaking-card creation flow.
 
-    FSM state definitions for the speaking-card creation flow.
-
-    定義了使用者與機器人互動的每一步驟。
+    對話卡生成流程的 FSM 狀態定義。
 
     Defines each step of the user-bot interaction.
+
+    定義了使用者與機器人互動的每一步驟。
     """
     waiting_for_deck = State()
     waiting_for_language = State()
@@ -121,23 +134,21 @@ class SpeakingStates(StatesGroup):
 
 
 async def start_speaking_fsm_flow(message: types.Message, state: FSMContext) -> None:
-    """啟動對話卡新增 FSM 流程的公開入口。
+    """Start the speaking-card creation FSM flow; the public entry point.
 
-    Public entry point that starts the speaking-card creation FSM flow.
+    啟動對話卡新增 FSM 流程的公開入口。
 
-    由 newcard_menu.py 的 Inline Keyboard 回呼觸發，
-    設定 FSM 狀態並提示使用者輸入目標牌組。
+    Triggered by the inline keyboard callback in newcard_menu.py; clears any previous FSM state, sets the new one,
+    and prompts the user for the target deck.
 
-    Triggered by the inline keyboard callback in newcard_menu.py; sets the
-    FSM state and prompts the user for the target deck.
+    由 newcard_menu.py 的 Inline Keyboard 回調觸發，
+    清除先前的 FSM 狀態、設定新狀態並提示使用者輸入目標牌組。
 
     Args:
-        message: Telegram 訊息物件（來自 callback.message）。
-            The Telegram message object (from callback.message).
-        state: aiogram FSM 上下文。The aiogram FSM context.
-
-    Returns:
-        None
+        message: the Telegram message (from ``callback.message``)
+            Telegram 訊息物件（來自 ``callback.message``）
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     await state.clear()
     await state.set_state(SpeakingStates.waiting_for_deck)
@@ -146,21 +157,20 @@ async def start_speaking_fsm_flow(message: types.Message, state: FSMContext) -> 
 
 @router.callback_query(lambda c: c.data == "speak_cancel")
 async def process_speak_cancel(callback_query: types.CallbackQuery, state: FSMContext) -> None:
-    """處理取消操作。
+    """Handle the cancel action.
 
-    Handle the cancel action.
+    處理取消操作。
+
+    Only acts while the speaking flow is active: once the flow has ended this is a button on an old message, and it
+    must not clear another flow the user is in now.
 
     只在對話卡流程中有效：流程已結束時這是舊訊息上的按鈕，不能清掉使用者現在進行中的其他流程。
 
-    Only acts while the speaking flow is active, so an old button never
-    clears another flow the user is in now.
-
     Args:
-        callback_query: Telegram 回呼查詢。The Telegram callback query.
-        state: aiogram FSM 上下文。The aiogram FSM context.
-
-    Returns:
-        None
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     if not await _in_flow(state):
         await answer_callback(callback_query, FLOW_ENDED_ALERT, show_alert=True)
@@ -174,16 +184,15 @@ async def process_speak_cancel(callback_query: types.CallbackQuery, state: FSMCo
 
 @router.callback_query(lambda c: c.data == "speak_skip_deck", SpeakingStates.waiting_for_deck)
 async def process_skip_deck(callback_query: types.CallbackQuery, state: FSMContext) -> None:
-    """處理跳過牌組設定。
+    """Handle skipping the deck setting, which uses the Default deck.
 
-    Handle skipping the deck setting.
+    處理跳過牌組設定（使用 Default 牌組）。
 
     Args:
-        callback_query: Telegram 回呼查詢。The Telegram callback query.
-        state: aiogram FSM 上下文。The aiogram FSM context.
-
-    Returns:
-        None
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     await state.update_data(deck="Default")
     if callback_query.message:
@@ -198,16 +207,15 @@ async def process_skip_deck(callback_query: types.CallbackQuery, state: FSMConte
 
 @router.message(SpeakingStates.waiting_for_deck)
 async def process_deck(message: types.Message, state: FSMContext) -> None:
-    """處理牌組輸入。
+    """Handle the deck name input; ``/skip`` uses the Default deck.
 
-    Handle the deck name input.
+    處理牌組輸入；``/skip`` 使用 Default 牌組。
 
     Args:
-        message: 包含牌組名稱的訊息。The message containing the deck name.
-        state: aiogram FSM 上下文。The aiogram FSM context.
-
-    Returns:
-        None
+        message: the message containing the deck name
+            包含牌組名稱的訊息
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     if not message.text:
         return
@@ -220,13 +228,15 @@ async def process_deck(message: types.Message, state: FSMContext) -> None:
 
 @router.callback_query(lambda c: c.data and c.data.startswith("speak_lang_"), SpeakingStates.waiting_for_language)
 async def process_lang_callback(callback_query: types.CallbackQuery, state: FSMContext) -> None:
-    """處理按鈕選擇的語言代碼。
+    """Handle the language code chosen via an inline button.
 
-    Handle the language code chosen via an inline button.
+    處理按鈕選擇的語言代碼。
 
     Args:
-        callback_query: Telegram 回呼查詢。The Telegram callback query.
-        state: aiogram FSM 上下文。The aiogram FSM context.
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     lang_code = callback_query.data.replace("speak_lang_", "")
     await _handle_language_selection(lang_code, callback_query.message, state)
@@ -234,20 +244,21 @@ async def process_lang_callback(callback_query: types.CallbackQuery, state: FSMC
 
 @router.message(SpeakingStates.waiting_for_language)
 async def process_lang_message(message: types.Message, state: FSMContext) -> None:
-    """處理手動輸入的語言代碼（含格式驗證，H1 修復）。
+    """Handle a manually typed language code, with format validation (H1 fix).
 
-    Handle a manually typed language code (with format validation, H1 fix).
+    處理手動輸入的語言代碼（含格式驗證，H1 修復）。
+
+    Invalid input (arbitrary text, accidental long sentences) is no longer written into the card or the LLM prompt;
+    instead the user is re-prompted while staying in this state.
 
     不合法的輸入（任意文字、誤觸長句）不再直接寫進卡片與 LLM 提示詞，
     而是提示使用者重新輸入並停留在本狀態。
 
-    Invalid input (arbitrary text, accidental long sentences) is no longer
-    written into the card or LLM prompt; instead the user is re-prompted
-    while staying in this state.
-
     Args:
-        message: 包含語言代碼的訊息。The message containing the language code.
-        state: aiogram FSM 上下文。The aiogram FSM context.
+        message: the message containing the language code
+            包含語言代碼的訊息
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     if not message.text:
         return
@@ -264,16 +275,17 @@ async def process_lang_message(message: types.Message, state: FSMContext) -> Non
     await _handle_language_selection(normalized, message, state)
 
 async def _handle_language_selection(lang_code: str, message: types.Message | None, state: FSMContext) -> None:
-    """共用邏輯：記錄語言代碼並推進到目標句輸入狀態。
+    """Store the language code and advance to the front-input state (shared logic).
 
-    Shared logic: store the language code and advance to the front-input
-    state.
+    共用邏輯：記錄語言代碼並推進到目標句輸入狀態。
 
     Args:
-        lang_code: 正規化後的語言代碼。The normalized language code.
-        message: Telegram 訊息物件（可為 None）。
-            The Telegram message object (may be None).
-        state: aiogram FSM 上下文。The aiogram FSM context.
+        lang_code: the normalized language code
+            正規化後的語言代碼
+        message: the Telegram message to reply to; when ``None`` the state still advances but no prompt is sent
+            要回覆的 Telegram 訊息；為 ``None`` 時仍推進狀態，但不送出提示
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     await state.update_data(target_language=lang_code)
     await state.set_state(SpeakingStates.waiting_for_front)
@@ -290,16 +302,15 @@ async def _handle_language_selection(lang_code: str, message: types.Message | No
 
 @router.message(SpeakingStates.waiting_for_front)
 async def process_front(message: types.Message, state: FSMContext) -> None:
-    """處理目標句輸入。
+    """Handle the front (target sentence) input.
 
-    Handle the front (target sentence) input.
+    處理目標句輸入。
 
     Args:
-        message: 包含目標句的訊息。The message containing the target sentence.
-        state: aiogram FSM 上下文。The aiogram FSM context.
-
-    Returns:
-        None
+        message: the message containing the target sentence
+            包含目標句的訊息
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     if not message.text:
         return
@@ -313,16 +324,15 @@ async def process_front(message: types.Message, state: FSMContext) -> None:
 
 @router.callback_query(lambda c: c.data == "speak_skip_back", SpeakingStates.waiting_for_back)
 async def process_skip_back(callback_query: types.CallbackQuery, state: FSMContext) -> None:
-    """處理跳過情境設定。
+    """Handle skipping the context setting.
 
-    Handle skipping the context setting.
+    處理跳過情境設定。
 
     Args:
-        callback_query: Telegram 回呼查詢。The Telegram callback query.
-        state: aiogram FSM 上下文。The aiogram FSM context.
-
-    Returns:
-        None
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     await state.update_data(back="")
     if callback_query.message:
@@ -337,16 +347,15 @@ async def process_skip_back(callback_query: types.CallbackQuery, state: FSMConte
 
 @router.message(SpeakingStates.waiting_for_back)
 async def process_back(message: types.Message, state: FSMContext) -> None:
-    """處理情境輸入。
+    """Handle the context input; ``/skip`` leaves the context empty.
 
-    Handle the context input.
+    處理情境輸入；``/skip`` 時情境留空。
 
     Args:
-        message: 包含情境的訊息。The message containing the context.
-        state: aiogram FSM 上下文。The aiogram FSM context.
-
-    Returns:
-        None
+        message: the message containing the context
+            包含情境的訊息
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     if not message.text:
         return
@@ -364,18 +373,22 @@ async def process_answers(
     state: FSMContext,
     anki_client: AnkiClient
 ) -> None:
-    """處理參考回答輸入，並寫入 Anki。
+    """Handle the reference answers input and write the card to Anki.
 
-    Handle the reference answers input and write the card to Anki.
+    處理參考回答輸入，並寫入 Anki。
+
+    Each non-blank line becomes one reference answer; if there is none, the user is asked again and the flow stays on
+    this step. Once the write is attempted, the FSM state is cleared whether it succeeds or fails.
+
+    每一個非空白行是一則參考回答；一則都沒有時請使用者重新輸入，停留在這一步。一旦嘗試寫入，不論成敗都會清除 FSM 狀態。
 
     Args:
-        message: 包含參考回答的訊息。
-            The message containing the reference answers.
-        state: aiogram FSM 上下文。The aiogram FSM context.
-        anki_client: Anki 客戶端。The AnkiClient instance.
-
-    Returns:
-        None
+        message: the message containing the reference answers
+            包含參考回答的訊息
+        state: the aiogram FSM context
+            aiogram FSM 上下文
+        anki_client: the AnkiConnect client
+            Anki 客戶端
     """
     if not message.text:
         return
@@ -466,16 +479,20 @@ async def process_answers(
 
 @router.callback_query(lambda c: c.data and c.data.startswith("speak_back_"))
 async def process_go_back(callback_query: types.CallbackQuery, state: FSMContext) -> None:
-    """處理返回上一步的操作。
+    """Handle the go-back-one-step action.
 
-    Handle the go-back-one-step action.
+    處理返回上一步的操作。
+
+    Only acts while the speaking flow is active; the message with the old step is deleted and the earlier step's
+    prompt is sent again.
+
+    只在對話卡流程中有效；刪除舊步驟的訊息，重新送出前一步的提示。
 
     Args:
-        callback_query: Telegram 回呼查詢。The Telegram callback query.
-        state: aiogram FSM 上下文。The aiogram FSM context.
-
-    Returns:
-        None
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     # 舊訊息上的返回鈕在流程結束後仍按得到：那時 data 已清空，不能把 FSM 拉回中間某步
     if not await _in_flow(state):

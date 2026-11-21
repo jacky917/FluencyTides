@@ -1,15 +1,15 @@
-"""JP_VerbPair（自他動詞對）卡片的 LLM 結構化輸出 Schema。
+"""LLM structured-output schemas for JP_VerbPair (verb-pair) cards.
 
-LLM structured-output schemas for JP_VerbPair (verb-pair) cards.
+JP_VerbPair（自他動詞對）卡片的 LLM 結構化輸出 Schema。
 """
 
 from typing import Literal
 from pydantic import BaseModel, Field
 
 class VerbPairDialogTurn(BaseModel):
-    """LINE 風格上下文對話的單一句子。
+    """A single utterance in a LINE-style context dialog.
 
-    Single utterance in a LINE-style context dialog.
+    LINE 風格上下文對話的單一句子。
     """
     speaker: str = Field(description="說話者名稱 (如 A, B 或特定人物)")
     avatar: str = Field(description="說話者頭像名稱，若無則填 'none'")

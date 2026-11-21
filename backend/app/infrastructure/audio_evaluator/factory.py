@@ -1,32 +1,48 @@
-"""
-Audio Evaluator 工廠模組：依能力路由建立錄音評分器（能力路由計畫 capability_routing_FEAT_2026-10-19.md
-§3.2、§8.3）。
+"""Audio evaluator factory that builds the recording evaluator from the capability routes.
 
-Audio evaluator factory: builds the evaluator from the capability routes.
+Audio Evaluator 工廠模組：依能力路由建立錄音評分器。
+
+See the capability routing plan capability_routing_FEAT_2026-10-19.md §3.2 and §8.3.
+
+見能力路由計畫 capability_routing_FEAT_2026-10-19.md §3.2、§8.3。
+
+Evaluators no longer read the global settings; instead they are composed of the capabilities
+resolved for a route key (for example ``recording_eval`` or ``recording_eval.speaking_trilingual``):
+
+| ``audio_eval`` strategy | capabilities used | evaluator |
+|---|---|---|
+| ``listen`` | ``audio_llm`` | decided by the endpoint type: gemini-native →
+  :class:`GeminiNativeAudioEvaluator`; openai → :class:`OpenAIAudioEvaluator`
+  (:class:`ProxyAudioEvaluator` when ``audio_transport=image_url``) |
+| ``stt_diff`` | ``stt`` | :class:`STTDiffEvaluator` |
+| ``stt_llm`` | ``stt``, ``llm`` | :class:`STTLLMEvaluator` |
 
 評分器不再讀全域 settings，而是依用途鍵（例如 ``recording_eval`` 或
 ``recording_eval.speaking_trilingual``）解析出的能力組成：
 
 | ``audio_eval`` 策略 | 用到的能力 | 評分器 |
 |---|---|---|
-| ``listen`` | ``audio_llm`` | 端點類型決定：gemini-native → :class:`GeminiNativeAudioEvaluator`；openai →
-  :class:`OpenAIAudioEvaluator`（``audio_transport=image_url`` 時為 :class:`ProxyAudioEvaluator`） |
-| ``stt_diff`` | ``stt`` | :class:`STTDiffEvaluator` |
-| ``stt_llm`` | ``stt``、``llm`` | :class:`STTLLMEvaluator` |
+| ``listen`` | ``audio_llm`` | 端點類型決定：gemini-native → ``GeminiNativeAudioEvaluator``；openai →
+  ``OpenAIAudioEvaluator``（``audio_transport=image_url`` 時為 ``ProxyAudioEvaluator``） |
+| ``stt_diff`` | ``stt`` | ``STTDiffEvaluator`` |
+| ``stt_llm`` | ``stt``、``llm`` | ``STTLLMEvaluator`` |
 
-每個能力各自沿「分支 → 流程 → 全域 → .env」解析（見 :mod:`app.infrastructure.llm.routing`）。
+Each capability is resolved on its own along "branch → flow → global → .env" (see
+:mod:`app.infrastructure.llm.routing`). Built evaluators are cached per "setting combination";
+any write or delete of a setting (a change of the route cache generation) clears the whole cache.
+
+每個能力各自沿「分支 → 流程 → 全域 → .env」解析（見 ``app.infrastructure.llm.routing``）。
 建好的評分器依「設定組合」快取；設定一有寫入或刪除（路由快取世代改變）就整個清掉。
+
+Concrete implementations are imported lazily, so an SDK that is not installed does not affect the
+other strategies (for example google-genai is not needed when only stt_diff is used). When no
+evaluator can be built (key or server not set, package not installed, invalid strategy),
+:class:`~app.core.exceptions.AudioEvaluatorUnavailableError` is raised, and its message says which
+capability and which layer's setting is at fault.
 
 具體實作延遲匯入，未安裝的 SDK 不會影響其他策略（例如只用 stt_diff 時不需要 google-genai）。
 建不出評分器（金鑰或伺服器未設定、套件未安裝、策略無效）時拋
-:class:`~app.core.exceptions.AudioEvaluatorUnavailableError`，訊息說明是哪個能力、哪一層的設定。
-
-English summary:
-    Builds the recording evaluator from the capability routes of a route
-    key: the ``audio_eval`` strategy picks the evaluator and the other
-    capabilities supply its models. Evaluators are cached per combination
-    and dropped whenever a route setting changes. Implementations are
-    imported lazily.
+``AudioEvaluatorUnavailableError``，訊息說明是哪個能力、哪一層的設定。
 """
 
 import logging
@@ -63,15 +79,17 @@ _SOURCE_NAMES = {"route": "用途", "parent": "流程", "global": "全域", "env
 
 @dataclass(frozen=True)
 class EvaluatorPlan:
-    """一個用途鍵的評分器組成：策略與它用到的各能力的解析結果。
+    """The evaluator composition of one route key: the strategy and its resolved capabilities.
 
-    What an evaluator for a route key is made of.
+    一個用途鍵的評分器組成：策略與它用到的各能力的解析結果。
 
     Attributes:
-        route_key: 用途鍵。The route key.
-        strategy: ``audio_eval`` 的解析結果。The resolved strategy.
-        routes: 策略用到的能力 → 解析結果。The resolved capabilities the
-            strategy uses.
+        route_key: the route key
+            用途鍵
+        strategy: the resolved ``audio_eval`` route
+            ``audio_eval`` 的解析結果
+        routes: each capability the strategy uses → its resolved route
+            策略用到的能力 → 解析結果
     """
 
     route_key: str
@@ -80,12 +98,23 @@ class EvaluatorPlan:
 
     @property
     def strategy_name(self) -> str:
-        """策略名。The strategy name."""
+        """The strategy name.
+
+        策略名。
+        """
         return self.strategy.provider
 
     @property
     def cache_key(self) -> tuple[object, ...]:
-        """快取鍵：策略與各能力生效的 (provider, 模型, effort)。The cache key."""
+        """The cache key: the strategy plus each capability's effective (provider, model, effort).
+
+        快取鍵：策略與各能力生效的 (provider, 模型, effort)。
+
+        Each capability also records whether its choice comes from the ``.env`` layer; it is
+        ``(capability, None)`` when no choice is in effect.
+
+        每個能力另記錄選擇是否來自 ``.env`` 層；沒有生效的選擇時為 ``(capability, None)``。
+        """
         parts: list[object] = [self.strategy_name]
         for capability in sorted(self.routes):
             resolved = self.routes[capability]
@@ -99,10 +128,24 @@ class EvaluatorPlan:
 
 
 async def plan_for(route_key: str) -> EvaluatorPlan:
-    """解析用途鍵的策略，以及策略用到的能力。Resolve the strategy and what it needs.
+    """Resolve the strategy of a route key and the capabilities the strategy uses.
+
+    解析用途鍵的策略，以及策略用到的能力。
+
+    When the strategy is invalid (this can only happen on the ``.env`` layer, because DB layers not
+    on the whitelist are skipped), no other capability is resolved, and :func:`build_evaluator`
+    reports the error.
 
     策略無效時（只會發生在 ``.env`` 那一層：DB 層不在白名單會被跳過）不解析其他能力，
-    交給 :func:`build_evaluator` 報錯。
+    交給 ``build_evaluator`` 報錯。
+
+    Args:
+        route_key: the route key, for example ``recording_eval``
+            用途鍵，例如 ``recording_eval``
+
+    Returns:
+        the strategy and capabilities, all resolved from the same snapshot of stored settings
+        策略與各能力，全部由同一份已儲存設定的快照解析
     """
     # 所有能力由同一份快照解析：讀取期間有寫入時，不會把新策略配上舊模型
     snapshot, read_ok = await routing.stored_choices()
@@ -115,7 +158,10 @@ async def plan_for(route_key: str) -> EvaluatorPlan:
 
 
 def _where(resolved: ResolvedRoute) -> str:
-    """「recording_eval 的 audio_llm（來源：全域）」這樣的說明。Where a setting came from."""
+    """Describe where a setting came from, like "recording_eval's audio_llm (source: global)".
+
+    產生「recording_eval 的 audio_llm（來源：全域）」這樣的說明。
+    """
     return f"'{resolved.route_key}' 的 {resolved.capability}（來源：{_SOURCE_NAMES[resolved.source]}）"
 
 
@@ -127,12 +173,29 @@ def _unavailable(resolved: ResolvedRoute, reason: str) -> AudioEvaluatorUnavaila
 
 
 def build_listen_evaluator(endpoint_id: str, model: str) -> BaseAudioEvaluator:
-    """依端點建立「直接聽音檔」的評分器。Build a listening evaluator for an endpoint.
+    """Build an evaluator that listens to the audio directly, for the given endpoint.
+
+    依端點建立「直接聽音檔」的評分器。
+
+    Args:
+        endpoint_id: the endpoint ID
+            端點 ID
+        model: the audio model (the ``audio_llm`` capability)
+            聽音檔的模型（能力路由的 ``audio_llm``）
+
+    Returns:
+        the Gemini native evaluator for a gemini-native endpoint; for an openai endpoint, the proxy
+        evaluator when ``audio_transport=image_url``, otherwise the OpenAI evaluator
+        gemini-native 端點為 Gemini 原生評分器；openai 端點在 ``audio_transport=image_url`` 時為
+        中轉評分器，否則為 OpenAI 評分器
 
     Raises:
-        AudioEvaluatorUnavailableError: 端點不存在或不能聽音檔。
-        LLMServiceError: 評分器初始化失敗（金鑰或模型未設定）。
-        ImportError: 端點需要的套件未安裝或版本不符。
+        AudioEvaluatorUnavailableError: if the endpoint does not exist or cannot listen to audio
+            若端點不存在或不能聽音檔
+        ImportError: if a package the endpoint needs is not installed or has the wrong version
+            若端點需要的套件未安裝或版本不符
+        LLMServiceError: if the evaluator fails to initialize (key or model not set)
+            若評分器初始化失敗（金鑰或模型未設定）
     """
     endpoint = get_endpoint(endpoint_id)
     if endpoint is None:
@@ -158,11 +221,29 @@ def build_listen_evaluator(endpoint_id: str, model: str) -> BaseAudioEvaluator:
 
 
 def build_whisper(provider: str, model: str) -> WhisperClient:
-    """建立語音轉文字客戶端。Build the speech-to-text client.
+    """Build the speech-to-text client.
+
+    建立語音轉文字客戶端。
+
+    The server URL and key come from ``STT_SERVER_URL`` and ``STT_API_KEY``.
+
+    伺服器網址與金鑰取自 ``STT_SERVER_URL`` 與 ``STT_API_KEY``。
+
+    Args:
+        provider: the ``stt`` provider; only whisper is supported
+            ``stt`` 的 provider，只支援 whisper
+        model: the Whisper model
+            Whisper 模型
+
+    Returns:
+        the Whisper client
+        Whisper 客戶端
 
     Raises:
-        AudioEvaluatorUnavailableError: provider 不是 whisper。
-        STTServiceError: ``STT_SERVER_URL`` 或模型未設定。
+        AudioEvaluatorUnavailableError: if ``provider`` is not whisper
+            若 ``provider`` 不是 whisper
+        STTServiceError: if ``STT_SERVER_URL`` or the model is not set
+            若 ``STT_SERVER_URL`` 或模型未設定
     """
     if provider != STT_WHISPER:
         raise AudioEvaluatorUnavailableError(f"語音轉文字只支援 '{STT_WHISPER}'，不是 '{provider}'")
@@ -170,12 +251,21 @@ def build_whisper(provider: str, model: str) -> WhisperClient:
 
 
 def _build_part(resolved: ResolvedRoute) -> object:
-    """建立一個能力的工具（聽音檔的評分器、Whisper 或 LLM 客戶端），失敗時說明是哪個設定。
+    """Build the tool for one capability, explaining which setting failed if it cannot be built.
 
-    Build the tool for one capability, explaining which setting failed.
+    建立一個能力的工具（聽音檔的評分器、Whisper 或 LLM 客戶端），失敗時說明是哪個設定。
+
+    Args:
+        resolved: the resolved route of the capability
+            該能力的解析結果
+
+    Returns:
+        the listening evaluator, the Whisper client, or the LLM client
+        聽音檔的評分器、Whisper 或 LLM 客戶端
 
     Raises:
-        AudioEvaluatorUnavailableError: 建不出來。
+        AudioEvaluatorUnavailableError: if the tool cannot be built
+            若建不出來
     """
     try:
         if resolved.capability == CAPABILITY_AUDIO_LLM:
@@ -196,10 +286,22 @@ def _build_part(resolved: ResolvedRoute) -> object:
 
 
 def build_evaluator(plan: EvaluatorPlan) -> BaseAudioEvaluator:
-    """依評分器組成建立評分器（不快取）。Build the evaluator for a plan, uncached.
+    """Build the evaluator for an evaluator composition, without caching.
+
+    依評分器組成建立評分器（不快取）。
+
+    Args:
+        plan: the evaluator composition from :func:`plan_for`
+            ``plan_for`` 產生的評分器組成
+
+    Returns:
+        a new evaluator for the plan's strategy
+        依組成的策略新建的評分器
 
     Raises:
-        AudioEvaluatorUnavailableError: 策略無效，或策略用到的某個能力建不出工具。
+        AudioEvaluatorUnavailableError: if the strategy is invalid, or a capability the strategy
+            uses cannot be built
+            若策略無效，或策略用到的某個能力建不出工具
     """
     strategy = plan.strategy_name
     if strategy not in STRATEGIES:
@@ -234,24 +336,32 @@ _evaluators_generation: int | None = None
 
 
 def clear_cache() -> None:
-    """清掉已建立的評分器（測試或設定改變時用）。Drop every cached evaluator."""
+    """Drop every cached evaluator (used by tests or when settings change).
+
+    清掉已建立的評分器（測試或設定改變時用）。
+    """
     global _evaluators_generation
     _evaluators.clear()
     _evaluators_generation = None
 
 
 async def evaluator_for(route_key: str) -> tuple[BaseAudioEvaluator, EvaluatorPlan]:
-    """依用途鍵目前的設定取得評分器（依設定組合快取）。The evaluator for a route key.
+    """Get the evaluator for a route key's current settings, cached per setting combination.
+
+    依用途鍵目前的設定取得評分器（依設定組合快取）。
 
     Args:
-        route_key: 用途鍵（例如 ``recording_eval`` 或 ``recording_eval.speaking_trilingual``）。
-            The route key.
+        route_key: the route key (for example ``recording_eval`` or
+            ``recording_eval.speaking_trilingual``)
+            用途鍵（例如 ``recording_eval`` 或 ``recording_eval.speaking_trilingual``）
 
     Returns:
-        ``(評分器, 評分器組成)``。The evaluator and what it is made of.
+        ``(evaluator, evaluator composition)``
+        ``(評分器, 評分器組成)``
 
     Raises:
-        AudioEvaluatorUnavailableError: 建不出評分器（訊息說明是哪個設定）。
+        AudioEvaluatorUnavailableError: if no evaluator can be built (the message says which setting)
+            若建不出評分器（訊息說明是哪個設定）
     """
     global _evaluators_generation
     generation = routing.cache_generation()

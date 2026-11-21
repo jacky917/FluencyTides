@@ -1,4 +1,16 @@
-"""Cloze 挖空定位與對話組裝的共用純函數模組。
+"""Shared pure functions for cloze positioning and dialog assembly.
+
+Cloze 挖空定位與對話組裝的共用純函數模組。
+
+Extracted from ``jp_verb_pair_handler.py`` and shared by the JP_VerbPair and JP_CoreVerb handlers as a single
+source of truth:
+
+1. ``assemble_dialog_turns``: deterministically assembles the LINE-style dialog structure in Python from the
+   translation map the LLM returned (including truncation and bubble alignment).
+2. ``position_cloze``: blanks the original sentence with a right-to-left positioning strategy, with two
+   built-in fallbacks (particle stripping and whole-phrase matching of ``target_particle_verb``), failing
+   fast with ``ClozePositioningError`` when all of them fail; it also supports optional cross-validation
+   against a verified span (to stop the LLM from blanking a contaminated position).
 
 本模組自 ``jp_verb_pair_handler.py`` 抽出，供 JP_VerbPair 與 JP_CoreVerb
 兩個 Handler 共用，維持單一事實來源：
@@ -9,17 +21,6 @@
    內建助詞剝除與 ``target_particle_verb`` 整體匹配兩層 Fallback，
    全數失敗時 fail-fast 拋出 ``ClozePositioningError``；
    另支援可選的 verified span 交叉驗證（防止 LLM 挖到污染位置）。
-
-Shared pure functions for cloze positioning and dialog assembly.
-
-Extracted from ``jp_verb_pair_handler.py`` and shared by the JP_VerbPair
-and JP_CoreVerb handlers as a single source of truth:
-``assemble_dialog_turns`` deterministically assembles the LINE-style
-dialog structure from the LLM translation map (with truncation and
-bubble alignment); ``position_cloze`` performs right-to-left cloze
-positioning with particle-stripping and whole-phrase fallbacks,
-fail-fasting with ``ClozePositioningError`` when everything fails, plus
-optional verified-span cross-validation.
 """
 
 import logging
@@ -35,32 +36,33 @@ def assemble_dialog_turns(
     context_dialogue: list[dict],
     translation_map: dict[int, str],
 ) -> list[dict]:
-    """在 Python 中組裝確定性的對話結構 (Deterministic Dialog)。
+    """Assemble the deterministic dialog structure in Python.
 
-    Assemble the deterministic dialog structure in Python.
+    在 Python 中組裝確定性的對話結構（Deterministic Dialog）。
 
-    依據 LLM 決定保留的句子範圍（``translation_map`` 的 id 集合）截斷上下文，
-    並為每一句配置說話者氣泡對齊方向、抽取音檔純檔名、對齊翻譯。
+    Truncates the context to the sentence range the LLM kept (from the smallest to the largest id in
+    ``translation_map``, always widened to include the target sentence), then for each sentence assigns the
+    speaker's bubble alignment, extracts the bare audio file name, and aligns the translation. An empty
+    ``translation_map`` keeps the whole context. The target sentence's speaker is aligned right, everyone else
+    left, and the narrator (``"-"``) always center; a sentence missing from ``translation_map`` gets the
+    translation ``"(翻譯遺失)"``. Line breaks in text and translations are replaced with spaces.
 
-    Truncates the context to the sentence range the LLM kept (the id set
-    of ``translation_map``), assigns bubble alignment per speaker,
-    extracts bare audio filenames, and aligns translations.
+    依據 LLM 決定保留的句子範圍（``translation_map`` 的最小到最大 id，一定擴展到包含目標句）截斷上下文，
+    並為每一句配置說話者氣泡對齊方向、抽取音檔純檔名、對齊翻譯。``translation_map`` 為空時保留全部
+    上下文。目標句的說話者靠右、其他人靠左，旁白（``"-"``）永遠置中；``translation_map`` 沒有的句子
+    翻譯為 ``"(翻譯遺失)"``。原文與翻譯中的換行一律換成空格。
 
     Args:
-        context_dialogue: 原始上下文對話陣列，每個元素為包含
-            speaker / text / is_target / audio / avatar 的 dict。Raw
-            dialog list; each item has speaker / text / is_target /
-            audio / avatar.
-        translation_map: LLM 回傳的翻譯映射，key 為原始對話索引 (0-based)、
-            value 為該句的繁體中文翻譯。LLM translation map keyed by the
-            0-based dialog index, valued with the Traditional Chinese
-            translation.
+        context_dialogue: the raw context dialog; each item is a dict with speaker, text, is_target, audio,
+            and avatar
+            原始上下文對話陣列，每個元素為包含 speaker / text / is_target / audio / avatar 的 dict
+        translation_map: the translation map returned by the LLM, keyed by the original 0-based dialog index,
+            with the sentence's Traditional Chinese translation as the value
+            LLM 回傳的翻譯映射，key 為原始對話索引（0-based）、value 為該句的繁體中文翻譯
 
     Returns:
-        list[dict]: 組裝完成的對話回合清單，每個元素包含
-            speaker / avatar / text / translation / align / is_target /
-            audio。Assembled dialog turns with speaker / avatar / text /
-            translation / align / is_target / audio.
+        the assembled dialog turns, each with speaker, avatar, text, translation, align, is_target, and audio
+        組裝完成的對話回合清單，每個元素包含 speaker / avatar / text / translation / align / is_target / audio
     """
     dialog_turns = []
 
@@ -145,31 +147,30 @@ def _validate_span_overlap(
     verified_span: tuple[int, int] | None,
     target_sentence: str,
 ) -> None:
-    """檢查挖空位置與腳本側 verified span 是否有重疊（交叉驗證）。
+    """Cross-validate that the cloze positions overlap the script-side verified span.
 
-    Cross-validate that cloze positions overlap the verified span.
+    檢查挖空位置與腳本側 verified span 是否有重疊（交叉驗證）。
+
+    If the target verb's character span, verified on the script side with a morphological analyzer, does not
+    overlap any cloze position the LLM chose, the LLM blanked a homographic contaminant (for example the first
+    part of a compound verb, or an auxiliary verb), so card creation must be rejected fail-fast.
 
     腳本側以形態素分析器驗證過的目標動詞字元 span，
     與 LLM 決定的挖空位置若完全不重疊，代表 LLM 挖到了
     同形污染詞（如複合動詞前項或補助動詞），必須 fail-fast 拒絕建卡。
 
-    If the morphologically verified target-verb span does not overlap
-    any LLM cloze position, the LLM blanked a homographic contaminant
-    (e.g. a compound-verb prefix or auxiliary verb), so card creation is
-    rejected fail-fast.
-
     Args:
-        positions: 已定位完成的挖空位置清單，每個元素為 (start, end)。
-            Located cloze positions as (start, end) tuples.
-        verified_span: 腳本側傳入的目標動詞字元 span (start, end)；為 None
-            時跳過檢查。Script-side verified char span; None skips the
-            check.
-        target_sentence: 目標句原文（僅用於錯誤訊息）。Original sentence
-            (error message only).
+        positions: the located cloze positions, each a (start, end) pair
+            已定位完成的挖空位置清單，每個元素為 (start, end)
+        verified_span: the target verb's character span (start, end) passed from the script side; ``None``
+            skips the check
+            腳本側傳入的目標動詞字元 span (start, end)；為 ``None`` 時跳過檢查
+        target_sentence: the original target sentence (used only in the error message)
+            目標句原文（僅用於錯誤訊息）
 
     Raises:
-        ClozePositioningError: 挖空位置與 verified span 完全不重疊時拋出。
-            When no cloze position overlaps the verified span.
+        ClozePositioningError: if no cloze position overlaps the verified span
+            若挖空位置與 verified span 完全不重疊
     """
     if verified_span is None:
         return
@@ -201,62 +202,72 @@ def position_cloze(
     raw_response: str,
     verified_span: tuple[int, int] | None = None,
 ) -> tuple[str, str]:
-    """在目標句原文中定位並執行 Cloze 挖空（fail-fast）。
+    """Locate and apply the cloze blanks in the original target sentence (fail-fast).
 
-    Locate and apply cloze blanks in the original sentence (fail-fast).
+    在目標句原文中定位並執行 Cloze 挖空（fail-fast）。
 
-    LLM 負責「決定挖空哪裡」(提供要挖空的子字串清單)，
-    Python 負責「精準執行挖空」(在原文中定位並替換)，
+    The LLM decides where to blank (it provides the list of substrings to blank); Python carries out the
+    blanking precisely (locating and replacing them in the original), eliminating the risk of the LLM rewriting
+    the sentence.
+
+    LLM 負責「決定挖空哪裡」（提供要挖空的子字串清單），
+    Python 負責「精準執行挖空」（在原文中定位並替換），
     徹底消除 LLM 自行改寫原文的風險。
+
+    Blanks are located right to left: Japanese verbs sit at the end of the sentence, and the particle that goes
+    with the verb is the one nearest to it. So the verb (the rightmost blank) is found first, then the nearest
+    particle to its left, which handles particles that occur more than once. When ``verified_span`` is given,
+    the verb is first looked for at an occurrence overlapping that span, which handles a verb that occurs more
+    than once in the sentence.
 
     採用「從右往左定位」策略處理挖空：日文的動詞位於句尾，
     搭配的助詞是離動詞最近的那個。因此先找動詞位置（最右邊的 blank），
-    再往左找最近的助詞，即可正確處理助詞重複出現的情況。
+    再往左找最近的助詞，即可正確處理助詞重複出現的情況。有 ``verified_span`` 時，
+    動詞優先找與該 span 重疊的出現位置，處理同一動詞在句中重複出現的情況。
+
+    When positioning fails, two fallbacks are tried in order:
+
+    1. Strip the leading particles the LLM made up, then position again.
+    2. Match ``target_particle_verb`` as a whole.
+
+    If all of them fail, a JSONL failure log is written and ``ClozePositioningError`` is raised.
 
     定位失敗時依序嘗試兩層 Fallback：
+
     1. 剝除 LLM 腦補的開頭助詞後重新定位。
     2. 以 ``target_particle_verb`` 整體匹配。
+
     全數失敗即記錄 JSONL 失敗日誌並拋出 ``ClozePositioningError``。
 
-    The LLM decides where to blank (a list of substrings); Python
-    executes the blanking precisely, eliminating the risk of the LLM
-    rewriting the sentence. Uses a right-to-left strategy (Japanese
-    verbs sit at the sentence end; the relevant particle is the nearest
-    one to the left). On failure, two fallbacks are tried in order:
-    (1) strip LLM-hallucinated leading particles and retry; (2) match
-    ``target_particle_verb`` as a whole. If all fail, a JSONL failure
-    log is written and ``ClozePositioningError`` is raised.
-
     Args:
-        target_sentence: 目標句原文。Original target sentence.
-        cloze_blanks: LLM 回傳的挖空子字串清單。Substrings to blank,
-            returned by the LLM.
-        target_particle_verb: 完整的目標搭配詞（助詞+動詞），作為最終
-            Fallback。Full target collocation (particle + verb), used as
-            the final fallback.
-        task_name: 失敗日誌 (JSONL) 使用的任務名稱，例如
-            "JP_VerbPair_Cloze"。Task name for the JSONL failure log.
-        model_name: 本次 LLM 呼叫實際使用的模型名稱（記錄失敗日誌用）。
-            LLM model name actually used (for the failure log).
-        prompt_text: 本次 LLM 呼叫的完整提示詞（記錄失敗日誌用）。Full
-            prompt of this LLM call (for the failure log).
-        raw_response: LLM 的原始回應內容（記錄失敗日誌用）。Raw LLM
-            response (for the failure log).
-        verified_span: 可選。腳本側形態素驗證過的目標動詞字元 span
-            (start, end)。提供時會在定位完成後檢查挖空位置與該 span 有
-            重疊，不重疊即拋出 ``ClozePositioningError``。Optional
-            script-side verified char span; when given, cloze positions
-            must overlap it or ``ClozePositioningError`` is raised.
+        target_sentence: the original target sentence
+            目標句原文
+        cloze_blanks: the substrings to blank, returned by the LLM
+            LLM 回傳的挖空子字串清單
+        target_particle_verb: the full target collocation (particle + verb), used as the final fallback
+            完整的目標搭配詞（助詞+動詞），作為最終 Fallback
+        task_name: the task name used in the JSONL failure log, for example ``"JP_VerbPair_Cloze"``
+            失敗日誌（JSONL）使用的任務名稱，例如 ``"JP_VerbPair_Cloze"``
+        model_name: the model actually used for this LLM call (for the failure log)
+            本次 LLM 呼叫實際使用的模型名稱（記錄失敗日誌用）
+        prompt_text: the full prompt of this LLM call (for the failure log)
+            本次 LLM 呼叫的完整提示詞（記錄失敗日誌用）
+        raw_response: the raw LLM response (for the failure log)
+            LLM 的原始回應內容（記錄失敗日誌用）
+        verified_span: optional; the target verb's character span (start, end) verified morphologically on
+            the script side. When given, the cloze positions are checked to overlap it after positioning, and
+            ``ClozePositioningError`` is raised if they do not.
+            可選。腳本側形態素驗證過的目標動詞字元 span (start, end)。提供時會在定位完成後檢查挖空位置與
+            該 span 有重疊，不重疊即拋出 ``ClozePositioningError``。
 
     Returns:
-        tuple[str, str]: ``(cloze_sentence, full_sentence_html)``——
-            前者為挖空後（____）的句子，後者為以底線標記解答的完整句
-            HTML。The blanked (____) sentence and the full-sentence HTML
-            with the answer underlined.
+        ``(cloze_sentence, full_sentence_html)``: the sentence with the blanks replaced by ``____``, and the
+        full-sentence HTML with the answer underlined
+        ``(cloze_sentence, full_sentence_html)``——前者為挖空後（____）的句子，後者為以底線標記解答的完整句 HTML
 
     Raises:
-        ClozePositioningError: 所有定位策略均失敗，或 span 交叉驗證失敗時
-            拋出。When all strategies fail or span cross-validation fails.
+        ClozePositioningError: if every positioning strategy fails, or the span cross-validation fails
+            若所有定位策略均失敗，或 span 交叉驗證失敗
     """
     # 使用「從右往左定位」策略處理挖空。
     # 例：「彼女は私を見つけて、扉をゆっくり開けた」
@@ -324,7 +335,7 @@ def position_cloze(
         # Fallback 1: 嘗試剝除 LLM 腦補的助詞後重新匹配。
         # 口語日文常省略助詞（助詞省略），但 LLM 會按語法規則自動補回，
         # 導致 'を閉める' 在原文 '閉める' 中找不到。
-        # 策略：將每個失敗的 blank 去掉開頭的常見助詞後重試。
+        # 策略：將每個 blank（不只找不到的那些）去掉開頭的常見助詞後重試；剝除後仍在原文中才採用。
         common_particles = ("を", "が", "に", "は", "と", "で", "へ", "から", "まで", "より")
         stripped_blanks: list[str] = []
         for blank in cloze_blanks:

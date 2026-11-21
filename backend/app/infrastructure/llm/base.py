@@ -1,5 +1,13 @@
-"""
+"""Abstract base for LLM clients (plan D2).
+
 LLM 客戶端抽象基底（計畫 D2）。
+
+The shared contract and shared logic of every text LLM provider:
+
+- ``generate_structured_data`` is the only public generation method (``@abstractmethod``)
+- unified ``model`` resolution (override > ``LLM_MODEL_NAME``) and effort-support checks
+- the public ``model_label`` property replaces cross-layer reads of ``_formatted_model_name``
+- ``_retry_transient()`` is the transient-error retry shared by HTTP-based providers
 
 所有文字 LLM provider 的共同契約與共用邏輯：
 
@@ -8,18 +16,18 @@ LLM 客戶端抽象基底（計畫 D2）。
 - ``model_label`` 公開屬性取代跨層讀取 ``_formatted_model_name``
 - ``_retry_transient()`` 供 HTTP 類 provider 共用的瞬時錯誤重試
 
+An ABC is chosen over a Protocol for the same reasons as ``audio_evaluator/base.py``: subclasses must be forced
+to implement, the base holds concrete shared logic, and the factory and the diagnostics service need
+``isinstance`` dispatch.
+
 選 ABC 而非 Protocol 的理由與 ``audio_evaluator/base.py`` 一致：要強制子類
 實作、基底要放具體共用邏輯、工廠與診斷服務需要 ``isinstance`` 分流。
 
+This module deliberately has zero third-party dependencies (it imports neither openai, jsonschema, nor
+google-genai), so no provider's dependency becomes a startup prerequisite of another provider through the base.
+
 本模組刻意零第三方依賴（不 import openai / jsonschema / google-genai），
 確保任何 provider 的依賴都不會因為基底而變成其他 provider 的啟動前提。
-
-English summary:
-    Abstract base for every text LLM provider: the single abstract
-    ``generate_structured_data`` method, unified model/effort handling,
-    a public ``model_label`` property, and a shared transient-error retry
-    helper. Deliberately free of third-party imports so provider
-    dependencies stay lazy.
 """
 
 import abc
@@ -42,7 +50,10 @@ T = TypeVar("T")
 
 
 class EffortMode(enum.Enum):
-    """effort 參數的特殊值。Special values for the effort argument."""
+    """Special values for the effort argument.
+
+    effort 參數的特殊值。
+    """
 
     OMIT = "omit"
 
@@ -60,23 +71,30 @@ EffortArg: TypeAlias = str | EffortMode | None
 
 
 class BaseLLMClient(abc.ABC):
-    """文字 LLM 客戶端的抽象基底。Abstract base for text LLM clients.
+    """Abstract base for text LLM clients.
+
+    文字 LLM 客戶端的抽象基底。
 
     Attributes:
-        PROVIDER_NAME: 工廠註冊鍵，也是標籤的 ``(provider)`` 段。Registry
-            key and label prefix.
-        SUPPORTS_EFFORT: 是否接受 ``effort`` 覆寫；False 時給值即拋錯。
-            工廠註冊表另有一份靜態宣告，載入時核對必須一致。Whether an
-            effort override is accepted; verified against the registry.
-        MODEL_LABEL_STRIP_PREFIX: 標籤中要去掉的模型名前綴。Prefix
-            stripped from the model name in labels.
-        _model_name: 實際送給後端的模型名。The model name sent upstream.
-        _provider: 端點 ID；未指定端點時為正規化後的 ``LLM_PROVIDER``。
-            Endpoint ID, or the normalized ``LLM_PROVIDER`` without one.
-        _endpoint: 建立時指定的端點；None 表示讀舊式單組設定。The endpoint
-            given at construction, or None to read the legacy settings.
-        _effort: 生效的 effort；無此概念的 provider 為 None。Effective
-            effort, or None.
+        PROVIDER_NAME: the factory registry key, also the ``(provider)`` part of the label
+            工廠註冊鍵，也是標籤的 ``(provider)`` 段
+        SUPPORTS_EFFORT: whether an ``effort`` override is accepted; when ``False``, giving a value raises. The
+            factory registry holds a separate static declaration, checked for consistency at load time.
+            是否接受 ``effort`` 覆寫；False 時給值即拋錯。
+            工廠註冊表另有一份靜態宣告，載入時核對必須一致。
+        MODEL_LABEL_STRIP_PREFIX: the model-name prefix removed in labels
+            標籤中要去掉的模型名前綴
+        ENDPOINT_TYPES: the endpoint types this class accepts (see ``endpoints.ALL_TYPES``); checked at
+            construction
+            本類可接受的端點類型（見 ``endpoints.ALL_TYPES``）；建構時檢查
+        _model_name: the model name actually sent upstream
+            實際送給後端的模型名
+        _provider: the endpoint ID; the normalized ``LLM_PROVIDER`` when no endpoint is given
+            端點 ID；未指定端點時為正規化後的 ``LLM_PROVIDER``
+        _endpoint: the endpoint given at construction; ``None`` means reading the legacy single-set settings
+            建立時指定的端點；None 表示讀舊式單組設定
+        _effort: the effective effort; ``None`` for providers without that notion
+            生效的 effort；無此概念的 provider 為 None
     """
 
     PROVIDER_NAME: ClassVar[str] = ""
@@ -93,25 +111,29 @@ class BaseLLMClient(abc.ABC):
         effort: EffortArg = None,
         endpoint: Endpoint | None = None,
     ) -> None:
-        """解析模型名並檢查 effort 是否受支援。
+        """Resolve the model name and validate effort support.
 
-        Resolve the model name and validate effort support.
+        解析模型名並檢查 effort 是否受支援。
 
         Args:
-            model: 覆寫模型名；None 沿用 ``LLM_MODEL_NAME``。Model override.
-            effort: 覆寫思考深度；不支援的 provider 給值即拋錯；
-                :data:`OMIT_EFFORT` 表示不傳。Effort override; rejected when
-                unsupported, :data:`OMIT_EFFORT` means none.
-            endpoint: 端點（網址、金鑰、標籤前綴的來源），類型須在
+            model: the model-name override; ``None`` keeps ``LLM_MODEL_NAME``
+                覆寫模型名；None 沿用 ``LLM_MODEL_NAME``
+            effort: the thinking-depth override; giving a value to an unsupported provider raises;
+                :data:`OMIT_EFFORT` means not sending one
+                覆寫思考深度；不支援的 provider 給值即拋錯；``OMIT_EFFORT`` 表示不傳
+            endpoint: the endpoint (source of the URL, the key, and the label prefix); its type must be in
+                ``ENDPOINT_TYPES``. ``None`` keeps the legacy single-set settings (``LLM_PROVIDER`` and so on),
+                the same behavior as before endpoints were introduced. When giving an endpoint, ``model``
+                should usually be given too: ``None`` still takes ``LLM_MODEL_NAME`` and ignores the endpoint's
+                allowlist.
+                端點（網址、金鑰、標籤前綴的來源），類型須在
                 ``ENDPOINT_TYPES`` 內；None 沿用舊式單組設定（``LLM_PROVIDER``
                 等），與導入端點之前的行為相同。指定端點時通常應一併指定
-                ``model``：None 仍取 ``LLM_MODEL_NAME``，不看端點的白名單。The
-                endpoint; None keeps reading the legacy settings.
+                ``model``：None 仍取 ``LLM_MODEL_NAME``，不看端點的白名單。
 
         Raises:
-            LLMServiceError: 端點類型不符、effort 不受支援、或模型名為空時。
-                When the endpoint type mismatches, effort is unsupported or
-                the model name is empty.
+            LLMServiceError: if the endpoint type mismatches, effort is unsupported, or the model name is empty
+                若端點類型不符、effort 不受支援、或模型名為空
         """
         self._check_endpoint_type(endpoint)
         self._endpoint = endpoint
@@ -132,7 +154,10 @@ class BaseLLMClient(abc.ABC):
 
     @property
     def model_label(self) -> str:
-        """寫入 Anki tag 與去重紀錄的標籤。Label for Anki tags and dedup records."""
+        """The label written to Anki tags and dedup records.
+
+        寫入 Anki tag 與去重紀錄的標籤。
+        """
         return build_model_label(
             self._provider,
             self._model_name,
@@ -142,41 +167,54 @@ class BaseLLMClient(abc.ABC):
 
     @property
     def _formatted_model_name(self) -> str:
-        """``model_label`` 的過渡 alias；既有讀取點遷移完畢後移除。
+        """Transitional alias of ``model_label``; removed once the existing readers migrate.
 
-        Transitional alias of ``model_label``; removed once callers migrate.
+        ``model_label`` 的過渡 alias；既有讀取點遷移完畢後移除。
         """
         return self.model_label
 
     @classmethod
     def default_effort(cls) -> str | None:
-        """未帶覆寫時該 provider 的預設 effort；無此概念回 None。
+        """Return the provider's default effort when no override is given.
 
-        The provider's default effort when no override is given, or None.
+        回傳未帶覆寫時該 provider 的預設 effort。
+
+        Returns:
+            the default effort; ``None`` for providers without that notion
+            預設 effort；無此概念回 None
         """
         return None
 
     @property
     def provider(self) -> str:
-        """端點 ID，標籤前綴的來源（google / openai / 空字串不加前綴）。
+        """The endpoint ID, source of the label prefix (google / openai / empty string add no prefix).
 
-        The endpoint ID, source of the label prefix.
+        端點 ID，標籤前綴的來源（google / openai / 空字串不加前綴）。
         """
         return self._provider
 
     @property
     def endpoint(self) -> Endpoint | None:
-        """建立時指定的端點；None＝舊式單組設定。The endpoint, if any."""
+        """The endpoint given at construction; ``None`` means the legacy single-set settings.
+
+        建立時指定的端點；None＝舊式單組設定。
+        """
         return self._endpoint
 
     @property
     def model_name(self) -> str:
-        """實際送給後端的模型名。The model name sent upstream."""
+        """The model name actually sent upstream.
+
+        實際送給後端的模型名。
+        """
         return self._model_name
 
     @property
     def effort(self) -> str | None:
-        """生效的 effort。The effective effort, if any."""
+        """The effective effort; ``None`` for providers without that notion.
+
+        生效的 effort；無此概念的 provider 為 None。
+        """
         return self._effort
 
     # ------------------------------------------------------------------
@@ -190,21 +228,25 @@ class BaseLLMClient(abc.ABC):
         user_prompt: str,
         response_schema: dict[str, object],
     ) -> LLMGenerateResult:
-        """呼叫 LLM 並取得嚴格符合 ``response_schema`` 的 JSON 資料。
+        """Call the LLM and obtain JSON data that strictly conforms to ``response_schema``.
 
-        Call the LLM and obtain JSON strictly conforming to the schema.
+        呼叫 LLM 並取得嚴格符合 ``response_schema`` 的 JSON 資料。
 
         Args:
-            system_prompt: 系統提示。The system prompt.
-            user_prompt: 使用者輸入。The user input.
-            response_schema: JSON Schema 定義字典。JSON Schema dict.
+            system_prompt: the system prompt
+                系統提示
+            user_prompt: the user input
+                使用者輸入
+            response_schema: the JSON Schema definition dict
+                JSON Schema 定義字典
 
         Returns:
-            LLMGenerateResult 實例。An LLMGenerateResult instance.
+            an ``LLMGenerateResult`` instance
+            ``LLMGenerateResult`` 實例
 
         Raises:
-            LLMServiceError: 任何失敗一律以此類（或其子類）拋出。Every
-                failure surfaces as this class or a subclass.
+            LLMServiceError: on any failure; every failure is raised as this class or a subclass
+                任何失敗一律以此類（或其子類）拋出
         """
 
     # ------------------------------------------------------------------
@@ -221,36 +263,45 @@ class BaseLLMClient(abc.ABC):
         timeout: float | None = None,
         describe_error: Callable[[BaseException], str] | None = None,
     ) -> T:
-        """對瞬時錯誤做指數退避重試，並可加絕對超時。
+        """Retry an awaitable on transient errors with exponential backoff and an optional absolute timeout.
 
-        Retry an awaitable on transient errors with exponential backoff and
-        an optional absolute timeout per attempt.
+        對瞬時錯誤做指數退避重試，並可加絕對超時。
+
+        Modeled on the retry loop in ``audio_evaluator/gemini_client.py``. Non-transient errors are re-raised
+        unchanged without retrying; exhausting the retries raises ``LLMServiceError``. An attempt whose own
+        timeout expires is always retried, regardless of ``is_transient``.
 
         藍本為 ``audio_evaluator/gemini_client.py`` 的重試迴圈。非瞬時錯誤
-        原樣拋出、不重試；重試耗盡拋 ``LLMServiceError``。
+        原樣拋出、不重試；重試耗盡拋 ``LLMServiceError``。單次嘗試自己的超時到期時一律重試，不經 ``is_transient``。
 
         Args:
-            operation: 每次嘗試都重新建立的 awaitable 工廠。Factory
-                producing a fresh awaitable per attempt.
-            is_transient: 判斷例外是否值得重試。Predicate deciding whether
-                an exception is retryable.
-            max_retries: 最大嘗試次數。Maximum attempts.
-            base_delay: 首次等待秒數，之後每次加倍。Initial delay, doubled
-                each retry.
-            timeout: 單次嘗試的絕對超時秒數；None 不設。Per-attempt
-                timeout in seconds, or None.
-            describe_error: 重試耗盡時把最後一個例外寫進訊息的方式；None 用
+            operation: the awaitable factory, called anew for each attempt
+                每次嘗試都重新建立的 awaitable 工廠
+            is_transient: the predicate deciding whether an exception is worth retrying
+                判斷例外是否值得重試
+            max_retries: the maximum number of attempts
+                最大嘗試次數
+            base_delay: the first wait in seconds, doubled after each attempt
+                首次等待秒數，之後每次加倍
+            timeout: the absolute timeout of a single attempt in seconds; ``None`` sets none
+                單次嘗試的絕對超時秒數；None 不設
+            describe_error: how the last exception is written into the message when retries are exhausted;
+                ``None`` uses "type name: repr" (so exceptions with an empty str, such as ``TimeoutError()``,
+                stay identifiable). A provider may pass its own version, for example one that does not embed
+                the whole response JSON, because the message reaches the generation scripts, which grade it by
+                substring matching.
+                重試耗盡時把最後一個例外寫進訊息的方式；None 用
                 「型別名: repr」（``TimeoutError()`` 這類 str 為空的例外仍可
                 辨識）。provider 可傳入自己的版本，例如不嵌整包回應 JSON——
-                訊息會到生成腳本，而腳本以子字串比對分級。How the last
-                exception is rendered into the exhaustion message.
+                訊息會到生成腳本，而腳本以子字串比對分級。
 
         Returns:
-            operation 的結果。The operation's result.
+            the result of ``operation``
+            ``operation`` 的結果
 
         Raises:
-            LLMServiceError: 重試耗盡或超時時。When retries are exhausted or
-                every attempt timed out.
+            LLMServiceError: if the retries are exhausted or the last attempt timed out
+                若重試耗盡或超時
         """
         for attempt in range(1, max_retries + 1):
             scope: asyncio.Timeout | None = None
@@ -298,12 +349,21 @@ class BaseLLMClient(abc.ABC):
 
     @classmethod
     def _check_endpoint_type(cls, endpoint: Endpoint | None) -> None:
-        """端點類型不在 ``ENDPOINT_TYPES`` 內時拋錯（工廠之外直接建構時的防線）。
+        """Raise when the endpoint's type is not in ``ENDPOINT_TYPES``.
 
-        Raise when the endpoint's type is not one this class serves.
+        端點類型不在 ``ENDPOINT_TYPES`` 內時拋錯（工廠之外直接建構時的防線）。
+
+        This is the guard for direct construction outside the factory. ``None`` always passes.
+
+        這是工廠之外直接建構時的防線。``None`` 一律通過。
+
+        Args:
+            endpoint: the endpoint to check, or ``None``
+                要檢查的端點，或 ``None``
 
         Raises:
-            LLMServiceError: 類型不符時。On a type mismatch.
+            LLMServiceError: if the type does not match
+                若類型不符
         """
         if endpoint is not None and endpoint.type not in cls.ENDPOINT_TYPES:
             raise LLMServiceError(
@@ -313,19 +373,30 @@ class BaseLLMClient(abc.ABC):
 
     @classmethod
     def _reject_unsupported_effort(cls, effort: EffortArg) -> None:
-        """``SUPPORTS_EFFORT`` 為 False 卻收到 effort 時拋錯。
+        """Raise when ``SUPPORTS_EFFORT`` is ``False`` but an effort is given.
 
-        Raise when an effort override is given to a class that does not
-        support it.
+        ``SUPPORTS_EFFORT`` 為 False 卻收到 effort 時拋錯。
+
+        It is a classmethod so subclasses can call it **before** their other checks (keeping the error order from
+        before the hierarchy was introduced); the base ``__init__`` calling it again is idempotent. The message
+        wording matches the pre-hierarchy ``factory.py`` version; the supported list comes from the providers with
+        ``supports_effort=True`` in the factory's static registry (in registration order, following the registry
+        as it changes), without importing any provider module. ``None`` and ``OMIT_EFFORT`` are not overrides; an
+        empty string is still an invalid override.
 
         做成 classmethod 是為了讓子類能在自己的其他檢查**之前**先呼叫（保持
         層級化前的錯誤順序），基底 ``__init__`` 再呼叫一次是冪等的。訊息
         句型與層級化前 ``factory.py`` 的版本相同；支援清單取自工廠靜態註冊表中
         ``supports_effort=True`` 的 provider（依註冊順序，隨註冊表增減），
-        不 import 任何 provider 模組。
+        不 import 任何 provider 模組。None 與 ``OMIT_EFFORT`` 不算覆寫；空字串仍視為非法覆寫。
+
+        Args:
+            effort: the effort argument to check
+                要檢查的 effort 參數
 
         Raises:
-            LLMServiceError: 不支援 effort 卻收到值時。
+            LLMServiceError: if effort is not supported but a value is given
+                若不支援 effort 卻收到值
         """
         # None 與 OMIT_EFFORT 都不算 effort 覆寫；空字串照舊視為非法覆寫
         if effort is None or effort is OMIT_EFFORT or cls.SUPPORTS_EFFORT:

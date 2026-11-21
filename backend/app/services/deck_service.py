@@ -1,14 +1,16 @@
-"""
+"""Deck service: create decks in Anki (deck_create plan §4, §5).
+
 牌組服務：在 Anki 新增牌組（deck_create 計畫書 §4、§5）。
 
-Deck service: creates a deck in Anki.
+- ``normalize_deck_name``  validate and tidy a deck name (trim whitespace around every level)
+- ``DeckService.create``   reject an existing deck → create → sync AnkiWeb after the write
 
 - ``normalize_deck_name``  檢查並整理牌組名稱（去掉每一層前後的空白）
 - ``DeckService.create``   已存在就拒絕 → 建立 → 寫入後同步 AnkiWeb
 
-只做新增；改名、刪除、搬移卡片不在這裡（計畫書 §8）。
+Creation only; renaming, deleting and moving cards are not handled here (plan §8).
 
-Creation only; renaming, deleting and moving cards are out of scope.
+只做新增；改名、刪除、搬移卡片不在這裡（計畫書 §8）。
 """
 
 import logging
@@ -20,32 +22,36 @@ from app.services.note_service import sync_warning
 
 logger = logging.getLogger(__name__)
 
-#: Anki 牌組名的分層符號。Anki's deck level separator.
+#: Anki's deck level separator.
+#: Anki 牌組名的分層符號。
 DECK_SEPARATOR = "::"
-#: 牌組全名的長度上限（字元數，含分層符號）。Maximum length of a full deck name.
+#: The maximum length of a full deck name (in characters, separators included).
+#: 牌組全名的長度上限（字元數，含分層符號）。
 MAX_DECK_NAME_LENGTH = 200
 
 
 def normalize_deck_name(name: str) -> str:
-    """檢查牌組名稱，回傳整理後的全名（計畫書 §4）。
+    """Validate a deck name and return the normalized full name (plan §4).
 
-    Validate a deck name and return its normalized full name.
+    檢查牌組名稱，回傳整理後的全名（計畫書 §4）。
+
+    Split on ``::`` and trim whitespace around every level; reject the name if any level is empty or the full name
+    exceeds the length limit. Other characters are not blocked and are left to Anki.
 
     以 ``::`` 分層，每一層去掉前後空白；任何一層是空的、或全名超過長度上限就拒絕。其他字元不擋，
     交給 Anki 判斷。
 
-    Split on ``::`` and trim every level; reject an empty level or a name
-    over the length limit. Other characters are left to Anki.
-
     Args:
-        name: 使用者輸入的名稱，例如 ``日本語 :: 面接``。The name as typed.
+        name: the name as typed by the user, for example ``日本語 :: 面接``
+            使用者輸入的名稱，例如 ``日本語 :: 面接``
 
     Returns:
-        整理後的全名，例如 ``日本語::面接``。The normalized full name.
+        the normalized full name, for example ``日本語::面接``
+        整理後的全名，例如 ``日本語::面接``
 
     Raises:
-        DeckNameInvalidError: 名稱是空的、某一層是空的，或太長。
-            The name is empty, has an empty level, or is too long.
+        DeckNameInvalidError: if the name is empty, a level is empty, or the name is too long
+            若名稱是空的、某一層是空的，或太長
     """
     if not name.strip():
         raise DeckNameInvalidError("牌組名稱不能是空的")
@@ -62,71 +68,79 @@ def normalize_deck_name(name: str) -> str:
 
 
 def _same_deck_key(name: str) -> str:
-    """比對牌組是否同名用的鍵：近似 Anki 的規則（牌組名不分大小寫，也不分 Unicode 的組合寫法）。
+    """Return the key used to tell whether two deck names are the same deck.
 
-    The key used to tell whether two deck names are the same deck; an
-    approximation of Anki's rule (case-insensitive, Unicode-normalized).
+    回傳比對牌組是否同名用的鍵。
 
-    只是近似：真正的判斷在 Anki，所以 ``DeckService.create`` 建立後還會再看回傳的 id 是不是既有的。
+    It approximates Anki's rule (deck names are case-insensitive and ignore Unicode composition differences). It is
+    only an approximation: Anki has the final say, which is why ``DeckService.create`` also checks after creating
+    whether the returned id belongs to an existing deck.
 
-    Only an approximation: Anki has the final say, which is why
-    ``DeckService.create`` also checks the returned id after creating.
+    近似 Anki 的規則（牌組名不分大小寫，也不分 Unicode 的組合寫法）。只是近似：真正的判斷在 Anki，所以
+    ``DeckService.create`` 建立後還會再看回傳的 id 是不是既有的。
 
     Args:
-        name: 牌組全名。A full deck name.
+        name: a full deck name
+            牌組全名
 
     Returns:
-        比對用的鍵。The comparison key.
+        the comparison key
+        比對用的鍵
     """
     return unicodedata.normalize("NFC", name).casefold()
 
 
 class DeckService:
-    """牌組的寫入操作（目前只有新增）。
+    """Deck write operations (creation only for now).
 
-    Deck write operations (creation only for now).
+    牌組的寫入操作（目前只有新增）。
 
     Attributes:
-        anki_client: AnkiConnect 客戶端。The AnkiConnect client.
+        anki_client: the AnkiConnect client
+            AnkiConnect 客戶端
     """
 
     def __init__(self, anki_client: AnkiClient) -> None:
-        """初始化服務。Initialize the service.
+        """Initialize the service.
+
+        初始化服務。
 
         Args:
-            anki_client: AnkiConnect 客戶端。The AnkiConnect client.
+            anki_client: the AnkiConnect client
+                AnkiConnect 客戶端
         """
         self.anki_client = anki_client
 
     async def create(self, name: str) -> dict[str, object]:
-        """新增牌組：檢查名稱 → 已存在就拒絕 → 建立 → 同步 AnkiWeb 並等它完成。
+        """Create a deck: validate the name → reject an existing deck → create → sync AnkiWeb and wait for it.
 
-        Create a deck: validate the name, reject an existing deck, create it,
-        then sync with AnkiWeb and wait for it.
+        新增牌組：檢查名稱 → 已存在就拒絕 → 建立 → 同步 AnkiWeb 並等它完成。
+
+        When creating ``A::B::C``, Anki automatically adds ``A`` and ``A::B``. If the sync fails, the deck is still
+        created; this is reported through ``sync_warning`` rather than raised.
 
         建 ``A::B::C`` 時 Anki 會自動補上 ``A``、``A::B``。同步失敗時牌組仍已建立，以
         ``sync_warning`` 提醒，不拋錯。
 
-        Anki adds the missing parents of ``A::B::C``. A failed sync leaves
-        the deck created and is reported through ``sync_warning``.
-
         Args:
-            name: 使用者輸入的牌組名稱。The deck name as typed.
+            name: the deck name as typed by the user
+                使用者輸入的牌組名稱
 
         Returns:
-            ``{"deck_name", "deck_id", "sync_warning"}``：``deck_name`` 是 Anki 裡實際的名稱，
-            ``sync_warning`` 在同步成功時為 None。
-            ``deck_name`` is the name as stored in Anki; ``sync_warning`` is
-            None when the sync succeeded.
+            ``{"deck_name", "deck_id", "sync_warning"}``, where ``deck_name`` is the actual name in Anki and
+            ``sync_warning`` is ``None`` when the sync succeeded
+            ``{"deck_name", "deck_id", "sync_warning"}``，``deck_name`` 是 Anki 裡實際的名稱，
+            ``sync_warning`` 在同步成功時為 ``None``
 
         Raises:
-            DeckNameInvalidError: 400——名稱不合格。The name is invalid.
-            DeckExistsError: 409——同名的牌組已存在（比對不分大小寫與 Unicode 的組合寫法；Anki 自己
+            AnkiConnectError: 502, if Anki is unreachable or rejects the name
+                502——若連不上 Anki，或 Anki 拒絕這個名稱
+            DeckExistsError: 409, if a deck with the same name exists (compared ignoring case and Unicode
+                composition, or judged an existing deck by Anki itself). The message shows the existing name in Anki.
+                409——若同名的牌組已存在（比對不分大小寫與 Unicode 的組合寫法；Anki 自己
                 判定為既有牌組時也是）。訊息裡是 Anki 裡既有的寫法。
-                A deck with this name exists (compared case-insensitively, or
-                as judged by Anki itself); the message shows the existing name.
-            AnkiConnectError: 502——連不上 Anki，或 Anki 拒絕這個名稱。
-                Anki is unreachable or rejected the name.
+            DeckNameInvalidError: 400, if the name is invalid
+                400——若名稱不合格
         """
         normalized = normalize_deck_name(name)
         before = await self.anki_client.get_deck_names_and_ids()
@@ -151,23 +165,26 @@ class DeckService:
         return {"deck_name": deck_name, "deck_id": deck_id, "sync_warning": warning}
 
     async def _stored_name(self, deck_id: int, normalized: str) -> str:
-        """新牌組在 Anki 裡實際的名稱；查不到時用送出的名稱。
+        """Return the new deck's actual name in Anki, falling back to the name sent.
 
-        The new deck's name as stored in Anki, falling back to the name sent.
+        回傳新牌組在 Anki 裡實際的名稱；查不到時用送出的名稱。
+
+        Anki may adjust the name (for example its Unicode composition), and the frontend needs the actual name to
+        select the new deck. This step runs after the deck is created, so neither a failed lookup nor a missing
+        deck may count as a failed creation; it is only logged and the name sent is used instead.
 
         Anki 可能調整名稱（例如 Unicode 的組合寫法），前端要用實際的名稱才選得到新牌組。這一步在牌組
         建好之後：查詢失敗或查不到都不能當成建立失敗，只記下來並改用送出的名稱。
 
-        Anki may adjust the name, and the frontend selects the deck by its
-        stored name. The deck already exists at this point, so a failed or
-        empty lookup is logged and never reported as a failed creation.
-
         Args:
-            deck_id: ``create_deck`` 回傳的牌組 ID。The ID returned by ``create_deck``.
-            normalized: 送給 Anki 的名稱。The name sent to Anki.
+            deck_id: the deck ID returned by ``create_deck``
+                ``create_deck`` 回傳的牌組 ID
+            normalized: the name sent to Anki
+                送給 Anki 的名稱
 
         Returns:
-            Anki 裡的名稱；查不到時為 ``normalized``。The stored name, or ``normalized``.
+            the name in Anki, or ``normalized`` if it cannot be found
+            Anki 裡的名稱；查不到時為 ``normalized``
         """
         try:
             decks = await self.anki_client.get_deck_names_and_ids()

@@ -1,7 +1,23 @@
-"""
+"""Telegram flows of the person profile card (person-card plan §3.12, §3.13).
+
 人脈卡的 Telegram 流程（人脈卡計畫書 §3.12、§3.13）。
 
-Telegram flows of the person profile card.
+- ``/p name``: find a person and reply with the must-see summary and action buttons.
+- Summary buttons: log an interaction, follow-ups (mark done, delete), edit data (text fields), each list
+  (add, delete; history fields can also be struck out and restored, which for positions are "leave job" and
+  "restore current job"), photo, and full data.
+- Deep links on the card face (actions in ``deep_link_parser.PERSON_VERBS``) are forwarded by ``/start`` in
+  ``commands.py`` to :func:`handle_person_link`. ``psec`` is a section's "+": when the section has several
+  fields, it first asks which one to add; ``pend`` is "strike out". Long-pressing a list entry (``pitm``) or a
+  text field (``pfld``) first opens a menu: hide or show (affects only the card face), strike out (for
+  positions, leave job), delete and edit (every entry's content and time can be edited, work-history plan
+  §16); for text fields it is edit, hide or show (§5.4). Telegram's lists and "edit data" have the same hide
+  toggle and editing, so there is no need to go back to the card and long-press.
+- When "person card" is chosen in ``/newcard``, :func:`start_person_create` creates a new person.
+- "AI insight and topics": the LLM analyzes the person from a counselor's perspective and suggests topics;
+  names are masked before sending (:mod:`app.services.person_profile_topics`).
+- "Record in a paragraph": a text or voice message is organized by the LLM into interaction, follow-up and
+  field proposals, which are written only after being checked (:mod:`app.services.person_profile_ingest`).
 
 - ``/p 名字``：找人，回覆「見面前必看」摘要與操作按鈕。
 - 摘要的按鈕：記一筆互動、待追蹤（標成完成、刪除）、改資料（文字欄位）、各清單（新增、刪除；
@@ -16,10 +32,12 @@ Telegram flows of the person profile card.
 - 「用一段話記錄」：一段文字或語音經 LLM 整理成互動、待追蹤與欄位建議，勾選後才寫入
   （:mod:`app.services.person_profile_ingest`）。
 
+All writes go through ``NoteService`` (named actions or ``update_fields``); the handler validates and syncs
+after writing. Callback data starts with ``pp:``; a person is referred to by note ID (only card-face deep links
+use ``Card_ID``).
+
 寫入一律經 ``NoteService``（具名動作或 ``update_fields``），由 handler 驗證並在寫入後同步。
 callback data 以 ``pp:`` 開頭；用筆記 ID 指人（卡面深連結才用 ``Card_ID``）。
-
-All writes go through ``NoteService``; callback data starts with ``pp:``.
 """
 
 from __future__ import annotations
@@ -94,12 +112,16 @@ logger = logging.getLogger(__name__)
 router = Router(name="person_profile")
 
 HANDLER_NAME = "person_profile"
-#: TG 建立的人放在這個牌組。The deck people created on Telegram go into.
+#: The deck that people created on Telegram go into.
+#: TG 建立的人放在這個牌組。
 PERSON_DECK = "人脈"
 
 
 class PersonStates(StatesGroup):
-    """人脈卡流程的狀態。States of the person flows."""
+    """FSM states of the person-card flows.
+
+    人脈卡流程的狀態。
+    """
 
     waiting_search = State()
     create_name = State()
@@ -122,7 +144,10 @@ CANCEL_ROW = [_button("取消", "pp:cancel")]
 
 
 def _today() -> date:
-    """今天（``APP_TIMEZONE``）。Today in the configured time zone."""
+    """Return today's date in the configured time zone (``APP_TIMEZONE``).
+
+    回傳今天（``APP_TIMEZONE``）。
+    """
     return clock.today()
 
 
@@ -132,10 +157,16 @@ def _today() -> date:
 
 
 async def _load(card_service: CardService, note_id: int) -> tuple[dict[str, str], dict[str, list[object]]] | None:
-    """讀出一個人：一般欄位與解析好的清單；不是人脈卡時為 None。
+    """Load a person: plain fields and parsed lists; ``None`` when the note is not a person card.
 
-    Load a person's fields and parsed lists; None when not a person card.
-    清單含六種 JSON 清單與會變的欄位（:data:`PERSON_HISTORY_FIELDS`）。格式壞掉的清單（包括還沒跑
+    讀出一個人：一般欄位與解析好的清單；不是人脈卡時為 ``None``。
+
+    The lists include the JSON lists and the history fields (:data:`PERSON_HISTORY_FIELDS`). A list whose
+    format is broken (including old text not yet run through ``migrate_history_fields.py``) is treated as
+    empty and a warning is logged; display code marks it with ``view.broken_lists``, and the handler refuses
+    to write it (no overwrite).
+
+    清單含 JSON 清單與會變的欄位（``PERSON_HISTORY_FIELDS``）。格式壞掉的清單（包括還沒跑
     ``migrate_history_fields.py`` 的舊文字）當成空的，記一筆 warning；顯示的地方以
     ``view.broken_lists`` 標出，寫入時 handler 會拒絕（不覆寫）。
     """
@@ -146,7 +177,10 @@ async def _load(card_service: CardService, note_id: int) -> tuple[dict[str, str]
 async def _load_with_tags(
     card_service: CardService, note_id: int
 ) -> tuple[dict[str, str], dict[str, list[object]], list[str]] | None:
-    """同 :func:`_load`，另外帶回筆記的標籤。Like :func:`_load`, plus the note's tags."""
+    """Load a person like :func:`_load`, also returning the note's tags.
+
+    同 ``_load``，另外帶回筆記的標籤。
+    """
     note = await card_service.get_note(note_id)
     if str(note.get("modelName")) != PERSON_NOTE_TYPE:
         return None
@@ -165,9 +199,13 @@ async def _load_with_tags(
 
 
 async def _ensure_ids(card_service: CardService, note_id: int, fields: dict[str, str]) -> None:
-    """Anki app 建立的人沒有 ``Card_ID``、``TG_Bot``：第一次在 TG 找到時補上（R7）。
+    """Backfill ``Card_ID`` and ``TG_Bot`` the first time a person created in the Anki app is found (R7).
 
-    Backfill ``Card_ID`` and ``TG_Bot`` for people created in the Anki app.
+    Anki app 建立的人沒有 ``Card_ID``、``TG_Bot``：第一次在 TG 找到時補上（R7）。
+
+    ``fields`` is updated in place with the new values.
+
+    ``fields`` 會就地更新為新的值。
     """
     changes: dict[str, str] = {}
     if not fields.get("Card_ID", "").strip():
@@ -184,7 +222,18 @@ async def _ensure_ids(card_service: CardService, note_id: int, fields: dict[str,
 
 
 def summary_keyboard(note_id: int) -> InlineKeyboardMarkup:
-    """摘要下方的操作按鈕。The buttons under a summary."""
+    """Return the action buttons shown under a summary.
+
+    回傳摘要下方的操作按鈕。
+
+    Args:
+        note_id: the person's note ID
+            人脈卡的筆記 ID
+
+    Returns:
+        the inline keyboard
+        按鈕鍵盤
+    """
     return InlineKeyboardMarkup(inline_keyboard=[
         [_button("用一段話記錄（文字或語音）", f"pp:ing:{note_id}")],
         [_button("AI 分析與話題", f"pp:topic:{note_id}")],
@@ -197,14 +246,26 @@ def summary_keyboard(note_id: int) -> InlineKeyboardMarkup:
 async def send_summary(
     target: types.Message, card_service: CardService, note_id: int, *, prefix: str = "", edit: bool = False
 ) -> None:
-    """送出（或改寫成）某人的摘要。Send, or edit into, a person's summary.
+    """Send a person's summary, or edit a message into it.
+
+    送出（或改寫成）某人的摘要。
+
+    Replies with the card-not-found text when the note is not a person card. Backfills ``Card_ID`` and
+    ``TG_Bot`` when missing.
+
+    不是人脈卡時回覆找不到卡片。缺 ``Card_ID``、``TG_Bot`` 時會補上。
 
     Args:
-        target: 回覆的訊息；``edit`` 時改寫它。The message to answer or edit.
-        card_service: 卡片服務。Card service.
-        note_id: 人脈卡的筆記 ID。The person note.
-        prefix: 放在摘要前面的一行（例如「✅ 已儲存」）。A line before the summary.
-        edit: 改寫 ``target`` 而不是送新訊息。Edit instead of sending.
+        target: the message to reply to; edited instead when ``edit`` is set
+            回覆的訊息；``edit`` 時改寫它
+        card_service: the card service
+            卡片服務
+        note_id: the person's note ID
+            人脈卡的筆記 ID
+        prefix: a line placed before the summary (for example 「✅ 已儲存」)
+            放在摘要前面的一行（例如「✅ 已儲存」）
+        edit: edit ``target`` instead of sending a new message
+            改寫 ``target`` 而不是送新訊息
     """
     loaded = await _load(card_service, note_id)
     if loaded is None:
@@ -220,7 +281,10 @@ async def send_summary(
 
 
 async def _reply_error(target: types.Message, error: Exception) -> None:
-    """服務層或 Anki 的錯誤轉成回覆。Reply with a service or Anki error."""
+    """Reply with a service-layer or Anki error.
+
+    把服務層或 Anki 的錯誤轉成回覆。
+    """
     if isinstance(error, FluencyTidesError):
         await target.answer(f"❌ {error_detail(error.message)}", parse_mode="HTML")
     else:
@@ -241,7 +305,22 @@ async def command_person(
     anki_client: AnkiClient,
     card_service: CardService,
 ) -> None:
-    """``/p 名字``：找人；沒給名字時請使用者輸入。``/p name``: find a person."""
+    """Handle ``/p name``: find a person; ask for a name when none is given.
+
+    處理 ``/p 名字``：找人；沒給名字時請使用者輸入。
+
+    Args:
+        message: the command message
+            指令訊息
+        command: the parsed command; its arguments are the name
+            解析後的指令，參數是名字
+        state: the FSM context; cleared first
+            FSM 狀態，會先清除
+        anki_client: the AnkiConnect client
+            AnkiConnect 客戶端
+        card_service: the card service
+            卡片服務
+    """
     await state.clear()
     if not command.args or not command.args.strip():
         await state.set_state(PersonStates.waiting_search)
@@ -255,7 +334,20 @@ async def command_person(
 async def process_search(
     message: types.Message, state: FSMContext, anki_client: AnkiClient, card_service: CardService
 ) -> None:
-    """處理輸入的名字。Handle the typed name."""
+    """Handle the name typed after ``/p`` asked for one.
+
+    處理 ``/p`` 詢問後輸入的名字。
+
+    Args:
+        message: the message with the name
+            含名字的訊息
+        state: the FSM context; cleared first
+            FSM 狀態，會先清除
+        anki_client: the AnkiConnect client
+            AnkiConnect 客戶端
+        card_service: the card service
+            卡片服務
+    """
     await state.clear()
     await _search(message, state, anki_client, card_service, (message.text or "").strip())
 
@@ -263,7 +355,15 @@ async def process_search(
 async def _search(
     message: types.Message, state: FSMContext, anki_client: AnkiClient, card_service: CardService, name: str
 ) -> None:
-    """依名字找人：一位直接回摘要；多位列按鈕；找不到時提供建立。Search by name."""
+    """Search for a person by name.
+
+    依名字找人。
+
+    One match replies with the summary directly; several matches are listed as buttons (too many asks for
+    a fuller name); no match offers to create the person.
+
+    一位直接回摘要；多位列按鈕（太多時請打更完整的名字）；找不到時提供建立。
+    """
     if not name:
         await message.answer("請輸入名字。")
         return
@@ -308,7 +408,29 @@ async def handle_person_link(
     anki_client: AnkiClient,
     action: PersonLinkAction,
 ) -> None:
-    """卡面深連結：先同步，以 ``Card_ID`` 找到人，再依動作處理。Handle a card link."""
+    """Handle a card-face deep link: sync first, find the person by ``Card_ID``, then act on the verb.
+
+    處理卡面深連結：先同步，以 ``Card_ID`` 找到人，再依動作處理。
+
+    Unsupported field names or malformed indexes reply that the link is not supported; service and Anki
+    errors are replied to instead of raised.
+
+    不支援的欄位名稱或格式不對的索引會回覆連結不支援；服務層與 Anki 的錯誤以回覆處理，不往外拋。
+
+    Args:
+        message: the ``/start`` message carrying the link
+            帶著連結的 ``/start`` 訊息
+        state: the FSM context; cleared first
+            FSM 狀態，會先清除
+        note_service: the note service used for writes
+            寫入用的筆記服務
+        card_service: the card service
+            卡片服務
+        anki_client: the AnkiConnect client
+            AnkiConnect 客戶端
+        action: the parsed deep link action
+            解析好的深連結動作
+    """
     await state.clear()
     try:
         await anki_client.sync(raise_errors=False)
@@ -391,7 +513,25 @@ async def on_person_button(
     note_service: NoteService,
     card_service: CardService,
 ) -> None:
-    """``pp:`` 按鈕的分派。Dispatch the ``pp:`` buttons."""
+    """Dispatch the ``pp:`` buttons.
+
+    分派 ``pp:`` 按鈕。
+
+    Buttons on a prompt message that is no longer the current one (a second tap, or an older prompt) are
+    ignored with a short hint and their buttons removed.
+
+    不在目前提問訊息上的提問按鈕（連點的第二下或較早的提問）會以短提示忽略，並拿掉按鈕。
+
+    Args:
+        callback: the button callback
+            按鈕 callback
+        state: the FSM context
+            FSM 狀態
+        note_service: the note service used for writes
+            寫入用的筆記服務
+        card_service: the card service
+            卡片服務
+    """
     message = callback.message
     # 太舊的訊息（超過 48 小時）拿不到內容，無法回覆或改寫
     if message is None or isinstance(message, types.InaccessibleMessage):
@@ -573,9 +713,13 @@ async def on_person_button(
 
 
 def _button_list(parts: list[str]) -> tuple[int, str] | None:
-    """清單一筆的按鈕指向的人與清單（那一筆已經變了時給「打開清單」）；不是這種按鈕時為 None。
+    """Return the person and list a per-item button points at; ``None`` for other buttons.
 
-    The person and list a per-item button points at.
+    回傳清單一筆的按鈕指向的人與清單；不是這種按鈕時為 ``None``。
+
+    Used to offer "open list" when that entry has already changed.
+
+    用於那一筆已經變了時給「打開清單」。
     """
     verb = parts[1] if len(parts) > 1 else ""
     try:
@@ -595,10 +739,16 @@ def _button_list(parts: list[str]) -> tuple[int, str] | None:
 async def _reply_item_changed(
     message: types.Message, note_id: int, field_name: str, *, unsaved: str | None = None
 ) -> None:
-    """那一筆已經改過或不在了：請使用者重新打開清單（舊訊息的按鈕帶的是舊的序號與指紋）。``unsaved`` 是修改到
-    一半的預覽（已轉義）：附上剛才輸入的內容，使用者重新打開清單後可以照著再改。
+    """Ask the user to reopen the list because the entry has changed or is gone.
 
-    Ask to reopen the list when the item has changed.
+    那一筆已經改過或不在了：請使用者重新打開清單。
+
+    Buttons on old messages carry the old index and fingerprint. ``unsaved`` is the preview of an edit in
+    progress (escaped): the text just typed is attached so the user can redo the edit after reopening the
+    list.
+
+    舊訊息的按鈕帶的是舊的序號與指紋。``unsaved`` 是修改到一半的預覽（已轉義）：附上剛才輸入的內容，
+    使用者重新打開清單後可以照著再改。
     """
     title = escape_tg(view.list_title(field_name))
     if unsaved:
@@ -616,40 +766,59 @@ async def _reply_item_changed(
 
 
 class _StaleButton(Exception):
-    """按鈕的 callback data 解析不了（舊版本的按鈕、格式不對）。The button's data cannot be parsed.
+    """Raised when a button's callback data cannot be parsed (an old button version or a bad format).
+
+    按鈕的 callback data 解析不了（舊版本的按鈕、格式不對）。
+
+    Used only while parsing callback data: runtime errors are not turned into this, so they are not
+    reported as "the button has expired".
 
     只用在解析 callback data：執行時的錯誤不轉成這個，免得被說成「按鈕已失效」。
     """
 
 
+#: Button verbs accepted only on the current step's prompt message: choices, today / yesterday, skip, restart
+#: input, save, redo the edit, replace / append, toggle a proposal, and save the selected proposals. The prompt
+#: message's ID is kept in the FSM data as ``prompt_id`` (:func:`_remember_prompt`).
 #: 只認「目前這一步的提問訊息」上的按鈕：選項、今天／昨天、略過、重新輸入開始、儲存、重新修改、取代／接在後面、勾選、
 #: 儲存勾選的。提問訊息的 ID 記在 FSM 資料的 ``prompt_id``（:func:`_remember_prompt`）。
 _PROMPT_VERBS = frozenset({"ch", "skip", "back", "save", "redo", "em", "ig", "igsave"})
 
 
 async def _remember_prompt(state: FSMContext, sent: types.Message) -> None:
-    """記下目前這一步的提問訊息：之後只有它上面的按鈕有效，更早的提問訊息上的按鈕都忽略。
+    """Remember the current step's prompt message; buttons on earlier prompts are ignored from now on.
 
-    Remember the current step's prompt message; buttons on earlier prompts are ignored.
+    記下目前這一步的提問訊息：之後只有它上面的按鈕有效，更早的提問訊息上的按鈕都忽略。
     """
     await state.update_data(prompt_id=sent.message_id)
 
 
 async def _is_current_prompt(message: types.Message, state: FSMContext) -> bool:
-    """按鈕所在的訊息是不是目前這一步的提問訊息。Whether the button belongs to the current prompt."""
+    """Return whether the button's message is the current step's prompt message.
+
+    回傳按鈕所在的訊息是不是目前這一步的提問訊息。
+    """
     return message.message_id == (await state.get_data()).get("prompt_id")
 
 
 async def _remove_buttons(message: types.Message) -> bool:
-    """拿掉訊息的按鈕；按鈕早就拿掉了（``message is not modified``，連點的第二下）時回傳 False，呼叫端直接結束。
+    """Remove a message's buttons.
 
-    Remove the buttons; False when they were already gone (handled before), so the caller stops.
+    拿掉訊息的按鈕。
+
+    Returns ``False`` when the buttons were already gone (``message is not modified``, the second tap of a
+    double tap); the caller should then stop.
+
+    按鈕早就拿掉了（``message is not modified``，連點的第二下）時回傳 ``False``，呼叫端直接結束。
     """
     return await _edit_buttons(message, None)
 
 
 async def _edit_buttons(message: types.Message, markup: InlineKeyboardMarkup | None) -> bool:
-    """改訊息的按鈕；內容沒變時回傳 False（已處理過）。Edit the buttons; False when nothing changed."""
+    """Edit a message's buttons; return ``False`` when nothing changed (already handled).
+
+    改訊息的按鈕；內容沒變時回傳 ``False``（已處理過）。
+    """
     try:
         await message.edit_reply_markup(reply_markup=markup)
     except TelegramBadRequest as e:
@@ -661,9 +830,13 @@ async def _edit_buttons(message: types.Message, markup: InlineKeyboardMarkup | N
 
 
 async def _remove_buttons_quietly(message: types.Message) -> None:
-    """盡力拿掉訊息的按鈕（過時的提問、已經寫入完成的預覽）；失敗不影響結果，只記 log。
+    """Remove a message's buttons on a best-effort basis (stale prompts, previews already written).
 
-    Best-effort removal of a message's buttons.
+    盡力拿掉訊息的按鈕（過時的提問、已經寫入完成的預覽）。
+
+    A failure does not affect the result and is only logged.
+
+    失敗不影響結果，只記 log。
     """
     try:
         await message.edit_reply_markup(reply_markup=None)
@@ -713,7 +886,14 @@ async def _send_full(message: types.Message, card_service: CardService, note_id:
 
 
 def _active_company(raw: str) -> str:
-    """``Company`` 欄位原始值裡目前有效的職位（搜尋結果的按鈕用；格式壞了時為空）。The current positions."""
+    """Return the currently valid positions in a raw ``Company`` field value.
+
+    回傳 ``Company`` 欄位原始值裡目前有效的職位。
+
+    Used for search-result buttons; empty when the format is broken.
+
+    搜尋結果的按鈕用；格式壞了時為空字串。
+    """
     try:
         items = AnkiJsonFieldManager.parse_field_string(raw)
     except AnkiFieldCorruptedError:
@@ -722,7 +902,15 @@ def _active_company(raw: str) -> str:
 
 
 async def _send_lists_menu(message: types.Message, card_service: CardService, note_id: int) -> None:
-    """各清單的按鈕（括號是筆數；會變的欄位是有效的筆數，工作經歷含以前的工作），兩個一排。The list buttons."""
+    """Send the buttons of every list, two per row.
+
+    送出各清單的按鈕，兩個一排。
+
+    The count in parentheses is the number of entries; for history fields it is the number of valid
+    entries, except that work history also counts past jobs.
+
+    括號是筆數；會變的欄位是有效的筆數，工作經歷含以前的工作。
+    """
     loaded = await _load(card_service, note_id)
     if loaded is None:
         await message.answer(CARD_NOT_FOUND)
@@ -742,7 +930,10 @@ async def _send_lists_menu(message: types.Message, card_service: CardService, no
 
 
 async def _send_section_menu(message: types.Message, note_id: int, section: str) -> None:
-    """卡片區塊的「+」對應多個欄位時：先問要新增哪一項。Ask which field a section's "+" adds to."""
+    """Ask which field to add to when a card section's "+" maps to several fields.
+
+    卡片區塊的「+」對應多個欄位時：先問要新增哪一項。
+    """
     rows = []
     for name in view.SECTION_FIELDS[section]:
         if name in view.CODE_OF_LIST:
@@ -755,8 +946,16 @@ async def _send_section_menu(message: types.Message, note_id: int, section: str)
 
 
 async def _send_list(message: types.Message, card_service: CardService, note_id: int, field_name: str) -> None:
-    """一個清單的每一筆，附刪除（與待追蹤的完成、會變的欄位的劃掉、目標的狀態）、在卡面隱藏或顯示，以及「改」
-    （內容與時間，§16）的按鈕。One list with its item buttons."""
+    """Send one list's entries with their buttons.
+
+    送出一個清單的每一筆與按鈕。
+
+    Each entry gets delete (plus done for follow-ups, strike out for history fields, and status for goals),
+    hide or show on the card, and "edit" (content and time, §16). Only the latest 20 entries are listed.
+
+    每一筆附刪除（與待追蹤的完成、會變的欄位的劃掉、目標的狀態）、在卡面隱藏或顯示，以及「改」
+    （內容與時間，§16）的按鈕。只列最近 20 筆。
+    """
     loaded = await _load(card_service, note_id)
     if loaded is None:
         await message.answer(CARD_NOT_FOUND)
@@ -803,7 +1002,15 @@ async def _send_list(message: types.Message, card_service: CardService, note_id:
 async def _confirm_delete(
     message: types.Message, card_service: CardService, note_id: int, field_name: str, index: int, fingerprint: str
 ) -> None:
-    """刪除前顯示那一筆並請使用者確認；指紋對不上時找同一筆，找不到就說明。Confirm a deletion."""
+    """Show the entry and ask the user to confirm before deleting it.
+
+    刪除前顯示那一筆並請使用者確認。
+
+    When the fingerprint does not match at ``index``, the single entry with that fingerprint is used; if
+    there is not exactly one, the user is told.
+
+    指紋對不上時找同一筆（必須剛好一筆），找不到就說明。
+    """
     loaded = await _load(card_service, note_id)
     if loaded is None:
         await message.answer(CARD_NOT_FOUND)
@@ -831,7 +1038,14 @@ async def _confirm_delete(
 async def _confirm_done(
     message: types.Message, card_service: CardService, note_id: int, index: int, fingerprint: str
 ) -> None:
-    """卡片上點了待追蹤：顯示那一筆，問要不要標成完成；已經完成或找不到時說明。Confirm marking a follow-up done."""
+    """Show a follow-up tapped on the card and ask whether to mark it done.
+
+    卡片上點了待追蹤：顯示那一筆，問要不要標成完成。
+
+    Tells the user when it is already done or cannot be found.
+
+    已經完成或找不到時說明。
+    """
     loaded = await _load(card_service, note_id)
     if loaded is None:
         await message.answer(CARD_NOT_FOUND)
@@ -869,7 +1083,10 @@ async def _set_followup_status(
     fingerprint: str,
     status: str,
 ) -> None:
-    """標成完成（或復原），附反向的按鈕。Mark a follow-up done or open again."""
+    """Mark a follow-up done (or open again), with a button that reverses it.
+
+    把待追蹤標成完成（或復原），附反向的按鈕。
+    """
     warning = await note_service.run_action(
         note_id, "set_followup_status", {"index": index, "fingerprint": fingerprint, "status": status}
     )
@@ -893,7 +1110,10 @@ async def _set_history_status(
     *,
     ended: bool,
 ) -> None:
-    """劃掉（失效日＝今天）或取消劃掉會變的欄位的一筆，附反向的按鈕。End or restore a history entry."""
+    """Strike out (date ended = today) or restore one history entry, with a button that reverses it.
+
+    劃掉（失效日＝今天）或取消劃掉會變的欄位的一筆，附反向的按鈕。
+    """
     warning = await note_service.run_action(
         note_id, "set_history_status",
         {"field": field_name, "index": index, "fingerprint": fingerprint, "ended": ended},
@@ -924,7 +1144,10 @@ async def _set_history_status(
 async def _send_item_menu(
     message: types.Message, card_service: CardService, note_id: int, field_name: str, index: int, fingerprint: str
 ) -> None:
-    """長按清單的一筆：顯示那一筆與能做的事。The long-press menu of one item."""
+    """Send the long-press menu of one list entry: the entry and what can be done with it.
+
+    長按清單的一筆：顯示那一筆與能做的事。
+    """
     loaded = await _load(card_service, note_id)
     if loaded is None:
         await message.answer(CARD_NOT_FOUND)
@@ -976,7 +1199,10 @@ async def _set_item_hidden(
     *,
     hidden: bool,
 ) -> None:
-    """在卡面隱藏或顯示清單的一筆，附反向的按鈕。Hide or show one item on the card."""
+    """Hide or show one list entry on the card face, with a button that reverses it.
+
+    在卡面隱藏或顯示清單的一筆，附反向的按鈕。
+    """
     warning = await note_service.run_action(
         note_id, "set_hidden", {"field": field_name, "index": index, "fingerprint": fingerprint, "hidden": hidden}
     )
@@ -991,7 +1217,10 @@ async def _set_item_hidden(
 
 
 async def _send_field_menu(message: types.Message, card_service: CardService, note_id: int, field_name: str) -> None:
-    """長按文字欄位：顯示目前的內容，可以修改或在卡面隱藏。The long-press menu of a text field."""
+    """Send the long-press menu of a text field: its current content, with edit and hide on the card.
+
+    長按文字欄位：顯示目前的內容，可以修改或在卡面隱藏。
+    """
     loaded = await _load_with_tags(card_service, note_id)
     if loaded is None:
         await message.answer(CARD_NOT_FOUND)
@@ -1013,7 +1242,10 @@ async def _send_field_menu(message: types.Message, card_service: CardService, no
 
 
 def _hide_toggle(note_id: int, field_name: str, hidden: bool) -> InlineKeyboardButton:
-    """文字欄位（含照片）的「在卡面隱藏／顯示」按鈕。The hide / show button of a text field or the photo."""
+    """Return the "hide / show on card" button of a text field (including the photo).
+
+    回傳文字欄位（含照片）的「在卡面隱藏／顯示」按鈕。
+    """
     mode = "s" if hidden else "h"
     data = (f"pp:hp:{note_id}:{mode}" if field_name == "Photo"
             else f"pp:hf:{note_id}:{view.EDITABLE_FIELDS.index(field_name)}:{mode}")
@@ -1021,7 +1253,10 @@ def _hide_toggle(note_id: int, field_name: str, hidden: bool) -> InlineKeyboardB
 
 
 async def _send_photo_menu(message: types.Message, card_service: CardService, note_id: int) -> None:
-    """長按卡面的頭像：換照片、移除、在卡面隱藏或顯示。The long-press menu of the photo."""
+    """Send the long-press menu of the photo on the card: replace, remove, hide or show on the card.
+
+    長按卡面的頭像：換照片、移除、在卡面隱藏或顯示。
+    """
     loaded = await _load_with_tags(card_service, note_id)
     if loaded is None:
         await message.answer(CARD_NOT_FOUND)
@@ -1044,9 +1279,13 @@ async def _send_photo_menu(message: types.Message, card_service: CardService, no
 async def _set_field_hidden(
     message: types.Message, card_service: CardService, note_id: int, field_name: str, *, hidden: bool
 ) -> None:
-    """在卡面隱藏或顯示文字欄位：加減標籤 ``人脈卡隱藏::欄位名``（不改筆記類型），並同步。
+    """Hide or show a text field on the card face by adding or removing a tag, then sync.
 
-    Hide or show a text field on the card via its tag, then sync.
+    在卡面隱藏或顯示文字欄位：加減標籤，並同步。
+
+    The tag is ``人脈卡隱藏::field name``; the note type is not changed.
+
+    標籤是 ``人脈卡隱藏::欄位名``（不改筆記類型）。
     """
     if await _load(card_service, note_id) is None:
         await message.answer(CARD_NOT_FOUND)
@@ -1071,7 +1310,8 @@ async def _set_field_hidden(
     )
 
 
-#: 目標狀態按鈕的代碼。The goal status codes of the buttons.
+#: Goal status codes used by the buttons.
+#: 目標狀態按鈕的代碼。
 _GOAL_CODES = {"d": "done", "x": "dropped", "o": "open"}
 
 
@@ -1084,7 +1324,14 @@ async def _set_goal_status(
     status: str,
     closed: str | None = None,
 ) -> None:
-    """目標標成達成、放棄（``closed`` 是那天，沒給就是今天）或重開，附「復原」（改回進行中）。Set a goal's status."""
+    """Mark a goal achieved, abandoned or reopened, with an "undo" button (back to in progress).
+
+    把目標標成達成、放棄或重開，附「復原」（改回進行中）。
+
+    ``closed`` is the day it ended; when omitted, today is used.
+
+    ``closed`` 是那天，沒給就是今天。
+    """
     warning = await _write_goal_status(note_service, note_id, index, fingerprint, status, closed)
     await _send_goal_status(message, note_id, index, fingerprint, status, closed, warning)
 
@@ -1092,7 +1339,10 @@ async def _set_goal_status(
 async def _write_goal_status(
     note_service: NoteService, note_id: int, index: int, fingerprint: str, status: str, closed: str | None
 ) -> object:
-    """寫入目標的狀態（與結束日）；回傳同步警告。Write a goal's status; returns the sync warning."""
+    """Write a goal's status (and end date) and return the sync warning.
+
+    寫入目標的狀態（與結束日），回傳同步警告。
+    """
     params: dict[str, object] = {"index": index, "fingerprint": fingerprint, "status": status}
     if closed:
         params["closed"] = closed
@@ -1108,7 +1358,10 @@ async def _send_goal_status(
     closed: str | None,
     warning: object,
 ) -> None:
-    """改好目標狀態後的回覆，附「復原」、「看目標」。The reply after setting a goal's status."""
+    """Send the reply after a goal's status is set, with "undo" and "view goals" buttons.
+
+    送出改好目標狀態後的回覆，附「復原」、「看目標」。
+    """
     when = f"（{closed}）" if closed else ""
     text = {"done": f"🎉 已標成達成{when}。", "dropped": f"已標成放棄{when}（保留在目標裡）。", "open": "已改回進行中。"}[status]
     buttons = [_button("復原", f"pp:gs:{note_id}:{index}:{fingerprint}:o")] if status != "open" else []
@@ -1117,9 +1370,14 @@ async def _send_goal_status(
 
 
 def _goal_day_rows(note_id: int, index: int, fingerprint: str, status: str) -> list[list[InlineKeyboardButton]]:
-    """目標結束日的「今天」「昨天」「取消」：按鈕自己帶著是哪一個目標（連按兩個目標時不會套錯）。
+    """Return the "today", "yesterday" and "cancel" buttons for a goal's closing day.
 
-    The day buttons of a goal's closing; each carries the goal it belongs to.
+    回傳目標結束日的「今天」「昨天」「取消」按鈕。
+
+    Each button carries the goal it belongs to, so tapping buttons of two goals in a row cannot apply the
+    day to the wrong one.
+
+    按鈕自己帶著是哪一個目標（連按兩個目標時不會套錯）。
     """
     code = {value: key for key, value in _GOAL_CODES.items()}[status]
     ref = f"{note_id}:{index}:{fingerprint}:{code}"
@@ -1129,9 +1387,14 @@ def _goal_day_rows(note_id: int, index: int, fingerprint: str, status: str) -> l
 async def _ask_goal_closed(
     message: types.Message, state: FSMContext, note_id: int, index: int, fingerprint: str, status: str
 ) -> None:
-    """達成、放棄先問是哪一天（今天、昨天，或輸入日期）：晚幾天才按時，結束日才不會記錯（工作經歷計畫書 §15）。
+    """Ask which day a goal was achieved or abandoned (today, yesterday, or a typed date).
 
-    Ask the day a goal was reached or dropped.
+    達成、放棄先問是哪一天（今天、昨天，或輸入日期）。
+
+    When the button is pressed a few days late, the end date is still recorded correctly (work-history plan
+    §15).
+
+    晚幾天才按時，結束日才不會記錯（工作經歷計畫書 §15）。
     """
     await state.clear()
     await state.set_state(PersonStates.goal_closed)
@@ -1145,7 +1408,23 @@ async def _ask_goal_closed(
 
 @router.message(PersonStates.goal_closed, F.text)
 async def process_goal_closed(message: types.Message, state: FSMContext, note_service: NoteService) -> None:
-    """輸入的目標結束日（只寫月日、算出來在今天之後時當成去年）。The typed closing day of a goal."""
+    """Handle the typed closing day of a goal.
+
+    處理輸入的目標結束日。
+
+    A month-day alone that falls after today is taken as last year; a date that is still in the future or
+    cannot be understood is rejected and asked again.
+
+    只寫月日、算出來在今天之後時當成去年；還沒到或看不懂的日期會拒絕並重問。
+
+    Args:
+        message: the message with the date
+            含日期的訊息
+        state: the FSM context holding the goal being closed
+            記著要結束哪個目標的 FSM 狀態
+        note_service: the note service used for writes
+            寫入用的筆記服務
+    """
     today = _today()
     value = view.parse_past_date_input((message.text or "").strip(), today)
     if value is None:
@@ -1169,7 +1448,16 @@ async def _finish_goal_closed(
     status: str,
     closed: str,
 ) -> None:
-    """寫入目標的狀態與結束日。Write the goal's status and closing day.
+    """Write the goal's status and closing day.
+
+    寫入目標的狀態與結束日。
+
+    - The entry was changed elsewhere, or the parameters are invalid: retrying cannot succeed, so this step
+      ends, with a "view goals" button.
+    - Other failures (Anki unreachable and so on): stay in this step and attach the day buttons again; the
+      date can also be typed again.
+    - Write succeeded: end this step before replying (so if the reply fails, later typing is not taken as a
+      date and applied again).
 
     - 這一筆在別處被改過、或參數不對：再試也不會成功，結束這一步，附「看目標」。
     - 其他失敗（Anki 連不上等）：留在這一步，重新附上日子的按鈕，也可以再輸入一次日期。
@@ -1203,7 +1491,10 @@ async def _finish_goal_closed(
 
 
 def _edit_data(note_id: int, field_name: str, index: int, fingerprint: str) -> str:
-    """「改 N」「修改」按鈕的 callback data（§16）。The callback data of the edit buttons."""
+    """Return the callback data of the 「改 N」 and 「修改」 buttons (§16).
+
+    回傳「改 N」「修改」按鈕的 callback data（§16）。
+    """
     return f"pp:ie:{note_id}:{view.CODE_OF_LIST[field_name]}:{index}:{fingerprint}"
 
 
@@ -1216,8 +1507,13 @@ async def _start_item_edit(
     index: int,
     fingerprint: str,
 ) -> None:
-    """修改一筆（工作經歷計畫書 §16）：沿用新增的問答（``edit`` 模式，:func:`view.edit_steps`），每一步顯示目前的
-    值，略過＝保留。Edit one item through the add-step flow.
+    """Start editing one entry (work-history plan §16) through the adding steps.
+
+    開始修改一筆（工作經歷計畫書 §16），沿用新增的問答。
+
+    Uses ``edit`` mode (:func:`view.edit_steps`): each step shows the current value, and skipping keeps it.
+
+    以 ``edit`` 模式（``view.edit_steps``）進行：每一步顯示目前的值，略過＝保留。
     """
     loaded = await _load(card_service, note_id)
     if loaded is None:
@@ -1273,7 +1569,20 @@ async def _start_item_edit(
 
 
 async def start_add(message: types.Message, state: FSMContext, note_id: int, field_name: str) -> None:
-    """開始新增一筆：依清單的步驟逐一詢問。Start adding an item to a list."""
+    """Start adding an entry to a list, asking the list's steps one by one.
+
+    開始新增一筆：依清單的步驟逐一詢問。
+
+    Args:
+        message: the message to reply to
+            回覆的訊息
+        state: the FSM context; cleared first
+            FSM 狀態，會先清除
+        note_id: the person's note ID
+            人脈卡的筆記 ID
+        field_name: the list to add to; must be a key of ``view.ADD_STEPS``
+            要新增的清單；必須是 ``view.ADD_STEPS`` 的鍵
+    """
     await state.clear()
     await state.set_state(PersonStates.add_step)
     await state.update_data(nid=note_id, field=field_name, step=0, item={})
@@ -1282,13 +1591,27 @@ async def start_add(message: types.Message, state: FSMContext, note_id: int, fie
 
 
 def _steps(data: dict[str, Any]) -> tuple[view.Step, ...]:
-    """這次問答的步驟：修改（``edit``）是 :func:`view.edit_steps`，否則是那個清單的新增步驟。The steps in progress."""
+    """Return the steps of the flow in progress.
+
+    回傳這次問答的步驟。
+
+    Editing (``edit``) uses :func:`view.edit_steps`; otherwise the list's adding steps.
+
+    修改（``edit``）是 ``view.edit_steps``，否則是那個清單的新增步驟。
+    """
     return view.edit_steps(data["field"]) if data.get("edit") else view.ADD_STEPS[data["field"]]
 
 
 async def _ask_step(message: types.Message, state: FSMContext) -> None:
-    """問目前這一步；全部問完時顯示預覽。修改（``edit``）時附上目前的值（略過＝保留）；新增時跳過
-    :func:`view.skip_detail_step` 說不用問的時間。Ask the current step, or preview."""
+    """Ask the current step, or show the preview once every step is answered.
+
+    問目前這一步；全部問完時顯示預覽。
+
+    When editing (``edit``), the current value is shown (skipping keeps it); when adding, the time steps
+    that :func:`view.skip_detail_step` says need not be asked are skipped.
+
+    修改（``edit``）時附上目前的值（略過＝保留）；新增時跳過 ``view.skip_detail_step`` 說不用問的時間。
+    """
     data = await state.get_data()
     steps = _steps(data)
     editing = bool(data.get("edit"))
@@ -1340,11 +1663,25 @@ async def _ask_step(message: types.Message, state: FSMContext) -> None:
 
 
 async def _store_answer(message: types.Message, state: FSMContext, raw: str | None) -> None:
-    """記下這一步的回答（None 為略過）並問下一步；格式不對時重問。Store an answer and move on.
+    """Store this step's answer (``None`` means skip) and ask the next step; ask again on a bad format.
+
+    記下這一步的回答（``None`` 為略過）並問下一步；格式不對時重問。
+
+    When editing (``edit``): skipping keeps the value (a value with a bad format cannot be kept); 「清空」
+    clears the value (required steps cannot be cleared). When a position's existing end date is cleared, the
+    date ended is cleared too (back to the current job, the same as the handler's ``edit_item``, so the
+    preview is not wrong). For a splittable field, changed content may only be a single value (unchanged old
+    data may contain 、).
 
     修改（``edit``）時：略過＝保留（原值格式不對的不能保留）；「清空」清掉這個值（必填的不能清空）。職位清掉的是
     原本有的離職年月時一併清掉失效日（改回現職，和 handler 的 ``edit_item`` 相同，預覽才不會說錯）。可切的欄位
     改了內容時只能改成一個值（沒改的舊資料可以含頓號）。
+
+    For fields with a start and an end (positions and education, :data:`view.PERIOD_PAIRS`), the end step
+    (skipping included) checks that the end is not before the start; otherwise this step is asked again
+    with a 「重新輸入到職／入學」 button (the start is often the wrong one). The user is not told to skip or
+    clear: for positions, both would turn a past job into the current job.
+
     有起訖的欄位（職位、學歷，:data:`view.PERIOD_PAIRS`）問到結束那一步時（略過也算）檢查不早於開始，不對就重問
     這一步，並提供「重新輸入到職／入學」（錯的常是開始）；不叫使用者略過或清空：職位的那兩個都會讓以前的工作
     變成現職。
@@ -1425,7 +1762,14 @@ async def _store_answer(message: types.Message, state: FSMContext, raw: str | No
 
 
 async def _back_to_start(message: types.Message, state: FSMContext) -> None:
-    """「重新輸入到職／入學」：問答回到開始那一步（結束早於開始時，錯的常是剛輸入的開始）。Go back to the start step."""
+    """Handle 「重新輸入到職／入學」: go back to the start step.
+
+    「重新輸入到職／入學」：問答回到開始那一步。
+
+    When the end is earlier than the start, the wrong one is often the start just typed.
+
+    結束早於開始時，錯的常是剛輸入的開始。
+    """
     if await state.get_state() != PersonStates.add_step.state:
         await message.answer("⌛ 這個步驟已結束，請重新開始。")
         return
@@ -1442,7 +1786,21 @@ async def _back_to_start(message: types.Message, state: FSMContext) -> None:
 
 @router.message(PersonStates.add_step, F.text)
 async def process_add_text(message: types.Message, state: FSMContext) -> None:
-    """新增一筆時輸入的文字。Typed text while adding an item."""
+    """Handle text typed while adding or editing an entry.
+
+    處理新增或修改一筆時輸入的文字。
+
+    For a choice step, the text is matched against each choice's value or button text; otherwise the user
+    is asked to tap a button.
+
+    選擇題會拿文字比對選項的值或按鈕文字，比對不到時請使用者點按鈕。
+
+    Args:
+        message: the message with the answer
+            含回答的訊息
+        state: the FSM context of the flow
+            問答的 FSM 狀態
+    """
     data = await state.get_data()
     step = _steps(data)[data["step"]]
     text = (message.text or "").strip()
@@ -1460,7 +1818,10 @@ async def process_add_text(message: types.Message, state: FSMContext) -> None:
 async def _answer_step_button(
     message: types.Message, state: FSMContext, note_service: NoteService, card_service: CardService, parts: list[str]
 ) -> None:
-    """新增一筆時的按鈕：選項、今天／昨天、略過；建立新的人時的「略過」。Step buttons."""
+    """Handle the step buttons: choices, today / yesterday and skip; also "skip" when creating a person.
+
+    處理問答的按鈕：選項、今天／昨天、略過；建立新的人時的「略過」。
+    """
     current = await state.get_state()
     if current == PersonStates.create_context.state and parts[1] == "skip":
         if not await _remove_buttons(message):
@@ -1491,9 +1852,13 @@ async def _answer_step_button(
 async def _save_item(
     message: types.Message, state: FSMContext, note_service: NoteService, card_service: CardService
 ) -> None:
-    """儲存新增的一筆（互動紀錄附帶的「下次要問」各存成一筆待追蹤），或修改的一筆（:func:`_save_item_edit`）。
+    """Save the new entry, or the edited one (:func:`_save_item_edit`).
 
-    Save the new or the edited item.
+    儲存新增的一筆，或修改的一筆（``_save_item_edit``）。
+
+    Each "ask next time" line attached to an interaction is saved as its own follow-up.
+
+    互動紀錄附帶的「下次要問」各存成一筆待追蹤。
     """
     if await state.get_state() != PersonStates.add_confirm.state:
         await message.answer("⌛ 這個步驟已結束，請重新開始。")
@@ -1530,7 +1895,23 @@ async def _save_item_edit(
     edit: dict[str, Any],
     item: dict[str, object],
 ) -> None:
-    """寫入修改的一筆（``edit_item``，§16）；失敗時依原因：
+    """Write the edited entry (``edit_item``, §16); a failure is handled according to its cause.
+
+    寫入修改的一筆（``edit_item``，§16）；失敗時依原因處理。
+
+    - The entry was changed elsewhere or is gone: end this step, attach the text just typed, and ask the user
+      to reopen the list (pressing save again cannot succeed).
+    - The parameters do not match the backend (:class:`ActionContractError`, a programming error): end this
+      step and log an error without asking the user to retry.
+    - The card is gone or the list format is broken: end this step and explain (it must be fixed on the web
+      or in Anki first).
+    - Rejected (duplicates another entry, content does not fit the format): keep the answers and offer
+      「重新修改」 to edit again from the first step (pressing save again gives the same result, so it is not
+      offered).
+    - Anki unreachable: stay in the confirm step so save can be pressed again.
+    - Other errors: retrying does not help, so end this step and explain.
+
+    If the write succeeded and only reading the summary failed, it still says the entry was updated.
 
     - 這一筆在別處被改過或不在了：結束這一步，附上剛才輸入的內容，請使用者重新打開清單（再按儲存也不會成功）。
     - 參數和後端對不上（:class:`ActionContractError`，程式錯誤）：結束這一步、記 error，不叫使用者重試。
@@ -1540,8 +1921,6 @@ async def _save_item_edit(
     - 其他錯誤：重試也沒用，結束這一步並說明。
 
     寫入成功、只是讀摘要失敗時照樣說已更新。
-
-    Write the edited item; how a failure is handled depends on its cause.
     """
     index = int(edit["index"])
     try:
@@ -1600,7 +1979,14 @@ async def _save_item_edit(
 
 
 async def _redo_item_edit(message: types.Message, state: FSMContext) -> None:
-    """「重新修改」：修改被擋下後回到第一步；剛才的回答留著（略過＝保留剛才的回答）。Restart the edit steps."""
+    """Handle 「重新修改」: after an edit is rejected, go back to the first step.
+
+    「重新修改」：修改被擋下後回到第一步。
+
+    The previous answers are kept (skipping keeps the answer just given).
+
+    剛才的回答留著（略過＝保留剛才的回答）。
+    """
     data = await state.get_data()
     if await state.get_state() != PersonStates.add_confirm.state or not data.get("edit"):
         await message.answer("⌛ 這個步驟已結束，請重新開始。")
@@ -1634,9 +2020,13 @@ async def _send_edit_fields(message: types.Message, note_id: int, group_index: i
 async def _start_edit(
     message: types.Message, state: FSMContext, card_service: CardService, note_id: int, field_name: str
 ) -> None:
-    """改一個文字欄位：顯示目前的內容，等使用者輸入；附「在卡面隱藏／顯示」（按了不影響這次修改）。
+    """Start editing a text field: show its current content and wait for the user's input.
 
-    Start editing a text field; the hide toggle leaves the edit waiting.
+    改一個文字欄位：顯示目前的內容，等使用者輸入。
+
+    A "hide / show on card" button is attached; pressing it does not affect this edit.
+
+    附「在卡面隱藏／顯示」（按了不影響這次修改）。
     """
     loaded = await _load_with_tags(card_service, note_id)
     if loaded is None:
@@ -1666,7 +2056,27 @@ async def _start_edit(
 async def process_edit_value(
     message: types.Message, state: FSMContext, note_service: NoteService, card_service: CardService
 ) -> None:
-    """改資料時輸入的內容：文字區段且原本有內容時，問要取代還是接在後面。Typed new value."""
+    """Handle the new value typed in "edit data".
+
+    處理改資料時輸入的內容。
+
+    「清空」 clears the field (not allowed for ``Display_Name``). Single-line fields are validated and
+    normalized like on creation; for a multi-line text section that already has content, the user is asked
+    whether to replace it or append.
+
+    「清空」會清除欄位（``Display_Name`` 不可）。單行欄位與建立時同樣驗證並整理寫法；文字區段且原本有內容時，
+    問要取代還是接在後面。
+
+    Args:
+        message: the message with the new value
+            含新內容的訊息
+        state: the FSM context holding the field being edited
+            記著正在改哪個欄位的 FSM 狀態
+        note_service: the note service used for writes
+            寫入用的筆記服務
+        card_service: the card service
+            卡片服務
+    """
     data = await state.get_data()
     field_name = str(data["field"])
     text = (message.text or "").strip()
@@ -1702,7 +2112,10 @@ async def process_edit_value(
 async def _finish_edit(
     message: types.Message, state: FSMContext, note_service: NoteService, card_service: CardService, *, append: bool
 ) -> None:
-    """寫入改好的欄位。Write the edited field."""
+    """Write the edited field, replacing or appending to the current content, then send the summary.
+
+    寫入改好的欄位（取代或接在原本內容後面），再送出摘要。
+    """
     current_state = await state.get_state()
     if current_state not in (PersonStates.edit_value.state, PersonStates.edit_mode.state):
         await message.answer("⌛ 這個步驟已結束，請重新開始。")
@@ -1747,7 +2160,27 @@ async def process_photo(
     card_service: CardService,
     anki_client: AnkiClient,
 ) -> None:
-    """收到照片：存進 Anki 媒體，再設成這個人的照片。Store the photo and set it."""
+    """Handle a received photo: store it in Anki media, then set it as this person's photo.
+
+    收到照片：存進 Anki 媒體，再設成這個人的照片。
+
+    A Telegram or I/O failure keeps the state so the photo can be sent again; service and Anki errors end
+    the flow.
+
+    Telegram 或 I/O 失敗時保留狀態，可以再傳一次；服務層與 Anki 的錯誤會結束流程。
+
+    Args:
+        message: the message with the photo
+            含照片的訊息
+        state: the FSM context holding the person
+            記著是哪個人的 FSM 狀態
+        note_service: the note service used for writes
+            寫入用的筆記服務
+        card_service: the card service
+            卡片服務
+        anki_client: the AnkiConnect client used to store the media file
+            存媒體檔用的 AnkiConnect 客戶端
+    """
     data = await state.get_data()
     note_id = int(data["nid"])
     status = await message.reply("⏳ 處理照片中…")
@@ -1803,7 +2236,18 @@ async def _start_ingest(message: types.Message, state: FSMContext, card_service:
 
 @router.message(PersonStates.ingest_text, F.text)
 async def process_ingest_text(message: types.Message, state: FSMContext, card_service: CardService) -> None:
-    """用一段話記錄：收到文字。The typed paragraph."""
+    """Handle the typed paragraph of "record in a paragraph".
+
+    用一段話記錄：處理收到的文字。
+
+    Args:
+        message: the message with the paragraph
+            含那段話的訊息
+        state: the FSM context holding the person
+            記著是哪個人的 FSM 狀態
+        card_service: the card service
+            卡片服務
+    """
     text = (message.text or "").strip()
     if not text:
         await message.answer("請輸入一段話，或傳語音。")
@@ -1814,7 +2258,22 @@ async def process_ingest_text(message: types.Message, state: FSMContext, card_se
 
 @router.message(PersonStates.ingest_text, F.voice)
 async def process_ingest_voice(message: types.Message, state: FSMContext, card_service: CardService) -> None:
-    """用一段話記錄：收到語音，先轉成文字。The voice message, transcribed first."""
+    """Handle the voice message of "record in a paragraph", transcribing it first.
+
+    用一段話記錄：收到語音，先轉成文字。
+
+    Download and transcription failures are reported and keep the state, so the user can resend or type.
+
+    下載與轉文字失敗時說明並保留狀態，使用者可以再傳或改用打字。
+
+    Args:
+        message: the voice message
+            語音訊息
+        state: the FSM context holding the person
+            記著是哪個人的 FSM 狀態
+        card_service: the card service
+            卡片服務
+    """
     status = await message.reply("⏳ 下載語音中…")
     try:
         bot, voice = message.bot, message.voice
@@ -1847,9 +2306,15 @@ async def process_ingest_voice(message: types.Message, state: FSMContext, card_s
 async def _run_ingest(
     message: types.Message, status: types.Message, state: FSMContext, card_service: CardService, text: str
 ) -> None:
-    """請 LLM 整理，列出建議讓使用者勾選。失敗時保留狀態，可以直接再傳一次。
+    """Ask the LLM to organize the text, then list the proposals for the user to select.
 
-    Ask the LLM, then show the proposals. On failure the state is kept so the user can resend.
+    請 LLM 整理，列出建議讓使用者勾選。
+
+    When the LLM fails or Anki is temporarily unreachable, the state is kept so the user can simply send
+    again. When the card is gone or the prompt template is broken (resending cannot help), the state is
+    cleared.
+
+    LLM 失敗或暫時連不上 Anki 時保留狀態，可以直接再傳一次；卡片不在或提示詞模板有誤（重傳也沒用）時清除狀態。
     """
     note_id = int((await state.get_data())["nid"])
     try:
@@ -1900,18 +2365,31 @@ async def _run_ingest(
 
 
 def _ingest_failure(error: LLMServiceError | LLMGenerationError) -> str:
-    """整理一段話失敗時給使用者的訊息。The ingest failure message."""
+    """Return the message shown to the user when organizing a paragraph fails.
+
+    回傳整理一段話失敗時給使用者的訊息。
+    """
     return _llm_failure(error, task="整理", setting=ingest_service.INGEST_ROUTE.description, retry="再傳")
 
 
 def _llm_failure(error: LLMServiceError | LLMGenerationError, *, task: str, setting: str, retry: str) -> str:
-    """LLM 失敗時給使用者的訊息：依原因給下一步。The LLM failure message, with a next step per cause.
+    """Return the message shown to the user when the LLM fails, with a next step for each cause.
+
+    回傳 LLM 失敗時給使用者的訊息：依原因給下一步。
 
     Args:
-        error: LLM 的錯誤。The error.
-        task: 做什麼失敗（「整理」）。What failed.
-        setting: 用途鍵的說明（``/setconfig`` 上看到的名稱）。The route's description.
-        retry: 重試的動作（「再傳」「再按」）。How to retry.
+        error: the LLM error
+            LLM 的錯誤
+        task: what failed (for example 「整理」)
+            做什麼失敗（例如「整理」）
+        setting: the route key's description (the name shown in ``/setconfig``)
+            用途鍵的說明（``/setconfig`` 上看到的名稱）
+        retry: the retry action (「再傳」, 「再按」)
+            重試的動作（「再傳」「再按」）
+
+    Returns:
+        the message in Telegram HTML
+        Telegram HTML 格式的訊息
     """
     detail = error_detail(error.message)
     change = f"用 /setconfig 替「{setting}」換一個模型"
@@ -1930,7 +2408,14 @@ def _llm_failure(error: LLMServiceError | LLMGenerationError, *, task: str, sett
 
 
 async def _send_topics(message: types.Message, card_service: CardService, note_id: int) -> None:
-    """請 LLM 以諮商師的角度分析這個人並推薦話題（名字遮起來送出，回來再換回）。Analyse and suggest topics."""
+    """Ask the LLM to analyze this person from a counselor's perspective and suggest topics.
+
+    請 LLM 以諮商師的角度分析這個人並推薦話題。
+
+    Names are masked before sending and restored in the reply.
+
+    名字遮起來送出，回來再換回。
+    """
     status = await message.answer("⏳ 分析中…（約需半分鐘）")
     try:
         loaded = await _load_with_tags(card_service, note_id)
@@ -1966,7 +2451,10 @@ async def _send_topics(message: types.Message, card_service: CardService, note_i
 
 
 def _topics_keyboard(note_id: int, masked: bool) -> InlineKeyboardMarkup:
-    """再想一次、回摘要，以及內文遮名字的開關（按了切換）。The topics buttons."""
+    """Return the topics buttons: think again, back to summary, and the name-masking toggle for the text.
+
+    回傳話題的按鈕：再想一次、回摘要，以及內文遮名字的開關（按了切換）。
+    """
     toggle = (_button("內文名字：遮（按此改成不遮）", f"pp:mask:{note_id}:off") if masked
               else _button("內文名字：不遮（按此改成遮）", f"pp:mask:{note_id}:on"))
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -1978,11 +2466,26 @@ def _topics_keyboard(note_id: int, masked: bool) -> InlineKeyboardMarkup:
 async def _set_text_mask(
     message: types.Message, card_service: CardService, note_id: int, masked: bool, *, from_button: bool = True
 ) -> None:
-    """切換內文遮名字：加減標籤 :data:`TEXT_UNMASKED_TAG`（不改筆記類型），並同步。Toggle via the tag.
+    """Toggle name masking in the text by adding or removing the :data:`TEXT_UNMASKED_TAG` tag, then sync.
+
+    切換內文遮名字：加減標籤 ``TEXT_UNMASKED_TAG``（不改筆記類型），並同步。
+
+    The note type is not changed.
+
+    不改筆記類型。
 
     Args:
-        from_button: 從分析結果的按鈕切換（更新那則訊息的按鈕）；卡面的開關圖示（深連結）為 False。
-            From the topics message's button; False for the card's toggle icon.
+        message: the message to reply to (and, from a button, whose buttons are updated)
+            回覆的訊息（從按鈕切換時也更新它的按鈕）
+        card_service: the card service
+            卡片服務
+        note_id: the person's note ID
+            人脈卡的筆記 ID
+        masked: whether names in the text should be masked
+            內文是否要遮名字
+        from_button: toggled from the topics message's button (that message's buttons are updated);
+            ``False`` for the toggle icon on the card face (deep link)
+            從分析結果的按鈕切換（更新那則訊息的按鈕）；卡面的開關圖示（深連結）為 ``False``
     """
     loaded = await _load(card_service, note_id)
     if loaded is None:
@@ -2005,7 +2508,10 @@ async def _set_text_mask(
 
 
 def _proposal_view(data: dict[str, object]) -> tuple[str, InlineKeyboardMarkup]:
-    """依 FSM 資料畫出預覽與按鈕（已儲存的項目標「已存」）。The preview and its buttons from the FSM data."""
+    """Build the proposal preview and its buttons from the FSM data (saved proposals are marked 「已存」).
+
+    依 FSM 資料畫出預覽與按鈕（已儲存的項目標「已存」）。
+    """
     proposals = list(data["proposals"])  # type: ignore[call-overload]
     selected = [bool(x) for x in data["selected"]]  # type: ignore[attr-defined]
     saved = frozenset(int(i) for i in data.get("saved") or [])  # type: ignore[attr-defined]
@@ -2034,15 +2540,19 @@ async def _toggle_proposal(message: types.Message, state: FSMContext, index: int
     await message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 
-#: 互動、待追蹤建議對應的具名動作。The named action for each item proposal.
+#: The named actions for interaction and follow-up proposals.
+#: 互動、待追蹤建議對應的具名動作。
 _PROPOSAL_ACTIONS = {"interaction": "add_interaction", "followup": "add_followup"}
 
 
 def _proposal_action(kind: str, data: dict[str, object]) -> tuple[str, dict[str, object]]:
-    """一項建議（文字欄位以外）要執行的具名動作與參數。The action and parameters of a proposal.
+    """Return the named action and parameters to run for one proposal (other than text fields).
+
+    回傳一項建議（文字欄位以外）要執行的具名動作與參數。
 
     Raises:
-        ValueError: 不認得的種類（程式錯誤）。On an unknown kind.
+        ValueError: if the kind is not recognized (a programming error)
+            若種類不認得（程式錯誤）
     """
     if kind in _PROPOSAL_ACTIONS:
         return _PROPOSAL_ACTIONS[kind], {"item": data}
@@ -2060,10 +2570,17 @@ def _proposal_action(kind: str, data: dict[str, object]) -> tuple[str, dict[str,
 async def _save_proposals(
     message: types.Message, state: FSMContext, note_service: NoteService, card_service: CardService
 ) -> None:
-    """寫入勾選的建議：互動、待追蹤各一筆，欄位建議合成一次 ``update_fields``。
+    """Write the selected proposals.
 
+    寫入勾選的建議。
+
+    Interaction, follow-up, goal and history proposals are each written with their own action; field
+    proposals are combined into one ``update_fields``. When it fails midway, the state is kept and the
+    written proposals are recorded (marked 「已存」 in the preview), so pressing save again writes only the
+    rest without duplicating.
+
+    互動、待追蹤、目標與會變的欄位建議各以自己的動作寫入，欄位建議合成一次 ``update_fields``。
     中途失敗時保留狀態並記下已寫入的項目（預覽標「已存」），再按一次儲存只補存其他的，不會重複寫入。
-    Write the picked proposals; after a partial failure, pressing save again writes only the rest.
     """
     if await state.get_state() != PersonStates.ingest_confirm.state:
         await message.answer("⌛ 這個步驟已結束，請重新開始。")
@@ -2143,7 +2660,18 @@ async def _save_proposals(
 
 
 async def start_person_create(message: types.Message, state: FSMContext, *, name: str | None = None) -> None:
-    """開始建立一個人：問稱呼（已知時跳過）與認識場合。Start creating a person."""
+    """Start creating a person: ask the display name (skipped when known) and where you met.
+
+    開始建立一個人：問稱呼（已知時跳過）與認識場合。
+
+    Args:
+        message: the message to reply to
+            回覆的訊息
+        state: the FSM context; cleared first
+            FSM 狀態，會先清除
+        name: the display name, when already known (for example from a failed ``/p`` search)
+            已知的稱呼（例如 ``/p`` 找不到時的名字）
+    """
     await state.clear()
     if name:
         await state.set_state(PersonStates.create_context)
@@ -2169,6 +2697,16 @@ async def _ask_context(message: types.Message, state: FSMContext, name: str) -> 
 
 @router.message(PersonStates.create_name, F.text)
 async def process_create_name(message: types.Message, state: FSMContext) -> None:
+    """Handle the display name typed when creating a person, then ask where you met.
+
+    處理建立新的人時輸入的稱呼，接著問認識場合。
+
+    Args:
+        message: the message with the name
+            含稱呼的訊息
+        state: the FSM context of the creation flow
+            建立流程的 FSM 狀態
+    """
     name = (message.text or "").strip()
     if not name:
         await message.answer("請輸入稱呼。")
@@ -2182,6 +2720,20 @@ async def process_create_name(message: types.Message, state: FSMContext) -> None
 async def process_create_context(
     message: types.Message, state: FSMContext, note_service: NoteService, card_service: CardService
 ) -> None:
+    """Handle where you met, typed when creating a person, then create the person.
+
+    處理建立新的人時輸入的認識場合，接著建立這個人。
+
+    Args:
+        message: the message with where you met
+            含認識場合的訊息
+        state: the FSM context of the creation flow
+            建立流程的 FSM 狀態
+        note_service: the note service used to create the note
+            建立筆記用的筆記服務
+        card_service: the card service
+            卡片服務
+    """
     try:
         await _create_person(message, state, note_service, card_service, context=(message.text or "").strip())
     except (FluencyTidesError, AnkiConnectError) as e:
@@ -2196,7 +2748,10 @@ async def _create_person(
     *,
     context: str,
 ) -> None:
-    """建立並回覆摘要；有認識場合時認識日期記為今天。Create the person and reply with the summary."""
+    """Create the person and reply with the summary; when where you met is given, the met date is today.
+
+    建立並回覆摘要；有認識場合時認識日期記為今天。
+    """
     data = await state.get_data()
     await state.clear()
     params = {"Display_Name": str(data.get("name", "")), "Met_Where": context}

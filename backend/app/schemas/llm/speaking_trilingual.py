@@ -1,6 +1,13 @@
-"""三語對話卡「網頁建卡」的 LLM 輸出格式（計畫書 ``docs/archive/trilingual_web_create_FEAT_2026-10-30.md`` §4.1）。
+"""LLM output schema of the trilingual speaking card web-create draft.
 
-LLM output schema of the trilingual speaking card web-create draft.
+三語對話卡「網頁建卡」的 LLM 輸出格式（計畫書 ``docs/archive/trilingual_web_create_FEAT_2026-10-30.md`` §4.1）。
+
+See the plan ``docs/archive/trilingual_web_create_FEAT_2026-10-30.md`` §4.1.
+The field order of each saying is the generation order: first the sentence a
+native speaker would really say, then the note, and only then the familiarity,
+judged from that sentence itself. The LLM only proposes a draft; cards are
+created only after the user ticks items on the web page, and at creation the
+handler's create parameters are validated once more.
 
 每句的欄位順序就是生成順序：先寫出母語者真的會說的句子，再寫說明，最後才依這句話本身評熟識度。
 LLM 只提草稿；使用者在網頁上勾選後才建卡，建卡時再經 handler 的建立參數驗證一次。

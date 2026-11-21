@@ -1,7 +1,20 @@
-"""
-建卡草稿 REST API（``docs/wip/server_drafts_FEAT_2026-11-04.md`` §4）。
+"""Card creation draft REST API.
 
-Create draft REST API.
+建卡草稿 REST API。
+
+Plan ``docs/wip/server_drafts_FEAT_2026-11-04.md`` §4.
+
+- ``GET    /drafts/current``: the current draft (at most one site-wide), or null if there is none
+- ``PATCH  /drafts/{id}``: save the web page's editing state (with a version)
+- ``POST   /drafts/{id}/retry``: retry after generation failed (202)
+- ``DELETE /drafts/{id}``: discard (only drafts that are ready to create or whose generation failed)
+
+Starting generation lives in ``POST /handlers/{name}/drafts`` and creating cards from a draft in
+``POST /handlers/{name}/notes`` (``app/api/handlers.py``). Operations the state does not allow
+return 409 with the current draft attached as ``draft``; when ``{id}`` is not the current draft, the
+response is 404 ``DRAFT_NOT_FOUND``.
+
+計畫 ``docs/wip/server_drafts_FEAT_2026-11-04.md`` §4。
 
 - ``GET    /drafts/current``      目前的草稿（全站最多一份），沒有時為 null
 - ``PATCH  /drafts/{id}``         存網頁的編輯狀態（帶版本）
@@ -10,8 +23,6 @@ Create draft REST API.
 
 開始生成在 ``POST /handlers/{name}/drafts``、從草稿建卡在 ``POST /handlers/{name}/notes``（``app/api/handlers.py``）。
 狀態不允許的操作回 409，回應附上目前的草稿 ``draft``；``{id}`` 不是目前那份時回 404 ``DRAFT_NOT_FOUND``。
-
-Starting a draft and creating from it live in ``app/api/handlers.py``.
 """
 
 from fastapi import APIRouter, Depends, Response, status
@@ -44,7 +55,18 @@ _STATE = "草稿狀態不允許，或版本不是最新的；回應附上目前�
     description="全站同一時間最多一份；沒有時回 null。生成中、建立中時網頁輪詢這個端點。",
 )
 async def current_draft(session: CreateSession = Depends(get_create_session)) -> dict[str, object] | None:
-    """目前的草稿。The current draft."""
+    """Return the current draft.
+
+    回傳目前的草稿。
+
+    Args:
+        session: the site-wide create session
+            全站共用的建卡工作階段
+
+    Returns:
+        the current draft, or ``None`` if there is none
+        目前的草稿；沒有時為 ``None``
+    """
     return session.snapshot()
 
 
@@ -64,7 +86,32 @@ async def update_draft(
     body: UpdateDraftRequest,
     session: CreateSession = Depends(get_create_session),
 ) -> dict[str, object]:
-    """存編輯狀態。Save the editing state."""
+    """Save the web page's editing state.
+
+    存網頁的編輯狀態。
+
+    Args:
+        draft_id: the draft's ID
+            草稿 ID
+        body: the editing state and the version it was based on
+            編輯狀態與它所根據的版本
+        session: the site-wide create session
+            全站共用的建卡工作階段
+
+    Returns:
+        the draft after saving
+        儲存後的草稿
+
+    Raises:
+        DraftBusyError: if the draft is not ready
+            若草稿不是可建立（ready）狀態
+        DraftNotFoundError: if ``draft_id`` is not the current draft
+            若 ``draft_id`` 不是目前的草稿
+        DraftStateTooLargeError: if the editing state exceeds the size limit
+            若編輯狀態超過大小上限
+        DraftVersionConflictError: if the version is not the latest
+            若版本不是最新的
+    """
     return await session.save_state(draft_id, body.state, body.version)
 
 
@@ -86,16 +133,41 @@ async def retry_draft(
     note_service: NoteService = Depends(get_note_service),
     session: CreateSession = Depends(get_create_session),
 ) -> dict[str, object]:
-    """重試。Retry a failed draft.
+    """Retry a draft whose generation failed.
+
+    重試生成失敗的草稿。
+
+    The draft is read once outside the lock only to get the handler name for validating the new
+    input; the state and version are checked inside the lock of ``session.retry``.
 
     先在鎖外讀一次草稿只是為了取得 handler 名稱來驗證新的輸入；狀態與版本在 ``session.retry`` 的鎖內才檢查。
 
+    Args:
+        draft_id: the draft's ID
+            草稿 ID
+        body: the version, plus optional new input and duplicate decision
+            版本，以及可選的新輸入與重複卡處理決定
+        note_service: the note service that validates input and generates the draft
+            驗證輸入並生成草稿的筆記服務
+        session: the site-wide create session
+            全站共用的建卡工作階段
+
+    Returns:
+        the draft after the retry was accepted; the LLM generates in the background
+        接受重試後的草稿；LLM 在背景生成
+
     Raises:
-        DraftNotFoundError: ``{id}`` 不是目前的草稿。Not the current draft.
-        DraftNotFailedError: 不是生成失敗的草稿。Not failed.
-        DraftVersionConflictError: 版本不是最新的。Stale version.
-        RequestValidationError: 新的輸入驗證失敗。On invalid new input.
-        DuplicateFoundError: 新的輸入在 Anki 已有同一張卡，還沒決定怎麼處理。A duplicate needs a decision.
+        DraftNotFailedError: if the draft's generation did not fail
+            若不是生成失敗的草稿
+        DraftNotFoundError: if ``draft_id`` is not the current draft
+            若 ``draft_id`` 不是目前的草稿
+        DraftVersionConflictError: if the version is not the latest
+            若版本不是最新的
+        DuplicateFoundError: if the new input already has the same card in Anki and no decision has
+            been made yet
+            若新的輸入在 Anki 已有同一張卡，還沒決定怎麼處理
+        RequestValidationError: if the new input fails validation
+            若新的輸入驗證失敗
     """
     previous = session.get(draft_id)
     handler_name = previous.handler_name
@@ -123,6 +195,25 @@ async def retry_draft(
     responses={**_GONE, 409: {"model": ErrorResponse, "description": _STATE}},
 )
 async def discard_draft(draft_id: str, session: CreateSession = Depends(get_create_session)) -> Response:
-    """廢棄。Discard a draft."""
+    """Discard a draft that is ready to create or whose generation failed.
+
+    廢棄可建立或生成失敗的草稿。
+
+    Args:
+        draft_id: the draft's ID
+            草稿 ID
+        session: the site-wide create session
+            全站共用的建卡工作階段
+
+    Returns:
+        an empty 204 response
+        空的 204 回應
+
+    Raises:
+        DraftBusyError: if the draft is generating or being created
+            若草稿生成中或建立中
+        DraftNotFoundError: if ``draft_id`` is not the current draft
+            若 ``draft_id`` 不是目前的草稿
+    """
     await session.discard(draft_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

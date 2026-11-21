@@ -1,13 +1,17 @@
-"""
-人脈卡任務處理器 (Person Profile Handler) 模組。
+"""Person profile handler module.
+
+人脈卡任務處理器（Person Profile Handler）模組。
+
+Owns Person_Profile_Dark: creation from the web and TG, plain field updates, and deletion; JSON lists and the
+photo are written through named actions (plan ``docs/archive/person_profile_card_FEAT_2026-10-23.md`` §3.11,
+§3.12). Fields that change over time (interests, positions, residence, and so on; ``PERSON_HISTORY_FIELDS``)
+are JSON lists too, each entry with a recorded date and an end date
+(``docs/wip/person_field_history_FEAT_2026-11-07.md``).
 
 負責 Person_Profile_Dark：網頁與 TG 建立、修改一般欄位、刪除；JSON 清單與照片經由具名動作寫入
 （計畫書 ``docs/archive/person_profile_card_FEAT_2026-10-23.md`` §3.11、§3.12）。會變的欄位
 （興趣、職位、現居地等，``PERSON_HISTORY_FIELDS``）也是 JSON 清單，每筆附登錄日與失效日
 （``docs/wip/person_field_history_FEAT_2026-11-07.md``）。
-
-Person profile handler module: owns Person_Profile_Dark; JSON lists and the
-photo are written through named actions, not as plain text.
 """
 
 import html
@@ -60,17 +64,21 @@ from app.services.task_handlers.registry import register_handler
 
 logger = logging.getLogger(__name__)
 
+#: Fields the system maintains, which ``update_fields`` cannot change: TG deep links find a person by
+#: ``Card_ID``, so changing it breaks them.
 #: 系統維護、不能經 ``update_fields`` 改的欄位：TG 深連結以 ``Card_ID`` 找人，改了就斷線。
-#: Fields the system owns; TG deep links find a person by ``Card_ID``.
 SYSTEM_FIELDS = ("Card_ID",)
 
-#: ``add_item`` 能新增的清單（互動紀錄與待追蹤各有自己的動作）。Lists ``add_item`` accepts.
+#: The lists ``add_item`` can add to (interactions and follow-ups each have their own action).
+#: ``add_item`` 能新增的清單（互動紀錄與待追蹤各有自己的動作）。
 GENERIC_LISTS = ("Family_JSON", "Gifts_JSON", "Key_Dates_JSON", "Contacts_JSON", "Goals_JSON")
 
-#: 照片檔名：Anki 媒體資料夾裡的檔名，只允許安全的字元。A safe media file name.
+#: The photo file name: a file name in the Anki media folder, safe characters only.
+#: 照片檔名：Anki 媒體資料夾裡的檔名，只允許安全的字元。
 _MEDIA_NAME = re.compile(r"^[\w.\-]{1,120}$")
 
-#: 會變的欄位名（固定順序的 tuple，接在 ``JSON_FIELDS`` 後面用）。The history field names.
+#: The history field names (a tuple in fixed order, appended after ``JSON_FIELDS``).
+#: 會變的欄位名（固定順序的 tuple，接在 ``JSON_FIELDS`` 後面用）。
 HISTORY_FIELDS = tuple(PERSON_HISTORY_FIELDS)
 
 ACTIONS = (
@@ -91,35 +99,60 @@ ACTIONS = (
 
 
 def today_iso() -> str:
-    """今天（``APP_TIMEZONE``，見 :mod:`app.core.clock`）。Today in the configured time zone."""
+    """Return today's date in ``APP_TIMEZONE`` (see :mod:`app.core.clock`).
+
+    今天（``APP_TIMEZONE``，見 ``app.core.clock``）。
+
+    Returns:
+        today as an ISO date string
+        今天的 ISO 日期字串
+    """
     return clock.today_iso()
 
 
 def new_card_id() -> str:
-    """新的 ``Card_ID``：``PP_YYYYMMDD_HHMMSS_xxxx``（同一秒建立多人也不重複）。
+    """Return a new ``Card_ID``: ``PP_YYYYMMDD_HHMMSS_xxxx``, unique even for people created in the same second.
 
-    A new ``Card_ID``; the random suffix keeps same-second creations apart.
+    新的 ``Card_ID``：``PP_YYYYMMDD_HHMMSS_xxxx``（同一秒建立多人也不重複）。
+
+    It contains only letters, digits, and underscores, so it fits in a TG deep link
+    (``{action}-{field}-{index}-{Card_ID}``).
+
     只含英數字與底線，能放進 TG 深連結（``{動作}-{欄位}-{序號}-{Card_ID}``）。
+
+    Returns:
+        the new ``Card_ID``
+        新的 ``Card_ID``
     """
     return f"PP_{clock.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(2)}"
 
 
 def resolve_index(items: list[object], index: int, fingerprint: str | None) -> int:
-    """找出要動的那一筆：序號上的那筆指紋相符就用它；否則在清單裡找同指紋的唯一一筆。
+    """Find the item to change in the current list.
 
-    Find the item to change: the one at ``index`` when its fingerprint
-    matches, otherwise the only item with that fingerprint.
+    找出要動的那一筆。
+
+    The item at ``index`` is used when its fingerprint matches; otherwise the only item in the list with that
+    fingerprint.
+
+    序號上的那筆指紋相符就用它；否則在清單裡找同指紋的唯一一筆。
 
     Args:
-        items: 目前的清單。The current list.
-        index: 卡片或 TG 上的序號（可能過時）。The possibly stale index.
-        fingerprint: 那一筆的指紋；None 表示只看序號。The fingerprint, or None.
+        items: the current list
+            目前的清單
+        index: the index on the card or in TG (possibly stale)
+            卡片或 TG 上的序號（可能過時）
+        fingerprint: that item's fingerprint; ``None`` means only the index is checked
+            那一筆的指紋；``None`` 表示只看序號
 
     Returns:
-        目前清單中的序號。The index in the current list.
+        the index in the current list
+        目前清單中的序號
 
     Raises:
-        JsonItemChangedError: 找不到同一筆。When the item cannot be found.
+        JsonItemChangedError: if the same item cannot be found (out of range, or zero or several items with the
+            fingerprint)
+            若找不到同一筆（超出範圍，或同指紋的有零筆或多筆）
     """
     if fingerprint is None:
         if 0 <= index < len(items):
@@ -134,7 +167,10 @@ def resolve_index(items: list[object], index: int, fingerprint: str | None) -> i
 
 
 class _ActionParams(BaseModel):
-    """具名動作的參數：多餘的鍵擋掉。Action parameters; unknown keys rejected."""
+    """The parameters of a named action; unknown keys are rejected.
+
+    具名動作的參數：多餘的鍵擋掉。
+    """
 
     model_config = ConfigDict(extra="forbid")
     action: str
@@ -160,10 +196,15 @@ class _AddItem(_ActionParams):
 
 
 class _SetGoalStatus(_ActionParams):
-    """改目標的狀態。``closed`` 是達成或放棄的那天（TG 按的時候問；沒給就是今天），要是真的日期、不能在未來；
-    改回進行中時不看它。
+    """The parameters for setting a goal's status.
 
-    Set a goal's status; ``closed`` is the day it was reached or dropped (today when omitted).
+    改目標的狀態。
+
+    ``closed`` is the day the goal was reached or dropped (TG asks when the button is pressed; today when
+    omitted); it must be a real date and not in the future. It is ignored when the goal is set back to open.
+
+    ``closed`` 是達成或放棄的那天（TG 按的時候問；沒給就是今天），要是真的日期、不能在未來；
+    改回進行中時不看它。
     """
 
     index: int = Field(ge=0)
@@ -191,7 +232,15 @@ class _SetHistoryStatus(_ActionParams):
 
 
 class _EditPosition(_ActionParams):
-    """改一份工作的任職起訖與說明（舊動作：TG 已改用 ``edit_item``，§16；保留給舊的呼叫端）。
+    """The parameters for editing a job's start, end, and note (legacy action, kept for old callers).
+
+    改一份工作的任職起訖與說明（舊動作：TG 已改用 ``edit_item``，§16；保留給舊的呼叫端）。
+
+    TG has switched to ``edit_item`` (§16). All three values are required (they replace the set as a whole; an
+    empty string clears), so a value left out is not taken as a clear. ``expected_start`` and ``expected_end``
+    are the original values seen when editing began: two jobs with the same name have the same fingerprint, so
+    a stale index may match the other one, and if the original values do not match, the item counts as
+    changed.
 
     三個值都必填（整組取代，空字串＝清掉），漏送不會被當成清掉。``expected_start``、``expected_end`` 是開始
     修改時看到的原值：同名的兩份工作指紋相同，序號過時可能對到另一筆，原值對不上就當成這一筆變了。
@@ -207,12 +256,19 @@ class _EditPosition(_ActionParams):
 
 
 class _EditHistoryPeriod(_ActionParams):
-    """改一筆的事件時間（職位以外有 :data:`HISTORY_PERIOD_KEYS` 的欄位；職位走 ``edit_position``）。
+    """The parameters for editing one entry's event times.
 
+    改一筆的事件時間。
+
+    For fields other than positions that have :data:`HISTORY_PERIOD_KEYS`; positions use ``edit_position``.
+    ``values`` must be exactly that field's time keys (replacing the set as a whole; an empty string clears),
+    so a key left out is not taken as a clear. ``expected`` is the original values seen when editing began:
+    two entries with the same content have the same fingerprint, so a stale index may match the other one, and
+    if the original values do not match, the entry counts as changed.
+
+    職位以外有 ``HISTORY_PERIOD_KEYS`` 的欄位；職位走 ``edit_position``。
     ``values`` 要剛好是那個欄位的時間鍵（整組取代，空字串＝清掉），漏送不會被當成清掉。``expected`` 是開始修改時
     看到的原值：同內容的兩筆指紋相同，序號過時可能對到另一筆，原值對不上就當成這一筆變了。
-
-    Replace one entry's event times; ``expected`` holds the values seen when editing began.
     """
 
     field: str
@@ -223,7 +279,20 @@ class _EditHistoryPeriod(_ActionParams):
 
 
 class _EditItem(_ActionParams):
-    """改一筆（工作經歷計畫書 §16）。
+    """The parameters for editing one item (work history plan §16).
+
+    改一筆（工作經歷計畫書 §16）。
+
+    - ``values``: must be exactly the list's editable keys (:data:`ITEM_EDIT_KEYS`), replacing them as a set.
+      Clearing text sends an empty string; ``None`` removes the key and leaves it to the model's default (for
+      clearing a number or yes/no, or skipping a key that did not exist).
+    - Other keys (recorded date, hidden, status) stay as they are. The end date also stays, except that it is
+      cleared when a position's original end month is cleared (back to the current job).
+    - ``expected``: the original values seen when editing began (``None``, empty string, and ``False`` all
+      count as empty). Two items with the same content have the same fingerprint, so a stale index may match
+      the other one, and if the original values do not match, the item counts as changed. But when that item
+      already looks like ``values`` (the save succeeded, the response was lost, and the button was pressed
+      again), it counts as already edited.
 
     - ``values``：要剛好是那個清單能改的鍵（:data:`ITEM_EDIT_KEYS`），整組取代。文字清掉送空字串；None＝拿掉
       那個鍵、交給模型的預設值（數字、是／否清掉，或原本就沒有這個鍵又略過時）。
@@ -231,8 +300,6 @@ class _EditItem(_ActionParams):
     - ``expected``：開始修改時看到的原值（None、空字串、False 都算空）。同內容的兩筆指紋相同，序號過時可能對到
       另一筆，原值對不上就當成這一筆變了。但那一筆已經是 ``values`` 的樣子時（存檔成功、回應沒送到又重按），
       當成已經改好。
-
-    Edit one item; ``values`` replaces the list's editable keys and ``expected`` holds what was seen.
     """
 
     field: str
@@ -261,9 +328,36 @@ class _SetPhoto(_ActionParams):
 
 @register_handler
 class PersonProfileHandler(BaseHandler):
-    """人脈卡任務處理器。
+    """Person profile card task handler.
 
-    Person profile card task handler.
+    人脈卡任務處理器。
+
+    - Create (web, TG): the parameters are ``PersonCreateParams``; ``Card_ID`` is generated, ``TG_Bot`` and
+      ``Updated_At`` are written, and the six JSON fields are filled with ``[]`` (history fields left unfilled
+      stay empty, see below). Duplicate names are allowed (different people can all be called 「田中さん」).
+    - Plain field updates: JSON fields and ``Card_ID`` cannot be changed directly, and retired fields
+      (:data:`RETIRED_FIELDS`: title and work content, both merged into ``Company``) cannot be written with a
+      non-empty value (clearing is allowed); the photo accepts only a file name obtained from a web upload
+      (media_upload plan D3); ``Updated_At`` is updated when something changes.
+    - Named actions (``ACTIONS``): append an interaction (also updating ``Last_Contact``), add a follow-up,
+      change a follow-up's status, add an item to another list (goals always start open, recorded today),
+      change a goal's status (``set_goal_status``: reached or dropped records an end date, which may be given
+      and defaults to today), add an entry to a history field (``add_history``) or strike it out or restore
+      it (``set_history_status``; striking out a position means leaving, and the end month is added
+      separately), edit one item of any list (``edit_item``: content, times, and note), hide or show an item
+      on the card (``set_hidden``), delete an item, and set the photo. Items are validated with the models of
+      §3.3; delete, status changes, and hiding confirm by fingerprint that they touch the same item. Every
+      write updates ``Updated_At``. The legacy actions ``edit_position`` and ``edit_history_period`` (times
+      and note only) are kept for old callers; TG has switched to ``edit_item``.
+    - History fields: on create, text is turned into a list (recorded date = today); the system fills in
+      today as the recorded date when adding and as the end date when striking out; for single-value fields
+      (residence, time zone, relationship, closeness), adding strikes out the entry that was active. When a
+      list becomes empty, the field is written as an empty string (the same as leaving it unfilled at
+      creation; the "who is this" card used to check whether ``Company`` had a value, and ``[]`` counted as a
+      value).
+    - Web whole-field JSON editing (``JSON_FIELD_SPECS``): ``Updated_At`` is updated after writing; when
+      interactions get a later date, ``Last_Contact`` is updated too.
+    - Delete: the standard delete.
 
     - 建立（網頁、TG）：參數是 ``PersonCreateParams``；自動產生 ``Card_ID``、寫入 ``TG_Bot`` 與
       ``Updated_At``、六個 JSON 欄位填 ``[]``（會變的欄位沒填時留空，見下）。允許稱呼重複（不同的人
@@ -305,7 +399,8 @@ class PersonProfileHandler(BaseHandler):
     MEDIA_FIELDS = {"Photo": "image"}
     CREATE_TAGS = ("PersonProfile", "HandlerGenerated")
     CREATE_PARAMS = PersonCreateParams
-    #: 網頁欄位搜尋的按鈕：名字合併各語言的姓名，相近的欄位放在一起。The field-search buttons.
+    #: The web field-search buttons: "name" combines the names in each language, and related fields are grouped.
+    #: 網頁欄位搜尋的按鈕：名字合併各語言的姓名，相近的欄位放在一起。
     SEARCH_FIELDS = (
         SearchField("name", "名字", ("Display_Name", "Name_ZH", "Name_EN", "Name_JA", "Name_JA_Kana", "Name_Romaji")),
         SearchField("relationship", "關係", ("Relationship",)),
@@ -330,19 +425,28 @@ class PersonProfileHandler(BaseHandler):
     @property
     @override
     def handler_name(self) -> str:
-        """處理器名稱。Handler name."""
+        """The handler name used in URLs.
+
+        處理器名稱，出現在網址裡。
+        """
         return "person_profile"
 
     @property
     @override
     def title(self) -> str:
-        """中文名稱。Display title."""
+        """The Chinese display title.
+
+        中文名稱。
+        """
         return "人脈卡"
 
     @property
     @override
     def supported_models(self) -> list[str]:
-        """支援的 Anki 模型名稱清單。Supported Anki model names."""
+        """The Anki note types this handler owns.
+
+        這個處理器負責的 Anki 筆記類型。
+        """
         return [PERSON_NOTE_TYPE]
 
     @override
@@ -354,21 +458,36 @@ class PersonProfileHandler(BaseHandler):
         model_name: str,
         parameters: dict[str, object],
     ) -> list[int]:
-        """建立一個人：填入使用者給的欄位與系統欄位。
+        """Create a person, filling in the fields the user gave and the system fields.
 
-        Create a person with the given fields and the system fields.
+        建立一個人：填入使用者給的欄位與系統欄位。
+
+        Duplicates are allowed.
+
+        允許重複。
 
         Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務（不用）。Relation service (unused).
-            deck_name: 目標牌組。Target deck.
-            model_name: 筆記類型（服務層已確認）。The note type.
-            parameters: ``PersonCreateParams`` 驗證過的值，加上服務層補的 ``tg_bot``。會變的欄位在這裡
-                轉成清單（文字照規則切、清單每列一筆；職位一列是公司＋職稱）。
-                The validated parameters plus ``tg_bot``.
+            card_service: the card service
+                卡片服務
+            relation_service: the relation service (unused)
+                關聯服務（不用）
+            deck_name: the target deck
+                目標牌組
+            model_name: the note type (confirmed by the service layer)
+                筆記類型（服務層已確認）
+            parameters: the values validated by ``PersonCreateParams``, plus the ``tg_bot`` the service layer
+                adds. History fields are turned into lists here (text is split by the rules, a list gives one
+                entry per row; a position row is company plus title).
+                ``PersonCreateParams`` 驗證過的值，加上服務層補的 ``tg_bot``。會變的欄位在這裡轉成清單
+                （文字照規則切、清單每列一筆；職位一列是公司＋職稱）。
 
         Returns:
-            建立的 Note ID。The created note ID.
+            the created note ID, as a one-element list
+            建立的 Note ID（單元素陣列）
+
+        Raises:
+            InvalidNoteFieldsError: if a history entry does not match its model
+                若會變的欄位有一筆不符模型
         """
         values = dict(parameters)
         tg_bot = str(values.pop("tg_bot", "") or "")
@@ -401,25 +520,41 @@ class PersonProfileHandler(BaseHandler):
         note_id: int,
         parameters: dict[str, object],
     ) -> None:
-        """修改一般欄位，或執行具名動作。
+        """Update plain fields, or run a named action.
 
-        Update plain fields, or run a named action.
+        修改一般欄位，或執行具名動作。
+
+        Each named action reads once and writes once.
+
+        每個具名動作讀一次、寫一次。
 
         Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            note_id: 筆記 ID。The note.
-            parameters: ``{"action": ..., ...}``；``update_fields`` 同基底，其他見 ``ACTIONS``。
+            card_service: the card service
+                卡片服務
+            relation_service: the relation service
+                關聯服務
+            note_id: the note ID
+                筆記 ID
+            parameters: ``{"action": ..., ...}``; ``update_fields`` is as in the base class, the others are
+                listed in ``ACTIONS``
+                ``{"action": ..., ...}``；``update_fields`` 同基底，其他見 ``ACTIONS``
 
         Raises:
-            FieldNotEditableError: ``update_fields`` 改了 JSON、``Card_ID`` 或寫入非空的 ``Title``。
-                A locked field.
-            MediaFieldInvalidError: ``update_fields`` 的照片不是 ``POST /media`` 命名格式的圖片檔名。
-                An invalid photo name.
-            InvalidNoteFieldsError: 動作參數或項目內容不符格式。Invalid parameters or items.
-            JsonItemChangedError: 要刪除或改狀態的那一筆已經變了。The item changed.
-            AnkiFieldCorruptedError: 要改的清單格式壞了（不覆寫）。When the list is broken.
-            HandlerOperationUnsupportedError: 不認得的動作。An unknown action.
+            AnkiFieldCorruptedError: if the list to change is malformed (it is not overwritten)
+                若要改的清單格式壞了（不覆寫）
+            FieldNotEditableError: if ``update_fields`` changes a JSON field or ``Card_ID``, or writes a
+                non-empty value to a retired field (:data:`RETIRED_FIELDS`)
+                若 ``update_fields`` 改了 JSON、``Card_ID``，或在停用的欄位（``RETIRED_FIELDS``）寫入非空的值
+            HandlerOperationUnsupportedError: if the action is unknown
+                若是不認得的動作
+            InvalidNoteFieldsError: if the action parameters or item contents do not match the format
+                (including ``ActionContractError``)
+                若動作參數或項目內容不符格式（含 ``ActionContractError``）
+            JsonItemChangedError: if the item to change has changed or is gone
+                若要動的那一筆已經變了或不在了
+            MediaFieldInvalidError: if the photo in ``update_fields`` is not an image file name in the
+                ``POST /media`` naming format
+                若 ``update_fields`` 的照片不是 ``POST /media`` 命名格式的圖片檔名
         """
         action = parameters.get("action")
         # 每個具名動作讀一次、寫一次：清單、Last_Contact、Updated_At 在同一次寫入，不會只寫了一半
@@ -566,11 +701,25 @@ class PersonProfileHandler(BaseHandler):
     async def after_json_update(
         self, card_service: CardService, note_id: int, field_name: str, items: list[object]
     ) -> None:
-        """網頁整欄寫入之後：互動紀錄的最新日期推進 ``Last_Contact``；會變的欄位清空時寫空字串
-        （和建卡時沒填的一樣）；並更新 ``Updated_At``。
+        """Maintain related fields after the web writes a whole JSON field.
 
-        After the web writes a whole field: move ``Last_Contact`` forward,
-        blank emptied history fields, and stamp ``Updated_At``.
+        網頁整欄寫入之後維護相關欄位。
+
+        The latest interaction date moves ``Last_Contact`` forward; an emptied history field is written as an
+        empty string (the same as leaving it unfilled at creation); and ``Updated_At`` is updated.
+
+        互動紀錄的最新日期推進 ``Last_Contact``；會變的欄位清空時寫空字串（和建卡時沒填的一樣）；
+        並更新 ``Updated_At``。
+
+        Args:
+            card_service: the card service
+                卡片服務
+            note_id: the note ID
+                筆記 ID
+            field_name: the JSON field written
+                寫入的 JSON 欄位
+            items: the list written
+                寫入的清單
         """
         changes: dict[str, str] = {}
         if field_name in PERSON_HISTORY_FIELDS and not items:
@@ -588,10 +737,14 @@ class PersonProfileHandler(BaseHandler):
         note_id: int,
         parameters: dict[str, object],
     ) -> None:
-        """修改一般欄位（標準實作）：``Card_ID`` 不能改、停用的欄位（:data:`RETIRED_FIELDS`）不能寫入非空的值；
-        真的有改動時更新 ``Updated_At``。
+        """Update plain fields through the standard implementation, with this card's extra checks.
 
-        Plain field update; ``Card_ID`` is locked; ``Updated_At`` follows changes.
+        修改一般欄位（標準實作）。
+
+        ``Card_ID`` cannot be changed, and retired fields (:data:`RETIRED_FIELDS`) cannot be written with a
+        non-empty value; ``Updated_At`` is updated only when something actually changes.
+
+        ``Card_ID`` 不能改、停用的欄位（``RETIRED_FIELDS``）不能寫入非空的值；真的有改動時更新 ``Updated_At``。
         """
         fields = parameters.get("fields")
         changed = False
@@ -610,16 +763,23 @@ class PersonProfileHandler(BaseHandler):
 
 
 async def _read(card_service: CardService, note_id: int) -> dict[str, str]:
-    """讀出筆記的欄位原始值。The note's raw field values."""
+    """Read the note's raw field values.
+
+    讀出筆記的欄位原始值。
+    """
     return note_field_values(await card_service.get_note(note_id))
 
 
 def _list(values: dict[str, str], field: str) -> list[object]:
-    """解析一個 JSON 清單欄位。Parse one JSON list field.
+    """Parse one JSON list field.
+
+    解析一個 JSON 清單欄位。
 
     Raises:
-        AnkiFieldCorruptedError: 欄位格式壞了（不覆寫，免得蓋掉原本的資料）；訊息帶欄位名稱，
-            會變的欄位另外提示可能是還沒轉換的舊文字。When the field is broken.
+        AnkiFieldCorruptedError: if the field is malformed (it is not overwritten, so the original data is not
+            lost); the message names the field, and for history fields also hints that it may be old text not
+            yet migrated
+            若欄位格式壞了（不覆寫，免得蓋掉原本的資料）；訊息帶欄位名稱，會變的欄位另外提示可能是還沒轉換的舊文字
     """
     try:
         return AnkiJsonFieldManager.parse_field_string(values.get(field, ""))
@@ -634,21 +794,47 @@ def _list(values: dict[str, str], field: str) -> list[object]:
 
 
 def _require_history(field: str) -> None:
-    """確認是會變的欄位。Check the field is a history field.
+    """Check that the field is a history field.
+
+    確認是會變的欄位。
 
     Raises:
-        InvalidNoteFieldsError: 不是。When it is not.
+        InvalidNoteFieldsError: if it is not
+            若不是
     """
     if field not in PERSON_HISTORY_FIELDS:
         raise InvalidNoteFieldsError(f"{field} 不是人脈卡會變的欄位")
 
 
 def add_history(field: str, items: list[object], item: dict[str, object], today: str | None = None) -> list[object]:
-    """在會變的欄位新增：登錄日填今天、失效日空白；可切的欄位內容以逗號、頓號、換行切成多筆；與目前有效的
-    某筆相同的略過；單值欄位真的新增了一筆時才把原本有效的劃掉（登錄日計畫書 D5、D6）。
+    """Add entries to a history field.
 
-    Add entries to a history field: dates by the system, splittable values
-    split, current duplicates skipped, single-value fields end the old one.
+    在會變的欄位新增。
+
+    The recorded date is today and the end date is blank; the content of splittable fields is split into
+    several entries at commas, enumeration commas, and line breaks; entries identical to a currently active one
+    are skipped; a single-value field strikes out the previously active entry only when a new entry is
+    actually added (recorded date plan D5, D6).
+
+    When an entry is the same as an active one (:func:`entry_key`) but this time carries an event time that
+    entry still lacks (:data:`HISTORY_PERIOD_KEYS`, for example adding the year an interest started) or a new
+    note (:data:`NOTE_FIELDS`, joined per :func:`merged_note`), it is filled into that entry instead of being
+    added; when the given time differs from the one the entry already has, :class:`InvalidNoteFieldsError` is
+    raised (so the time the user just typed is not silently dropped). When nothing is added or filled (a full
+    duplicate), an error is raised too, so the user does not think it was saved.
+
+    Positions are the exception: one with the same name as a current job is not added; instead its start month
+    (when that entry's is empty) and note (per :func:`merged_note`) are filled into that entry; a start that
+    differs from the entry's existing one does not change it. When nothing is filled, it is a duplicate. One
+    with an end month (a past job) is not merged into the current job but appended; it counts as a duplicate
+    only when :func:`entry_key` and both start and end match an entry.
+
+    Only the keys the field can edit (:data:`ITEM_EDIT_KEYS`, plus the date keys that are overwritten) are
+    accepted: keys of other fields (for example a note on an interest) would be stored but never shown or
+    editable.
+
+    登錄日填今天、失效日空白；可切的欄位內容以逗號、頓號、換行切成多筆；與目前有效的
+    某筆相同的略過；單值欄位真的新增了一筆時才把原本有效的劃掉（登錄日計畫書 D5、D6）。
 
     和某筆有效的相同（:func:`entry_key`）、但這次帶了那一筆還空著的事件時間（:data:`HISTORY_PERIOD_KEYS`，例如
     補上興趣開始的年份）或新的說明（:data:`NOTE_FIELDS`，照 :func:`merged_note` 接上）時，補進那一筆，不另外
@@ -663,18 +849,26 @@ def add_history(field: str, items: list[object], item: dict[str, object], today:
     存了也顯示不出來、改不到。
 
     Args:
-        field: 會變的欄位。The history field.
-        items: 目前的清單（會被修改）。The current list, modified in place.
-        item: ``{"value": ...}``；職位為 ``{"company", "title"}``。日期鍵會被系統的值蓋掉。
-            The entry; date keys are overwritten.
-        today: 今天（預設 :func:`today_iso`）。Today.
+        field: the history field
+            會變的欄位
+        items: the current list (modified in place)
+            目前的清單（會被修改）
+        item: ``{"value": ...}``; for positions ``{"company", "title"}``. Date keys are overwritten with the
+            system's values.
+            ``{"value": ...}``；職位為 ``{"company", "title"}``。日期鍵會被系統的值蓋掉。
+        today: today (defaults to :func:`today_iso`)
+            今天（預設 ``today_iso``）
 
     Returns:
-        新的清單（就是 ``items``）。The list.
+        the new list (``items`` itself)
+        新的清單（就是 ``items``）
 
     Raises:
-        InvalidNoteFieldsError: 內容不符格式（例如空的、親密度不是 1–5），或職位和現職完全重複。
-            On an invalid entry or a duplicate position.
+        InvalidNoteFieldsError: if the content does not match the format (for example empty, or a closeness
+            outside 1–5), a key is not editable for the field (``ActionContractError``), a given time
+            conflicts with an existing entry, or the entry is a full duplicate
+            若內容不符格式（例如空的、親密度不是 1–5）、帶了那個欄位不能改的鍵（``ActionContractError``）、
+            帶的時間和已有的一筆不同，或完全重複
     """
     today = today or today_iso()
     data = {key: value for key, value in item.items() if key not in ("added", "ended")}
@@ -723,10 +917,17 @@ def add_history(field: str, items: list[object], item: dict[str, object], today:
 
 
 def _check_restored(field: str, entry: dict[str, object]) -> None:
-    """取消劃掉（恢復現職）之後整筆要仍然合法：只有離職時間的工作（§17）拿掉離職就什麼都沒有了。
+    """Check that an entry is still valid after being restored (back to a current job).
+
+    取消劃掉（恢復現職）之後整筆要仍然合法。
+
+    A job with only an end time (§17) has nothing left once the end is removed.
+
+    只有離職時間的工作（§17）拿掉離職就什麼都沒有了。
 
     Raises:
-        InvalidNoteFieldsError: 恢復後不合法（不寫入）。When the restored entry is invalid.
+        InvalidNoteFieldsError: if the restored entry is invalid (nothing is written)
+            若恢復後不合法（不寫入）
     """
     try:
         _validate_item(field, entry)
@@ -739,17 +940,29 @@ def _check_restored(field: str, entry: dict[str, object]) -> None:
 
 
 def set_history_status(field: str, entry: dict[str, object], *, ended: bool, today: str | None = None) -> None:
-    """劃掉或取消劃掉一筆（會修改 ``entry``）。End or restore one history entry in place.
+    """Strike out or restore one history entry, modifying ``entry`` in place.
+
+    劃掉或取消劃掉一筆（會修改 ``entry``）。
+
+    - Strike out: the end date is set to today; striking out an entry that is already struck out keeps its end
+      date. Striking out a position means leaving the job: when there is no end month, this month is added.
+    - Restore: the end date is cleared and the end month removed (so a position becomes the current job again;
+      for other fields, an ``end`` left by manual editing is removed too, symmetric with :func:`is_active`,
+      which does not distinguish fields). Other active entries are not struck out (D5 covers only adding).
 
     - 劃掉：失效日填今天；已經劃掉的再劃一次不改失效日。職位的劃掉是「離職」：沒有離職年月時補上這個月。
     - 取消劃掉：清空失效日，並拿掉離職年月（職位因此恢復成現職；其他欄位若因手改留下 ``end``，也一併拿掉，
       和 :func:`is_active` 不分欄位的判斷對稱）。不會把其他有效的劃掉（D5 只管新增）。
 
     Args:
-        field: 會變的欄位。The history field.
-        entry: 那一筆。The entry.
-        ended: 劃掉為 True。True to end it.
-        today: 今天（預設 :func:`today_iso`）。Today.
+        field: the history field
+            會變的欄位
+        entry: the entry
+            那一筆
+        ended: ``True`` to strike it out, ``False`` to restore it
+            劃掉為 ``True``，取消劃掉為 ``False``
+        today: today (defaults to :func:`today_iso`)
+            今天（預設 ``today_iso``）
     """
     today = today or today_iso()
     if ended:
@@ -763,11 +976,21 @@ def set_history_status(field: str, entry: dict[str, object], *, ended: bool, tod
 
 
 def _merge_into_current(new: list[dict[str, object]], current: dict[str, object]) -> None:
-    """同名的現職：新的到職年月補進那一筆空著的到職（已經有不同的到職時不改，也不報錯：要改請用修改）；說明照
-    :func:`merged_note` 補（空的就填，新的內容換行接在後面，§18）。The duplicate position fills the current one.
+    """Fill a current job with the same name from the new position.
+
+    同名的現職：用新的那筆補進現職。
+
+    The new start month fills that entry's empty start (when it already has a different start, it is not
+    changed and no error is raised: editing is the way to change it); the note is filled per
+    :func:`merged_note` (filled when empty, otherwise new content appended on a new line, §18).
+
+    新的到職年月補進那一筆空著的到職（已經有不同的到職時不改，也不報錯：要改請用修改）；說明照
+    ``merged_note`` 補（空的就填，新的內容換行接在後面，§18）。
 
     Raises:
-        InvalidNoteFieldsError: 沒有任何可以補的（完全重複，或到職已經有不同的值）。Nothing to fill.
+        InvalidNoteFieldsError: if there is nothing to fill (a full duplicate, or the start already has a
+            different value)
+            若沒有任何可以補的（完全重複，或到職已經有不同的值）
     """
     filled = False
     for entry in new:
@@ -788,19 +1011,47 @@ def _merge_into_current(new: list[dict[str, object]], current: dict[str, object]
 
 
 def edit_position(items: list[object], index: int, params: _EditPosition) -> dict[str, object]:
-    """改好的那一份工作（不改 ``items``）：任職起訖與說明換成新的，其他鍵照舊，整筆再經模型驗證。
+    """Return the edited job, without modifying ``items``.
 
-    The edited position; the list itself is left untouched.
+    改好的那一份工作（不改 ``items``）。
+
+    The start, end, and note are replaced with the new ones, other keys stay as they are, and the whole entry
+    is validated with the model again.
+
+    - If the original values (``expected_*``) do not match, :class:`JsonItemChangedError` is raised (two jobs
+      with the same name have the same fingerprint).
+    - If an existing end month is cleared, the job becomes current again and the end date is cleared too (the
+      same as "restore to current job"). Old data with only an end date and no end month already has an empty
+      end, so it is not revived by this.
+    - If the result duplicates another entry (a past job with identical start and end, or two current jobs with
+      the same name), :class:`InvalidNoteFieldsError` is raised, the same as :func:`add_history` blocks.
+
+    任職起訖與說明換成新的，其他鍵照舊，整筆再經模型驗證。
 
     - 原值（``expected_*``）對不上：丟 :class:`JsonItemChangedError`（同名的兩份工作指紋相同）。
     - 原本有離職年月、改成清空：改回現職，失效日一起清掉（和「恢復現職」相同）。只有失效日、沒有離職年月的
       舊資料，離職本來就是空的，不會因此復活。
     - 改完和另一筆重複（起訖完全相同的以前的工作、同名的兩份現職）：丟 :class:`InvalidNoteFieldsError`，
-      和 :func:`add_history` 擋的一樣。
+      和 ``add_history`` 擋的一樣。
+
+    Args:
+        items: the current list of jobs
+            目前的工作經歷清單
+        index: the index of the job to edit
+            要改的那一份工作的序號
+        params: the action parameters
+            動作參數
+
+    Returns:
+        the edited job
+        改好的那一份工作
 
     Raises:
-        JsonItemChangedError: 這一筆在別處被改過。When the item changed elsewhere.
-        InvalidNoteFieldsError: 格式不對、離職早於到職，或改完和另一筆重複。On invalid or duplicate entries.
+        InvalidNoteFieldsError: if the format is wrong, the end is earlier than the start, or the result
+            duplicates another entry
+            若格式不對、離職早於到職，或改完和另一筆重複
+        JsonItemChangedError: if the item was changed elsewhere
+            若這一筆在別處被改過
     """
     entry = items[index]
     if not isinstance(entry, dict):
@@ -820,8 +1071,19 @@ def edit_position(items: list[object], index: int, params: _EditPosition) -> dic
 
 
 def _reject_position_duplicate(items: list[object], index: int, edited: dict[str, object]) -> None:
-    """改好的職位和另一筆重複時丟 :class:`InvalidNoteFieldsError`：同名的兩份現職、或起訖完全相同的以前的
-    工作（和 :func:`add_history` 擋的一樣）。Reject an edited position duplicating another one."""
+    """Reject an edited position that duplicates another entry.
+
+    改好的職位和另一筆重複時丟 ``InvalidNoteFieldsError``。
+
+    Duplicates are two current jobs with the same name, or past jobs with identical start and end (the same
+    as :func:`add_history` blocks).
+
+    重複指同名的兩份現職、或起訖完全相同的以前的工作（和 ``add_history`` 擋的一樣）。
+
+    Raises:
+        InvalidNoteFieldsError: if it duplicates another entry
+            若和另一筆重複
+    """
     others = [item for i, item in enumerate(items) if i != index]
     if is_active(edited):
         key, text = entry_key("Company", edited), entry_text("Company", edited)
@@ -832,10 +1094,14 @@ def _reject_position_duplicate(items: list[object], index: int, edited: dict[str
 
 
 def _same(a: object, b: object) -> bool:
-    """原值比對：沒有這個鍵（None）、空字串與 False 在比對時都算空（JSON 清單存檔時這三種都不寫，見
-    :func:`_validate_item`；會變的欄位有的鍵會存成空字串）。
+    """Compare an original value, treating a missing key (``None``), ``""``, and ``False`` all as empty.
 
-    Compare an expected value; None, "" and False all mean empty.
+    原值比對：沒有這個鍵（None）、空字串與 False 在比對時都算空。
+
+    JSON lists store none of these three (see :func:`_validate_item`); some keys of history fields are stored
+    as empty strings.
+
+    JSON 清單存檔時這三種都不寫，見 ``_validate_item``；會變的欄位有的鍵會存成空字串。
     """
     def empty(value: object) -> bool:
         # 用 is False：0 == False，數值 0 不算空
@@ -845,7 +1111,10 @@ def _same(a: object, b: object) -> bool:
 
 
 def _already_applied(field: str, entry: object, values: dict[str, object]) -> bool:
-    """這一筆能改的鍵已經是 ``values`` 的樣子（同一次修改重送）。Whether the edit is already in place."""
+    """Check whether the item's editable keys already look like ``values`` (the same edit sent again).
+
+    這一筆能改的鍵已經是 ``values`` 的樣子（同一次修改重送）。
+    """
     return isinstance(entry, dict) and set(values) == set(ITEM_EDIT_KEYS[field]) and all(
         _same(value, entry.get(key)) for key, value in values.items()
     )
@@ -854,16 +1123,31 @@ def _already_applied(field: str, entry: object, values: dict[str, object]) -> bo
 def _contact_after_edit(
     values: dict[str, str], items: list[object], old: object, new: dict[str, object]
 ) -> dict[str, str]:
-    """改了一筆互動之後 ``Last_Contact`` 的變更：日期往後改照新增的規則推進；原本的上次聯絡就是這一筆、日期又
-    往前更正時，改成清單裡最新的日期（不然會留著一個已經不存在的日期）。上次聯絡是別的來源時（手動填的）不往回改。
+    """Return the ``Last_Contact`` change after editing an interaction.
 
-    The ``Last_Contact`` change after editing an interaction.
+    改了一筆互動之後 ``Last_Contact`` 的變更。
+
+    A date moved later advances it by the same rule as adding; when the previous last contact was this item
+    and its date is corrected earlier, it becomes the latest date in the list (otherwise a date that no longer
+    exists would remain). When the last contact came from another source (filled in by hand), it is not moved
+    back.
+
+    日期往後改照新增的規則推進；原本的上次聯絡就是這一筆、日期又往前更正時，改成清單裡最新的日期
+    （不然會留著一個已經不存在的日期）。上次聯絡是別的來源時（手動填的）不往回改。
 
     Args:
-        values: 卡片目前的欄位值（讀 ``Last_Contact``）。The card's field values.
-        items: 改好之後的互動紀錄。The interactions after the edit.
-        old: 改之前的那一筆。The item before the edit.
-        new: 改好的那一筆。The edited item.
+        values: the card's current field values (``Last_Contact`` is read)
+            卡片目前的欄位值（讀 ``Last_Contact``）
+        items: the interactions after the edit
+            改好之後的互動紀錄
+        old: the item before the edit
+            改之前的那一筆
+        new: the edited item
+            改好的那一筆
+
+    Returns:
+        the fields to write; empty when ``Last_Contact`` does not change
+        要寫入的欄位；``Last_Contact`` 不變時為空
     """
     old_date = str(old.get("date") or "") if isinstance(old, dict) else ""
     new_date = str(new.get("date") or "")
@@ -875,10 +1159,25 @@ def _contact_after_edit(
 def edit_item(
     field: str, items: list[object], index: int, values: dict[str, object], expected: dict[str, object] | None
 ) -> dict[str, object]:
-    """改好的那一筆（不改 ``items``）：能改的鍵（:data:`ITEM_EDIT_KEYS`）換成新的，其他鍵照舊，整筆再經模型
-    驗證（工作經歷計畫書 §16）。
+    """Return the edited item, without modifying ``items`` (work history plan §16).
 
-    The edited item; the list itself is left untouched.
+    改好的那一筆（不改 ``items``；工作經歷計畫書 §16）。
+
+    The editable keys (:data:`ITEM_EDIT_KEYS`) are replaced with the new ones, other keys stay as they are,
+    and the whole item is validated with the model again.
+
+    - If the original values (``expected``) do not match but the item already looks like ``values``, it is the
+      same edit sent again, and the item is returned as is (no error).
+    - Positions: clearing an existing end month makes the job current again (the end date is cleared too, as in
+      :func:`edit_position`); a past job whose end month is not cleared keeps its end date. A result that
+      duplicates another entry is blocked.
+    - Other history fields: when the content of a splittable field changes, it can become only one value (old
+      data whose content is unchanged may contain enumeration commas and have only its times edited); a result
+      equal to another active entry is blocked.
+    - Other lists: only validated with the model (the status and end date of goals and follow-ups stay as they
+      are).
+
+    能改的鍵（``ITEM_EDIT_KEYS``）換成新的，其他鍵照舊，整筆再經模型驗證。
 
     - 原值（``expected``）對不上、但這一筆已經是 ``values`` 的樣子：同一次修改重送，照樣回傳（不丟錯）。
     - 職位：清掉原本有的離職年月時改回現職（劃掉日一併清掉，同 :func:`edit_position`）；離職年月沒清掉的以前的
@@ -887,9 +1186,28 @@ def edit_item(
       有效的相同就擋。
     - 其他清單：只經模型驗證（目標、待追蹤的狀態與結束日照舊）。
 
+    Args:
+        field: the list field
+            清單欄位
+        items: the current list
+            目前的清單
+        index: the index of the item to edit
+            要改的那一筆的序號
+        values: the new values of the editable keys
+            能改的鍵的新值
+        expected: the original values seen when editing began, or ``None`` to skip the check
+            開始修改時看到的原值；``None`` 表示不檢查
+
+    Returns:
+        the edited item
+        改好的那一筆
+
     Raises:
-        JsonItemChangedError: 原值（``expected``）對不上：這一筆在別處被改過。When the item changed elsewhere.
-        InvalidNoteFieldsError: 鍵不對、格式不對，或改完和另一筆重複。On invalid keys, values or duplicates.
+        InvalidNoteFieldsError: if the keys are wrong (``ActionContractError``), the format is wrong, or the
+            result duplicates another entry
+            若鍵不對（``ActionContractError``）、格式不對，或改完和另一筆重複
+        JsonItemChangedError: if the original values (``expected``) do not match: the item was changed elsewhere
+            若原值（``expected``）對不上：這一筆在別處被改過
     """
     keys = ITEM_EDIT_KEYS[field]
     title = PERSON_HISTORY_FIELDS[field].title if field in PERSON_HISTORY_FIELDS else PERSON_JSON_ITEMS[field][1]
@@ -930,17 +1248,26 @@ def edit_item(
 
 
 def _fill_periods(field: str, new: dict[str, object], target: object) -> list[str]:
-    """重複的那筆（``target``）還空著的事件時間用新的補上，有說明的欄位（:data:`NOTE_FIELDS`）說明照
-    :func:`merged_note` 接上（職位以外；職位見 :func:`_merge_into_current`）。補完整筆再經模型驗證（例如學歷原本
-    只有畢業 2015，又補上入學 2018），不合法就不補、丟錯。
+    """Fill the duplicate entry's (``target``) empty event times from the new one, modifying ``target``.
 
-    Fill the empty event times of the duplicate entry, validating the result.
+    重複的那筆（``target``）還空著的事件時間用新的補上。
+
+    For fields with a note (:data:`NOTE_FIELDS`), the note is joined per :func:`merged_note` (positions
+    excepted; see :func:`_merge_into_current`). The filled entry is validated with the model again (for
+    example, education that had only graduation 2015 and is then given enrollment 2018); if it is invalid,
+    nothing is filled and an error is raised.
+
+    有說明的欄位（``NOTE_FIELDS``）說明照 ``merged_note`` 接上（職位以外；職位見 ``_merge_into_current``）。
+    補完整筆再經模型驗證（例如學歷原本只有畢業 2015，又補上入學 2018），不合法就不補、丟錯。
 
     Returns:
-        帶了時間、但和那一筆已有的時間不同的項目文字（含已有的時間），給呼叫端報錯。The conflicting entries.
+        the text of the entry (with its existing times) when a given time differs from the one it already has,
+        for the caller to report; otherwise empty
+        帶了時間、但和那一筆已有的時間不同時，該項目的文字（含已有的時間），給呼叫端報錯；否則為空
 
     Raises:
-        InvalidNoteFieldsError: 補完的那一筆不合法。When the filled entry is invalid.
+        InvalidNoteFieldsError: if the filled entry is invalid
+            若補完的那一筆不合法
     """
     if field == "Company" or not isinstance(target, dict):
         return []
@@ -973,13 +1300,37 @@ def _fill_periods(field: str, new: dict[str, object], target: object) -> list[st
 def edit_history_period(
     field: str, items: list[object], index: int, values: dict[str, str], expected: dict[str, str] | None
 ) -> dict[str, object]:
-    """改好的那一筆（不改 ``items``）：事件時間換成新的，其他鍵照舊，整筆再經模型驗證。
+    """Return the entry with its event times replaced, without modifying ``items``.
 
-    The entry with its event times replaced; the list itself is left untouched.
+    改好的那一筆（不改 ``items``）。
+
+    The event times are replaced with the new ones, other keys stay as they are, and the whole entry is
+    validated with the model again.
+
+    事件時間換成新的，其他鍵照舊，整筆再經模型驗證。
+
+    Args:
+        field: the history field
+            會變的欄位
+        items: the current list
+            目前的清單
+        index: the index of the entry to edit
+            要改的那一筆的序號
+        values: the new event times
+            新的事件時間
+        expected: the original values seen when editing began, or ``None`` to skip the check
+            開始修改時看到的原值；``None`` 表示不檢查
+
+    Returns:
+        the edited entry
+        改好的那一筆
 
     Raises:
-        JsonItemChangedError: 原值（``expected``）對不上：這一筆在別處被改過。When the item changed elsewhere.
-        InvalidNoteFieldsError: 鍵不對、格式不對或畢業早於入學。On invalid keys or values.
+        InvalidNoteFieldsError: if the keys are wrong, the format is wrong, or graduation is earlier than
+            enrollment
+            若鍵不對、格式不對或畢業早於入學
+        JsonItemChangedError: if the original values (``expected``) do not match: the entry was changed elsewhere
+            若原值（``expected``）對不上：這一筆在別處被改過
     """
     keys = HISTORY_PERIOD_KEYS[field]
     title = PERSON_HISTORY_FIELDS[field].title
@@ -996,11 +1347,18 @@ def edit_history_period(
 
 
 def _reject_duplicate_past(items: list[object], new: list[dict[str, object]]) -> None:
-    """以前的工作：:func:`entry_key`（公司・職稱；沒名字的看說明與到職）與任職起訖都和某一筆相同就是重複。
-    A past job already recorded.
+    """Reject past jobs that are already recorded.
+
+    擋掉已經記錄過的以前的工作。
+
+    A past job is a duplicate when its :func:`entry_key` (company and title; for unnamed ones, the note and
+    start) and its start and end all match an existing entry.
+
+    以前的工作：``entry_key``（公司・職稱；沒名字的看說明與到職）與任職起訖都和某一筆相同就是重複。
 
     Raises:
-        InvalidNoteFieldsError: 重複。On a duplicate.
+        InvalidNoteFieldsError: if any is a duplicate
+            若重複
     """
     def key(entry: object) -> tuple[str, str, str]:
         values = entry if isinstance(entry, dict) else {}
@@ -1014,9 +1372,13 @@ def _reject_duplicate_past(items: list[object], new: list[dict[str, object]]) ->
 
 
 def _serialize(field: str, items: list[object]) -> str:
-    """清單寫回欄位的字串；會變的欄位清空時寫空字串（和建卡時沒填的一樣）。
+    """Return the field string a list is written back as.
 
-    The field string of a list; emptied history fields become blank.
+    清單寫回欄位的字串。
+
+    An emptied history field becomes an empty string (the same as leaving it unfilled at creation).
+
+    會變的欄位清空時寫空字串（和建卡時沒填的一樣）。
     """
     if field in PERSON_HISTORY_FIELDS and not items:
         return ""
@@ -1024,12 +1386,18 @@ def _serialize(field: str, items: list[object]) -> str:
 
 
 def _last_contact(values: dict[str, str], contact_date: str) -> dict[str, str]:
-    """互動的日期比 ``Last_Contact`` 新時要寫入的變更。The change moving ``Last_Contact`` forward."""
+    """Return the change that moves ``Last_Contact`` forward when the interaction date is newer.
+
+    互動的日期比 ``Last_Contact`` 新時要寫入的變更；不比較新時為空。
+    """
     return {"Last_Contact": contact_date} if contact_date > values.get("Last_Contact", "").strip() else {}
 
 
 async def _write(card_service: CardService, note_id: int, changes: dict[str, str]) -> None:
-    """一次寫入這些欄位，並附上今天的 ``Updated_At``。Write the changes plus today's ``Updated_At`` at once."""
+    """Write these fields in one go, together with today's ``Updated_At``.
+
+    一次寫入這些欄位，並附上今天的 ``Updated_At``。
+    """
     await card_service.update_note_fields(
         note_id, {**changes, "Updated_At": today_iso()}, model_name=PERSON_NOTE_TYPE
     )
@@ -1039,10 +1407,13 @@ _Params = TypeVar("_Params", bound=_ActionParams)
 
 
 def _parse(model: type[_Params], parameters: dict[str, object]) -> _Params:
-    """驗證動作參數。Validate action parameters.
+    """Validate action parameters with the given model.
+
+    驗證動作參數。
 
     Raises:
-        InvalidNoteFieldsError: 格式不對。On invalid parameters.
+        InvalidNoteFieldsError: if the parameters are invalid
+            若格式不對
     """
     try:
         return model.model_validate(parameters)
@@ -1051,14 +1422,21 @@ def _parse(model: type[_Params], parameters: dict[str, object]) -> _Params:
 
 
 def _validate_item(field: str, item: dict[str, object]) -> dict[str, object]:
-    """以該清單的模型驗證一筆項目，回傳要寫入的 dict（保留多餘的鍵、去掉空值的選填鍵）。
+    """Validate one item with the list's model and return the dict to store.
 
-    Validate one item with the list's model; returns the dict to store.
+    以該清單的模型驗證一筆項目，回傳要寫入的 dict（保留多餘的鍵、去掉空值的選填鍵）。
+
+    Extra keys are kept and optional keys with empty values are dropped. History fields keep their fixed-shape
+    keys (value or company/title, added, ended; a blank ``ended`` means active); optional keys added later
+    (hidden, plus each model's own such as a position's note and event times) are dropped by the model's own
+    ``model_dump`` when empty (``_Item._OMIT_WHEN_EMPTY``).
+
     會變的欄位保留形狀固定的鍵（value 或 company／title、added、ended；``ended`` 空白＝有效）；後來加的選填鍵
     （隱藏，以及職位的說明、事件時間等各模型自己的）沒有值時由模型的 ``model_dump`` 自己拿掉（``_Item._OMIT_WHEN_EMPTY``）。
 
     Raises:
-        InvalidNoteFieldsError: 格式不對。On an invalid item.
+        InvalidNoteFieldsError: if the item is invalid
+            若格式不對
     """
     if field in PERSON_HISTORY_FIELDS:
         model, title = PERSON_HISTORY_FIELDS[field].model, PERSON_HISTORY_FIELDS[field].title
@@ -1078,7 +1456,10 @@ def _validate_item(field: str, item: dict[str, object]) -> dict[str, object]:
 
 
 def _first_error(error: ValidationError) -> str:
-    """第一個驗證錯誤的「欄位：原因」。The first validation error as text."""
+    """Return the first validation error as 「field：reason」 text.
+
+    第一個驗證錯誤的「欄位：原因」。
+    """
     first = error.errors()[0]
     location = ".".join(str(part) for part in first.get("loc", ()))
     return f"{location}：{first.get('msg', '')}" if location else str(first.get("msg", ""))

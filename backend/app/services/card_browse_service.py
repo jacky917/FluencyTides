@@ -1,7 +1,23 @@
-"""卡片瀏覽服務：不經過 task handler，直接以 Anki 搜尋列出任一牌組的卡片。
+"""Card browsing service: list the cards of any deck straight from Anki search, without a task handler.
 
-Card browsing service: lists cards of any deck straight from Anki search,
-without going through a task handler (網頁版計畫階段 A).
+卡片瀏覽服務：不經過 task handler，直接以 Anki 搜尋列出任一牌組的卡片。
+
+Part of stage A of the web version plan.
+
+- A deck's ``deck:"…"`` search already includes its sub-decks, so selecting a parent deck shows all the cards
+  under it.
+- Card faces use the ``question`` / ``answer`` rendered by Anki itself (``cardsInfo``), so the web page does not
+  need its own renderer for every note type. When rendering, Anki replaces ``[sound:name]`` with markers such as
+  ``[anki:play:q:N]`` (the review screen draws them as play buttons separately); here the matching file name is
+  recovered from the template and the marker is replaced with a button the web page can play.
+- Media files live in Anki's media folder and are read with ``retrieveMediaFile``. Only a bare file name is
+  accepted: AnkiConnect itself also takes the basename, so returning 400 here is defence in depth and makes the
+  error explicit instead of silently renaming. The response type is limited to audio, video and common images;
+  everything else is ``application/octet-stream``: the media endpoint shares the web page's origin, so serving
+  ``text/html`` / ``image/svg+xml`` by extension would let a single file in the media folder run scripts in the
+  web page's origin.
+
+網頁版計畫階段 A。
 
 - 牌組的 ``deck:"…"`` 搜尋本來就包含子牌組，選上層即可看到底下所有卡片。
 - 卡面用 Anki 自己渲染的 ``question`` / ``answer``（``cardsInfo``），網頁不必為每種筆記
@@ -66,35 +82,47 @@ _TEMPLATE_REF = re.compile(r"\{\{(.*?)\}\}", re.S)
 
 
 def deck_search_term(deck: str) -> str:
-    """組出只比對這個牌組（含子牌組）的搜尋條件，名稱中的萬用字元與冒號照字面比對。
+    """Build a search term matching only this deck (and its sub-decks), with wildcards and colons matched literally.
 
-    Build a search term matching exactly this deck and its sub-decks; ``*``,
-    ``_`` and ``:`` in the name are escaped and matched literally. Delegates to
-    the shared :func:`app.infrastructure.anki.search.deck_term`.
+    組出只比對這個牌組（含子牌組）的搜尋條件，名稱中的萬用字元與冒號照字面比對。
+
+    ``*``, ``_`` and ``:`` in the name are escaped. Delegates to the shared
+    :func:`app.infrastructure.anki.search.deck_term`.
+
+    名稱中的 ``*``、``_``、``:`` 會被跳脫。實際交給共用的 ``app.infrastructure.anki.search.deck_term``。
 
     Args:
-        deck: 牌組完整名稱，例如 ``日本語::外語糾錯``。Full deck name.
+        deck: the full deck name, for example ``日本語::外語糾錯``
+            牌組完整名稱，例如 ``日本語::外語糾錯``
 
     Returns:
-        例如 ``deck:"日本語\\:\\:外語糾錯"``（跳脫後的 ``::`` 照常比對子牌組）。The search term.
+        the search term, for example ``deck:"日本語\\:\\:外語糾錯"`` (the escaped ``::`` still matches sub-decks)
+        搜尋條件，例如 ``deck:"日本語\\:\\:外語糾錯"``（跳脫後的 ``::`` 照常比對子牌組）
     """
     return deck_term(deck)
 
 
 def build_query(deck: str | None, search: str | None) -> str:
-    """牌組條件加上使用者的 Anki 搜尋語句（以括號接在後面）。
+    """Combine the deck term with the user's Anki search, appended in parentheses.
 
-    Combine the deck term with the user's own Anki search, parenthesised.
+    牌組條件加上使用者的 Anki 搜尋語句（以括號接在後面）。
+
+    All decks use ``deck:*``, because an empty Anki search only searches the current deck. A user search with
+    unbalanced parentheses (for example ``x) OR (deck:*``) can escape the deck term; it only affects the user's own
+    collection, so it is not guarded against.
 
     全部牌組用 ``deck:*``：Anki 的空白搜尋只會找目前牌組。使用者的語句若括號不對稱（例如
     ``x) OR (deck:*``）可以跳出牌組條件——只影響使用者自己的收藏，不另外防範。
 
     Args:
-        deck: 牌組完整名稱；None 或空字串表示全部牌組。Deck, or all decks.
-        search: 使用者輸入的 Anki 搜尋語句；可省略。Optional Anki search.
+        deck: the full deck name; ``None`` or an empty string means all decks
+            牌組完整名稱；``None`` 或空字串表示全部牌組
+        search: the Anki search typed by the user; optional, and ignored when blank
+            使用者輸入的 Anki 搜尋語句；可省略，空白時忽略
 
     Returns:
-        Anki 搜尋語句。The Anki query.
+        the Anki query
+        Anki 搜尋語句
     """
     query = deck_search_term(deck) if deck else "deck:*"
     search = (search or "").strip()
@@ -102,7 +130,10 @@ def build_query(deck: str | None, search: str | None) -> str:
 
 
 def _summary(info: AnkiCardInfo) -> CardSummary:
-    """``cardsInfo`` 的一筆轉成清單項目，欄位依筆記類型的順序。Convert one entry."""
+    """Convert one ``cardsInfo`` entry into a list item, with fields in the note type's order.
+
+    把 ``cardsInfo`` 的一筆轉成清單項目，欄位依筆記類型的順序。
+    """
     ordered = sorted(info.fields.items(), key=lambda item: item[1].order)
     return CardSummary(
         card_id=info.cardId,
@@ -115,11 +146,13 @@ def _summary(info: AnkiCardInfo) -> CardSummary:
 
 
 def _parse_infos(infos: list[dict[str, object]]) -> list[AnkiCardInfo]:
-    """解析 ``cardsInfo``；搜尋與讀取之間被刪除的卡回傳空物件，略過。
+    """Parse ``cardsInfo``, skipping the empty objects returned for cards deleted between search and read.
 
-    Parse ``cardsInfo``, skipping the empty objects returned for cards
-    deleted between search and read. A malformed entry raises (500): the
-    AnkiConnect contract changed and should not be papered over.
+    解析 ``cardsInfo``；搜尋與讀取之間被刪除的卡回傳空物件，略過。
+
+    A malformed entry raises (500): the AnkiConnect contract has changed and should not be papered over.
+
+    格式不對的項目會拋錯（500）：AnkiConnect 的契約變了，不應掩蓋。
     """
     parsed = [AnkiCardInfo.model_validate(info) for info in infos if info]
     if len(parsed) < len(infos):
@@ -130,26 +163,37 @@ def _parse_infos(infos: list[dict[str, object]]) -> list[AnkiCardInfo]:
 async def browse_cards(
     anki: AnkiClient, deck: str | None, search: str | None, page: int, page_size: int
 ) -> CardPage:
-    """列出一頁卡片，新到舊（卡片 ID 是建立時間戳）。
+    """List one page of cards, newest first (card IDs are creation timestamps).
 
-    List one page of cards, newest first (card IDs are creation timestamps).
-    Every call fetches all matching IDs (needed for ``total``) and reads only
-    the requested page with ``cardsInfo``.
+    列出一頁卡片，新到舊（卡片 ID 是建立時間戳）。
+
+    Every call fetches all matching IDs (needed for ``total``) and reads only the requested page with
+    ``cardsInfo``.
+
+    每次呼叫都會取得所有符合的 ID（``total`` 需要），只以 ``cardsInfo`` 讀取要求的那一頁。
 
     Args:
-        anki: AnkiConnect 客戶端。AnkiConnect client.
-        deck: 牌組完整名稱（含子牌組）；None 為全部。Deck, or all decks.
-        search: 額外的 Anki 搜尋語句。Extra Anki search.
-        page: 頁碼（1 起算）。Page number, from 1.
-        page_size: 每頁張數。Page size.
+        anki: the AnkiConnect client
+            AnkiConnect 客戶端
+        deck: the full deck name (sub-decks included); ``None`` means all decks
+            牌組完整名稱（含子牌組）；``None`` 為全部
+        search: an extra Anki search
+            額外的 Anki 搜尋語句
+        page: the page number, starting at 1
+            頁碼（1 起算）
+        page_size: the number of cards per page
+            每頁張數
 
     Returns:
-        這一頁的卡片與總數。``total`` 含搜尋後才被刪除的卡，可能比實際多。The page and
-        the total.
+        the cards on this page and the total. ``total`` includes cards deleted after the search, so it may be
+        larger than the actual count.
+        這一頁的卡片與總數。``total`` 含搜尋後才被刪除的卡，可能比實際多。
 
     Raises:
-        InvalidAnkiSearchError: 使用者的搜尋語句被 Anki 拒絕。The user's search was rejected.
-        AnkiServiceError: AnkiConnect 連不上或其他錯誤。On other AnkiConnect errors.
+        AnkiServiceError: if AnkiConnect is unreachable or returns another error
+            若 AnkiConnect 連不上或其他錯誤
+        InvalidAnkiSearchError: if Anki rejects the user's search
+            若使用者的搜尋語句被 Anki 拒絕
     """
     try:
         found = await anki.find_cards(build_query(deck, search))
@@ -166,21 +210,28 @@ async def browse_cards(
 
 
 def template_sounds(template: str, fields: dict[str, str]) -> list[str]:
-    """依模板中欄位出現的順序，列出其中的 ``[sound:檔名]``，即 Anki 標記序號對應的檔案。
+    """List the ``[sound:name]`` files of the fields a template references, in the order the fields appear.
 
-    List the ``[sound:…]`` files of the fields a template references, in
-    reference order — the order Anki numbers its ``[anki:play]`` tags.
+    依模板中欄位出現的順序，列出其中的 ``[sound:檔名]``，即 Anki 標記序號對應的檔案。
 
-    限制：條件區塊（``{{#X}}``）隱藏的欄位、``{{tts}}`` 產生的語音也會讓 Anki 的序號與
+    This is the order Anki numbers its ``[anki:play]`` markers. Limitation: fields hidden by conditional sections
+    (``{{#X}}``) and speech produced by ``{{tts}}`` also make Anki's numbering differ from this list; when they do
+    not match, the caller shows "audio file not found". ``{{FrontSide}}`` is not counted (the back face's markers
+    cover only the back's own part; the front's markers stay ``q``).
+
+    即 Anki 標記序號的順序。限制：條件區塊（``{{#X}}``）隱藏的欄位、``{{tts}}`` 產生的語音也會讓 Anki 的序號與
     這裡不同；對不上時呼叫端會顯示「找不到音檔」。``{{FrontSide}}`` 不計（背面標記只算背面
     自己的部分，正面的標記仍是 ``q``）。
 
     Args:
-        template: 正面或背面模板。The front or back template.
-        fields: 欄位名 → 原始值。Raw field values.
+        template: the front or back template
+            正面或背面模板
+        fields: field name → raw value
+            欄位名 → 原始值
 
     Returns:
-        依序的檔名。The file names in order.
+        the file names in order
+        依序的檔名
     """
     sounds: list[str] = []
     for match in _TEMPLATE_REF.finditer(template):
@@ -195,7 +246,10 @@ def template_sounds(template: str, fields: dict[str, str]) -> list[str]:
 
 
 def _play_button(filename: str) -> str:
-    """一個播放鈕；網頁注入 iframe 的腳本負責點擊後播放。A play button for the bridge."""
+    """Return a play button; the script the web page injects into the iframe plays the file on click.
+
+    回傳一個播放鈕；網頁注入 iframe 的腳本負責點擊後播放。
+    """
     name = html.escape(filename, quote=True)
     return f'<button type="button" class="replay-button soundLink" data-anki-sound="{name}" title="{name}">▶</button>'
 
@@ -204,10 +258,21 @@ _MISSING_SOUND = '<span class="replay-button-missing" title="找不到這個播�
 
 
 def replace_av_tags(face_html: str, question_sounds: list[str], answer_sounds: list[str]) -> str:
-    """把 ``[anki:play:q|a:N]`` 換成播放鈕；序號對不到檔案時換成「找不到音檔」。
+    """Replace ``[anki:play:q|a:N]`` with play buttons, or an "audio not found" marker when the index has no file.
 
-    Replace Anki's play tags with play buttons, or a "missing" marker when
-    the index has no matching file.
+    把 ``[anki:play:q|a:N]`` 換成播放鈕；序號對不到檔案時換成「找不到音檔」。
+
+    Args:
+        face_html: the rendered card face
+            Anki 渲染好的卡面
+        question_sounds: the file names for ``q`` markers, from ``template_sounds``
+            ``q`` 標記對應的檔名（``template_sounds`` 的結果）
+        answer_sounds: the file names for ``a`` markers, from ``template_sounds``
+            ``a`` 標記對應的檔名（``template_sounds`` 的結果）
+
+    Returns:
+        the card face with every marker replaced
+        所有標記都換掉後的卡面
     """
 
     def replace(match: re.Match[str]) -> str:
@@ -219,9 +284,9 @@ def replace_av_tags(face_html: str, question_sounds: list[str], answer_sounds: l
 
 
 async def _resolve_av_tags(anki: AnkiClient, info: AnkiCardInfo) -> tuple[str, str]:
-    """正反面中有播放標記時，讀模板找回檔名並換成播放鈕；沒有標記就不多查一次。
+    """Resolve play markers via the note type's templates, skipping the extra query when there are none.
 
-    Resolve play tags via the note type's templates; skipped when absent.
+    正反面中有播放標記時，讀模板找回檔名並換成播放鈕；沒有標記就不多查一次。
     """
     if not (_AV_TAG.search(info.question) or _AV_TAG.search(info.answer)):
         return info.question, info.answer
@@ -238,20 +303,25 @@ async def _resolve_av_tags(anki: AnkiClient, info: AnkiCardInfo) -> tuple[str, s
 
 
 async def get_card(anki: AnkiClient, card_id: int) -> CardView:
-    """讀一張卡與 Anki 渲染好的正反面（播放標記換成播放鈕）。
+    """Read one card with the faces Anki rendered (play markers turned into play buttons).
 
-    Read one card with its rendered faces, play tags turned into buttons.
+    讀一張卡與 Anki 渲染好的正反面（播放標記換成播放鈕）。
 
     Args:
-        anki: AnkiConnect 客戶端。AnkiConnect client.
-        card_id: 卡片 ID。Card ID.
+        anki: the AnkiConnect client
+            AnkiConnect 客戶端
+        card_id: the card ID
+            卡片 ID
 
     Returns:
-        卡片與卡面。The card and its faces.
+        the card and its faces
+        卡片與卡面
 
     Raises:
-        CardNotFoundError: Anki 中沒有這張卡。The card does not exist.
-        AnkiServiceError: AnkiConnect 錯誤。On AnkiConnect errors.
+        AnkiServiceError: on AnkiConnect errors
+            若 AnkiConnect 錯誤
+        CardNotFoundError: if the card does not exist in Anki
+            若 Anki 中沒有這張卡
     """
     infos = _parse_infos(await anki.get_cards_info([card_id]))
     if not infos:
@@ -262,17 +332,21 @@ async def get_card(anki: AnkiClient, card_id: int) -> CardView:
 
 
 def validate_media_filename(filename: str) -> str:
-    """只接受媒體資料夾中的單一檔名。Accept a bare file name only.
+    """Accept only a bare file name within the media folder.
+
+    只接受媒體資料夾中的單一檔名。
 
     Args:
-        filename: 檔名。The file name.
+        filename: the file name
+            檔名
 
     Returns:
-        原檔名。The same name.
+        the same file name
+        原檔名
 
     Raises:
-        InvalidMediaFilenameError: 空字串、含路徑分隔符號或 NUL、或為 ``.`` / ``..``。
-            Empty, containing a path separator or NUL, or ``.`` / ``..``.
+        InvalidMediaFilenameError: if the name is empty, contains a path separator or NUL, or is ``.`` / ``..``
+            若為空字串、含路徑分隔符號或 NUL、或為 ``.`` / ``..``
     """
     if not filename or filename in {".", ".."} or any(char in filename for char in "/\\\0"):
         raise InvalidMediaFilenameError(f"不是有效的媒體檔名：{filename!r}")
@@ -280,29 +354,49 @@ def validate_media_filename(filename: str) -> str:
 
 
 def media_type_for(filename: str) -> str:
-    """依副檔名決定回應類型；不在允許清單的一律 ``application/octet-stream``。
+    """Return the response type for a media file, decided by its extension.
 
-    The response type for a media file; unknown or scriptable types fall
-    back to ``application/octet-stream``.
+    依副檔名決定回應類型。
+
+    Anything not on the allow list (unknown or scriptable types) is ``application/octet-stream``. The extension is
+    compared case-insensitively.
+
+    不在允許清單的（未知或可執行腳本的類型）一律 ``application/octet-stream``。副檔名不分大小寫。
+
+    Args:
+        filename: the file name
+            檔名
+
+    Returns:
+        the MIME type
+        MIME 類型
     """
     return _MEDIA_TYPES.get(PurePosixPath(filename).suffix.lower(), _FALLBACK_MEDIA_TYPE)
 
 
 async def read_media(anki: AnkiClient, filename: str) -> tuple[bytes, str]:
-    """從 Anki 媒體資料夾讀出一個檔案。Read a file from Anki's media folder.
+    """Read a file from Anki's media folder.
+
+    從 Anki 媒體資料夾讀出一個檔案。
 
     Args:
-        anki: AnkiConnect 客戶端。AnkiConnect client.
-        filename: 單一檔名。A bare file name.
+        anki: the AnkiConnect client
+            AnkiConnect 客戶端
+        filename: a bare file name
+            單一檔名
 
     Returns:
-        ``(內容, 回應類型)``；類型見 :func:`media_type_for`。內容可以是空的（0 位元組的檔案）。
-        The content and its response type.
+        ``(content, response type)``; for the type see :func:`media_type_for`. The content may be empty (a 0-byte
+        file).
+        ``(內容, 回應類型)``；類型見 ``media_type_for``。內容可以是空的（0 位元組的檔案）。
 
     Raises:
-        InvalidMediaFilenameError: 檔名不合格。Invalid name.
-        MediaFileNotFoundError: 檔案不存在（AnkiConnect 回傳 False）。Missing file.
-        AnkiServiceError: AnkiConnect 錯誤，或回傳的內容不是 base64。On errors.
+        AnkiServiceError: on AnkiConnect errors, or if the returned content is not base64
+            若 AnkiConnect 錯誤，或回傳的內容不是 base64
+        InvalidMediaFilenameError: if the file name is not valid
+            若檔名不合格
+        MediaFileNotFoundError: if the file does not exist (AnkiConnect returns ``False``)
+            若檔案不存在（AnkiConnect 回傳 ``False``）
     """
     validate_media_filename(filename)
     encoded = await anki.retrieve_media_file(filename)

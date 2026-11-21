@@ -1,14 +1,14 @@
-"""
-任務處理器註冊表 (Handler Registry) 模組。
+"""Handler registry module.
 
-負責在應用程式層級動態管理與分派 Task Handlers。
-Registry 本身為輕量 Singleton，在 FastAPI lifespan 初始化。
+任務處理器註冊表（Handler Registry）模組。
 
-Handler registry module.
+Dynamically manages and dispatches task handlers at the application level. The registry is a lightweight
+module-level singleton (``handler_registry``) created when this module is imported; handlers register
+themselves through ``@register_handler`` when the ``task_handlers`` package is imported.
 
-Dynamically manages and dispatches task handlers at the application
-level. The registry is a lightweight singleton initialized during the
-FastAPI lifespan.
+負責在應用程式層級動態管理與分派 Task Handlers。Registry 本身為輕量的模組層級 Singleton
+（``handler_registry``），在 import 此模組時建立；各 handler 在 import ``task_handlers`` 套件時經
+``@register_handler`` 註冊。
 """
 
 import logging
@@ -26,21 +26,22 @@ logger = logging.getLogger(__name__)
 
 
 class HandlerNotFoundError(FluencyTidesError):
-    """指定的 Handler 不存在於 Registry 中。
+    """The error raised when the requested handler is not present in the registry.
 
-    Raised when the requested handler is not present in the registry.
+    指定的 Handler 不存在於 Registry 中時拋出的錯誤。
     """
 
     error_code = "HANDLER_NOT_FOUND"
     status_code = 404
 
     def __init__(self, handler_name: str) -> None:
-        """初始化錯誤訊息。
+        """Create the error with a message naming the missing handler.
 
-        Initialize the error message.
+        以指出找不到的處理器的訊息建立錯誤。
 
         Args:
-            handler_name: 找不到的處理器名稱。The missing handler name.
+            handler_name: the handler name that was not found
+                找不到的處理器名稱
         """
         super().__init__(
             message=f"找不到指定的任務處理器: {handler_name}",
@@ -48,44 +49,49 @@ class HandlerNotFoundError(FluencyTidesError):
 
 
 class HandlerRegistry:
-    """處理器註冊表。
+    """The handler registry.
 
-    Handler registry.
+    處理器註冊表。
 
-    負責統一管理所有已註冊的 Handler 實例，
-    並提供給 API 層與 Telegram Bot 層查詢與分派使用。
+    Centrally manages all registered handler instances and serves lookup and dispatch for the API layer and
+    the Telegram bot layer.
 
-    Centrally manages all registered handler instances and serves lookup
-    and dispatch for the API layer and the Telegram bot layer.
+    負責統一管理所有已註冊的 Handler 實例，並提供給 API 層與 Telegram Bot 層查詢與分派使用。
 
     Attributes:
-        _handlers: handler_name -> BaseHandler 的映射字典。Mapping from
-            handler_name to BaseHandler.
+        _handlers: mapping from ``handler_name`` to the handler
+            ``handler_name`` → handler 的映射字典
+        _by_note_type: mapping from note type to the handlers owning it, in registration order
+            筆記類型 → 負責它的 handler，依註冊順序
     """
 
     def __init__(self) -> None:
-        """初始化空的 Registry。
+        """Create an empty registry.
 
-        Initialize an empty registry.
+        建立空的 Registry。
         """
         self._handlers: dict[str, BaseHandler] = {}
         self._by_note_type: dict[str, list[BaseHandler]] = {}
 
     def register(self, handler: BaseHandler) -> None:
-        """檢查宣告後註冊一個 Handler 實例；檢查不過時不會留下任何註冊。
+        """Check a handler instance's declarations, then register it.
 
-        Validate and register a handler instance; nothing is registered on
-        failure.
+        檢查宣告後註冊一個 Handler 實例。
+
+        Nothing is registered when a check fails.
+
+        檢查不過時不會留下任何註冊。
 
         Args:
-            handler: 要註冊的 Handler 實例。Handler instance to register.
+            handler: the handler instance to register
+                要註冊的 Handler 實例
 
         Raises:
-            ValueError: 若 handler_name 已存在。If handler_name already
-                exists.
-            RuntimeError: 能力宣告沒有實作支撐，或與共用筆記類型的 handler 不一致（D2、D4）。
-                When the declarations are not backed by the implementation
-                or conflict with a handler sharing a note type.
+            RuntimeError: if the capability declarations are not backed by the implementation, or conflict with
+                a handler sharing a note type (D2, D4)
+                若能力宣告沒有實作支撐，或與共用筆記類型的 handler 不一致（D2、D4）
+            ValueError: if ``handler_name`` is already registered
+                若 ``handler_name`` 已存在
         """
         if handler.handler_name in self._handlers:
             raise ValueError(f"Handler '{handler.handler_name}' 已經被註冊過了。")
@@ -97,13 +103,17 @@ class HandlerRegistry:
         logger.info("已註冊 Handler: %s (支援: %s)", handler.handler_name, handler.supported_models)
 
     def _check_shared_note_types(self, handler: BaseHandler) -> None:
-        """同一筆記類型有多個 handler 時，對既有筆記的能力必須相同（D4）。
+        """Check that handlers sharing a note type offer the same capabilities on existing notes (D4).
 
-        Handlers sharing a note type must offer the same operations on
-        existing notes.
+        同一筆記類型有多個 handler 時，檢查對既有筆記的能力相同（D4）。
+
+        Args:
+            handler: the handler about to be registered
+                即將註冊的 handler
 
         Raises:
-            RuntimeError: 能力不同。When they differ.
+            RuntimeError: if the capabilities differ
+                若能力不同
         """
         ops = handler.CAPABILITIES.existing_note_ops()
         for note_type in handler.supported_models:
@@ -115,61 +125,80 @@ class HandlerRegistry:
                     )
 
     def handler_for_note_type(self, note_type: str) -> BaseHandler | None:
-        """負責這個筆記類型的 handler；有多個時取第一個註冊的（它們的能力相同，D4）。
+        """Return the handler owning a note type; the first registered when several do.
 
-        The handler owning a note type; the first registered when several do.
+        回傳負責這個筆記類型的 handler；有多個時取第一個註冊的。
+
+        Several handlers owning one note type have the same capabilities (D4).
+
+        多個 handler 負責同一筆記類型時，它們的能力相同（D4）。
 
         Args:
-            note_type: 筆記類型。The note type.
+            note_type: the note type
+                筆記類型
 
         Returns:
-            Handler；沒有 handler 負責時為 None。None when no handler owns it.
+            the handler, or ``None`` when no handler owns it
+            Handler；沒有 handler 負責時為 ``None``
         """
         handlers = self._by_note_type.get(note_type)
         return handlers[0] if handlers else None
 
     def handlers_for_note_type(self, note_type: str) -> list[BaseHandler]:
-        """負責這個筆記類型的所有 handler，依註冊順序。All handlers owning a note type.
+        """Return all handlers owning a note type, in registration order.
+
+        回傳負責這個筆記類型的所有 handler，依註冊順序。
 
         Args:
-            note_type: 筆記類型。The note type.
+            note_type: the note type
+                筆記類型
 
         Returns:
-            Handler 清單（可能為空）。The handlers, possibly none.
+            the handlers; empty when none owns it
+            Handler 清單，可能為空
         """
         return list(self._by_note_type.get(note_type, []))
 
     def all_handlers(self) -> list[BaseHandler]:
-        """所有已註冊的 handler，依註冊順序。All registered handlers, in order."""
+        """Return all registered handlers, in registration order.
+
+        回傳所有已註冊的 handler，依註冊順序。
+
+        Returns:
+            the handlers
+            Handler 清單
+        """
         return list(self._handlers.values())
 
     def get_handler(self, handler_name: str) -> BaseHandler:
-        """根據名稱取得對應的 Handler 實例。
+        """Return the handler instance with the given name.
 
-        Get the handler instance by name.
+        根據名稱取得對應的 Handler 實例。
 
         Args:
-            handler_name: 處理器名稱。Handler name.
+            handler_name: the handler name
+                處理器名稱
 
         Returns:
-            對應的 BaseHandler 實例。The matching BaseHandler instance.
+            the matching handler instance
+            對應的 Handler 實例
 
         Raises:
-            HandlerNotFoundError: 若名稱不存在。If the name is not
-                registered.
+            HandlerNotFoundError: if no handler is registered under the name
+                若名稱不存在
         """
         if handler_name not in self._handlers:
             raise HandlerNotFoundError(handler_name)
         return self._handlers[handler_name]
 
     def list_all_handlers(self) -> list[dict[str, object]]:
-        """列出所有註冊的 Handler 資訊，供前端使用。
+        """Return information about all registered handlers, for the frontend.
 
-        List info of all registered handlers for frontend use.
+        列出所有註冊的 Handler 資訊，供前端使用。
 
         Returns:
-            包含每個 Handler 的 name, models, schema 的字典列表。List of
-            dicts with each handler's name, models, and schema.
+            one dict per handler with ``handler_name``, ``supported_models``, and ``input_schema``
+            每個 Handler 一個字典，含 ``handler_name``、``supported_models``、``input_schema``
         """
         return [
             {
@@ -182,20 +211,24 @@ class HandlerRegistry:
 
 
 def validate_handler(handler: BaseHandler) -> None:
-    """檢查 handler 的宣告有實作支撐（handlers 計畫書 D2 的表格）。
+    """Check that a handler's declarations are backed by its implementation (the table in handlers plan D2).
 
-    Check that a handler's declarations are backed by its implementation.
+    檢查 handler 的宣告有實作支撐（handlers 計畫書 D2 的表格）。
+
+    Only "declared as offered → must be implemented" is checked: an implementation that is declared as not
+    offered is allowed. The shape of the declaration itself (for example, a closed operation always has a
+    reason) is already checked when the ``capabilities`` dataclasses are constructed.
 
     只檢查「宣告開放 → 必須有實作」：有實作但宣告不開放是允許的。宣告本身的形狀（例如不開放時
     必有原因）在 ``capabilities`` 的資料類別建立時就檢查過。
 
-    Only "declared → implemented" is checked; implemented-but-closed is fine.
-
     Args:
-        handler: 要檢查的 handler。The handler to check.
+        handler: the handler to check
+            要檢查的 handler
 
     Raises:
-        RuntimeError: 列出所有不一致之處。Listing every problem found.
+        RuntimeError: if any inconsistency is found; the message lists all of them
+            若有不一致之處；訊息列出全部
     """
     caps = handler.CAPABILITIES
     cls = type(handler)
@@ -270,13 +303,22 @@ def validate_handler(handler: BaseHandler) -> None:
 
 
 def _unknown_declared_fields(handler: BaseHandler) -> list[str]:
-    """宣告的欄位名要存在於至少一個負責的筆記類型（以 repo 的定義檔為準）。
+    """Check that declared field names exist in at least one of the handler's note types.
 
-    Declared field names must exist in at least one of the handler's note
-    types, per the repo's definition files.
+    檢查宣告的欄位名存在於至少一個負責的筆記類型。
+
+    The repo's definition files are authoritative. When a note type has no definition file, the fields
+    cannot be checked, and that is reported instead.
+
+    以 repo 的定義檔為準。筆記類型沒有定義檔時無法檢查欄位，改為指出缺的檔案。
+
+    Args:
+        handler: the handler to check
+            要檢查的 handler
 
     Returns:
-        問題描述。The problems found.
+        descriptions of the problems found; empty when there are none
+        問題描述；沒有問題時為空
     """
     declared = {
         "RELATION_LABEL_FIELD": (handler.RELATION_LABEL_FIELD,) if handler.RELATION_LABEL_FIELD else (),
@@ -309,18 +351,27 @@ def _unknown_declared_fields(handler: BaseHandler) -> list[str]:
 handler_registry = HandlerRegistry()
 
 def register_handler(cls: Type[BaseHandler]) -> Type[BaseHandler]:
-    """裝飾器：將 Handler 類別實例化並註冊至全域 Registry。
+    """Instantiate a handler class and register it in the global registry; used as a class decorator.
 
-    Decorator: instantiate the handler class and register it globally.
+    裝飾器：將 Handler 類別實例化並註冊至全域 Registry。
 
-    由於 Handler 已被重構為無狀態 (Stateless)，可以直接無參數實例化。
-    Handlers are stateless, so they can be instantiated without args.
+    Handlers are stateless, so they can be instantiated without arguments.
+
+    由於 Handler 已被重構為無狀態（Stateless），可以直接無參數實例化。
 
     Args:
-        cls: 要註冊的 Handler 類別。Handler class to register.
+        cls: the handler class to register
+            要註冊的 Handler 類別
 
     Returns:
-        原始的 Handler 類別（不修改）。The original class, unmodified.
+        the original handler class, unmodified
+        原始的 Handler 類別（不修改）
+
+    Raises:
+        RuntimeError: if the handler's declarations fail the checks of :meth:`HandlerRegistry.register`
+            若 handler 的宣告沒通過 ``HandlerRegistry.register`` 的檢查
+        ValueError: if a handler with the same name is already registered
+            若同名的 handler 已註冊
     """
     handler_instance = cls()
     handler_registry.register(handler_instance)

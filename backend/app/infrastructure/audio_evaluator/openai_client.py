@@ -1,29 +1,28 @@
-"""
+"""OpenAI-compatible speech evaluator implementation.
+
 OpenAI 相容層語音評分器實作。
 
-OpenAI-compatible speech evaluator implementation.
+Uses the AsyncOpenAI SDK to base64-encode the audio and send it to the LLM for scoring through
+the input_audio feature of the Chat Completions API.
 
 使用 AsyncOpenAI SDK 將音檔轉為 Base64 並透過
 Chat Completions API 的 input_audio 功能傳送給 LLM 進行評分。
 
-Uses the AsyncOpenAI SDK to base64-encode audio and send it to the LLM for
-scoring via the Chat Completions input_audio feature.
+Applicable scenarios:
+- OpenAI models that accept audio input, such as GPT-4o-audio-preview.
+- Other providers that offer an OpenAI-compatible endpoint.
 
 適用場景：
 - 使用 OpenAI GPT-4o-audio-preview 等支援音訊輸入的模型。
 - 使用其他提供 OpenAI 相容端點的服務商。
 
-Applicable scenarios:
-- OpenAI models with audio input support, e.g. GPT-4o-audio-preview.
-- Any provider exposing an OpenAI-compatible endpoint.
+Design decisions:
+- Enforces JSON Schema output through response_format, consistent with the
+  generate_structured_data logic of the existing LLMClient.
 
 設計決策：
 - 使用 response_format 強制 JSON Schema 輸出，
   與現有 LLMClient 的 generate_structured_data 邏輯一致。
-
-Design decision:
-- Enforces JSON Schema output via response_format, consistent with the
-  existing LLMClient.generate_structured_data logic.
 """
 
 import base64
@@ -57,37 +56,43 @@ from app.core.dependencies import get_template_engine
 
 
 class OpenAIAudioEvaluator(BaseAudioEvaluator):
-    """使用 OpenAI 相容 API 的語音評分器。
+    """A speech evaluator using an OpenAI-compatible API.
 
-    Speech evaluator using an OpenAI-compatible API.
+    使用 OpenAI 相容 API 的語音評分器。
+
+    Encodes the audio as base64 and sends it to the LLM through the multimodal input of Chat
+    Completions for speech analysis and scoring.
 
     將音檔編碼為 Base64 後，透過 Chat Completions 的
     多模態輸入功能發送給 LLM 進行語音分析與評分。
 
-    Encodes the audio as base64 and sends it to the LLM via Chat Completions
-    multimodal input for speech analysis and scoring.
-
     Attributes:
-        _client: AsyncOpenAI 客戶端實例。The AsyncOpenAI client instance.
-        _model_name: 使用的模型名稱。The model name in use.
+        _client: the AsyncOpenAI client instance
+            AsyncOpenAI 客戶端實例
+        _model_name: the model name in use
+            使用的模型名稱
     """
 
     def __init__(
         self, *, api_key: str, model: str, base_url: str | None = None, api_key_setting: str = "AUDIO_API_KEY"
     ) -> None:
-        """初始化 OpenAI 相容層語音評分器。
+        """Initialize the OpenAI-compatible speech evaluator.
 
-        Initialize the OpenAI-compatible speech evaluator.
+        初始化 OpenAI 相容層語音評分器。
 
         Args:
-            api_key: API 金鑰。The API key.
-            model: 聽音檔的模型（能力路由的 ``audio_llm``）。The audio model.
-            base_url: OpenAI 相容端點網址；None 為 OpenAI 官方。The base URL.
-            api_key_setting: 金鑰的設定名（錯誤訊息用）。Setting name of the key.
+            api_key: the API key
+                API 金鑰
+            model: the model that listens to the audio (the ``audio_llm`` capability)
+                聽音檔的模型（能力路由的 ``audio_llm``）
+            base_url: the OpenAI-compatible endpoint URL; ``None`` means the official OpenAI API
+                OpenAI 相容端點網址；``None`` 為 OpenAI 官方
+            api_key_setting: the setting name of the key, used in error messages
+                金鑰的設定名（錯誤訊息用）
 
         Raises:
-            LLMServiceError: 金鑰或模型未設定時。Raised when the key or model
-                is missing.
+            LLMServiceError: if the key or the model is not set
+                若金鑰或模型未設定
         """
         if not api_key:
             raise LLMServiceError(
@@ -113,30 +118,40 @@ class OpenAIAudioEvaluator(BaseAudioEvaluator):
         template_name: str = "prompts/audio_evaluator.j2",
         reference_familiarity: list[int | None] | None = None,
     ) -> AudioEvaluationResult:
-        """評估使用者語音，產出結構化評分結果。
+        """Evaluate the user's speech and produce a structured scoring result.
 
-        Evaluate the user's speech and produce a structured scoring result.
+        評估使用者語音，產出結構化評分結果。
+
+        The audio format is sent as ``ogg`` for ``.ogg`` file names and as ``wav`` otherwise. The
+        API call times out after 90 seconds and is not retried.
+
+        檔名為 ``.ogg`` 時音訊格式送 ``ogg``，其餘送 ``wav``。API 呼叫 90 秒逾時，不重試。
 
         Args:
-            audio_data: 音檔的原始二進位資料（.ogg 格式）。Raw audio bytes
-                (.ogg format).
-            audio_filename: 音檔檔名。Audio file name.
-            prompt_text: 卡片 Prompt。The card prompt.
-            context_text: 卡片正面的 Context（文脈）。The card-front context.
-            reference_answers: 參考範本列表。Reference answer list.
-            reference_familiarity: 每句參考答案的熟識度（同 base）。Familiarity of each
-                reference (see the base class).
-            target_language: 目標語言。Target language.
-            template_name: 評分提示詞 j2 樣板。Jinja2 template for the
-                evaluation prompt.
+            audio_data: the raw audio bytes (.ogg format)
+                音檔的原始二進位資料（.ogg 格式）
+            audio_filename: the audio file name
+                音檔檔名
+            prompt_text: the card Prompt
+                卡片 Prompt
+            context_text: the card-front Context
+                卡片正面的 Context（文脈）
+            reference_answers: the reference answers
+                參考範本列表
+            target_language: the target language
+                目標語言
+            template_name: the Jinja2 template for the evaluation prompt
+                評分提示詞 j2 樣板
+            reference_familiarity: the familiarity of each reference answer (as in the base class)
+                每句參考答案的熟識度（同 base）
 
         Returns:
-            AudioEvaluationResult 結構化評分結果。The structured evaluation
-            result.
+            the structured evaluation result, with ``evaluator_label`` set to the model name
+            結構化評分結果，``evaluator_label`` 設為模型名稱
 
         Raises:
-            LLMServiceError: API 呼叫失敗或輸出格式不符時。Raised when the
-                API call fails or the output format is invalid.
+            LLMServiceError: if the API call fails or the output format is invalid
+                若 API 呼叫失敗或輸出格式不符
         """
         audio_b64 = base64.b64encode(audio_data).decode("utf-8")
         

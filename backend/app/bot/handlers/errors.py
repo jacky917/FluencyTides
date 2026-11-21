@@ -1,7 +1,15 @@
-"""
+"""Global error handler for the Telegram bot.
+
 Telegram Bot 的全域錯誤處理。
 
-Global error handler for the Telegram bot.
+Each handler catches only expected failures (for example Anki being unreachable) and lets programming errors
+propagate. Without this layer aiogram only writes a log entry: the user gets nothing on Telegram and the button keeps
+spinning. This layer logs the full traceback, stops the button's spinner, and sends a separate notice telling the user
+the action did not complete.
+
+Limitations: this layer cannot reach the "⏳ processing" message a handler already sent, so that message stays; nor
+can it reach the FSM state (the state middleware sits inside the error handling), so it does not clear the flow.
+Instead the notice asks the user to start over, rather than encouraging a plain retry.
 
 各 handler 只攔截預期內的錯誤（例如連不上 Anki），程式錯誤照常往上拋；沒有這一層的話，
 aiogram 只會記一筆 log，使用者在 TG 上什麼都收不到、按鈕一直轉圈。這裡記下完整的 traceback、
@@ -9,10 +17,6 @@ aiogram 只會記一筆 log，使用者在 TG 上什麼都收不到、按鈕一�
 
 限制：這一層拿不到 handler 先送出的「⏳ 處理中」訊息，那則訊息會留著；也拿不到 FSM 狀態（狀態
 middleware 在錯誤處理的內層），所以不清除流程，改在提示裡請使用者重新開始，不鼓勵原樣重試。
-
-Handlers only catch expected failures and let programming errors propagate.
-This last line of defence logs the traceback and tells the user the action
-did not complete, instead of leaving a spinner or a silent chat.
 """
 
 import logging
@@ -31,16 +35,23 @@ RETRY_HINT = "如果在建立卡片途中，請用 /newcard 重新開始；其�
 
 
 async def on_unhandled_error(event: ErrorEvent, bot: Bot) -> bool:
-    """記錄沒被 handler 攔下的例外，並通知觸發它的使用者。
+    """Log an exception no handler caught and notify the user who triggered it.
 
-    Log an exception no handler caught and notify the user who triggered it.
+    記錄沒被 handler 攔下的例外，並通知觸發它的使用者。
+
+    The notice is sent only for message and callback-query updates; a failure to send it is logged as a warning.
+
+    只有訊息與回調查詢的 update 會送出通知；通知送不出去時記一筆 warning。
 
     Args:
-        event: aiogram 的錯誤事件（含原本的 update 與例外）。The error event.
-        bot: 送出通知用的 Bot。The bot used to send the notice.
+        event: aiogram's error event, carrying the original update and the exception
+            aiogram 的錯誤事件（含原本的 update 與例外）
+        bot: the bot used to send the notice
+            送出通知用的 Bot
 
     Returns:
-        True：已處理，aiogram 不再往上拋。True, marking the error handled.
+        always ``True``, marking the error as handled so aiogram does not propagate it further
+        一律為 ``True``：已處理，aiogram 不再往上拋
     """
     update = event.update
     error = event.exception

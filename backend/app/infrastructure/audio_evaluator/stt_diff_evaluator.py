@@ -1,33 +1,34 @@
-"""
+"""STT + difflib zero-cost audio evaluator (stt_diff).
+
 STT + difflib 零成本語音評分器 (stt_diff)。
 
-STT + difflib zero-cost audio evaluator (stt_diff).
+Pipeline: local Whisper transcription → character-level difflib
+comparison against the reference answers → similarity converted to a
+score, producing dual-format diff markup for Telegram (<s>/<b>) and Anki
+(<span style>). Apart from STT there is no network IO and no API cost.
 
 流程：本地 Whisper 轉錄 → 與參考答案做字元級 difflib 比對 →
 相似度轉分數，並產出 TG（<s>/<b>）與 Anki（<span style>）雙格式
 差異標記。全程除 STT 外零網路 IO、零 API 費用。
 
-Pipeline: local Whisper transcription → character-level difflib
-comparison against reference answers → similarity-to-score mapping,
-producing dual-format diff markup for Telegram (<s>/<b>) and Anki
-(<span style>). Zero network IO besides STT, zero API cost.
+Design decisions:
+- Character-level diff (no tokenization): works well for Japanese, which
+  has no spaces; before comparison the text is NFKC-normalized, stripped
+  of punctuation and whitespace, and English is lowercased.
+- The display diff restores the original characters through a
+  "normalized index → original character" map (punctuation is omitted
+  from the display; this is expected).
+- A card without reference_answers, or a recording with no detected
+  speech, is not scored: :class:`AudioNotScoredError` is raised instead
+  of returning a score.
 
 設計決策：
 - 逐字元比對（非分詞）：對無空格的日文即可良好運作；比對前做
   NFKC 正規化、剝除標點空白、英文小寫化。
 - 顯示用差異以「正規化索引 → 原始字元」映射還原原文字元
   （標點在顯示中省略，屬預期行為）。
-- 無 reference_answers 的卡片回傳 score=0 並提示不支援本模式。
-
-Design decisions:
-- Character-level diff (no tokenization): works well for spaceless
-  Japanese; inputs are NFKC-normalized, stripped of punctuation and
-  whitespace, and lowercased before comparison.
-- Display diffs restore original characters through a normalized-index
-  → original-character map (punctuation is omitted from display by
-  design).
-- Cards without reference_answers return score=0 with a hint that this
-  mode is unsupported for them.
+- 無 reference_answers 的卡片，或沒偵測到語音的錄音不評分：拋出
+  ``AudioNotScoredError``，而不是回傳分數。
 """
 
 import difflib
@@ -62,27 +63,28 @@ _STRIP_CHARS = set(
 
 
 def _normalize_with_map(text: str) -> tuple[str, list[str]]:
-    """正規化字串並保留「正規化位置 → 原始字元」的顯示映射。
+    """Normalize a string while keeping a "normalized position → original character" display map.
 
-    Normalize a string while keeping a normalized-position → original
-    character map for display.
+    正規化字串並保留「正規化位置 → 原始字元」的顯示映射。
+
+    Applies NFKC normalization and lowercasing character by character,
+    stripping punctuation and whitespace; each normalized character maps to
+    one original character (when NFKC expands one character into several,
+    every expanded character maps back to the same original character).
 
     逐字元做 NFKC 正規化與小寫化，剝除標點/空白；每個正規化後字元
     對應一個原始字元（NFKC 一對多展開時，展開出的每個字元都映射回
     同一原始字元）。
 
-    Applies per-character NFKC normalization and lowercasing, stripping
-    punctuation/whitespace; each normalized character maps to one
-    original character (for one-to-many NFKC expansions, every expanded
-    character maps back to the same original).
-
     Args:
-        text: 原始字串。The original string.
+        text: the original string
+            原始字串
 
     Returns:
-        (正規化字串, 顯示映射)：映射第 i 項為正規化字串第 i 個字元
-        對應的原始字元。(normalized string, display map): item i of the
-        map is the original character behind normalized character i.
+        (normalized string, display map), where item i of the map is the
+        original character behind character i of the normalized string
+        (正規化字串, 顯示映射)，映射第 i 項為正規化字串第 i 個字元
+        對應的原始字元
     """
     norm_chars: list[str] = []
     display_map: list[str] = []
@@ -100,29 +102,31 @@ def _render_diff(
     reference_map: list[str],
     opcodes: list[tuple[str, int, int, int, int]],
 ) -> tuple[str, str]:
-    """依 difflib opcodes 產出 TG 與 Anki 雙格式差異標記。
+    """Render dual-format diff markup (Telegram and Anki) from difflib opcodes.
 
-    Render dual-format diff markup (Telegram and Anki) from difflib
-    opcodes.
+    依 difflib opcodes 產出 TG 與 Anki 雙格式差異標記。
+
+    Markup rules (STT plan §3.3): replace → struck-through wrong text plus
+    bold correct text; delete (extra speech) → strikethrough; insert
+    (missed text) → bold. On the TG side every original fragment goes
+    through html.escape. Anki uses red for wrong text and green for correct
+    text.
 
     標記規則（STT 計畫 §3.3）：replace → 刪除線誤字＋粗體正字；
     delete（多唸）→ 刪除線；insert（漏唸）→ 粗體。TG 端所有原文
-    片段皆經 html.escape。
-
-    Markup rules (STT plan §3.3): replace → struck wrong text + bold
-    correction; delete (extra speech) → strikethrough; insert (missed
-    text) → bold. All original fragments are html-escaped on the TG
-    side.
+    片段皆經 html.escape。Anki 端誤字為紅色、正字為綠色。
 
     Args:
-        transcript_map: 逐字稿的顯示映射。Display map of the transcript.
-        reference_map: 參考答案的顯示映射。Display map of the reference.
-        opcodes: SequenceMatcher.get_opcodes() 的結果。Result of
-            SequenceMatcher.get_opcodes().
+        transcript_map: the display map of the transcript
+            逐字稿的顯示映射
+        reference_map: the display map of the reference answer
+            參考答案的顯示映射
+        opcodes: the result of ``SequenceMatcher.get_opcodes()``
+            ``SequenceMatcher.get_opcodes()`` 的結果
 
     Returns:
-        (tg_markup, anki_html) 雙格式差異字串。The dual-format diff
-        strings (tg_markup, anki_html).
+        the dual-format diff strings ``(tg_markup, anki_html)``
+        ``(tg_markup, anki_html)`` 雙格式差異字串
     """
     tg_parts: list[str] = []
     anki_parts: list[str] = []
@@ -148,23 +152,23 @@ def _render_diff(
 
 
 class STTDiffEvaluator(BaseAudioEvaluator):
-    """本地 Whisper + difflib 的零成本語音評分器。
+    """A zero-cost audio evaluator using local Whisper plus difflib.
 
-    Zero-cost audio evaluator using local Whisper plus difflib.
+    本地 Whisper + difflib 的零成本語音評分器。
 
     Attributes:
-        _whisper: 共用的 Whisper 轉錄客戶端。Shared Whisper
-            transcription client.
+        _whisper: the shared Whisper transcription client
+            共用的 Whisper 轉錄客戶端
     """
 
     def __init__(self, whisper: WhisperClient) -> None:
-        """初始化 STTDiffEvaluator。
+        """Initialize the STTDiffEvaluator.
 
-        Initialize the STTDiffEvaluator.
+        初始化 STTDiffEvaluator。
 
         Args:
-            whisper: 轉錄用的 Whisper 客戶端（能力路由的 ``stt``）。The
-                Whisper client from the ``stt`` capability route.
+            whisper: the Whisper client used for transcription (the ``stt`` capability)
+                轉錄用的 Whisper 客戶端（能力路由的 ``stt``）
         """
         self._whisper = whisper
         logger.info("STT Diff Evaluator 初始化完成")
@@ -180,36 +184,44 @@ class STTDiffEvaluator(BaseAudioEvaluator):
         template_name: str = "prompts/audio_evaluator.j2",
         reference_familiarity: list[int | None] | None = None,
     ) -> AudioEvaluationResult:
-        """以 STT 逐字稿與參考答案的相似度評分。
+        """Score by the similarity between the STT transcript and the reference answers.
 
-        Score by similarity between the STT transcript and the
-        reference answers.
+        以 STT 逐字稿與參考答案的相似度評分。
+
+        The reference with the highest similarity is used for the score and
+        the diff.
+
+        取相似度最高的參考答案計算分數與差異。
 
         Args:
-            audio_data: 音檔原始二進位資料。Raw audio bytes.
-            audio_filename: 音檔檔名。Audio filename.
-            prompt_text: 卡片 Prompt（本模式不使用）。Card prompt
-                (unused in this mode).
-            context_text: 卡片 Context（本模式不使用）。Card context
-                (unused in this mode).
-            reference_answers: 參考答案列表（比對基準）。Reference
-                answers (comparison baseline).
-            target_language: 目標語言 locale，決定 Whisper 語言參數。
-                Target-language locale controlling Whisper's language.
-            template_name: 評分樣板（本模式不使用，保留介面相容）。
-                Evaluation template (unused; kept for interface parity).
-            reference_familiarity: 每句參考答案的熟識度；比對到的那句有標時，
-                feedback 開頭註明。Familiarity of each reference; noted in
-                the feedback for the matched one.
+            audio_data: the raw audio bytes
+                音檔原始二進位資料
+            audio_filename: the audio file name
+                音檔檔名
+            prompt_text: the card Prompt (unused in this mode)
+                卡片 Prompt（本模式不使用）
+            context_text: the card Context (unused in this mode)
+                卡片 Context（本模式不使用）
+            reference_answers: the reference answers (the comparison baseline)
+                參考答案列表（比對基準）
+            target_language: the target-language locale, which decides Whisper's language parameter
+                目標語言 locale，決定 Whisper 語言參數
+            template_name: the evaluation template (unused in this mode; kept for interface parity)
+                評分樣板（本模式不使用，保留介面相容）
+            reference_familiarity: the familiarity of each reference answer; when the matched one is
+                marked, the start of the feedback notes it
+                每句參考答案的熟識度；比對到的那句有標時，feedback 開頭註明
 
         Returns:
-            含分數、雙格式差異標記（可能帶熟識度註記）與逐字稿的評分結果。
-            The evaluation result with score, dual-format diff markup
-            (possibly noting the familiarity), and transcript.
+            the evaluation result with the score, the dual-format diff markup
+            (possibly with a familiarity note) and the transcript
+            含分數、雙格式差異標記（可能帶熟識度註記）與逐字稿的評分結果
 
         Raises:
-            STTServiceError: STT 服務呼叫失敗時拋出。Raised when the
-                STT call fails.
+            AudioNotScoredError: if no speech is detected or the card has no reference answers
+                若沒偵測到語音或卡片沒有參考答案
+            STTServiceError: if the STT service call fails
+                若 STT 服務呼叫失敗
         """
         label = "stt_diff"  # 零成本比對模式，無 LLM / zero-cost diff mode, no LLM
 

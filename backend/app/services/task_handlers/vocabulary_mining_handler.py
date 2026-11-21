@@ -1,14 +1,12 @@
-"""
-單字卡任務處理器 (Vocabulary Mining Handler) 模組。
+"""Vocabulary mining handler module.
+
+單字卡任務處理器（Vocabulary Mining Handler）模組。
+
+The pilot of the handlers plan: owns TOEIC_Coach_Dark_v2 and uses the standard ``BaseHandler`` CRUD without
+overrides; the graph comes from ``RelationGraphMixin`` (relation links such as synonyms and collocations).
 
 handlers 計畫書的試點：負責 TOEIC_Coach_Dark_v2，增刪改查全部用 ``BaseHandler`` 的標準實作、
 不覆寫；圖譜用 ``RelationGraphMixin``（同義詞、搭配詞等關聯連線）。
-
-Vocabulary mining handler module.
-
-The pilot of the handlers plan: owns TOEIC_Coach_Dark_v2 and uses the
-standard ``BaseHandler`` CRUD without overrides; the graph comes from
-``RelationGraphMixin``.
 """
 
 from typing import override
@@ -28,9 +26,17 @@ NOTE_TYPE = "TOEIC_Coach_Dark_v2"
 
 @register_handler
 class VocabularyMiningHandler(RelationGraphMixin):
-    """單字卡任務處理器。
+    """Vocabulary card task handler.
 
-    Vocabulary card task handler.
+    單字卡任務處理器。
+
+    Owns TOEIC_Coach_Dark_v2 only (the old TOEIC_Coach_Dark has no notes left and is no longer listed).
+
+    - Create: a manual form whose fields are the ``_v2`` fields; JSON fields are not listed and stay empty,
+      and audio fields are uploaded or recorded on the web (media_upload plan D5).
+    - When ``Expression`` changes, the base class syncs the text at both ends of the relations through
+      ``RELATION_LABEL_FIELD``, so the graph does not lose its links.
+    - Graph nodes read their subtitle and part of speech from ``Target_Translation`` and ``Target_POS``.
 
     只負責 TOEIC_Coach_Dark_v2（舊版 TOEIC_Coach_Dark 已無筆記，不再列入）。
 
@@ -38,9 +44,6 @@ class VocabularyMiningHandler(RelationGraphMixin):
       （media_upload 計畫書 D5）。
     - 修改 ``Expression`` 時，基底依 ``RELATION_LABEL_FIELD`` 同步關聯表兩端的文字，圖譜不會斷線。
     - 圖譜節點的副標、詞性讀 ``Target_Translation``、``Target_POS``。
-
-    Owns TOEIC_Coach_Dark_v2 only. Creation is a manual form; renaming
-    ``Expression`` keeps relation labels in sync through the base class.
     """
 
     CAPABILITIES = HandlerCapabilities(
@@ -60,23 +63,26 @@ class VocabularyMiningHandler(RelationGraphMixin):
     @property
     @override
     def handler_name(self) -> str:
-        """處理器名稱。
+        """The handler name used in URLs.
 
-        Handler name.
+        處理器名稱，出現在網址裡。
         """
         return "vocabulary_mining"
 
     @property
     @override
     def title(self) -> str:
-        """中文名稱。Display title."""
+        """The Chinese display title.
+
+        中文名稱。
+        """
         return "單字卡"
 
     @property
     @override
     def supported_models(self) -> list[str]:
-        """支援的 Anki 模型名稱清單。
+        """The Anki note types this handler owns.
 
-        Supported Anki model names.
+        這個處理器負責的 Anki 筆記類型。
         """
         return [NOTE_TYPE]

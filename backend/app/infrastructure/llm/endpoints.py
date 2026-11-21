@@ -1,10 +1,56 @@
-"""
+"""LLM endpoints and their allowlists.
+
 LLM 端點與白名單（模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D5）。
+
+See the model-routing plan llm_model_routing_FEAT_2026-10-15.md D5. An **endpoint** is one callable service (a
+relay, a Google key, a local CLI), identified by a unique ID; the ``(prefix)`` of a card label is the endpoint
+ID. Each endpoint carries an allowlist of selectable "model + effort" combinations. Endpoints and allowlists all
+come from ``.env``; the DB only records "which combination is currently selected" (see
+:mod:`app.infrastructure.llm.routing`).
+
+Endpoints have four sources:
+
+- **custom endpoints**: ``LLM_ENDPOINTS__<ID>__TYPE / BASE_URL / API_KEY / MODELS / SAFETY_SETTINGS /
+  AUDIO_MODELS / AUDIO_TRANSPORT``, any number of them
+- **built-in CLI endpoints**: ``claude-code`` / ``antigravity``, with allowlists ``LLM_CLAUDE_CODE_MODELS`` /
+  ``LLM_ANTIGRAVITY_MODELS``
+- **legacy single-set settings**: ``LLM_PROVIDER`` / ``LLM_BASE_URL`` / ``LLM_API_KEY`` / ``LLM_MODEL_NAME``,
+  automatically synthesized into an endpoint whose ID is ``LLM_PROVIDER``, that is, "the ``.env`` layer". This
+  set (including the CLI ``LLM_*_EFFORT``) is added to the allowlist automatically, so existing ``.env`` files
+  need no change. When ``LLM_ENDPOINTS`` defines an endpoint with the same ID as ``LLM_PROVIDER``, that one is
+  used instead (the factory also takes it when no endpoint is given, see :func:`env_endpoint_is_custom`)
+- **built-in audio endpoint** (capability-routing plan capability_routing_FEAT_2026-10-19.md §6.3): synthesized
+  from ``AUDIO_API_KEY`` / ``AUDIO_BASE_URL`` / ``AUDIO_EVALUATOR_PROVIDER``, with the fixed ID ``audio``. Its
+  audio-model allowlist is ``AUDIO_MODELS`` plus ``AUDIO_MODEL_NAME``; its text-model allowlist is the same list
+  plus ``STT_LLM_MODEL_NAME`` (for the ``stt_llm`` recording-evaluation strategy). Without ``AUDIO_API_KEY`` it
+  is not selectable (when the ``.env`` layer uses it, the client still reports the key as unset)
+
+**Audio models** (the ``audio_llm`` of capability routing) have a separate allowlist ``audio_models``: only
+models marked as able to listen to audio may be used to evaluate recordings. ``audio_transport`` decides how
+openai-type endpoints send audio: ``input_audio`` (OpenAI's audio input) or ``image_url`` (disguised as an
+image, for relays that accept only images; this is the former ``proxy`` evaluator).
+
+Each allowlist entry is written in the card-label form ``model@effort``: ``"opus@low|high"`` allows two
+efforts, and no ``@`` means the model takes no effort. The entry is split at the **last** ``@``, so the model
+name itself may contain ``@``; model names may also contain ``/`` and ``:`` (for example OpenRouter's
+``deepseek/deepseek-r1:free``). The cost: on endpoints that do not support effort, a model whose name contains
+``@`` is treated as carrying effort and skipped.
+
+A wrong setting (an invalid ID, a missing key, ``MODELS`` that is not JSON, a misspelled field name, a
+misspelled effort, and so on) only skips that endpoint or that entry and logs an ERROR, instead of keeping the
+whole backend from starting; the same error is logged only once. The backend loads endpoints once at startup
+through :func:`log_endpoint_summary`, so the errors appear in the startup log.
+
+Paths that name an endpoint all go through :func:`get_endpoint` / :func:`list_endpoints`; the legacy path
+without an endpoint (``LLM_PROVIDER`` with no matching ``LLM_ENDPOINTS``) still has the factory and clients read
+settings directly. This module imports no client class (to avoid pulling in openai / jsonschema /
+google-genai); :data:`EFFORT_VALUES` is the single source of each CLI's effort values, and the clients'
+``VALID_EFFORTS`` are taken directly from here.
 
 **端點**＝一家可呼叫的服務（一個中轉站、一把 Google 金鑰、一個本機 CLI），以唯一
 ID 識別；卡片標籤的 ``(前綴)`` 就是端點 ID。每個端點帶一份白名單，列出可選的
 「模型 + effort」組合。端點與白名單全部來自 ``.env``——DB 只記「目前選了哪一組」
-（見 :mod:`app.infrastructure.llm.routing`）。
+（見 ``app.infrastructure.llm.routing``）。
 
 端點的四個來源：
 
@@ -16,7 +62,7 @@ ID 識別；卡片標籤的 ``(前綴)`` 就是端點 ID。每個端點帶一份
   ``LLM_MODEL_NAME``，自動合成為 ID＝``LLM_PROVIDER`` 的端點，即「.env 那一層」。
   這一組（含 CLI 的 ``LLM_*_EFFORT``）自動加進白名單，所以現有 ``.env`` 不必改。
   ``LLM_ENDPOINTS`` 定義了與 ``LLM_PROVIDER`` 同 ID 的端點時改用它（工廠在不指定
-  端點時也會走它，見 :func:`env_endpoint_is_custom`）
+  端點時也會走它，見 ``env_endpoint_is_custom``）
 - **內建 audio 端點**（能力路由計畫 capability_routing_FEAT_2026-10-19.md §6.3）：由
   ``AUDIO_API_KEY`` / ``AUDIO_BASE_URL`` / ``AUDIO_EVALUATOR_PROVIDER`` 合成，ID 固定為
   ``audio``。音訊模型白名單為 ``AUDIO_MODELS`` 加上 ``AUDIO_MODEL_NAME``；文字模型白名單
@@ -35,21 +81,13 @@ effort，不帶 ``@`` 表示此模型不使用 effort。以**最後一個** ``@`
 
 設定寫錯（ID 不合規、缺金鑰、``MODELS`` 不是 JSON、欄位名拼錯、effort 拼錯…）只
 跳過那個端點或那一項並記 ERROR，不讓整個後端起不來；同一則錯誤只記一次。後端啟動
-時以 :func:`log_endpoint_summary` 載入一次，錯誤因此出現在啟動 log。
+時以 ``log_endpoint_summary`` 載入一次，錯誤因此出現在啟動 log。
 
-指定端點的路徑都經過 :func:`get_endpoint` / :func:`list_endpoints`；不指定端點的
+指定端點的路徑都經過 ``get_endpoint`` / ``list_endpoints``；不指定端點的
 舊路徑（``LLM_PROVIDER`` 沒有對應的 ``LLM_ENDPOINTS``）仍由工廠與客戶端直接讀
 settings。本模組不 import 任何客戶端類別（避免把 openai / jsonschema / google-genai
-拉進來）；各 CLI 的 effort 值域以 :data:`EFFORT_VALUES` 為唯一來源，客戶端的
+拉進來）；各 CLI 的 effort 值域以 ``EFFORT_VALUES`` 為唯一來源，客戶端的
 ``VALID_EFFORTS`` 直接取自這裡。
-
-English summary:
-    LLM endpoints and their whitelists, all sourced from ``.env``: custom
-    ``LLM_ENDPOINTS__<ID>__*`` endpoints, the built-in CLI endpoints, and the
-    legacy single-endpoint settings synthesized into an endpoint whose ID is
-    ``LLM_PROVIDER`` (auto-whitelisted, so existing ``.env`` files keep
-    working). Whitelist entries are ``model`` or ``model@e1|e2``. Bad
-    settings are skipped with a one-time ERROR instead of failing startup.
 """
 
 import json
@@ -133,28 +171,51 @@ _reported_problems: set[str] = set()
 
 @dataclass(frozen=True)
 class ModelOption:
-    """白名單中的一個模型。One whitelisted model.
+    """One model in an allowlist.
+
+    白名單中的一個模型。
 
     Attributes:
-        name: 模型名（CLI 類為基底名），非空。Model name, non-empty.
-        efforts: 允許的 effort（不重複）；空＝此模型不使用 effort。Allowed
-            efforts, unique; empty means the model takes no effort.
+        name: the model name (the base name for CLI types); not empty
+            模型名（CLI 類為基底名），非空
+        efforts: the allowed efforts (no duplicates); empty means this model takes no effort
+            允許的 effort（不重複）；空＝此模型不使用 effort
     """
 
     name: str
     efforts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        """Validate the name and the efforts.
+
+        檢查模型名與 effort。
+
+        Raises:
+            ValueError: if ``name`` is blank, or ``efforts`` contains an empty value or a duplicate
+                若 ``name`` 為空白，或 ``efforts`` 含空值或重複
+        """
         if not self.name.strip():
             raise ValueError("ModelOption.name 不可為空")
         if not all(self.efforts) or len(set(self.efforts)) != len(self.efforts):
             raise ValueError(f"ModelOption.efforts 不可有空值或重複：{self.efforts!r}")
 
     def allows(self, effort: str | None) -> bool:
-        """``effort`` 是否合法：帶 effort 的模型必須指定其一，不帶的必須為空。
+        """Return whether ``effort`` is valid for this model.
 
-        Whether ``effort`` is valid for this model: one of ``efforts`` when
-        the model takes effort, otherwise empty.
+        回傳 ``effort`` 是否合法：帶 effort 的模型必須指定其一，不帶的必須為空。
+
+        A model that takes effort must be given one of ``efforts``; a model that does not must be given ``None``
+        or an empty string.
+
+        帶 effort 的模型必須指定 ``efforts`` 之一；不帶的必須為 None 或空字串。
+
+        Args:
+            effort: the effort to check, or ``None``
+                要檢查的 effort，或 None
+
+        Returns:
+            ``True`` if the effort is valid
+            effort 合法時為 ``True``
         """
         if self.efforts:
             return effort in self.efforts
@@ -163,29 +224,44 @@ class ModelOption:
 
 @dataclass(frozen=True)
 class Endpoint:
-    """一個可呼叫的 LLM 端點。One callable LLM endpoint.
+    """One callable LLM endpoint.
+
+    一個可呼叫的 LLM 端點。
+
+    Construction checks the consistency between fields (type, safety_settings, allowlists); whether the endpoint
+    is "callable" (whether the key and URL are complete) is checked when a client is constructed. A legacy
+    synthesized endpoint may lack a key, and the client still raises "LLM_API_KEY 未設定".
 
     建構時檢查欄位之間的一致性（類型、safety_settings、白名單）；端點是否「可呼叫」
     （金鑰、網址是否齊全）由客戶端建構時檢查——舊式合成端點可能缺金鑰，客戶端照舊
     拋「LLM_API_KEY 未設定」。
 
     Attributes:
-        id: 唯一 ID，標籤前綴的來源（google / openai / 空字串不加前綴）。
-            Unique ID and source of the label prefix.
-        type: 端點類型（:data:`ALL_TYPES`），決定客戶端類別。Endpoint type.
-        base_url: OpenAI 相容端點網址。Base URL (OpenAI-compatible only).
-        api_key: API 金鑰。API key.
-        models: 白名單，模型名不重複。The whitelist.
-        send_safety_settings: 是否送 safety_settings（只有 openai 類可為 True）。
-            Whether to send safety_settings (openai type only).
-        listed: 是否可在管理介面選擇；``LLM_PROVIDER`` 留空時的合成端點、anthropic
-            佔位端點、沒有金鑰的 audio 端點為 False。Whether selectable in the admin menu.
-        audio_models: 能聽音檔的模型（能力路由的 ``audio_llm``），不帶 effort。
-            Audio-capable models, without effort.
-        audio_transport: openai 類送音檔的方式（:data:`AUDIO_TRANSPORTS`）；其他類型為 None。
-            How an openai-type endpoint receives audio.
-        api_key_setting: 金鑰的設定名（錯誤訊息用）。Setting name of the key.
-        base_url_setting: 網址的設定名（錯誤訊息用）。Setting name of the URL.
+        id: the unique ID, source of the label prefix (google / openai / empty string add no prefix)
+            唯一 ID，標籤前綴的來源（google / openai / 空字串不加前綴）
+        type: the endpoint type (:data:`ALL_TYPES`), which decides the client class
+            端點類型（``ALL_TYPES``），決定客戶端類別
+        base_url: the URL of an OpenAI-compatible endpoint
+            OpenAI 相容端點網址
+        api_key: the API key
+            API 金鑰
+        models: the allowlist; model names are unique
+            白名單，模型名不重複
+        send_safety_settings: whether to send safety_settings (only openai types may be ``True``)
+            是否送 safety_settings（只有 openai 類可為 True）
+        listed: whether selectable in the admin UI; ``False`` for the synthesized endpoint when ``LLM_PROVIDER``
+            is blank, the anthropic placeholder endpoint, and the audio endpoint without a key
+            是否可在管理介面選擇；``LLM_PROVIDER`` 留空時的合成端點、anthropic
+            佔位端點、沒有金鑰的 audio 端點為 False
+        api_key_setting: the setting name of the key (for error messages)
+            金鑰的設定名（錯誤訊息用）
+        base_url_setting: the setting name of the URL (for error messages)
+            網址的設定名（錯誤訊息用）
+        audio_models: the models that can listen to audio (the ``audio_llm`` of capability routing), without
+            effort
+            能聽音檔的模型（能力路由的 ``audio_llm``），不帶 effort
+        audio_transport: how an openai type sends audio (:data:`AUDIO_TRANSPORTS`); ``None`` for other types
+            openai 類送音檔的方式（``AUDIO_TRANSPORTS``）；其他類型為 None
     """
 
     id: str
@@ -201,6 +277,18 @@ class Endpoint:
     audio_transport: str | None = None
 
     def __post_init__(self) -> None:
+        """Validate the consistency between fields.
+
+        檢查欄位之間的一致性。
+
+        Raises:
+            ValueError: if the type is unknown, safety_settings is set on a non-openai type, the allowlist has
+                duplicate models or efforts the type does not support, the audio allowlist has duplicates or
+                carries effort, a non-audio type has audio models, or ``audio_transport`` is set where it does
+                not apply or is invalid
+                若類型未知、非 openai 類設了 safety_settings、白名單有重複模型或此類型不支援的 effort、
+                音訊白名單有重複或帶 effort、不能聽音檔的類型有音訊模型，或 ``audio_transport`` 設在不適用處或無效
+        """
         if self.type not in ALL_TYPES:
             raise ValueError(f"未知的端點類型 {self.type!r}")
         if self.send_safety_settings and self.type != TYPE_OPENAI:
@@ -223,21 +311,59 @@ class Endpoint:
             raise ValueError(f"端點 {self.id!r} 的 audio_transport 無效：{self.audio_transport!r}")
 
     def find_model(self, name: str) -> ModelOption | None:
-        """白名單中名為 ``name`` 的模型。The whitelisted model named ``name``."""
+        """Return the model named ``name`` in the allowlist.
+
+        回傳白名單中名為 ``name`` 的模型。
+
+        Args:
+            name: the model name to look up
+                要查找的模型名
+
+        Returns:
+            the matching model, or ``None`` if it is not in the allowlist
+            符合的模型；不在白名單時為 None
+        """
         return next((option for option in self.models if option.name == name), None)
 
     def allows(self, model: str, effort: str | None) -> bool:
-        """``(model, effort)`` 是否在白名單內。Whether ``(model, effort)`` is whitelisted."""
+        """Return whether ``(model, effort)`` is in the allowlist.
+
+        回傳 ``(model, effort)`` 是否在白名單內。
+
+        Args:
+            model: the model name
+                模型名
+            effort: the effort, or ``None``
+                effort，或 None
+
+        Returns:
+            ``True`` if the model is listed and accepts the effort
+            模型在白名單內且接受該 effort 時為 ``True``
+        """
         option = self.find_model(model)
         return option is not None and option.allows(effort)
 
     def find_audio_model(self, name: str) -> ModelOption | None:
-        """音訊白名單中名為 ``name`` 的模型。The audio-whitelisted model named ``name``."""
+        """Return the model named ``name`` in the audio allowlist.
+
+        回傳音訊白名單中名為 ``name`` 的模型。
+
+        Args:
+            name: the model name to look up
+                要查找的模型名
+
+        Returns:
+            the matching model, or ``None`` if it is not in the audio allowlist
+            符合的模型；不在音訊白名單時為 None
+        """
         return next((option for option in self.audio_models if option.name == name), None)
 
 
 def _report(message: str, level: int = logging.ERROR) -> None:
-    """同一則設定問題只記一次。Log a configuration problem once per message."""
+    """Log a configuration problem only once per message.
+
+    同一則設定問題只記一次。
+    """
     if message in _reported_problems:
         return
     _reported_problems.add(message)
@@ -245,14 +371,24 @@ def _report(message: str, level: int = logging.ERROR) -> None:
 
 
 def coerce_entries(raw: Any, *, setting_name: str) -> tuple[str, ...] | None:
-    """把白名單設定值（``.env`` 的 JSON 字串，或程式給的序列）轉成字串 tuple。
+    """Coerce an allowlist setting value into a tuple of strings.
 
-    Coerce a raw whitelist setting (a JSON string from ``.env``, or a
-    sequence given programmatically) into a tuple of strings.
+    把白名單設定值（``.env`` 的 JSON 字串，或程式給的序列）轉成字串 tuple。
+
+    The value may be a JSON string from ``.env`` or a sequence given programmatically. ``None``, a blank string,
+    and JSON ``null`` all yield an empty tuple.
+
+    設定值可以是 ``.env`` 的 JSON 字串，或程式給的序列。None、空白字串、JSON ``null`` 都得到空 tuple。
+
+    Args:
+        raw: the raw setting value
+            原始設定值
+        setting_name: the setting name, for error messages
+            設定名（錯誤訊息用）
 
     Returns:
-        字串 tuple；格式錯誤時記 ERROR 並回 None。The entries, or None after
-        reporting a malformed value.
+        the string tuple; ``None`` after logging an ERROR when the format is wrong
+        字串 tuple；格式錯誤時記 ERROR 並回 None
     """
     value = raw
     if isinstance(value, str):
@@ -275,11 +411,13 @@ def coerce_entries(raw: Any, *, setting_name: str) -> tuple[str, ...] | None:
 
 
 def _parse_bool(raw: Any) -> tuple[bool | None, bool]:
-    """把 ``true`` / ``false`` 之類的設定值轉成布林。Parse a boolean-ish setting.
+    """Parse a setting value such as ``true`` / ``false`` into a bool.
+
+    把 ``true`` / ``false`` 之類的設定值轉成布林。
 
     Returns:
-        ``(值, 是否可辨識)``；未設為 ``(None, True)``，無法辨識為 ``(None, False)``。
-        ``(value, recognized)``.
+        ``(value, recognized)``; ``(None, True)`` when unset, ``(None, False)`` when unrecognized
+        ``(值, 是否可辨識)``；未設為 ``(None, True)``，無法辨識為 ``(None, False)``
     """
     if raw is None or isinstance(raw, bool):
         return raw, True
@@ -296,21 +434,28 @@ def _parse_bool(raw: Any) -> tuple[bool | None, bool]:
 def parse_whitelist(
     entries: tuple[str, ...] | list[str], *, endpoint_id: str, endpoint_type: str
 ) -> tuple[ModelOption, ...]:
-    """把白名單字串解析成 :class:`ModelOption`，不合格的項目跳過並記 ERROR。
+    """Parse allowlist strings into :class:`ModelOption` objects, skipping invalid entries with an ERROR.
 
-    Parse whitelist strings into model options, skipping (and reporting)
-    malformed entries.
+    把白名單字串解析成 ``ModelOption``，不合格的項目跳過並記 ERROR。
+
+    When the same model is written in several entries, their efforts are merged (in order of appearance,
+    deduplicated). When the same model appears both "without effort" and "with effort", it is treated as
+    requiring effort, and an ERROR is logged as a reminder. Blank entries are ignored.
 
     同一模型寫多項時合併 effort（依出現順序、去重）。同一模型同時出現「不帶
-    effort」與「帶 effort」的寫法時，視為必須帶 effort，並記 ERROR 提醒。
+    effort」與「帶 effort」的寫法時，視為必須帶 effort，並記 ERROR 提醒。空白項目略過。
 
     Args:
-        entries: 白名單字串。Whitelist entries.
-        endpoint_id: 端點 ID（錯誤訊息用）。Endpoint ID, for messages.
-        endpoint_type: 端點類型，決定可用的 effort 值。Endpoint type.
+        entries: the allowlist strings
+            白名單字串
+        endpoint_id: the endpoint ID (for error messages)
+            端點 ID（錯誤訊息用）
+        endpoint_type: the endpoint type, which decides the available effort values
+            端點類型，決定可用的 effort 值
 
     Returns:
-        依首次出現順序排列的模型。Models in first-seen order.
+        the models in order of first appearance
+        依首次出現順序排列的模型
     """
     allowed = EFFORT_VALUES.get(endpoint_type)
     merged: dict[str, list[str]] = {}
@@ -361,10 +506,23 @@ def parse_whitelist(
 
 
 def parse_audio_whitelist(entries: tuple[str, ...] | list[str], *, setting_name: str) -> tuple[ModelOption, ...]:
-    """把音訊模型白名單解析成 :class:`ModelOption`（不帶 effort，重複的只留一個）。
+    """Parse an audio-model allowlist into :class:`ModelOption` objects (without effort, duplicates kept once).
 
-    Parse an audio-model whitelist: plain names, duplicates dropped; an
-    entry carrying ``@effort`` or an over-long name is skipped and reported.
+    把音訊模型白名單解析成 ``ModelOption``（不帶 effort，重複的只留一個）。
+
+    An entry containing ``@`` (treated as carrying effort) or a name that is too long is skipped and reported.
+
+    含 ``@`` 的項目（視為帶 effort）或過長的名稱會被跳過並記錄。
+
+    Args:
+        entries: the allowlist strings
+            白名單字串
+        setting_name: the setting name, for error messages
+            設定名（錯誤訊息用）
+
+    Returns:
+        the models in order of first appearance
+        依首次出現順序排列的模型
     """
     names: list[str] = []
     for raw in entries:
@@ -382,9 +540,13 @@ def parse_audio_whitelist(entries: tuple[str, ...] | list[str], *, setting_name:
 
 
 def _with_extra_models(models: tuple[ModelOption, ...], *names: str) -> tuple[ModelOption, ...]:
-    """把不帶 effort 的模型名補進白名單（已有的不重複加，空的、太長的略過）。
+    """Append model names without effort to the allowlist.
 
-    Append plain model names that are not whitelisted yet.
+    把不帶 effort 的模型名補進白名單。
+
+    Names already listed are not added again; empty and over-long names are ignored.
+
+    已有的不重複加，空的、太長的略過。
     """
     result = list(models)
     for raw in names:
@@ -395,15 +557,22 @@ def _with_extra_models(models: tuple[ModelOption, ...], *names: str) -> tuple[Mo
 
 
 def _audio_endpoint() -> Endpoint:
-    """由 ``AUDIO_*`` 合成內建 audio 端點（能力路由計畫 §6.3）。
+    """Synthesize the built-in audio endpoint from ``AUDIO_*`` (capability-routing plan §6.3).
 
-    Synthesize the built-in ``audio`` endpoint from the ``AUDIO_*`` settings.
+    由 ``AUDIO_*`` 合成內建 audio 端點（能力路由計畫 §6.3）。
+
+    Type: gemini-native when ``AUDIO_EVALUATOR_PROVIDER`` is ``gemini_native``; otherwise (``openai`` /
+    ``proxy`` / ``stt_diff`` / ``stt_llm``) openai, using the official OpenAI URL when there is no
+    ``AUDIO_BASE_URL``, the same as the evaluators before capability routing (``stt_llm`` already built an
+    OpenAI-compatible client from ``AUDIO_*``). ``proxy`` sends audio as ``image_url``, the rest as
+    ``input_audio``. Without ``AUDIO_API_KEY`` it is not selectable. At startup one line records the chosen type
+    (:func:`log_endpoint_summary`).
 
     類型：``AUDIO_EVALUATOR_PROVIDER`` 為 ``gemini_native`` 時為 gemini-native；其他（``openai`` /
     ``proxy`` / ``stt_diff`` / ``stt_llm``）為 openai，沒有 ``AUDIO_BASE_URL`` 時用 OpenAI 官方網址——
     與能力路由之前的評分器相同（``stt_llm`` 原本就以 ``AUDIO_*`` 建 OpenAI 相容客戶端）。``proxy``
     以 ``image_url`` 送音檔，其餘以 ``input_audio``。沒有 ``AUDIO_API_KEY`` 時不可選。啟動時記一行
-    選定的類型（:func:`log_endpoint_summary`）。
+    選定的類型（``log_endpoint_summary``）。
     """
     provider = (settings.AUDIO_EVALUATOR_PROVIDER or "").strip().lower()
     base_url = (settings.AUDIO_BASE_URL or "").strip()
@@ -437,9 +606,15 @@ def _audio_endpoint() -> Endpoint:
 
 
 def _with_env_option(endpoint: Endpoint, extra: ModelOption) -> Endpoint:
-    """把「.env 那一層」的組合併進端點的白名單。
+    """Merge the combination of "the ``.env`` layer" into the endpoint's allowlist.
 
-    Merge the ``.env`` layer's choice into the endpoint's whitelist.
+    把「.env 那一層」的組合併進端點的白名單。
+
+    - the allowlist lacks this model: add it
+    - the allowlist already has it and both carry effort: add the ``.env`` default effort
+    - the allowlist writes it **without** effort but ``.env`` carries effort: respect the allowlist and do not
+      rewrite it (otherwise DB settings with an empty effort would be judged invalid), and log a WARNING saying the
+      ``.env`` default is not listed
 
     - 白名單沒有這個模型：加進去
     - 白名單已有、且兩者都帶 effort：補上 ``.env`` 的預設 effort
@@ -462,10 +637,13 @@ def _with_env_option(endpoint: Endpoint, extra: ModelOption) -> Endpoint:
 
 
 def _custom_endpoint(raw_id: str, raw: Any) -> Endpoint | str:
-    """把一組 ``LLM_ENDPOINTS__<ID>__*`` 轉成端點；不合格時記 ERROR 並回傳跳過原因。
+    """Turn one set of ``LLM_ENDPOINTS__<ID>__*`` into an endpoint.
 
-    Build an endpoint from one ``LLM_ENDPOINTS`` entry, or report it and
-    return the reason it was skipped.
+    把一組 ``LLM_ENDPOINTS__<ID>__*`` 轉成端點。
+
+    Returns:
+        the endpoint; when invalid, the reason it was skipped, after logging an ERROR
+        端點；不合格時記 ERROR 並回傳跳過原因
     """
     endpoint_id = raw_id.strip().lower()
     prefix = f"LLM_ENDPOINTS__{raw_id.strip().upper()}"
@@ -554,10 +732,13 @@ def _custom_endpoint(raw_id: str, raw: Any) -> Endpoint | str:
 
 
 def _raw_endpoints() -> dict[str, Any]:
-    """``LLM_ENDPOINTS`` 的原始字典；頂層被直接設值（非字典）時記 WARNING 並視為空。
+    """Return the raw ``LLM_ENDPOINTS`` dict.
 
-    The raw ``LLM_ENDPOINTS`` mapping; a value set directly on the top-level
-    variable is reported and treated as empty.
+    回傳 ``LLM_ENDPOINTS`` 的原始字典。
+
+    When the top level is set directly (not a dict), log a WARNING and treat it as empty.
+
+    頂層被直接設值（非字典）時記 WARNING 並視為空。
     """
     raw = settings.LLM_ENDPOINTS
     if isinstance(raw, dict):
@@ -571,30 +752,46 @@ def _raw_endpoints() -> dict[str, Any]:
 
 
 def env_endpoint_id() -> str:
-    """「.env 那一層」的端點 ID：正規化後的 ``LLM_PROVIDER``。
+    """Return the endpoint ID of "the ``.env`` layer": the normalized ``LLM_PROVIDER``.
 
-    The endpoint ID of the ``.env`` layer: the normalized ``LLM_PROVIDER``.
+    回傳「.env 那一層」的端點 ID：正規化後的 ``LLM_PROVIDER``。
+
+    Returns:
+        the normalized ``LLM_PROVIDER``; may be an empty string
+        正規化後的 ``LLM_PROVIDER``；可能為空字串
     """
     return normalize_provider(settings.LLM_PROVIDER)
 
 
 def env_endpoint_is_custom() -> bool:
-    """``LLM_PROVIDER`` 是否指向 ``LLM_ENDPOINTS`` 中定義的端點（不論設定是否合格）。
+    """Return whether ``LLM_PROVIDER`` names an endpoint defined in ``LLM_ENDPOINTS``, valid or not.
 
-    Whether ``LLM_PROVIDER`` names an endpoint defined in ``LLM_ENDPOINTS``,
-    valid or not. 工廠據此決定「不指定端點」時是否改走端點路徑：定義了就用它的網址
+    回傳 ``LLM_PROVIDER`` 是否指向 ``LLM_ENDPOINTS`` 中定義的端點（不論設定是否合格）。
+
+    The factory uses this to decide whether "no endpoint given" switches to the endpoint path: if defined, its URL
+    and key are used; if defined but wrong, "endpoint does not exist" is reported explicitly instead of silently
+    falling back to the old ``LLM_API_KEY``.
+
+    工廠據此決定「不指定端點」時是否改走端點路徑：定義了就用它的網址
     與金鑰；定義了卻寫錯，則明確報「端點不存在」，不默默改用舊的 ``LLM_API_KEY``。
+
+    Returns:
+        ``True`` if ``LLM_ENDPOINTS`` defines an endpoint with that ID
+        ``LLM_ENDPOINTS`` 定義了該 ID 的端點時為 ``True``
     """
     provider = env_endpoint_id()
     return any(raw_id.strip().lower() == provider for raw_id in _raw_endpoints())
 
 
 def _env_option(provider: str) -> ModelOption | None:
-    """「.env 那一層」的模型組合（自動加進白名單）。
+    """Return the model combination of "the ``.env`` layer" (added to the allowlist automatically).
 
-    The ``.env`` layer's model choice, auto-added to the whitelist. A CLI
-    default effort outside the accepted values is left out: the client
-    rejects it at construction, exactly as before.
+    回傳「.env 那一層」的模型組合（自動加進白名單）。
+
+    A CLI default effort outside the accepted values yields ``None``: the client rejects it at construction,
+    exactly as before. A blank or over-long ``LLM_MODEL_NAME`` also yields ``None``.
+
+    CLI 預設 effort 不在可接受值內時回 None：客戶端建構時照舊拒絕。``LLM_MODEL_NAME`` 為空或過長時也回 None。
     """
     model = (settings.LLM_MODEL_NAME or "").strip()
     if not model:
@@ -617,10 +814,13 @@ def _env_option(provider: str) -> ModelOption | None:
 
 
 def _load() -> tuple[dict[str, Endpoint], dict[str, str]]:
-    """依目前設定組出所有端點，連同被跳過的自訂端點與原因（每次呼叫重新讀設定）。
+    """Build every endpoint from the current settings, plus the skipped custom endpoints and their reasons.
 
-    Build every endpoint from the current settings, plus the custom
-    endpoints skipped and why. Re-reads settings on each call.
+    依目前設定組出所有端點，連同被跳過的自訂端點與原因。
+
+    Settings are re-read on every call.
+
+    每次呼叫重新讀設定。
     """
     endpoints: dict[str, Endpoint] = {}
     skipped: dict[str, str] = {}
@@ -683,52 +883,80 @@ def _load() -> tuple[dict[str, Endpoint], dict[str, str]]:
 
 
 def load_endpoints() -> dict[str, Endpoint]:
-    """依目前設定組出所有端點（每次呼叫重新讀設定）。
+    """Build every endpoint from the current settings.
 
-    Build every endpoint from the current settings. Re-reads settings on
-    each call, so tests and runtime changes take effect immediately.
+    依目前設定組出所有端點。
+
+    Settings are re-read on every call, so tests and runtime changes take effect immediately.
+
+    每次呼叫重新讀設定，測試與執行期的變更因此立即生效。
 
     Returns:
-        端點 ID → 端點。Endpoint ID to endpoint.
+        endpoint ID → endpoint
+        端點 ID → 端點
     """
     return _load()[0]
 
 
 def skip_reason(endpoint_id: str) -> str | None:
-    """自訂端點因設定有誤被跳過的原因；沒被跳過（或根本沒定義）時為 None。
+    """Return why a custom endpoint was skipped because of a wrong setting.
 
-    Why a custom endpoint was skipped, or None. Lets callers put the cause
-    in the error itself instead of pointing at a log line that may have
-    rotated away.
+    回傳自訂端點因設定有誤被跳過的原因。
+
+    This lets callers put the cause in the error itself instead of pointing at a log line that may have rotated
+    away.
+
+    讓呼叫者把原因直接放進錯誤，而不是指向可能已輪替掉的 log。
+
+    Args:
+        endpoint_id: the endpoint ID; case and surrounding whitespace are ignored
+            端點 ID；忽略大小寫與前後空白
+
+    Returns:
+        the reason; ``None`` when it was not skipped (or was never defined)
+        原因；沒被跳過（或根本沒定義）時為 None
     """
     return _load()[1].get(endpoint_id.strip().lower())
 
 
 def skipped_endpoints() -> dict[str, str]:
-    """所有因設定有誤被跳過的自訂端點與原因（診斷端點用）。
+    """Return every custom endpoint skipped because of a wrong setting, with its reason (for diagnostics).
 
-    Every custom endpoint skipped as invalid, with the reason.
+    回傳所有因設定有誤被跳過的自訂端點與原因（診斷端點用）。
+
+    Returns:
+        endpoint ID → skip reason
+        端點 ID → 跳過原因
     """
     return dict(_load()[1])
 
 
 def get_endpoint(endpoint_id: str | None = None) -> Endpoint | None:
-    """取得端點；None 取「.env 那一層」的端點。
+    """Get an endpoint; ``None`` gets the endpoint of "the ``.env`` layer".
 
-    Get an endpoint by ID, or the ``.env`` layer's endpoint for None.
+    取得端點；None 取「.env 那一層」的端點。
+
+    Args:
+        endpoint_id: the endpoint ID (case and surrounding whitespace are ignored), or ``None`` for the
+            ``.env`` layer
+            端點 ID（忽略大小寫與前後空白），或 None 取「.env 那一層」
 
     Returns:
-        端點；不存在（未定義或設定有誤被跳過）時為 None。The endpoint, or
-        None when it is undefined or was skipped as invalid.
+        the endpoint; ``None`` when it does not exist (undefined, or skipped because of a wrong setting)
+        端點；不存在（未定義或設定有誤被跳過）時為 None
     """
     key = env_endpoint_id() if endpoint_id is None else endpoint_id.strip().lower()
     return load_endpoints().get(key)
 
 
 def list_endpoints() -> list[Endpoint]:
-    """可在管理介面選擇的端點（白名單非空），依 ID 排序。
+    """Return the endpoints selectable in the admin UI (listed, non-empty allowlist), sorted by ID.
 
-    Endpoints selectable in the admin menu (non-empty whitelist), by ID.
+    回傳可在管理介面選擇的端點（白名單非空），依 ID 排序。
+
+    Returns:
+        the selectable endpoints; may be empty
+        可選擇的端點；可能為空
     """
     return sorted(
         (endpoint for endpoint in load_endpoints().values() if endpoint.listed and endpoint.models),
@@ -737,9 +965,13 @@ def list_endpoints() -> list[Endpoint]:
 
 
 def list_audio_endpoints() -> list[Endpoint]:
-    """可選來聽音檔的端點（音訊白名單非空），依 ID 排序。
+    """Return the endpoints selectable for listening to audio (non-empty audio allowlist), sorted by ID.
 
-    Endpoints selectable for the ``audio_llm`` capability, by ID.
+    回傳可選來聽音檔的端點（音訊白名單非空），依 ID 排序。
+
+    Returns:
+        the selectable endpoints; may be empty
+        可選擇的端點；可能為空
     """
     return sorted(
         (endpoint for endpoint in load_endpoints().values() if endpoint.listed and endpoint.audio_models),
@@ -748,10 +980,14 @@ def list_audio_endpoints() -> list[Endpoint]:
 
 
 def log_endpoint_summary() -> None:
-    """載入一次端點並記一行摘要（後端啟動時呼叫）；設定錯誤在此首次記 ERROR。
+    """Load the endpoints once and log a one-line summary (called at backend startup).
 
-    Load the endpoints once and log a one-line summary (called at startup),
-    so configuration errors surface in the startup log. Never logs keys.
+    載入一次端點並記一行摘要（後端啟動時呼叫）。
+
+    Configuration errors are first logged as ERROR here, so they surface in the startup log. Keys are never
+    logged.
+
+    設定錯誤在此首次記 ERROR，因此出現在啟動 log。不會記錄金鑰。
     """
     loaded, skipped = _load()
     summary = ", ".join(

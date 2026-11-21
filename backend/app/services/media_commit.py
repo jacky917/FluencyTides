@@ -1,22 +1,31 @@
-"""
+"""Commit staged media files into Anki on card creation or field update, and undo on failure (media_upload plan D1).
+
 建卡、修改欄位時把暫存的媒體檔存進 Anki，失敗時撤回（media_upload 計畫書 D1）。
 
-Commit staged media into Anki with a create or update, and undo it when the
-write fails.
+Creation and update either succeed completely or return to how things were before submitting:
 
 建卡與修改要嘛整個成功，要嘛回到送出前的樣子：
+
+1. Before submitting: the files are in the staging area (``media_staging``), not in Anki.
+2. On submit: first store the staged files that are used into Anki, then write the note.
+3. Note write succeeds: delete the staged files (they are already in Anki).
+4. Note write fails: delete the files this attempt stored in Anki and keep the staged files, which returns to
+   step 1; after fixing the problem the user can resubmit without uploading again.
 
 1. 送出前：檔案在暫存區（``media_staging``），Anki 裡沒有。
 2. 送出時：先把用到的暫存檔存進 Anki，再寫筆記。
 3. 寫筆記成功：刪掉暫存檔（已經在 Anki 裡了）。
 4. 寫筆記失敗：把這次存進 Anki 的檔案刪掉，暫存檔留著——回到第 1 步，修正後再送不必重新上傳。
 
+Before deleting in step 4, check whether any note uses the file: for example Anki's response timed out but the
+note was actually written, or on a retry with the same file the first attempt actually succeeded. If a note uses
+it, do not delete it; better leave a file behind than let a card point at a missing audio file. If the query or
+the deletion fails, likewise do not delete: log a warning and leave the file in Anki (Anki's "Check Media" can
+clean it up).
+
 第 4 步刪檔前會先查有沒有筆記用到這個檔案：例如 Anki 回應逾時、其實已經寫進筆記，或同一個檔案重試時
 第一次其實成功了。有筆記用到就不刪，寧可留下檔案，也不讓卡片指向不存在的音檔。查詢或刪除失敗時同樣不刪，
 記 warning，檔案留在 Anki（可以用 Anki 的「檢查媒體」清掉）。
-
-Create and update either succeed or leave Anki as it was before; files a
-note turned out to use are never deleted.
 """
 
 from __future__ import annotations
@@ -42,19 +51,26 @@ logger = logging.getLogger(__name__)
 
 
 def staged_names(values: Mapping[str, object], fields: Iterable[str]) -> list[str]:
-    """這次要寫入的值裡，媒體欄位填了哪些上傳的檔名（依欄位順序、不重複）。
+    """Return the uploaded names put into the media fields of the values to write.
 
-    The uploaded names put into the given media fields, in order, without duplicates.
+    回傳這次要寫入的值裡，媒體欄位填了哪些上傳的檔名。
+
+    Only values matching the ``POST /media`` naming format are picked: the current value (``[sound:…]``), blanks
+    and hand-typed names are not picked and are left to the handler's usual rules (current value unchanged, blank
+    clears, hand-typed rejected). Non-string values are ignored.
 
     只挑符合 ``POST /media`` 命名格式的值：原值（``[sound:…]``）、空白、手打的名字不會被挑出來，
-    交給 handler 照原本的規則處理（原值不變、空白清空、手打的拒絕）。
+    交給 handler 照原本的規則處理（原值不變、空白清空、手打的拒絕）。不是字串的值會被忽略。
 
     Args:
-        values: 要寫入的值（建立參數或要改的欄位）。The values to write.
-        fields: 媒體欄位（或媒體參數）的名稱。The media field names.
+        values: the values to write (creation parameters or the fields to change)
+            要寫入的值（建立參數或要改的欄位）
+        fields: the names of the media fields (or media parameters)
+            媒體欄位（或媒體參數）的名稱
 
     Returns:
-        檔名。The names.
+        the names, in field order and without duplicates
+        檔名，依欄位順序、不重複
     """
     names: list[str] = []
     for field in fields:
@@ -69,26 +85,37 @@ def staged_names(values: Mapping[str, object], fields: Iterable[str]) -> list[st
 async def committed_media(
     anki_client: AnkiClient, staging: MediaStaging, names: list[str]
 ) -> AsyncIterator[None]:
-    """把暫存檔存進 Anki，包住後面的寫入；寫入失敗時撤回，成功時刪掉暫存檔。
+    """Store staged files in Anki around the write that follows; undo on failure, delete the staged files on success.
 
-    Store staged files in Anki around a write; undo on failure, drop the
-    staged copies on success.
+    把暫存檔存進 Anki，包住後面的寫入；寫入失敗時撤回，成功時刪掉暫存檔。
 
-    用法::
+    On entry, every staged file is read first, then each is stored in Anki. Any exception raised inside the block
+    (including cancellation) undoes the files stored by this attempt via ``undo_stored_media`` and is then
+    re-raised unchanged.
+
+    進入時先讀出所有暫存檔，再逐一存進 Anki。區塊內拋出的任何例外（含取消）都會先以 ``undo_stored_media``
+    撤回這次存進去的檔案，再原樣往上拋。
+
+    Usage::
 
         async with committed_media(anki, staging, names):
             await handler.execute_create(...)
 
     Args:
-        anki_client: AnkiConnect 客戶端。The AnkiConnect client.
-        staging: 暫存區。The staging area.
-        names: 要存進 Anki 的檔名（``staged_names``）。The names to commit.
+        anki_client: the AnkiConnect client
+            AnkiConnect 客戶端
+        staging: the staging area
+            暫存區
+        names: the names to store in Anki (from ``staged_names``)
+            要存進 Anki 的檔名（``staged_names``）
 
     Raises:
-        MediaUploadExpiredError: 有檔名不在暫存區（過期、後端重啟過、已經用掉）；什麼都沒寫。
-            A name is not staged; nothing is written.
-        AnkiConnectError: 存檔失敗或 Anki 改了檔名（已撤回這次存進去的檔案）。Storing failed.
-        區塊內拋出的任何例外：撤回後原樣往上拋。Anything raised inside, after undoing.
+        AnkiConnectError: if storing fails or Anki changes the file name (the files stored by this attempt have
+            been undone)
+            若存檔失敗或 Anki 改了檔名（已撤回這次存進去的檔案）
+        MediaUploadExpiredError: if a name is not in the staging area (expired, the backend restarted, or already
+            used); nothing is written
+            若有檔名不在暫存區（過期、後端重啟過、已經用掉）；什麼都沒寫
     """
     contents: dict[str, bytes] = {}
     for name in names:
@@ -122,14 +149,19 @@ async def committed_media(
 
 
 async def undo_stored_media(anki_client: AnkiClient, names: list[str]) -> None:
-    """撤回這次存進 Anki 的媒體檔：沒有任何筆記用到的才刪。不拋錯（失敗時記 warning、檔案留著）。
+    """Undo the media files this write stored in Anki, deleting only those no note uses.
 
-    Delete files stored by a failed write, skipping any that a note uses;
-    never raises.
+    撤回這次存進 Anki 的媒體檔：沒有任何筆記用到的才刪。
+
+    An ``AnkiConnectError`` is not raised: it is logged as a warning and the file is left in place.
+
+    ``AnkiConnectError`` 不往上拋：失敗時記 warning、檔案留著。
 
     Args:
-        anki_client: AnkiConnect 客戶端。The AnkiConnect client.
-        names: 這次存進 Anki 的檔名。The names stored by this write.
+        anki_client: the AnkiConnect client
+            AnkiConnect 客戶端
+        names: the names this write stored in Anki
+            這次存進 Anki 的檔名
     """
     for name in names:
         try:

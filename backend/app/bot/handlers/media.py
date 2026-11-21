@@ -1,9 +1,10 @@
-"""
-Telegram Bot 媒體檔案處理模組。
-負責處理使用者發送的照片等媒體檔案。
+"""Telegram Bot media file handler module.
 
-Telegram Bot media file handler module.
+Telegram Bot 媒體檔案處理模組。
+
 Handles media files sent by the user, such as photos.
+
+負責處理使用者發送的照片等媒體檔案。
 """
 
 import base64
@@ -33,21 +34,26 @@ async def process_photo_handler(
     user_state_manager: UserStateManager,
     anki_client: AnkiClient
 ) -> None:
-    """處理使用者上傳的自訂頭像照片。
+    """Handle a custom avatar photo uploaded by the user.
 
-    Handle a custom avatar photo uploaded by the user.
+    處理使用者上傳的自訂頭像照片。
 
-    僅在狀態為 wait_avatar_upload 時處理：下載最高解析度照片、
-    存到本地 assets/avatars 與 Anki Media，並推進到輸入說話者名稱狀態。
+    Only processed when the state is ``wait_avatar_upload``; photos in any other state are ignored silently. It
+    downloads the highest-resolution photo, saves it to the local assets/avatars directory and to Anki Media, then
+    advances to the speaker-name input state (``wait_speaker_name``). On a download or save failure the state is not
+    advanced, so the user can simply send the photo again.
 
-    Only processed when the state is wait_avatar_upload: downloads the
-    highest-resolution photo, saves it to local assets/avatars and Anki
-    media, then advances to the speaker-name input state.
+    僅在狀態為 ``wait_avatar_upload`` 時處理，其他狀態下的照片直接忽略：下載最高解析度照片、
+    存到本地 assets/avatars 與 Anki Media，並推進到輸入說話者名稱狀態（``wait_speaker_name``）。
+    下載或儲存失敗時狀態不推進，使用者可以直接再傳一次。
 
     Args:
-        message: Telegram 訊息物件。The Telegram message object.
-        user_state_manager: 使用者狀態管理器。The UserStateManager instance.
-        anki_client: AnkiClient 實例。The AnkiClient instance.
+        message: the Telegram message carrying the photo
+            帶有照片的 Telegram 訊息
+        user_state_manager: the user state manager
+            使用者狀態管理器
+        anki_client: the AnkiConnect client
+            AnkiConnect 客戶端
     """
     chat_id = message.chat.id
     state = user_state_manager.get_state(chat_id)

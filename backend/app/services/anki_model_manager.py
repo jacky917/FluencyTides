@@ -1,37 +1,34 @@
-"""
-Anki 模型管理與匯入服務模組。
+"""Anki model management service module.
+
+Anki 模型管理服務模組。
+
+This module merges responsibilities from the legacy anki_model_manager.py and import_model.py:
+1. Read the LLM schema and field configuration from local model definition files (.json).
+2. Assemble LLM structured output into AnkiConnect addNote payloads.
+3. Provide pre-write guards such as deck existence checks and duplicate checks.
 
 本模組整合了舊版 anki_model_manager.py 與 import_model.py 的職責：
 1. 讀取本地模型定義檔 (.json) 中的 LLM Schema 與欄位配置。
 2. 將 LLM 結構化輸出組裝為 AnkiConnect addNote 的 Payload。
-3. 從本地模型模板檔（.json, _front.html, _back.html, _style.css）
-   匯入完整的筆記類型 (Note Type) 至 Anki。
-4. 提供牌組存在性檢查與防重複驗證等前置防護功能。
+3. 提供牌組存在性檢查與防重複驗證等前置防護功能。
+
+Refactored from:
+- old/Anki/utils/anki_model_manager.py
+- old/Anki/utils/import_model.py
 
 重構自：
 - old/Anki/utils/anki_model_manager.py
 - old/Anki/utils/import_model.py
 
+Design principles:
+- This module belongs to the Service layer; all communication with AnkiConnect goes through the injected
+  AnkiClient (Infrastructure), strictly following Clean Architecture decoupling.
+- It never creates its own httpx connections; all HTTP I/O is delegated to AnkiClient.
+
 設計原則：
 - 此模組屬於 Service 層，透過注入 AnkiClient (Infrastructure) 完成
   所有與 AnkiConnect 的通訊，嚴格遵守 Clean Architecture 解耦原則。
 - 不自行建立 httpx 連線，所有 HTTP I/O 委託給 AnkiClient。
-
-Anki model management and import service module.
-
-This module merges the responsibilities of the legacy anki_model_manager.py
-and import_model.py:
-1. Read LLM schemas and field configs from local model definition (.json) files.
-2. Assemble LLM structured output into AnkiConnect addNote payloads.
-3. Import complete note types into Anki from local template files
-   (.json, _front.html, _back.html, _style.css).
-4. Provide guard features such as deck existence checks and duplicate
-   prevention.
-
-Design principles: this is a Service-layer module; all AnkiConnect
-communication is delegated to the injected AnkiClient (Infrastructure),
-strictly following Clean Architecture decoupling. It never creates its
-own httpx connections.
 """
 
 import json
@@ -50,29 +47,30 @@ logger = logging.getLogger(__name__)
 
 
 class AnkiModelManager:
-    """管理 Anki 模型定義檔的讀取、LLM 輸出組裝與 AnkiConnect 提交。
+    """A manager for reading Anki model definition files, assembling LLM output, and submitting via AnkiConnect.
 
-    Manages reading Anki model definition files, assembling LLM output,
-    and submitting notes through AnkiConnect.
+    管理 Anki 模型定義檔的讀取、LLM 輸出組裝與 AnkiConnect 提交。
+
+    This class wraps the following core capabilities:
+    - Read JSON schemas from the anki_models/ directory (for LLM structured output).
+    - Convert the JSON data returned by the LLM into AnkiNote Pydantic models.
+    - Submit new cards to Anki through AnkiClient, with full duplicate detection and error tracing.
 
     此類別封裝了以下核心能力：
     - 從 anki_models/ 目錄讀取 JSON Schema（供 LLM 結構化輸出使用）。
     - 將 LLM 回傳的 JSON 資料轉換為 AnkiNote Pydantic 模型。
     - 透過 AnkiClient 提交新卡片到 Anki，包含完整的重複檢測與錯誤追蹤。
-    - 匯入本地模型模板至 Anki（createModel）。
-
-    Core capabilities: read JSON schemas from anki_models/ (for LLM
-    structured output), convert LLM JSON into AnkiNote Pydantic models,
-    submit new cards via AnkiClient with duplicate detection and error
-    tracing, and import local model templates into Anki (createModel).
 
     Attributes:
-        _model_dir: 存放 JSON 模型定義檔的資料夾路徑。Directory containing
-            JSON model definition files.
-        _anki_client: 注入的非同步 AnkiConnect 客戶端。Injected async
-            AnkiConnect client.
+        _model_dir: the directory containing the JSON model definition files
+            存放 JSON 模型定義檔的資料夾路徑
+        _anki_client: the injected async AnkiConnect client
+            注入的非同步 AnkiConnect 客戶端
     """
 
+    #: The default model directory: an absolute path anchored at the package location (backend/app/anki_models).
+    #: The legacy default was "./anki_models" relative to the CWD, which, when started from another directory,
+    #: read from (and auto-created) an empty anki_models folder in the wrong place.
     #: 預設模型目錄：錨定於套件位置（backend/app/anki_models）的絕對路徑。
     #: 舊版預設為相對 CWD 的 "./anki_models"，從其他目錄啟動時會在
     #: 錯誤位置讀取（並自動建立）空的 anki_models 資料夾。
@@ -83,25 +81,25 @@ class AnkiModelManager:
         anki_client: AnkiClient,
         model_dir: str | Path | None = None,
     ) -> None:
-        """初始化管理器。
+        """Initialize the manager.
 
-        Initialize the manager.
-
-        Args:
-            anki_client: 注入的 AnkiClient 實例，用於所有 AnkiConnect 通訊。
-                Injected AnkiClient instance used for all AnkiConnect I/O.
-            model_dir: 存放模型定義檔的資料夾路徑；未提供時使用
-                DEFAULT_MODEL_DIR（絕對路徑，不受啟動 CWD 影響）。
-                Directory of model definition files; defaults to
-                DEFAULT_MODEL_DIR (absolute, CWD-independent).
+        初始化管理器。
 
         Note:
+            When the directory does not exist, only a warning is logged; it is no longer created automatically,
+            because this class only reads model assets and the legacy automatic mkdir once created empty folders
+            under the wrong CWD.
+
             目錄不存在時只記 warning、不再自動建立——本類別是模型資產的
             讀取者，舊版的自動 mkdir 曾在錯誤的 CWD 下生出空資料夾。
-            When the directory is missing only a warning is logged; it is
-            no longer auto-created, since this class is a reader of model
-            assets and the legacy auto-mkdir once created empty folders
-            under the wrong CWD.
+
+        Args:
+            anki_client: the injected AnkiClient instance, used for all AnkiConnect communication
+                注入的 AnkiClient 實例，用於所有 AnkiConnect 通訊
+            model_dir: the directory of model definition files; when omitted, ``DEFAULT_MODEL_DIR`` is used (an
+                absolute path unaffected by the startup CWD)
+                存放模型定義檔的資料夾路徑；未提供時使用
+                ``DEFAULT_MODEL_DIR``（絕對路徑，不受啟動 CWD 影響）
         """
         self._model_dir = (
             Path(model_dir) if model_dir is not None else self.DEFAULT_MODEL_DIR
@@ -120,32 +118,33 @@ class AnkiModelManager:
     # ========================================================================
 
     def get_model_schema(self, model_file_name: str) -> dict[str, object]:
-        """從本地讀取 Anki 模型定義 JSON Schema。
+        """Read an Anki model definition JSON Schema from local disk.
 
-        Read an Anki model definition JSON schema from local disk.
+        從本地讀取 Anki 模型定義 JSON Schema。
+
+        Two formats are supported:
+        1. The file root is the JSON Schema itself (simple models, such as AI_QA_Dark.json).
+        2. A composite definition containing an 'llm_schema' key (such as TOEIC_Coach_Dark.json); the llm_schema
+           sub-object is then extracted as the LLM's response_format.
 
         支援兩種格式：
         1. 根目錄即為 JSON Schema（簡易模型，如 AI_QA_Dark.json）。
         2. 包含 'llm_schema' 鍵值的複合定義檔（如 TOEIC_Coach_Dark.json），
            此時會提取 llm_schema 子物件作為 LLM 的 response_format。
 
-        Two formats are supported: (1) the file root itself is the JSON
-        schema; (2) a composite definition containing an 'llm_schema'
-        key, in which case that sub-object is extracted as the LLM
-        response_format.
-
         Args:
-            model_file_name: JSON 檔案名稱，例如 'TOEIC_Coach_Dark.json'。
-                JSON file name, e.g. 'TOEIC_Coach_Dark.json'.
+            model_file_name: the JSON file name, for example 'TOEIC_Coach_Dark.json'
+                JSON 檔案名稱，例如 'TOEIC_Coach_Dark.json'
 
         Returns:
-            包含 JSON Schema 定義的字典，可直接用於 LLM 的 response_format
-            參數。Dict with the JSON schema, usable directly as the LLM
-            response_format parameter.
+            a dict holding the JSON Schema definition, usable directly as the LLM's response_format parameter
+            包含 JSON Schema 定義的字典，可直接用於 LLM 的 response_format 參數
 
         Raises:
-            FileNotFoundError: 找不到對應檔案時。When the file is missing.
-            ValueError: JSON 格式無效時。When the JSON is invalid.
+            FileNotFoundError: if the file cannot be found
+                若找不到對應檔案
+            ValueError: if the JSON is invalid
+                若 JSON 格式無效
         """
         file_path = self._model_dir / model_file_name
         if not file_path.is_file():
@@ -178,20 +177,23 @@ class AnkiModelManager:
             raise ValueError(f"無效的 JSON 檔案: {decode_error}")
 
     def get_model_fields(self, model_file_name: str) -> list[str]:
-        """從模型定義檔中讀取 inOrderFields 欄位清單。
+        """Read the inOrderFields field list from a model definition file.
 
-        Read the ordered inOrderFields list from a model definition file.
+        從模型定義檔中讀取 inOrderFields 欄位清單。
 
         Args:
-            model_file_name: JSON 檔案名稱。JSON file name.
+            model_file_name: the JSON file name
+                JSON 檔案名稱
 
         Returns:
-            欄位名稱字串列表，按順序排列。Ordered list of field names.
+            the field names, in order
+            欄位名稱字串列表，按順序排列
 
         Raises:
-            FileNotFoundError: 找不到對應檔案時。When the file is missing.
-            ValueError: JSON 格式無效或缺少 inOrderFields 時。When JSON is
-                invalid or 'inOrderFields' is absent.
+            FileNotFoundError: if the file cannot be found
+                若找不到對應檔案
+            ValueError: if the JSON is invalid or inOrderFields is missing or not a list
+                若 JSON 格式無效，或缺少 inOrderFields 陣列
         """
         file_path = self._model_dir / model_file_name
         if not file_path.is_file():
@@ -220,29 +222,31 @@ class AnkiModelManager:
         llm_response: dict[str, object],
         tags: list[str] | None = None,
     ) -> AnkiNote:
-        """將 LLM 結構化輸出轉換為 AnkiNote Pydantic 模型。
+        """Convert LLM structured output into an AnkiNote Pydantic model.
 
-        Convert LLM structured output into an AnkiNote Pydantic model.
+        將 LLM 結構化輸出轉換為 AnkiNote Pydantic 模型。
 
-        對於 LLM 回傳的非字串欄位（如陣列、物件），會透過
+        Array and object fields returned by the LLM are serialized with json.dumps into valid JSON strings, so the
+        JavaScript in the Anki card can parse and render them correctly. Other non-string values are converted with
+        ``str()``. The note disallows duplicates within this deck.
+
+        對於 LLM 回傳的陣列、物件欄位，會透過
         json.dumps 序列化為合法 JSON 字串，讓 Anki 卡片內的
-        JavaScript 能夠正確解析與渲染。
-
-        Non-string fields (arrays/objects) returned by the LLM are
-        serialized with json.dumps into valid JSON strings so the card
-        template's JavaScript can parse and render them.
+        JavaScript 能夠正確解析與渲染。其他非字串值以 ``str()`` 轉換。筆記不允許在此牌組內重複。
 
         Args:
-            deck_name: 目標牌組名稱。Target deck name.
-            model_name: 目標模型（筆記類型）名稱。Target model (note type)
-                name.
-            llm_response: LLM 回傳的結構化 JSON 字典。Structured JSON dict
-                returned by the LLM.
-            tags: 附加至卡片的標籤列表。Tags attached to the card.
+            deck_name: the target deck name
+                目標牌組名稱
+            model_name: the target model (note type) name
+                目標模型（筆記類型）名稱
+            llm_response: the structured JSON dict returned by the LLM
+                LLM 回傳的結構化 JSON 字典
+            tags: the tags attached to the card; ``None`` means no tags
+                附加至卡片的標籤列表；``None`` 表示不加標籤
 
         Returns:
-            驗證後的 AnkiNote Pydantic 模型實例。Validated AnkiNote model
-            instance.
+            the validated AnkiNote Pydantic model instance
+            驗證後的 AnkiNote Pydantic 模型實例
         """
         # 利用 json.dumps 確保非字串欄位被轉為合法 JSON 字串，
         # 這是因為 Anki 的欄位只接受純字串，而卡片模板中的 JS
@@ -282,27 +286,30 @@ class AnkiModelManager:
     # ========================================================================
 
     async def submit_note(self, note: AnkiNote) -> int:
-        """提交 AnkiNote 到 AnkiConnect，並包含重複卡片的智能偵測。
+        """Submit an AnkiNote to AnkiConnect, with smart detection of duplicate cards.
 
-        Submit an AnkiNote via AnkiConnect with smart duplicate detection.
+        提交 AnkiNote 到 AnkiConnect，並包含重複卡片的智能偵測。
+
+        When AnkiConnect reports a duplicate error, the deck holding the duplicate card is looked up automatically,
+        giving a detailed error message that helps the user locate the problem.
 
         當 AnkiConnect 回報 duplicate 錯誤時，會自動反查重複卡片
         所在的牌組，提供詳細的錯誤訊息幫助使用者定位問題。
 
-        When AnkiConnect reports a duplicate error, the deck containing
-        the duplicate is looked up to enrich the error message.
-
         Args:
-            note: 已驗證的 AnkiNote 模型實例。Validated AnkiNote instance.
+            note: the validated AnkiNote model instance
+                已驗證的 AnkiNote 模型實例
 
         Returns:
-            成功建立後 Anki 回傳的筆記 ID。Note ID returned by Anki.
+            the note ID Anki returns after creating it
+            成功建立後 Anki 回傳的筆記 ID
 
         Raises:
-            AnkiConnectError: AnkiConnect 回傳錯誤時（包含增強的重複偵測
-                資訊）。On AnkiConnect error (with enriched duplicate info).
-            RuntimeError: AnkiConnect 回傳 null result 時。When AnkiConnect
-                returns a null result.
+            AnkiConnectError: if AnkiConnect returns an error (with the enriched duplicate information when
+                available)
+                若 AnkiConnect 回傳錯誤（包含增強的重複偵測資訊）
+            RuntimeError: if AnkiConnect returns a null result
+                若 AnkiConnect 回傳 null result
         """
         logger.info(
             "準備提交筆記至 [%s] 牌組，模型: [%s]",
@@ -332,25 +339,29 @@ class AnkiModelManager:
     async def _lookup_duplicate_location(
         self, note: AnkiNote
     ) -> str | None:
-        """當新增筆記遭遇重複錯誤時，反查重複卡片的所在牌組。
+        """Look up the deck holding the duplicate card after adding a note hits a duplicate error.
 
-        Look up the deck holding the duplicate note after a duplicate error.
+        當新增筆記遭遇重複錯誤時，反查重複卡片的所在牌組。
+
+        Search with the same condition Anki uses to detect duplicates: the same note type and an identical first
+        field as defined by the model (the value escaped literally), then trace the names of the decks it belongs
+        to, helping the user find the source of the conflict quickly. Best effort: any failure returns ``None`` and
+        the caller keeps the original duplicate error. Note that Anki strips HTML when comparing duplicates, while
+        a field search compares the raw content, so a field containing HTML may not be found (logged at INFO).
 
         以 Anki 判定重複的條件反查：同筆記類型、且模型定義的第一個欄位完全相同（值照字面跳脫），
         再追溯其所屬的牌組名稱，幫助使用者快速找到衝突來源。盡力而為：任何失敗都回傳 None，
         呼叫端保留原本的重複錯誤。注意 Anki 比對重複時會去掉 HTML，欄位搜尋則比對原始內容，
         所以欄位帶 HTML 時可能查不到（記 INFO）。
 
-        Locates the duplicate the way Anki detects it (same note type, same
-        first field as defined by the model, matched literally) and traces its
-        deck names. Best effort: any failure returns None.
-
         Args:
-            note: 觸發重複錯誤的筆記。The note that triggered the error.
+            note: the note that triggered the duplicate error
+                觸發重複錯誤的筆記
 
         Returns:
-            包含重複卡片詳細位置的錯誤訊息字串，若查找失敗則回傳 None。
-            Detailed error message string, or None if lookup fails.
+            an error message with the duplicate card's detailed location, or ``None`` if the lookup fails or finds
+            nothing
+            包含重複卡片詳細位置的錯誤訊息字串，若查找失敗或查無結果則回傳 ``None``
         """
         if not note.fields:
             return None
@@ -406,22 +417,25 @@ class AnkiModelManager:
     # ========================================================================
 
     async def ensure_deck_exists(self, deck_name: str) -> None:
-        """檢查目標牌組是否存在，若否則自動建立。
+        """Check whether the target deck exists, and create it automatically if not.
 
-        Ensure the target deck exists, creating it automatically otherwise.
+        檢查目標牌組是否存在，若否則自動建立。
+
+        Designed to be called before sending an expensive LLM request, to avoid discovering only after generating
+        the card content that the target deck does not exist.
 
         設計為在發送昂貴的 LLM 請求之前呼叫，避免生成完卡片內容
         後才發現目標牌組不存在的窘境。
 
-        Intended to run before expensive LLM requests, so we never
-        generate card content only to find the deck missing.
-
         Args:
-            deck_name: 預期所在的目標牌組名稱。Target deck name.
+            deck_name: the name of the deck the card is expected to go into
+                預期所在的目標牌組名稱
 
         Raises:
-            RuntimeError: 無法自動建立目標牌組時。When the deck cannot be
-                created automatically.
+            AnkiConnectError: if the deck list cannot be fetched
+                若無法取得牌組清單
+            RuntimeError: if the target deck cannot be created automatically
+                若無法自動建立目標牌組
         """
         logger.info("檢查目標牌組是否存在: %s", deck_name)
 
@@ -453,27 +467,33 @@ class AnkiModelManager:
         model_name: str,
         fields: dict[str, str],
     ) -> bool:
-        """檢查給定筆記是否可以安全新增（不重複且牌組/模型皆存在）。
+        """Check whether the given note can be added safely (no duplicate, and both the deck and model exist).
 
-        Check whether the note can be added safely (no duplicate; deck and
-        model both exist).
+        檢查給定筆記是否可以安全新增（不重複且牌組/模型皆存在）。
+
+        Designed to be called before sending an expensive LLM request, first confirming that Anki is reachable and
+        avoiding generating duplicate cards, to save API cost. Fields the local model definition declares but
+        ``fields`` omits are filled with empty strings before the check.
 
         設計為在發送昂貴的 LLM 請求之前呼叫，先確認 Anki 的存取性
-        以及避免重複生卡，節省 API 成本。
-
-        Intended to run before expensive LLM requests, confirming Anki
-        accessibility and avoiding duplicate generation to save API cost.
+        以及避免重複生卡，節省 API 成本。檢查前會把本地模型定義有、``fields`` 沒給的欄位補上空字串。
 
         Args:
-            deck_name: 目標牌組名稱。Target deck name.
-            model_name: 目標模型名稱。Target model name.
-            fields: 用來檢測的欄位字典，建議至少包含 Primary Field。Fields
-                used for the check; should contain at least the primary
-                field.
+            deck_name: the target deck name
+                目標牌組名稱
+            model_name: the target model name
+                目標模型名稱
+            fields: the fields used for the check; should contain at least the primary field
+                用來檢測的欄位字典，建議至少包含 Primary Field
 
         Returns:
-            True 若可以新增，False 若為重複卡片或遇到異常。True if addable,
-            False if duplicate or on anomaly.
+            ``True`` if the note can be added; ``False`` if Anki rejects it (likely a duplicate or a model mismatch)
+            or returns no result
+            ``True`` 若可以新增；``False`` 若 Anki 拒絕（可能為重複或模型設定不符）或沒有回傳結果
+
+        Raises:
+            AnkiConnectError: if the AnkiConnect request fails
+                若 AnkiConnect 請求失敗
         """
         logger.info(
             "先期檢查是否可以新增筆記: [%s] at [%s]",
@@ -527,20 +547,21 @@ class AnkiModelManager:
     # ========================================================================
 
     def list_available_models(self) -> list[AnkiModelInfo]:
-        """掃描模型定義目錄，回傳所有可用模型的摘要資訊。
+        """Scan the model definition directory and return summary information for every available model.
 
-        Scan the model definition directory and summarize available models.
+        掃描模型定義目錄，回傳所有可用模型的摘要資訊。
+
+        Read each .json file in the anki_models/ directory, parse its modelName, inOrderFields and llm_schema
+        fields, and assemble a list of AnkiModelInfo Pydantic models. A file that cannot be read or parsed is
+        logged as a warning and skipped.
 
         逐一讀取 anki_models/ 目錄下的 .json 檔案，
         解析其 modelName、inOrderFields 與 llm_schema 欄位，
-        組裝為 AnkiModelInfo Pydantic 模型列表。
-
-        Reads each .json under anki_models/, parses modelName,
-        inOrderFields and llm_schema, and assembles AnkiModelInfo models.
+        組裝為 AnkiModelInfo Pydantic 模型列表。無法讀取或解析的檔案記 warning 後跳過。
 
         Returns:
-            AnkiModelInfo 模型實例列表，按檔名排序。List of AnkiModelInfo
-            instances, sorted by file name.
+            the AnkiModelInfo instances, sorted by file name; an empty list if the directory does not exist
+            AnkiModelInfo 模型實例列表，按檔名排序；目錄不存在時為空串列
         """
         models: list[AnkiModelInfo] = []
 
@@ -586,26 +607,29 @@ class AnkiModelManager:
     def get_model_detail(
         self, model_file_name: str
     ) -> dict[str, object]:
-        """取得單一模型的完整定義資訊。
+        """Get the full definition of a single model.
 
-        Get the full definition of a single model.
+        取得單一模型的完整定義資訊。
+
+        Return the complete content of the JSON definition file, including every field such as modelName,
+        inOrderFields and llm_schema.
 
         回傳 JSON 定義檔的完整內容，包含 modelName、inOrderFields、
         llm_schema 等所有欄位。
 
-        Returns the complete content of the JSON definition file,
-        including modelName, inOrderFields, llm_schema, etc.
-
         Args:
-            model_file_name: JSON 檔案名稱，例如 'TOEIC_Coach_Dark.json'。
-                JSON file name, e.g. 'TOEIC_Coach_Dark.json'.
+            model_file_name: the JSON file name, for example 'TOEIC_Coach_Dark.json'
+                JSON 檔案名稱，例如 'TOEIC_Coach_Dark.json'
 
         Returns:
-            模型定義檔的完整 JSON 字典。Full JSON dict of the definition.
+            the full JSON dict of the model definition file
+            模型定義檔的完整 JSON 字典
 
         Raises:
-            FileNotFoundError: 找不到對應檔案時。When the file is missing.
-            ValueError: JSON 格式無效時。When the JSON is invalid.
+            FileNotFoundError: if the file cannot be found
+                若找不到對應檔案
+            ValueError: if the JSON is invalid
+                若 JSON 格式無效
         """
         file_path = self._model_dir / model_file_name
         if not file_path.is_file():
@@ -628,18 +652,18 @@ class AnkiModelManager:
     # ========================================================================
 
     async def sync_to_ankiweb(self) -> None:
-        """請求 Anki 桌面端執行同步至 AnkiWeb 動作。
+        """Ask the Anki desktop client to sync with AnkiWeb.
 
-        Ask the Anki desktop client to sync with AnkiWeb.
+        請求 Anki 桌面端執行同步至 AnkiWeb 動作。
+
+        Uses the ``AnkiClient.sync()`` defaults: skipped if synced within the last 10 seconds (debounce), and a
+        failure is only logged as a warning and **never raised**, so the caller cannot tell whether the sync
+        succeeded. When the result matters (for example a manual sync by the user), call
+        ``AnkiClient.sync(raise_errors=True, force=True)`` instead, as ``POST /anki/sync`` does.
 
         沿用 ``AnkiClient.sync()`` 的預設：10 秒內同步過就跳過（防抖），失敗只記 warning、
         **不會拋錯**，所以呼叫端無法得知同步是否成功。需要知道結果時（例如使用者手動同步）
         改呼叫 ``AnkiClient.sync(raise_errors=True, force=True)``，如 ``POST /anki/sync``。
-
-        Uses ``AnkiClient.sync()`` defaults: debounced to once per 10 seconds,
-        and failures are only logged, never raised. Call
-        ``AnkiClient.sync(raise_errors=True, force=True)`` when the caller
-        needs to know the outcome.
         """
         logger.info("正在請求 Anki 執行同步作業 (Sync)...")
         await self._anki_client.sync()
