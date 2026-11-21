@@ -18,7 +18,7 @@
 #   -h, --help        顯示說明
 #
 # 環境變數 / Environment:
-#   DEPLOY_HOST   SSH 目標（預設 jacky917@192.168.50.172）
+#   DEPLOY_HOST   SSH 目標，例如 user@host（必填，沒有預設；建議寫在 ~/.bashrc，不要寫進 repo）
 #   REMOTE_DIR    正式機上放原始碼與鎖檔的目錄（預設登入使用者的 ~/fluencytides-deploy；
 #                 /DATA/AppData 屬於 root，一般使用者不能寫）
 #   REMOTE_DATA   正式機上的資料目錄，讀後端 .env 用（預設 /DATA/AppData/FluencyTides）
@@ -44,7 +44,7 @@
 
 set -euo pipefail
 
-DEPLOY_HOST="${DEPLOY_HOST:-jacky917@192.168.50.172}"
+DEPLOY_HOST="${DEPLOY_HOST:-}"
 REMOTE_DIR="${REMOTE_DIR:-}"
 REMOTE_DATA="${REMOTE_DATA:-/DATA/AppData/FluencyTides}"
 IMAGE_PREFIX="ghcr.io/jacky917/fluencytides"
@@ -94,6 +94,9 @@ else
         shift
     done
 fi
+
+# 主機位址不寫進 repo（公開），一律由環境變數提供 / The host comes only from the environment, never the repo
+[ -n "$DEPLOY_HOST" ] || die "請先設定 DEPLOY_HOST（SSH 目標，例如 export DEPLOY_HOST=user@host；可寫進 ~/.bashrc）"
 
 cd "$(git rev-parse --show-toplevel 2>/dev/null)" || die "請在 FluencyTides 的 git repo 裡執行"
 START=$SECONDS
