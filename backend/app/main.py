@@ -1,25 +1,19 @@
-"""
+"""FluencyTides API application entry point.
+
 FluencyTides API 應用程式進入點。
-
-FluencyTides API application entry point.
-
-本模組是 FastAPI 後端的根進入點，負責：
-1. 透過 lifespan 事件管理 Infrastructure Client 的生命週期（Singleton）。
-2. 註冊全域 Exception Handler，統一回傳 ErrorResponse JSON。
-3. 掛載所有 API 路由（Health、Cards、Storage）。
-4. 配置 CORS 中介層與 Swagger UI 元資料。
 
 This module is the root entry point of the FastAPI backend. It:
 1. Manages infrastructure client singletons via the lifespan events.
 2. Registers global exception handlers returning ErrorResponse JSON.
-3. Mounts all API routers (Health, Cards, Storage).
+3. Mounts all API routers (Health, Handlers, Cards, Notes, Storage, Story,
+   and the others) plus the Telegram webhook.
 4. Configures the CORS middleware and Swagger UI metadata.
 
-Phase 2 改進：
-- 新增 lifespan 上下文管理器，啟動時初始化 AnkiClient、LLMClient、MinioClient。
-- 新增 FluencyTidesError 全域異常處理器。
-- 掛載 /api/v1/ 前綴下的 Cards 與 Storage 路由。
-- 增強 Swagger UI 元資料（title、description、version、tags）。
+本模組是 FastAPI 後端的根進入點，負責：
+1. 透過 lifespan 事件管理 Infrastructure Client 的生命週期（Singleton）。
+2. 註冊全域 Exception Handler，統一回傳 ErrorResponse JSON。
+3. 掛載所有 API 路由（Health、Handlers、Cards、Notes、Storage、Story 等）與 Telegram Webhook。
+4. 配置 CORS 中介層與 Swagger UI 元資料。
 
 Phase 2 improvements:
 - Added the lifespan context manager initializing AnkiClient, LLMClient
@@ -27,6 +21,12 @@ Phase 2 improvements:
 - Added the global FluencyTidesError exception handler.
 - Mounted the Cards and Storage routers under the /api/v1/ prefix.
 - Enhanced Swagger UI metadata (title, description, version, tags).
+
+Phase 2 改進：
+- 新增 lifespan 上下文管理器，啟動時初始化 AnkiClient、LLMClient、MinioClient。
+- 新增 FluencyTidesError 全域異常處理器。
+- 掛載 /api/v1/ 前綴下的 Cards 與 Storage 路由。
+- 增強 Swagger UI 元資料（title、description、version、tags）。
 """
 
 import asyncio
@@ -44,7 +44,7 @@ from app.api.relations import router as relations_router
 from app.api.storage import router as storage_router
 from app.api.verb_pair import router as verb_pair_router
 from app.api.core_verb import router as core_verb_router
-from app.api.webhook import router as webhook_router
+from app.api.webhook import bind_webhook, router as webhook_router
 from app.api.config import router as config_router
 from app.api.jp_tokenizer import router as jp_tokenizer_router
 from app.api.capability_routes import router as capability_routes_router
@@ -78,32 +78,56 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """管理 FastAPI 應用程式的生命週期事件。
+    """Manage the FastAPI application lifespan events.
 
-    Manage the FastAPI application lifespan events.
+    管理 FastAPI 應用程式的生命週期事件。
+
+    Startup (before yield):
+        - Initialize global logging.
+        - Create the AnkiClient singleton (httpx.AsyncClient connection pool).
+        - Initialize the database (create tables).
+        - Load and log the LLM endpoints and whitelists.
+        - Build the global LLM client for the diagnostics endpoint (``None``
+          if it cannot be built).
+        - Try building the recording evaluator once, logging a warning on
+          failure.
+        - Create the MinioClient singleton (MinIO SDK client; ``None`` if it
+          fails).
+        - Bind the Telegram webhook, or start polling, if a token is
+          configured.
+        - Store the singletons in app.state.
 
     Startup（yield 之前）：
         - 初始化全域日誌系統。
         - 建立 AnkiClient Singleton（httpx.AsyncClient 連線池）。
-        - 建立 LLMClient Singleton（AsyncOpenAI 客戶端）。
-        - 建立 MinioClient Singleton（MinIO SDK 客戶端）。
-        - 啟動 Telegram Bot Polling（若有設定 TOKEN）。
-        - 將所有 Singleton 存入 app.state。
+        - 初始化資料庫（建立資料表）。
+        - 載入並記錄 LLM 端點與白名單。
+        - 建立診斷端點用的全域 LLM 客戶端（建不出來時為 ``None``）。
+        - 試建一次錄音評分器，失敗時記警告。
+        - 建立 MinioClient Singleton（MinIO SDK 客戶端；失敗時為 ``None``）。
+        - 綁定 Telegram Webhook 或啟動 Polling（若有設定 TOKEN）。
+        - 將 Singleton 存入 app.state。
+
+    Shutdown (after yield):
+        - Shut down the web create session (cancel background generation).
+        - Remove the Telegram webhook, or stop polling, and close the bot
+          session.
+        - Release the AnkiClient httpx connection pool.
+        - Dispose of the database engines.
 
     Shutdown（yield 之後）：
+        - 關閉網頁的建卡工作階段（取消背景生成）。
+        - 移除 Telegram Webhook 或停止 Polling，並關閉 Bot 連線。
         - 釋放 AnkiClient 的 httpx 連線池。
-        - 停止 Telegram Bot Polling。
+        - 釋放資料庫引擎。
 
-    Startup (before yield): initialize global logging, create the
-    AnkiClient/LLMClient/MinioClient singletons, start Telegram Bot
-    polling or webhook binding if a token is configured, and store all
-    singletons in app.state.
-
-    Shutdown (after yield): release the AnkiClient httpx connection pool
-    and stop the Telegram Bot polling/webhook.
+    Args:
+        app: the FastAPI application
+            FastAPI 應用程式
 
     Yields:
-        None: lifespan 上下文。The lifespan context.
+        nothing; the application runs while suspended here
+        不產出值；應用程式在此暫停期間運作
     """
     # === Startup ===
     settings.setup_logging()
@@ -155,23 +179,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         dp["app"] = app
         
         if settings.tg_webhook_url:
-            # 檢查目前 Webhook 狀態
-            webhook_info = await bot.get_webhook_info()
-            if webhook_info.url != settings.tg_webhook_url:
-                logger.info("🔧 準備設定 Telegram Webhook: %s", settings.tg_webhook_url)
-                
-                secret_token = settings.TG_WEBHOOK_SECRET
-                if secret_token:
-                    masked = f"{secret_token[:3]}***{secret_token[-3:]}" if len(secret_token) > 6 else "***"
-                    logger.info("🔒 帶上 Webhook Secret Token 進行綁定: %s", masked)
-                
-                await bot.set_webhook(
-                    url=settings.tg_webhook_url,
-                    allowed_updates=dp.resolve_used_update_types(),
-                    drop_pending_updates=True,
-                    secret_token=secret_token,
-                )
-            
+            # 以密鑰綁定 Webhook，並把密鑰存進 app.state 供端點比對（見 app/api/webhook.py）
+            await bind_webhook(bot, dp, app.state)
+
             # 驗證綁定結果
             current_webhook = await bot.get_webhook_info()
             if current_webhook.url == settings.tg_webhook_url:
@@ -266,25 +276,29 @@ async def fluencytides_error_handler(
     request: Request,
     exc: FluencyTidesError,
 ) -> JSONResponse:
-    """統一處理所有 FluencyTidesError 子類別的異常。
+    """Uniformly handle all FluencyTidesError subclasses.
 
-    Uniformly handle all FluencyTidesError subclasses.
-
-    將業務異常轉換為統一的 ErrorResponse JSON 格式回傳，
-    符合 03_Acceptance_Criteria.md §2 的要求。
+    統一處理所有 FluencyTidesError 子類別的異常。
 
     Converts business exceptions into the unified ErrorResponse JSON
     format, per 03_Acceptance_Criteria.md §2.
 
+    將業務異常轉換為統一的 ErrorResponse JSON 格式回傳，
+    符合 03_Acceptance_Criteria.md §2 的要求。
+
     Args:
-        request: FastAPI Request 物件。The FastAPI Request object.
-        exc: FluencyTidesError 異常實例。The FluencyTidesError instance.
+        request: the FastAPI request
+            FastAPI Request 物件
+        exc: the FluencyTidesError instance
+            FluencyTidesError 異常實例
 
     Returns:
+        a JSONResponse with the ErrorResponse structure and the error's status code; a draft state
+        409 (``DraftStateError``) also carries ``draft`` (the current draft or null), and a duplicate
+        found before generation (``DuplicateFoundError``) also carries ``duplicate`` (the old card's
+        summary)
         JSONResponse 包含 ErrorResponse 結構；建卡草稿狀態的 409（``DraftStateError``）另帶 ``draft``
-        （目前的草稿或 null），生成前發現重複（``DuplicateFoundError``）另帶 ``duplicate``（舊卡摘要）。
-        A JSONResponse carrying the ErrorResponse structure, plus ``draft``
-        for draft state conflicts and ``duplicate`` for DUPLICATE_FOUND.
+        （目前的草稿或 null），生成前發現重複（``DuplicateFoundError``）另帶 ``duplicate``（舊卡摘要）
     """
     logger.warning(
         "業務異常 [%s] -> %s (HTTP %d)",
@@ -320,17 +334,27 @@ from fastapi.responses import JSONResponse
 
 @app.middleware("http")
 async def global_crash_middleware(request: Request, call_next) -> Response:
-    """作為終極安全網攔截所有未捕捉的 Exception (500 Error)。
+    """Intercept every uncaught exception as the ultimate safety net (HTTP 500).
 
-    Ultimate safety net intercepting every uncaught exception (HTTP 500).
+    作為終極安全網攔截所有未捕捉的 Exception (500 Error)。
+
+    1. Logs at ERROR level with the traceback.
+    2. Sends a Telegram alert asynchronously.
+    3. Returns a standard 500 JSON that masks the real system error.
 
     1. 記錄 ERROR 級別日誌並輸出 Traceback。
     2. 非同步發送 Telegram 警報。
     3. 回傳標準 500 JSON (遮蔽系統真實錯誤)。
 
-    1. Logs at ERROR level with the traceback.
-    2. Sends a Telegram alert asynchronously.
-    3. Returns a standard 500 JSON that masks the real system error.
+    Args:
+        request: the incoming request
+            收到的請求
+        call_next: the next handler in the middleware chain
+            中介層鏈中的下一個處理者
+
+    Returns:
+        the normal response, or a standard 500 JSON if an exception escaped
+        正常的回應；有例外漏出時為標準 500 JSON
     """
     try:
         return await call_next(request)
@@ -377,7 +401,8 @@ app.add_middleware(
 # Health Check（不受 API Key 認證保護，確保監控系統可正常運作）
 app.include_router(health_router, prefix="/api", tags=["Health"])
 
-# Phase 2 核心路由（受 API Key 認證保護）
+# Phase 2 核心路由（多數受 API Key 認證保護；verb_pair、core_verb、config、jp_verb_readings、
+# jp_tokenizer 的 router 沒有掛 verify_api_key）
 app.include_router(handlers.router, prefix="/api/v1")
 app.include_router(storage_router, prefix="/api/v1")
 app.include_router(relations_router, prefix="/api/v1")
@@ -399,11 +424,12 @@ app.include_router(webhook_router)
 
 @app.get("/", include_in_schema=False)
 async def root() -> dict[str, str]:
-    """根路徑歡迎訊息。
+    """Return the root-path welcome message.
 
-    Root-path welcome message.
+    回傳根路徑歡迎訊息。
 
     Returns:
-        包含歡迎訊息的字典。A dict containing the welcome message.
+        a dict containing the welcome message
+        包含歡迎訊息的字典
     """
     return {"message": "Welcome to FluencyTides API v0.2.0"}

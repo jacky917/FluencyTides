@@ -1,39 +1,35 @@
-"""
+"""Application configuration management module.
+
 應用程式配置管理模組。
-
-Application configuration management module.
-
-使用 Pydantic V2 BaseSettings 集中管理所有環境變數，
-涵蓋 AnkiConnect、Cloudflare Access、MinIO、LLM、VOICEPEAK
-等外部服務的連線資訊。
 
 Centralizes all environment variables via Pydantic V2 BaseSettings, covering
 connection info for AnkiConnect, Cloudflare Access, MinIO, LLM, VOICEPEAK and
 other external services.
 
-重構自 old/Anki/utils/config_manager.py，改進：
-- 移除全域實例化（避免 import 時拋出 ValidationError）。
-- 使用 Pydantic V2 語法（SettingsConfigDict）。
-- 集中管理所有服務的環境變數（舊版散落在各模組中）。
-- 新增 VOICEPEAK 語音合成引擎的設定欄位。
+使用 Pydantic V2 BaseSettings 集中管理所有環境變數，
+涵蓋 AnkiConnect、Cloudflare Access、MinIO、LLM、VOICEPEAK
+等外部服務的連線資訊。
 
 Refactored from old/Anki/utils/config_manager.py with these improvements:
-- Removed module-level instantiation side effects at import time.
 - Adopted Pydantic V2 syntax (SettingsConfigDict).
 - Centralized env vars for all services (previously scattered per module).
 - Added VOICEPEAK speech-synthesis settings fields.
 
-設計決策：
-- 使用 Singleton 模式提供全域 settings 實例，但延遲初始化，
-  讓測試環境可以注入 mock 值。
-- extra="ignore" 允許 .env 中有未定義的環境變數，
-  避免新增環境變數時因未同步更新 Settings 而崩潰。
+重構自 old/Anki/utils/config_manager.py，改進：
+- 使用 Pydantic V2 語法（SettingsConfigDict）。
+- 集中管理所有服務的環境變數（舊版散落在各模組中）。
+- 新增 VOICEPEAK 語音合成引擎的設定欄位。
 
 Design decisions:
-- A singleton `settings` instance is provided globally, with lazy-ish
-  initialization so tests can inject mock values.
+- A global singleton ``settings`` is created when this module is imported,
+  so a settings value that fails validation raises at import time.
 - extra="ignore" tolerates undefined variables in .env, preventing crashes
   when new env vars are added before Settings is updated.
+
+設計決策：
+- 匯入本模組時即建立全域單例 ``settings``，因此設定值驗證失敗時會在 import 時拋出。
+- extra="ignore" 允許 .env 中有未定義的環境變數，
+  避免新增環境變數時因未同步更新 Settings 而崩潰。
 """
 
 import logging
@@ -47,10 +43,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class LLMEndpointSettings(BaseModel):
-    """``.env`` 中一個自訂 LLM 端點的**未驗證**原始設定（``LLM_ENDPOINTS__<ID>__<欄位>``）。
+    """Raw, **unvalidated** settings for one custom LLM endpoint in ``.env`` (``LLM_ENDPOINTS__<ID>__<FIELD>``).
 
-    Raw, unvalidated settings for one custom LLM endpoint, read from
-    ``LLM_ENDPOINTS__<ID>__<FIELD>`` variables via the nested delimiter.
+    ``.env`` 中一個自訂 LLM 端點的**未驗證**原始設定（``LLM_ENDPOINTS__<ID>__<欄位>``）。
+
+    Deliberately not validated at all, down to the field types (``models`` / ``safety_settings`` are
+    ``Any``: values from ``.env`` are raw strings, which pydantic-settings does not try to parse). A
+    single bad endpoint must not stop the whole backend from starting: ``MODELS`` that is not JSON,
+    ``SAFETY_SETTINGS`` that is not a boolean, and misspelled field names (collected into
+    ``model_extra`` by ``extra="allow"``) are all checked when ``app/infrastructure/llm/endpoints.py``
+    loads them, which skips that endpoint and logs an ERROR.
 
     這裡刻意不做任何驗證，連型別都原樣收下（``models`` / ``safety_settings`` 為
     ``Any``：從 ``.env`` 來的是原始字串，pydantic-settings 不會嘗試解析）。寫錯一個
@@ -58,24 +60,29 @@ class LLMEndpointSettings(BaseModel):
     欄位名拼錯（``extra="allow"`` 收進 ``model_extra``），都在
     ``app/infrastructure/llm/endpoints.py`` 載入時檢查，跳過該端點並記 ERROR。
 
-    Deliberately unvalidated, down to the field types: a single bad endpoint
-    must not stop the backend from starting. The loader in
-    ``app/infrastructure/llm/endpoints.py`` parses and reports instead.
-
     Attributes:
-        type: ``openai``（OpenAI 相容）或 ``gemini-native``。Endpoint type.
-        base_url: OpenAI 相容端點網址；``gemini-native`` 不使用。Base URL.
-        api_key: API 金鑰。API key.
-        models: 白名單，``.env`` 中寫成 JSON 陣列，每項為 ``模型`` 或
-            ``模型@effort1|effort2``。Whitelist as a JSON array.
-        safety_settings: 是否送 ``safety_settings``（``true`` / ``false``）；未設
-            時 ID 為 google / openai 者不送、其餘送。只對 openai 類有效。
-            Whether to send safety_settings; openai type only.
-        audio_models: 能聽音檔的模型白名單（能力路由的 ``audio_llm``），JSON 陣列，
-            不帶 effort。Whitelist of audio-capable models, as a JSON array.
-        audio_transport: openai 類送音檔的方式：``input_audio``（預設，OpenAI 的音訊輸入）
-            或 ``image_url``（偽裝成圖片，給只收圖片的中轉站）。How an openai-type
-            endpoint receives audio.
+        type: the endpoint type, ``openai`` (OpenAI-compatible) or ``gemini-native``
+            ``openai``（OpenAI 相容）或 ``gemini-native``
+        base_url: the OpenAI-compatible endpoint URL; not used by ``gemini-native``
+            OpenAI 相容端點網址；``gemini-native`` 不使用
+        api_key: the API key
+            API 金鑰
+        models: the whitelist, written in ``.env`` as a JSON array; each item is ``model`` or
+            ``model@effort1|effort2``
+            白名單，``.env`` 中寫成 JSON 陣列，每項為 ``模型`` 或 ``模型@effort1|effort2``
+        safety_settings: whether to send ``safety_settings`` (``true`` / ``false``); when unset,
+            endpoints whose ID is google / openai do not send it and the rest do. Only applies to the
+            openai type.
+            是否送 ``safety_settings``（``true`` / ``false``）；未設時 ID 為 google / openai 者不送、
+            其餘送。只對 openai 類有效。
+        audio_models: the whitelist of models that can listen to audio (capability routing's
+            ``audio_llm``), as a JSON array without efforts
+            能聽音檔的模型白名單（能力路由的 ``audio_llm``），JSON 陣列，不帶 effort
+        audio_transport: how an openai-type endpoint receives audio: ``input_audio`` (default,
+            OpenAI's audio input) or ``image_url`` (disguised as an image, for relays that accept
+            only images)
+            openai 類送音檔的方式：``input_audio``（預設，OpenAI 的音訊輸入）或 ``image_url``
+            （偽裝成圖片，給只收圖片的中轉站）
     """
 
     model_config = ConfigDict(frozen=True, extra="allow")
@@ -90,51 +97,54 @@ class LLMEndpointSettings(BaseModel):
 
 
 class Settings(BaseSettings):
-    """FluencyTides 應用程式配置管理類別。
+    """The FluencyTides application settings.
 
-    FluencyTides application settings class.
-
-    透過 pydantic-settings 從 .env 檔案與系統環境變數讀取設定，
-    並強制進行型別與驗證檢查。
+    FluencyTides 應用程式配置管理類別。
 
     Reads settings from the .env file and system environment variables via
-    pydantic-settings, enforcing type and validation checks.
+    pydantic-settings, enforcing type and validation checks. Only the main
+    fields are listed below; every field also carries its own ``description``.
+
+    透過 pydantic-settings 從 .env 檔案與系統環境變數讀取設定，
+    並強制進行型別與驗證檢查。下面只列出主要欄位；每個欄位另有自己的 ``description``。
 
     Attributes:
-        PROJECT_NAME: 專案名稱，用於 FastAPI 的 title。Project name used as
-            the FastAPI title.
-        LOG_LEVEL: 系統日誌層級。System logging level.
-
-        ANKI_CONNECT_URL: AnkiConnect 本地端點完整 URL。Full local
-            AnkiConnect endpoint URL.
-        ANKI_CONNECT_API_KEY: AnkiConnect API 金鑰（可選）。Optional
-            AnkiConnect API key.
-
-        CF_ACCESS_CLIENT_ID: Cloudflare Access Client ID（可選）。Optional
-            Cloudflare Access client ID.
-        CF_ACCESS_CLIENT_SECRET: Cloudflare Access Client Secret（可選）。
-            Optional Cloudflare Access client secret.
-
-        MINIO_HOST: MinIO 伺服器主機位址。MinIO server host address.
-        MINIO_PORT: MinIO 伺服器埠號。MinIO server port.
-        MINIO_ACCESS_KEY: MinIO 存取金鑰。MinIO access key.
-        MINIO_SECRET_KEY: MinIO 秘密金鑰。MinIO secret key.
-        MINIO_SECURE: 是否使用 HTTPS 連線 MinIO。Whether to use HTTPS for
-            MinIO connections.
-        MINIO_DEFAULT_BUCKET: MinIO 預設儲存桶名稱。Default MinIO bucket
-            name.
-
-        LLM_API_KEY: OpenAI 相容 API 金鑰。OpenAI-compatible API key.
-        LLM_BASE_URL: OpenAI 相容 API 端點 URL。OpenAI-compatible API base
-            URL.
-        LLM_MODEL_NAME: LLM 模型名稱。LLM model name.
-
-        VOICEPEAK_EXECUTABLE_PATH: VOICEPEAK CLI 執行檔路徑。Path to the
-            VOICEPEAK CLI executable.
-        VOICEPEAK_DEFAULT_NARRATOR: VOICEPEAK 預設旁白角色。Default
-            VOICEPEAK narrator character.
-        VOICEPEAK_CHARACTERS_CONFIG_PATH: 角色設定 JSON 檔案路徑。Path to
-            the character configuration JSON file.
+        PROJECT_NAME: the project name, used as the FastAPI title
+            專案名稱，用於 FastAPI 的 title
+        LOG_LEVEL: the system logging level
+            系統日誌層級
+        ANKI_CONNECT_URL: the full local AnkiConnect endpoint URL
+            AnkiConnect 本地端點完整 URL
+        ANKI_CONNECT_API_KEY: the AnkiConnect API key (optional)
+            AnkiConnect API 金鑰（可選）
+        CF_ACCESS_CLIENT_ID: the Cloudflare Access client ID (optional)
+            Cloudflare Access Client ID（可選）
+        CF_ACCESS_CLIENT_SECRET: the Cloudflare Access client secret (optional)
+            Cloudflare Access Client Secret（可選）
+        MINIO_HOST: the MinIO server host address
+            MinIO 伺服器主機位址
+        MINIO_PORT: the MinIO server port
+            MinIO 伺服器埠號
+        MINIO_ACCESS_KEY: the MinIO access key
+            MinIO 存取金鑰
+        MINIO_SECRET_KEY: the MinIO secret key
+            MinIO 秘密金鑰
+        MINIO_SECURE: whether to use HTTPS for MinIO connections
+            是否使用 HTTPS 連線 MinIO
+        MINIO_DEFAULT_BUCKET: the default MinIO bucket name
+            MinIO 預設儲存桶名稱
+        LLM_API_KEY: the OpenAI-compatible API key
+            OpenAI 相容 API 金鑰
+        LLM_BASE_URL: the OpenAI-compatible API base URL
+            OpenAI 相容 API 端點 URL
+        LLM_MODEL_NAME: the LLM model name
+            LLM 模型名稱
+        VOICEPEAK_EXECUTABLE_PATH: the path to the VOICEPEAK CLI executable
+            VOICEPEAK CLI 執行檔路徑
+        VOICEPEAK_DEFAULT_NARRATOR: the default VOICEPEAK narrator character
+            VOICEPEAK 預設旁白角色
+        VOICEPEAK_CHARACTERS_CONFIG_PATH: the path to the character configuration JSON file
+            角色設定 JSON 檔案路徑
     """
 
     model_config = SettingsConfigDict(
@@ -319,9 +329,9 @@ class Settings(BaseSettings):
 
     @property
     def mysql_async_url(self) -> str:
-        """組裝非同步 MySQL 連線字串 (使用 aiomysql)。
+        """The async MySQL connection URL (using aiomysql, ``utf8mb4``).
 
-        Build the async MySQL connection URL (using aiomysql).
+        非同步 MySQL 連線字串（使用 aiomysql，``utf8mb4``）。
         """
         return (
             f"mysql+aiomysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}"
@@ -331,12 +341,25 @@ class Settings(BaseSettings):
     @field_validator("APP_TIMEZONE")
     @classmethod
     def check_timezone(cls, v: str) -> str:
-        """時區名稱要是 IANA 的名稱（``ZoneInfo`` 認得）；寫錯時啟動就報錯，不要等到算日期才失敗。
+        """Check that the time zone is an IANA name that ``ZoneInfo`` knows.
 
-        The time zone must be an IANA name ``ZoneInfo`` knows; fail at startup otherwise.
+        檢查時區名稱是 IANA 的名稱（``ZoneInfo`` 認得）。
+
+        A wrong name fails at startup instead of later when a date is calculated.
+
+        寫錯時啟動就報錯，不要等到算日期才失敗。
+
+        Args:
+            v: the raw ``APP_TIMEZONE`` value
+                原始的 ``APP_TIMEZONE`` 值
+
+        Returns:
+            the time zone name with surrounding whitespace removed
+            去掉前後空白的時區名稱
 
         Raises:
-            ValueError: 不認得的時區。On an unknown zone.
+            ValueError: if the time zone is unknown
+                若不認得該時區
         """
         name = v.strip()
         try:
@@ -348,23 +371,26 @@ class Settings(BaseSettings):
     @field_validator("DATABASE_URL")
     @classmethod
     def resolve_sqlite_path(cls, v: str) -> str:
-        """優雅處理 SQLite 的相對路徑問題。
+        """Resolve relative SQLite paths against the backend root.
 
-        Gracefully resolve relative SQLite paths.
+        將 SQLite 的相對路徑以 backend 根目錄為基準解析。
 
-        若使用 `sqlite+aiosqlite:///./...` 這種寫法，
-        將會自動相對於 backend 根目錄轉換為絕對路徑，避免在不同目錄執行腳本時
-        產生多個不同的 db 檔案。
-
-        URLs of the form `sqlite+aiosqlite:///./...` are converted to
+        URLs of the form ``sqlite+aiosqlite:///./...`` are converted to
         absolute paths relative to the backend root, so scripts run from
-        different directories do not create multiple db files.
+        different directories do not create multiple db files. Other URLs are
+        returned unchanged.
+
+        若使用 ``sqlite+aiosqlite:///./...`` 這種寫法，
+        將會自動相對於 backend 根目錄轉換為絕對路徑，避免在不同目錄執行腳本時
+        產生多個不同的 db 檔案。其他 URL 原樣回傳。
 
         Args:
-            v: 原始 DATABASE_URL 字串。The raw DATABASE_URL string.
+            v: the raw DATABASE_URL string
+                原始 DATABASE_URL 字串
 
         Returns:
-            解析後的 DATABASE_URL。The resolved DATABASE_URL.
+            the resolved DATABASE_URL
+            解析後的 DATABASE_URL
         """
         if v.startswith("sqlite+aiosqlite:///./"):
             from pathlib import Path
@@ -443,9 +469,9 @@ class Settings(BaseSettings):
 
     @property
     def note_source_tags_list(self) -> list[str]:
-        """解析 NOTE_SOURCE_TAGS 為字串列表。
+        """The tags in NOTE_SOURCE_TAGS as a list, with blanks dropped; empty if unset.
 
-        Parse NOTE_SOURCE_TAGS into a list of strings.
+        NOTE_SOURCE_TAGS 解析成的字串串列，略過空白項；未設定時為空串列。
         """
         if not self.NOTE_SOURCE_TAGS:
             return []
@@ -480,7 +506,10 @@ class Settings(BaseSettings):
     )
     TG_WEBHOOK_SECRET: str | None = Field(
         default=None,
-        description="Webhook 密鑰，用於驗證來自 Telegram 的請求。若設定，將會在 setWebhook 時自動帶上。",
+        description=(
+            "Webhook 密鑰，用於驗證來自 Telegram 的請求，會在 setWebhook 時帶上。"
+            "留空時每次啟動自動產生隨機密鑰（Webhook 一律驗證）。"
+        ),
     )
     TG_STATE_EXPIRE_MINUTES: int = Field(
         default=10,
@@ -489,9 +518,9 @@ class Settings(BaseSettings):
 
     @property
     def tg_webhook_url(self) -> str | None:
-        """根據 DOMAIN 與 PATH 組裝完整的 Webhook URL。
+        """The full webhook URL built from DOMAIN and PATH; ``None`` if DOMAIN is unset.
 
-        Build the full webhook URL from DOMAIN and PATH; None if unset.
+        根據 DOMAIN 與 PATH 組裝的完整 Webhook URL；DOMAIN 未設定時為 ``None``。
         """
         if not self.TG_WEBHOOK_DOMAIN:
             return None
@@ -501,13 +530,13 @@ class Settings(BaseSettings):
 
     @property
     def tg_allowed_users(self) -> set[int]:
-        """解析 TG_ALLOWED_USER_IDS 字串為整數 Set。
+        """The allowed user IDs in TG_ALLOWED_USER_IDS, as a set of integers.
 
-        Parse TG_ALLOWED_USER_IDS into a set of integers.
+        TG_ALLOWED_USER_IDS 解析成的整數集合。
 
-        Returns:
-            包含允許 User ID 的集合。若為空字串，則回傳空集合。
-            Set of allowed user IDs; empty set for an empty string.
+        Empty for an empty string; also empty (with an error logged) if any item is not an integer.
+
+        空字串時為空集合；任何一項不是整數時也是空集合（並記錄錯誤）。
         """
         if not self.TG_ALLOWED_USER_IDS:
             return set()
@@ -747,22 +776,24 @@ class Settings(BaseSettings):
     )
 
     def setup_logging(self) -> None:
-        """設定全域日誌 (Global Logging)。
+        """Configure global logging.
 
-        Configure global logging.
-
-        使用 Loguru InterceptHandler 接管標準 logging。
+        設定全域日誌 (Global Logging)。
 
         Uses a Loguru InterceptHandler to take over the standard logging
-        module.
+        module, logging to stdout and to ``LOG_FILE_PATH`` (rotated at 10 MB,
+        kept for 30 days, compressed).
+
+        使用 Loguru InterceptHandler 接管標準 logging，輸出到 stdout 與
+        ``LOG_FILE_PATH``（10 MB 輪轉、保留 30 天、壓縮）。
         """
         # loguru 保持惰性 import：模組載入期不需要它
         from loguru import logger
 
         class InterceptHandler(logging.Handler):
-            """攔截標準 logging 訊息並導向 Loguru。
+            """A handler that intercepts standard logging records and routes them to Loguru.
 
-            Intercept standard logging records and route them to Loguru.
+            攔截標準 logging 訊息並導向 Loguru 的 handler。
             """
             def emit(self, record: logging.LogRecord) -> None:
                 # 標準層級回名稱，自訂層級（loguru 不認識）回數值

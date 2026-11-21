@@ -1,15 +1,15 @@
-"""日文分詞詞典查詢端點的回應模型。
+"""Response model for the Japanese tokenizer dictionary endpoint.
 
-Response model for the Japanese tokenizer dictionary endpoint.
+日文分詞詞典查詢端點的回應模型。
 """
 
 from pydantic import BaseModel, Field
 
 
 class TokenizerDictionaryResponse(BaseModel):
-    """本服務行程實際載入的分詞詞典。
+    """The tokenizer dictionary actually loaded by this service process.
 
-    The tokenizer dictionary actually loaded by this service process.
+    本服務行程實際載入的分詞詞典。
     """
 
     kind: str = Field(..., description="unidic（完整版）或 unidic-lite（回退）")

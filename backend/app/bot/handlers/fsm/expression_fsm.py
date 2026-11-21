@@ -1,4 +1,18 @@
-"""外語糾錯 Telegram Bot FSM Handler。
+"""Foreign-language correction Telegram Bot FSM handler.
+
+外語糾錯 Telegram Bot FSM Handler。
+
+This module implements the 6-step input flow plus a preview/confirm step. The full flow is:
+Language -> Original Text -> Context -> Source Tag ->
+Grammar Correction -> Reorganized Expression -> LLM preview -> confirm.
+
+Design decisions:
+
+- The LLM result is serialized into FSM state data at the preview step to avoid calling the LLM twice.
+- Child cards use unified sequential numbering (grammar first, reorganized second) so the user can pick the cards
+  to add with simple numbers.
+- Invalid number input does not end the flow; the user is re-prompted until a valid value is entered or a button is
+  pressed.
 
 本模組實作 6 步輸入流程 + 預覽確認步驟，完整流程為：
 Language → Original Text → Context → Source Tag →
@@ -10,20 +24,6 @@ Grammar Correction → Reorganized Expression → LLM 預覽 → 確認添加
   讓使用者可以用簡單的數字選擇想要添加的卡片。
 - 非法編號輸入不會結束流程，而是持續要求重新輸入，
   直到輸入合法值或使用者點選按鈕。
-
-Foreign-language correction Telegram Bot FSM handler.
-
-This module implements the 6-step input flow plus a preview/confirm step:
-Language -> Original Text -> Context -> Source Tag ->
-Grammar Correction -> Reorganized Expression -> LLM preview -> confirm.
-
-Design decisions:
-- The LLM result is serialized into FSM state data at the preview step to
-  avoid calling the LLM twice.
-- Child cards use unified sequential numbering (grammar first, reorganized
-  second) so the user can pick cards with simple numbers.
-- Invalid number input does not end the flow; the user is re-prompted until
-  a valid value is entered or a button is pressed.
 """
 
 import html
@@ -55,15 +55,15 @@ _FLOW_EXPIRED = f"⌛ 流程已失效，{NEWCARD_RESTART}"
 
 
 class ExpressionStates(StatesGroup):
-    """外語糾錯流程的 FSM 狀態定義。
+    """FSM state definitions for the foreign-language correction flow.
 
-    FSM state definitions for the foreign-language correction flow.
+    外語糾錯流程的 FSM 狀態定義。
+
+    Defines the states of the full user-bot interaction: 6 data-collection steps, one duplicate-card decision step,
+    and the final write confirmation.
 
     定義了使用者與機器人互動的完整流程狀態。
     包含 6 步資料收集、1 步重複卡片防呆決策，以及最後的寫入確認。
-
-    Defines the full interaction states: 6 data-collection steps, one
-    duplicate-card decision step, and the final write confirmation.
     """
     waiting_for_lang = State()                  # 等待輸入語言設定 (例如：中文 -> 日文)
     waiting_for_text = State()                  # 等待輸入原文 (想要糾錯的外語句子)
@@ -93,9 +93,9 @@ _REORG_PROMPT = "（6/6）輸入道地重組（母語人士的說法），不確
 
 
 def _again(prompt: str, again: bool) -> str:
-    """從「返回」回到這一步時加「重新」，放在步驟編號之後（「（3/6）重新輸入…」）。
+    """Return the prompt, marked with 「重新」 after its step number when re-entered through "back".
 
-    Mark a re-entered step, after its step number.
+    回傳提示；從「返回」回到這一步時加「重新」，放在步驟編號之後（「（3/6）重新輸入…」）。
     """
     if not again:
         return prompt
@@ -106,16 +106,19 @@ def _again(prompt: str, again: bool) -> str:
 
 
 def _text_prompt(native_lang: str, target_lang: str, *, again: bool = False) -> str:
-    """第 2 步的提示（語言是使用者輸入，要轉義）。The step-2 prompt; the languages are user input."""
+    """Return the step-2 prompt; the languages are user input, so they are escaped.
+
+    回傳第 2 步的提示（語言是使用者輸入，要轉義）。
+    """
     nl, tl = escape_tg(native_lang, 20), escape_tg(target_lang, 20)
     verb = "重新輸入" if again else "輸入"
     return f"✅ {nl} → {tl}\n\n（2/6）{verb}要糾錯的{tl}原文："
 
 
 def _step_keyboard(back_data: str | None, *first_rows: list[InlineKeyboardButton]) -> InlineKeyboardMarkup:
-    """一步的鍵盤：額外的按鈕列，最後一列是「返回上一步」（第 1 步沒有）與「取消」。
+    """Return a step's keyboard: the extra button rows, then a last row with "back" (absent on step 1) and "cancel".
 
-    A step's keyboard: extra rows, then back (except on step 1) and cancel.
+    回傳一步的鍵盤：額外的按鈕列，最後一列是「返回上一步」（第 1 步沒有）與「取消」。
     """
     last = [_CANCEL_BUTTON]
     if back_data is not None:
@@ -138,27 +141,36 @@ def _reorg_keyboard() -> InlineKeyboardMarkup:
 
 
 async def _in_flow(state: FSMContext) -> bool:
-    """目前是否在外語糾錯流程中（舊訊息上的按鈕在流程結束後仍按得到）。
+    """Return whether the expression flow is currently active.
 
-    Whether the expression flow is active; old buttons stay clickable after it ends.
+    回傳目前是否在外語糾錯流程中。
+
+    Buttons on old messages stay clickable after the flow ends, so handlers check this first.
+
+    舊訊息上的按鈕在流程結束後仍按得到，所以 handler 先檢查這一點。
     """
     current = await state.get_state()
     return current is not None and current.startswith(f"{ExpressionStates.__name__}:")
 
 
 def _escape_keep_underline(text: str) -> str:
-    """轉義 LLM 文字，只保留錯誤對比刻意使用的 ``<u>…</u>``（顯示時再加粗）。
+    """Escape LLM text, keeping only the ``<u>…</u>`` markers the error contrast uses on purpose (shown in bold).
 
-    Escape LLM text, keeping only the intentional ``<u>`` markers.
+    轉義 LLM 文字，只保留錯誤對比刻意使用的 ``<u>…</u>``（顯示時再加粗）。
     """
     escaped = html.escape(text)
     return escaped.replace("&lt;u&gt;", "<u><b>").replace("&lt;/u&gt;", "</b></u>")
 
 
 def _split_message(text: str, limit: int = _MESSAGE_LIMIT) -> list[str]:
-    """依行切成不超過 ``limit`` 字的幾段（每一行的標籤在行內成對，不會被切斷）。
+    """Split the text on line boundaries into chunks of at most ``limit`` characters.
 
-    Split on line boundaries into chunks of at most ``limit`` characters.
+    依行切成不超過 ``limit`` 字的幾段。
+
+    Each line's tags are paired within the line, so they are never cut apart. A single line longer than ``limit``
+    is cut hard.
+
+    每一行的標籤在行內成對，不會被切斷。單一行就超過 ``limit`` 時硬切。
     """
     chunks: list[str] = []
     current = ""
@@ -176,20 +188,19 @@ def _split_message(text: str, limit: int = _MESSAGE_LIMIT) -> list[str]:
 
 
 def _get_source_tag_keyboard() -> InlineKeyboardMarkup:
-    """產生來源情境標籤的 Inline Keyboard 鍵盤。
+    """Build the source-tag inline keyboard.
 
-    Build the source-tag inline keyboard.
+    產生來源情境標籤的 Inline Keyboard 鍵盤。
+
+    Reads the tag list from settings and builds the button matrix dynamically, at most 2 buttons per row, followed
+    by a "skip" row and a last row with "back" and "cancel".
 
     從設定檔中讀取標籤清單，並動態生成按鈕矩陣。
-    每列最多 2 個按鈕，並在最後附上「跳過」與「返回」按鈕。
-
-    Reads the tag list from settings and builds the button matrix
-    dynamically, at most 2 buttons per row, ending with "skip" and
-    "back" buttons.
+    每列最多 2 個按鈕，之後是「跳過」一列，最後一列是「返回」與「取消」。
 
     Returns:
-        InlineKeyboardMarkup: 包含標籤選項的鍵盤物件。
-            The keyboard object containing the tag options.
+        the keyboard containing the tag options
+        包含標籤選項的鍵盤物件
     """
     from app.core.config import settings
     tags = settings.note_source_tags_list
@@ -210,23 +221,21 @@ def _get_source_tag_keyboard() -> InlineKeyboardMarkup:
 
 
 async def start_expression_flow(message: types.Message, state: FSMContext) -> None:
-    """啟動外語糾錯 FSM 流程的公開入口。
+    """Start the expression-correction FSM flow; the public entry point.
 
-    Public entry point that starts the expression-correction FSM flow.
+    啟動外語糾錯 FSM 流程的公開入口。
 
-    由 newcard_menu.py 的 Inline Keyboard 回呼觸發，
-    設定 FSM 狀態並提示使用者輸入語言設定。
+    Triggered by the inline keyboard callback in newcard_menu.py; clears the previous round's data, sets the FSM
+    state, and prompts the user for the language pair.
 
-    Triggered by the inline keyboard callback in newcard_menu.py; sets the
-    FSM state and prompts the user for the language pair.
+    由 newcard_menu.py 的 Inline Keyboard 回調觸發，
+    清掉上一輪的資料、設定 FSM 狀態並提示使用者輸入語言設定。
 
     Args:
-        message: Telegram 訊息物件（來自 callback.message）。
-            The Telegram message object (from callback.message).
-        state: aiogram FSM 上下文。The aiogram FSM context.
-
-    Returns:
-        None
+        message: the Telegram message (from ``callback.message``)
+            Telegram 訊息物件（來自 ``callback.message``）
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     # 清掉上一輪的資料：上一輪選了「覆蓋」但沒完成就重開時，殘留的 old_master_note_id 與
     # duplicate_decision 會讓這一輪寫入時刪掉上一輪那張舊卡（使用者完全看不到）
@@ -236,13 +245,20 @@ async def start_expression_flow(message: types.Message, state: FSMContext) -> No
 
 @router.message(ExpressionStates.waiting_for_lang)
 async def process_lang(message: types.Message, state: FSMContext) -> None:
-    """處理語言設定輸入（母語 -> 目標語言）。
+    """Handle the language pair input (native -> target language).
 
-    Handle the language pair input (native -> target language).
+    處理語言設定輸入（母語 -> 目標語言）。
+
+    ``/skip`` means Chinese -> Japanese. A single word is taken as the target language, with Chinese as the native
+    language.
+
+    ``/skip`` 為中文 → 日文。只輸入一個詞時當作目標語言，母語為中文。
 
     Args:
-        message: Telegram 訊息物件。The Telegram message object.
-        state: aiogram FSM 上下文。The aiogram FSM context.
+        message: the Telegram message
+            Telegram 訊息物件
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     if not message.text:
         return
@@ -266,13 +282,15 @@ async def process_lang(message: types.Message, state: FSMContext) -> None:
 
 @router.message(ExpressionStates.waiting_for_text)
 async def process_text(message: types.Message, state: FSMContext) -> None:
-    """處理欲糾錯的外語原文輸入。
+    """Handle the original foreign-language text to be corrected.
 
-    Handle the original foreign-language text to be corrected.
+    處理欲糾錯的外語原文輸入。
 
     Args:
-        message: Telegram 訊息物件。The Telegram message object.
-        state: aiogram FSM 上下文。The aiogram FSM context.
+        message: the Telegram message
+            Telegram 訊息物件
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     if not message.text:
         return
@@ -282,13 +300,15 @@ async def process_text(message: types.Message, state: FSMContext) -> None:
 
 @router.message(ExpressionStates.waiting_for_context)
 async def process_context(message: types.Message, state: FSMContext) -> None:
-    """處理發生情境（上下文）輸入。
+    """Handle the context input for the sentence; ``/skip`` leaves it empty.
 
-    Handle the context input for the sentence.
+    處理發生情境（上下文）輸入；``/skip`` 時留空。
 
     Args:
-        message: Telegram 訊息物件。The Telegram message object.
-        state: aiogram FSM 上下文。The aiogram FSM context.
+        message: the Telegram message
+            Telegram 訊息物件
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     if not message.text:
         return
@@ -301,13 +321,15 @@ async def process_context(message: types.Message, state: FSMContext) -> None:
 
 @router.callback_query(lambda c: c.data and c.data.startswith("source_tag_"), ExpressionStates.waiting_for_source_tag)
 async def process_source_tag(callback_query: types.CallbackQuery, state: FSMContext) -> None:
-    """處理按鈕選擇的來源情境標籤。
+    """Handle the source tag chosen via an inline button.
 
-    Handle the source tag chosen via an inline button.
+    處理按鈕選擇的來源情境標籤。
 
     Args:
-        callback_query: Telegram 回呼查詢。The Telegram callback query.
-        state: aiogram FSM 上下文。The aiogram FSM context.
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     tag = callback_query.data.replace("source_tag_", "")
     source_tag = "" if tag == "skip" else tag
@@ -322,13 +344,15 @@ async def process_source_tag(callback_query: types.CallbackQuery, state: FSMCont
 
 @router.message(ExpressionStates.waiting_for_source_tag)
 async def process_source_tag_text(message: types.Message, state: FSMContext) -> None:
-    """處理手動輸入的來源情境標籤。
+    """Handle a manually typed source tag; ``/skip`` leaves it empty.
 
-    Handle a manually typed source tag.
+    處理手動輸入的來源情境標籤；``/skip`` 時留空。
 
     Args:
-        message: Telegram 訊息物件。The Telegram message object.
-        state: aiogram FSM 上下文。The aiogram FSM context.
+        message: the Telegram message
+            Telegram 訊息物件
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     if not message.text:
         return
@@ -341,13 +365,15 @@ async def process_source_tag_text(message: types.Message, state: FSMContext) -> 
 
 @router.callback_query(lambda c: c.data == "skip_grammar_correction", ExpressionStates.waiting_for_grammar_correction)
 async def process_skip_grammar_correction(callback_query: types.CallbackQuery, state: FSMContext) -> None:
-    """處理跳過使用者自訂文法修正。
+    """Handle skipping the user-provided grammar correction.
 
-    Handle skipping the user-provided grammar correction.
+    處理跳過使用者自訂文法修正。
 
     Args:
-        callback_query: Telegram 回呼查詢。The Telegram callback query.
-        state: aiogram FSM 上下文。The aiogram FSM context.
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     await state.update_data(user_grammar_correction="")
     if callback_query.message:
@@ -358,13 +384,15 @@ async def process_skip_grammar_correction(callback_query: types.CallbackQuery, s
 
 @router.message(ExpressionStates.waiting_for_grammar_correction)
 async def process_grammar_correction(message: types.Message, state: FSMContext) -> None:
-    """處理使用者自訂的文法修正版輸入。
+    """Handle the user-provided grammar-correction input; ``/skip`` leaves it to the AI.
 
-    Handle the user-provided grammar-correction input.
+    處理使用者自訂的文法修正版輸入；``/skip`` 時交給 AI。
 
     Args:
-        message: Telegram 訊息物件。The Telegram message object.
-        state: aiogram FSM 上下文。The aiogram FSM context.
+        message: the Telegram message
+            Telegram 訊息物件
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     if not message.text:
         return
@@ -375,27 +403,32 @@ async def process_grammar_correction(message: types.Message, state: FSMContext) 
     await _prompt_reorganization(message, state)
 
 async def _prompt_reorganization(message_or_query_msg: types.Message, state: FSMContext) -> None:
-    """共用邏輯：切換到高階重組輸入狀態並發送提示。
+    """Switch to the reorganization-input state and send its prompt (shared logic).
 
-    Shared logic: switch to the reorganization-input state and prompt.
+    共用邏輯：切換到高階重組輸入狀態並發送提示。
 
     Args:
-        message_or_query_msg: Telegram 訊息物件。The Telegram message object.
-        state: aiogram FSM 上下文。The aiogram FSM context.
+        message_or_query_msg: the Telegram message to reply to
+            要回覆的 Telegram 訊息物件
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     await state.set_state(ExpressionStates.waiting_for_reorganization)
     await message_or_query_msg.answer(_REORG_PROMPT, reply_markup=_reorg_keyboard())
 
 @router.callback_query(lambda c: c.data == "skip_reorganization", ExpressionStates.waiting_for_reorganization)
 async def process_skip_reorganization(callback_query: types.CallbackQuery, state: FSMContext, card_service: CardService) -> None:
-    """處理跳過使用者自訂高階重組。
+    """Handle skipping the user-provided reorganized expression, then check for duplicates.
 
-    Handle skipping the user-provided reorganized expression.
+    處理跳過使用者自訂高階重組，接著檢查重複卡片。
 
     Args:
-        callback_query: Telegram 回呼查詢。The Telegram callback query.
-        state: aiogram FSM 上下文。The aiogram FSM context.
-        card_service: 卡片服務。The CardService instance.
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
+        card_service: the card service
+            卡片服務
     """
     await state.update_data(user_reorganization="")
     if callback_query.message:
@@ -405,14 +438,21 @@ async def process_skip_reorganization(callback_query: types.CallbackQuery, state
 
 @router.message(ExpressionStates.waiting_for_reorganization)
 async def process_reorganization(message: types.Message, state: FSMContext, card_service: CardService) -> None:
-    """處理使用者自訂的高階重組版輸入。
+    """Handle the user-provided reorganized-expression input, then check for duplicates.
 
-    Handle the user-provided reorganized-expression input.
+    處理使用者自訂的高階重組版輸入，接著檢查重複卡片。
+
+    ``/skip`` leaves the reorganization to the AI.
+
+    ``/skip`` 時交給 AI。
 
     Args:
-        message: Telegram 訊息物件。The Telegram message object.
-        state: aiogram FSM 上下文。The aiogram FSM context.
-        card_service: 卡片服務。The CardService instance.
+        message: the Telegram message
+            Telegram 訊息物件
+        state: the aiogram FSM context
+            aiogram FSM 上下文
+        card_service: the card service
+            卡片服務
     """
     if not message.text:
         return
@@ -431,9 +471,24 @@ async def _check_duplicate_before_generate(
     state: FSMContext,
     card_service: CardService
 ) -> None:
-    """在呼叫 LLM 產生卡片內容前，執行 Anki 重複卡片防呆檢查。
+    """Perform the Anki duplicate-card guard check before calling the LLM to generate the card content.
 
-    Perform the Anki duplicate-card guard check before calling the LLM.
+    在呼叫 LLM 產生卡片內容前，執行 Anki 重複卡片防呆檢查。
+
+    Purpose:
+        1. Avoid spending unnecessary LLM API tokens.
+        2. Ensure the data in the Anki deck does not end up with unexpected duplicates.
+
+    Logic:
+        1. The flow state has no original text (restart, timeout): treat the flow as expired, clear the state, and
+           ask the user to start over.
+        2. Search for an exactly matching original text with the Anki search syntax
+           ``deck:... note:... "My_Original:..."`` (the value is escaped literally).
+        3. The lookup fails (``AnkiConnectError`` only): tell the user the duplicate check was skipped, then generate
+           directly; other exceptions propagate as usual and the global error handler notifies the user.
+        4. No duplicate: call ``_generate_and_preview`` directly to enter the LLM preview flow.
+        5. Duplicate found: intercept the flow, switch the state to ``waiting_for_duplicate_decision``, and show the
+           old card's information to the user with the options to overwrite, allow a duplicate, or cancel.
 
     目的：
         1. 避免消耗不必要的 LLM API Token 費用。
@@ -441,20 +496,20 @@ async def _check_duplicate_before_generate(
 
     處理邏輯：
         1. 流程狀態裡沒有原文（重啟、逾時）：當成流程失效，清除狀態並請使用者重新開始。
-        2. 使用 Anki 搜尋語法 `deck:... note:... "My_Original:..."` 尋找完全一致的原文（值照字面跳脫）。
-        3. 查詢失敗（只限 `AnkiConnectError`）：告訴使用者跳過了重複檢查，再直接生成；
+        2. 使用 Anki 搜尋語法 ``deck:... note:... "My_Original:..."`` 尋找完全一致的原文（值照字面跳脫）。
+        3. 查詢失敗（只限 ``AnkiConnectError``）：告訴使用者跳過了重複檢查，再直接生成；
            其他例外照常往上拋，由全域錯誤處理通知使用者。
-        4. 若無重複：直接呼叫 `_generate_and_preview` 進入 LLM 預覽流程。
-        5. 若有重複：攔截流程，將狀態切換至 `waiting_for_duplicate_decision`，
+        4. 若無重複：直接呼叫 ``_generate_and_preview`` 進入 LLM 預覽流程。
+        5. 若有重複：攔截流程，將狀態切換至 ``waiting_for_duplicate_decision``，
            並將舊卡片的資訊展示給使用者，提供覆蓋、允許重複或取消的選項。
 
     Args:
-        message_or_query_msg: Telegram 訊息物件。
-        state: aiogram FSM 上下文。
-        card_service: Anki 卡片操作服務。
-
-    Returns:
-        None
+        message_or_query_msg: the Telegram message to reply to
+            要回覆的 Telegram 訊息物件
+        state: the aiogram FSM context
+            aiogram FSM 上下文
+        card_service: the Anki card service
+            Anki 卡片操作服務
     """
     data = await state.get_data()
     original_text = data.get("original_text")
@@ -516,21 +571,25 @@ async def _check_duplicate_before_generate(
 
 @router.callback_query(lambda c: c.data == "expr_dup_overwrite", ExpressionStates.waiting_for_duplicate_decision)
 async def handle_dup_overwrite(callback_query: types.CallbackQuery, state: FSMContext, card_service: CardService) -> None:
-    """處理重複卡片決策：使用者選擇「覆蓋舊卡片」。
+    """Handle the duplicate decision: the user chose "overwrite the old card".
 
-    Handle the duplicate decision: the user chose "overwrite old card".
+    處理重複卡片決策：使用者選擇「覆蓋舊卡片」。
 
-    將決策 `overwrite` 記錄在 FSM state 中，並繼續進入 LLM 預覽流程。
-    在最終確認寫入 Anki 時（_execute_card_creation），會執行級聯刪除，
+    Records the decision ``overwrite`` in the FSM state and continues to the LLM preview flow. At the final write to
+    Anki (``_execute_card_creation``) a cascading delete removes the old master card together with its related child
+    cards, so no orphan cards are left behind.
+
+    將決策 ``overwrite`` 記錄在 FSM state 中，並繼續進入 LLM 預覽流程。
+    在最終確認寫入 Anki 時（``_execute_card_creation``），會執行級聯刪除，
     將舊的母卡片與其關聯的子卡片一併刪除乾淨，避免留下落單的孤兒卡片。
 
     Args:
-        callback_query: Telegram 回呼查詢。
-        state: aiogram FSM 上下文。
-        card_service: Anki 卡片操作服務。
-
-    Returns:
-        None
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
+        card_service: the Anki card service
+            Anki 卡片操作服務
     """
     await state.update_data(duplicate_decision="overwrite")
     if callback_query.message:
@@ -540,21 +599,25 @@ async def handle_dup_overwrite(callback_query: types.CallbackQuery, state: FSMCo
 
 @router.callback_query(lambda c: c.data == "expr_dup_allow", ExpressionStates.waiting_for_duplicate_decision)
 async def handle_dup_allow(callback_query: types.CallbackQuery, state: FSMContext, card_service: CardService) -> None:
-    """處理重複卡片決策：使用者選擇「允許重複創建」。
+    """Handle the duplicate decision: the user chose "allow a duplicate".
 
-    Handle the duplicate decision: the user chose "allow duplicate".
+    處理重複卡片決策：使用者選擇「允許重複創建」。
 
-    將決策 `allow` 記錄在 FSM state 中，並繼續進入 LLM 預覽流程。
-    最終寫入時會將 `allow_duplicate` 設為 True 傳遞給底層 API，
+    Records the decision ``allow`` in the FSM state and continues to the LLM preview flow. At the final write,
+    ``allow_duplicate`` is passed as ``True`` to the underlying API, bypassing Anki's duplicate-first-field check so
+    the new card is created.
+
+    將決策 ``allow`` 記錄在 FSM state 中，並繼續進入 LLM 預覽流程。
+    最終寫入時會將 ``allow_duplicate`` 設為 ``True`` 傳遞給底層 API，
     從而繞過 Anki 首欄位重複的限制，成功建立新卡片。
 
     Args:
-        callback_query: Telegram 回呼查詢。
-        state: aiogram FSM 上下文。
-        card_service: Anki 卡片操作服務。
-
-    Returns:
-        None
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
+        card_service: the Anki card service
+            Anki 卡片操作服務
     """
     await state.update_data(duplicate_decision="allow")
     if callback_query.message:
@@ -564,18 +627,19 @@ async def handle_dup_allow(callback_query: types.CallbackQuery, state: FSMContex
 
 @router.callback_query(lambda c: c.data == "expr_dup_cancel", ExpressionStates.waiting_for_duplicate_decision)
 async def handle_dup_cancel(callback_query: types.CallbackQuery, state: FSMContext) -> None:
-    """處理重複卡片決策：使用者選擇「取消糾錯」。
+    """Handle the duplicate decision: the user chose "cancel the correction".
 
-    Handle the duplicate decision: the user chose "cancel correction".
+    處理重複卡片決策：使用者選擇「取消糾錯」。
+
+    Ends the FSM flow and clears the state, avoiding unnecessary LLM token usage.
 
     結束 FSM 流程並清空狀態，避免不必要的 LLM Token 消耗。
 
     Args:
-        callback_query: Telegram 回呼查詢。
-        state: aiogram FSM 上下文。
-
-    Returns:
-        None
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     if callback_query.message:
         await callback_query.message.edit_reply_markup(reply_markup=None)
@@ -588,21 +652,23 @@ async def _generate_and_preview(
     state: FSMContext,
     card_service: CardService
 ) -> None:
-    """呼叫 LLM 生成糾錯結果，格式化後發送預覽訊息。
+    """Call the LLM to generate the correction result, then format it and send a preview message.
 
-    Call the LLM to generate the correction result, then format and send
-    a preview message.
+    呼叫 LLM 生成糾錯結果，格式化後發送預覽訊息。
 
-    此函式將 LLM 結果序列化後存入 FSM state data，
-    以便後續確認步驟可以直接使用，避免重複呼叫 LLM。
+    The LLM result is serialized into the FSM state data so the confirmation step can use it directly without
+    calling the LLM again. If generation fails, the state is cleared and the user is asked to start over.
+
+    將 LLM 結果序列化後存入 FSM state data，
+    以便後續確認步驟可以直接使用，避免重複呼叫 LLM。生成失敗時清除狀態並請使用者重新開始。
 
     Args:
-        message: Telegram 訊息物件。
-        state: aiogram FSM 上下文。
-        card_service: Anki 卡片操作服務。
-
-    Returns:
-        None
+        message: the Telegram message to reply to
+            要回覆的 Telegram 訊息物件
+        state: the aiogram FSM context
+            aiogram FSM 上下文
+        card_service: the Anki card service (currently unused here)
+            Anki 卡片操作服務（目前這裡沒有用到）
     """
     data = await state.get_data()
     req = TGExpressionCorrectionRequest(
@@ -677,19 +743,23 @@ async def _generate_and_preview(
 
 
 def _format_preview(result: LLMExpressionCorrectionResult) -> str:
-    """將 LLM 糾錯結果格式化為 Telegram 預覽訊息（HTML 格式）。
+    """Format the LLM correction result into a Telegram preview message in HTML.
 
-    Format the LLM correction result into a Telegram preview message
-    (HTML format).
+    將 LLM 糾錯結果格式化為 Telegram 預覽訊息（HTML 格式）。
+
+    Child cards use unified sequential numbering: grammar first, reorganized second. The user selects child cards
+    by these numbers in the confirmation step.
 
     子卡片使用統一連續編號：grammar 在前，reorganized 在後。
     這個編號是使用者在確認步驟中用來選擇子卡片的依據。
 
     Args:
-        result: LLM 結構化輸出結果。
+        result: the LLM's structured output
+            LLM 結構化輸出結果
 
     Returns:
-        HTML 格式化的預覽字串。
+        the HTML-formatted preview text
+        HTML 格式化的預覽字串
     """
     # LLM 的內容一律轉義：含 <、& 或非白名單標籤時整則預覽會送不出去（生成已成功卻看不到）。
     # 只有錯誤對比刻意用 <u> 標出錯誤處，轉義後還原它（並加粗讓錯誤處更明顯）
@@ -742,18 +812,19 @@ async def handle_confirm_all(
     card_service: CardService,
     note_service: NoteService,
 ) -> None:
-    """使用者點選「全部添加」：母卡 + 全部子卡寫入 Anki。
+    """Handle "add all": write the master card plus all child cards to Anki.
 
-    The user pressed "add all": write the master card plus all child cards
-    to Anki.
+    使用者點選「全部添加」：母卡 + 全部子卡寫入 Anki。
 
     Args:
-        callback_query: Telegram 回呼查詢。
-        state: aiogram FSM 上下文。
-        card_service: Anki 卡片操作服務。
-
-    Returns:
-        None
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
+        card_service: the Anki card service
+            Anki 卡片操作服務
+        note_service: the note service used for the write
+            寫入用的筆記服務
     """
     if callback_query.message:
         await callback_query.message.edit_reply_markup(reply_markup=None)
@@ -767,16 +838,15 @@ async def handle_abandon_all(
     callback_query: types.CallbackQuery,
     state: FSMContext
 ) -> None:
-    """使用者點選「全部放棄」：什麼都不寫入，流程結束。
+    """Handle "abandon all": nothing is written and the flow ends.
 
-    The user pressed "abandon all": nothing is written and the flow ends.
+    使用者點選「全部放棄」：什麼都不寫入，流程結束。
 
     Args:
-        callback_query: Telegram 回呼查詢。
-        state: aiogram FSM 上下文。
-
-    Returns:
-        None
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     if callback_query.message:
         await callback_query.message.edit_reply_markup(reply_markup=None)
@@ -793,21 +863,27 @@ async def handle_card_selection_text(
     card_service: CardService,
     note_service: NoteService,
 ) -> None:
-    """使用者輸入子卡片編號（如 1,3,5）進行篩選。
+    """Handle child-card numbers typed by the user (such as 1,3,5) to select a subset.
 
-    The user typed child-card numbers (e.g. 1,3,5) to select a subset.
+    使用者輸入子卡片編號（如 1,3,5）進行篩選。
 
-    非法輸入（非數字、超出範圍）不會結束流程，
+    Numbers may be separated by commas, spaces, or 、. Invalid input (not a number, out of range) does not end the
+    flow; the user is told about the error and the bot keeps waiting until a valid value is entered or a button is
+    pressed.
+
+    編號可用逗號、空格或頓號分隔。非法輸入（非數字、超出範圍）不會結束流程，
     而是提示錯誤並繼續等待合法輸入，直到使用者
     輸入有效值或點選按鈕。
 
     Args:
-        message: Telegram 訊息物件。
-        state: aiogram FSM 上下文。
-        card_service: Anki 卡片操作服務。
-
-    Returns:
-        None
+        message: the Telegram message
+            Telegram 訊息物件
+        state: the aiogram FSM context
+            aiogram FSM 上下文
+        card_service: the Anki card service
+            Anki 卡片操作服務
+        note_service: the note service used for the write
+            寫入用的筆記服務
     """
     if not message.text:
         return
@@ -863,35 +939,46 @@ async def _execute_card_creation(
     note_service: NoteService,
     selected_indices: list[int] | None
 ) -> None:
-    """執行最終的 Anki 卡片寫入。
+    """Perform the final Anki card write.
 
-    Perform the final Anki card write.
+    執行最終的 Anki 卡片寫入。
 
-    從 FSM state 中取出先前快取的 LLM 結果與使用者參數，依 `duplicate_decision` 處理：
-    - `allow`：開啟 `allow_duplicate` 旗標繞過首欄位重複檢查。
-    - `overwrite`：**先**建立新卡（同樣繞過重複檢查，因為舊卡還在），成功之後才級聯刪除舊的
+    Takes the previously cached LLM result and the user's parameters from the FSM state, and handles
+    ``duplicate_decision``:
+
+    - ``allow``: turn on the ``allow_duplicate`` flag to bypass the first-field duplicate check.
+    - ``overwrite``: create the new cards **first** (also bypassing the duplicate check, since the old card still
+      exists), and only after that succeeds cascade-delete the old master card and its children. Doing it the other
+      way round (delete, then create) would lose both cards if creation failed. If the delete fails the new cards
+      already exist, so the reply says plainly that Anki now has two cards and asks the user to delete the old one
+      by hand.
+
+    從 FSM state 中取出先前快取的 LLM 結果與使用者參數，依 ``duplicate_decision`` 處理：
+
+    - ``allow``：開啟 ``allow_duplicate`` 旗標繞過首欄位重複檢查。
+    - ``overwrite``：**先**建立新卡（同樣繞過重複檢查，因為舊卡還在），成功之後才級聯刪除舊的
       母卡與子卡。反過來（先刪後建）的話，建立失敗時新舊兩張都沒了。刪除失敗時新卡已在，
       明說 Anki 裡現在有兩張，請使用者手動刪舊的。
 
-    Handles ``duplicate_decision``: ``allow`` bypasses the duplicate check;
-    ``overwrite`` creates the new cards first and only then deletes the old
-    master and its children, so a failed creation never loses the old card.
+    Creation goes through the service layer (``NoteService.create``, which syncs once after writing); deleting the
+    old cards on overwrite is internal to the expression flow and is still done directly, followed by another sync
+    to push the deletion to AnkiWeb, and the warning comes from that sync. The FSM state is cleared whether the
+    write succeeds or fails.
 
     建卡經服務層（``NoteService.create``，寫入後會同步一次）；覆蓋時刪舊卡是外語糾錯流程內部的操作，
-    照舊直接刪除，刪完再同步一次把刪除推上 AnkiWeb，提醒取這一次的。
-
-    Creation goes through the service layer, which syncs once; deleting the
-    old cards on overwrite stays direct and is followed by another sync.
+    照舊直接刪除，刪完再同步一次把刪除推上 AnkiWeb，提醒取這一次的。不論寫入成敗都會清除 FSM 狀態。
 
     Args:
-        message: Telegram 訊息物件。
-        state: aiogram FSM 上下文。
-        card_service: Anki 卡片操作服務（覆蓋時刪舊卡用）。
-        note_service: 筆記服務（建卡用）。
-        selected_indices: 要寫入的子卡片編號列表，None 代表全部。
-
-    Returns:
-        None
+        message: the Telegram message to reply to
+            Telegram 訊息物件
+        state: the aiogram FSM context
+            aiogram FSM 上下文
+        card_service: the Anki card service, used to delete the old cards on overwrite
+            Anki 卡片操作服務（覆蓋時刪舊卡用）
+        note_service: the note service, used to create the cards
+            筆記服務（建卡用）
+        selected_indices: the 1-based numbers of the child cards to write; ``None`` means all
+            要寫入的子卡片編號列表（從 1 開始），``None`` 代表全部
     """
     data = await state.get_data()
     llm_result_dict = data.get("llm_result")
@@ -959,12 +1046,18 @@ async def _execute_card_creation(
 
 
 async def _delete_old_cards(card_service: CardService, old_master_note_id: int) -> str:
-    """覆蓋：新卡已建立後，刪除舊的母卡與其子卡；回傳要接在成功訊息後的說明。
+    """Delete the old master card and its children after the new cards exist (overwrite).
 
-    Delete the old master and its children after the new cards exist, and
-    return the text to append to the success message.
+    覆蓋：新卡已建立後，刪除舊的母卡與其子卡。
+
+    If the delete fails the new cards are still there: the text says truthfully that Anki has two cards with the
+    same original text and asks the user to delete the old one by hand; it must not claim the old card was deleted.
 
     刪除失敗時新卡仍在：如實說 Anki 裡有兩張相同原文的卡，請使用者手動刪舊的，不能寫成「已刪除」。
+
+    Returns:
+        the text to append to the success message
+        要接在成功訊息後的說明
     """
     try:
         child_query = f"{note_type_term('Expression_Micro_Dark')} {field_term('Master_Note_ID', str(old_master_note_id))}"
@@ -979,13 +1072,20 @@ async def _delete_old_cards(card_service: CardService, old_master_note_id: int) 
 
 @router.callback_query(lambda c: c.data and c.data.startswith("expr_back_"))
 async def process_go_back(callback_query: types.CallbackQuery, state: FSMContext) -> None:
-    """處理返回上一步的操作。
+    """Handle the go-back-one-step action.
 
-    Handle the go-back-one-step action.
+    處理返回上一步的操作。
+
+    Only acts while the expression flow is active; the message with the old step is deleted and the earlier step's
+    prompt is sent again.
+
+    只在外語糾錯流程中有效；刪除舊步驟的訊息，重新送出前一步的提示。
 
     Args:
-        callback_query: Telegram 回呼查詢。The Telegram callback query.
-        state: aiogram FSM 上下文。The aiogram FSM context.
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     # 舊訊息上的返回鈕在流程結束後仍按得到：那時 data 已清空，把 FSM 拉回中間某步只會顯示
     # 預設值、往下走還會缺欄位而失敗
@@ -1031,12 +1131,20 @@ async def process_go_back(callback_query: types.CallbackQuery, state: FSMContext
 
 @router.callback_query(lambda c: c.data == "expr_cancel")
 async def process_cancel(callback_query: types.CallbackQuery, state: FSMContext) -> None:
-    """取消外語糾錯流程（每一步都有這顆鈕）。Cancel the expression flow from any step.
+    """Cancel the expression flow; every step has this button.
+
+    取消外語糾錯流程（每一步都有這顆鈕）。
+
+    Only acts while the flow is active: once the flow has ended this is a button on an old message, and it must not
+    clear another flow the user is in now.
 
     只在流程中有效：流程已結束時是舊訊息上的按鈕，不能清掉使用者現在進行中的其他流程。
 
-    Only acts while the flow is active, so an old button never clears
-    another flow the user is in now.
+    Args:
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     if not await _in_flow(state):
         await answer_callback(callback_query, FLOW_ENDED_ALERT, show_alert=True)

@@ -1,13 +1,12 @@
-"""口說教練任務處理器 (Speaking Coach Handler) 模組。
+"""Speaking coach handler module.
+
+口說教練任務處理器（Speaking Coach Handler）模組。
+
+Handles creation and listing of speaking cards such as Speaking_Coach_Dark, and updates of JSON fields such as
+Recordings, References, and Prompt_Audios.
 
 負責 Speaking_Coach_Dark 等口說卡片的建立、列表讀取，
 以及 Recordings / References / Prompt_Audios 等 JSON 欄位的更新。
-
-Speaking coach handler module.
-
-Handles creation and listing of speaking cards such as
-Speaking_Coach_Dark, and updates of JSON fields like Recordings,
-References, and Prompt_Audios.
 """
 
 import json
@@ -36,6 +35,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: The named actions shared by speaking cards (speaking cards and trilingual speaking cards), used by TG
+#: recordings and audio uploads.
 #: 口說卡（對話卡、三語對話卡）共用的具名動作，TG 的錄音與上傳音檔在用。
 SPEAKING_ACTIONS = ("add_audio", "add_recording", "delete_recording")
 
@@ -43,15 +44,19 @@ SPEAKING_ACTIONS = ("add_audio", "add_recording", "delete_recording")
 MAX_REFERENCES = 100
 MAX_REFERENCE_LENGTH = 2000
 
-#: 一筆參考回答（去掉前後空白後不能是空的）。One reference answer.
+#: One reference answer (must not be empty after stripping surrounding whitespace).
+#: 一筆參考回答（去掉前後空白後不能是空的）。
 ReferenceText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_REFERENCE_LENGTH)]
 
 
 class SpeakingCoachCreateParams(BaseModel):
-    """對話卡的建立參數（D3）。``tg_bot`` 不在這裡，由服務層的關鍵字參數傳入。
+    """The create parameters of a speaking card (D3).
 
-    Create parameters of a speaking card; ``tg_bot`` is passed by the service
-    layer, not here.
+    對話卡的建立參數（D3）。
+
+    ``tg_bot`` is not here; the service layer passes it as a keyword argument.
+
+    ``tg_bot`` 不在這裡，由服務層的關鍵字參數傳入。
     """
 
     prompt: str = Field(
@@ -81,7 +86,10 @@ class SpeakingCoachCreateParams(BaseModel):
     @field_validator("references", mode="before")
     @classmethod
     def _drop_blank(cls, value: object) -> object:
-        """去掉空白的一筆（網頁一行一筆，空行不算）。Drops blank entries."""
+        """Drop blank entries (the web sends one per line, and blank lines do not count).
+
+        去掉空白的一筆（網頁一行一筆，空行不算）。
+        """
         if isinstance(value, list):
             return [item for item in value if not (isinstance(item, str) and not item.strip())]
         return value
@@ -89,7 +97,10 @@ class SpeakingCoachCreateParams(BaseModel):
     @field_validator("target_language")
     @classmethod
     def _normalize(cls, value: str) -> str:
-        """與 TG 流程相同的正規化（``ja-jp`` → ``ja-JP``）。Same normalization as the TG flow."""
+        """Normalize the language code the same way as the TG flow (``ja-jp`` → ``ja-JP``).
+
+        與 TG 流程相同的正規化（``ja-jp`` → ``ja-JP``）。
+        """
         normalized = normalize_language_code(value)
         if normalized is None:
             raise ValueError(f"無法辨識的語言代碼：{value}")
@@ -98,15 +109,15 @@ class SpeakingCoachCreateParams(BaseModel):
 
 @register_handler
 class SpeakingCoachHandler(BaseHandler):
-    """口說教練任務處理器。
+    """Speaking coach task handler.
 
-    Speaking coach task handler.
+    口說教練任務處理器。
+
+    Supports speaking cards such as Speaking_Coach_Dark, managing scenario creation and updates of complex JSON
+    fields (Recordings).
 
     支援 Speaking_Coach_Dark 等口說卡片。
     管理口說情境的建立、以及複雜 JSON 欄位（Recordings）的更新。
-
-    Supports speaking cards such as Speaking_Coach_Dark, managing
-    scenario creation and updates of complex JSON fields (Recordings).
     """
 
     CAPABILITIES = HandlerCapabilities(
@@ -128,24 +139,27 @@ class SpeakingCoachHandler(BaseHandler):
     @property
     @override
     def handler_name(self) -> str:
-        """處理器名稱。
+        """The handler name used in URLs.
 
-        Handler name.
+        處理器名稱，出現在網址裡。
         """
         return "speaking_coach"
 
     @property
     @override
     def title(self) -> str:
-        """中文名稱。Display title."""
+        """The Chinese display title.
+
+        中文名稱。
+        """
         return "對話卡"
 
     @property
     @override
     def supported_models(self) -> list[str]:
-        """支援的 Anki 模型名稱清單。
+        """The Anki note types this handler owns.
 
-        Supported Anki model names.
+        這個處理器負責的 Anki 筆記類型。
         """
         return ["Speaking_Coach_Dark"]
 
@@ -158,20 +172,30 @@ class SpeakingCoachHandler(BaseHandler):
         model_name: str,
         parameters: dict
     ) -> list[int]:
-        """建立一張口說卡片：參考回答依參數寫入（補上今天、啟用、沒有音檔），錄音與題目音檔為空陣列。
+        """Create one speaking card with the given reference answers.
 
-        Create a speaking card with the given reference answers.
+        建立一張口說卡片。
+
+        Reference answers are written from the parameters (with today's date, enabled, and no audio); the
+        recordings and prompt audios start as empty lists.
+
+        參考回答依參數寫入（補上今天、啟用、沒有音檔），錄音與題目音檔為空陣列。
 
         Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            deck_name: 目標牌組。Target deck.
-            model_name: 目標模型。Target model.
-            parameters: ``SpeakingCoachCreateParams`` 驗證後的參數與 tg_bot。The
-                validated parameters plus 'tg_bot'.
+            card_service: the card service
+                卡片服務
+            relation_service: the relation service (unused)
+                關聯服務（不使用）
+            deck_name: the target deck
+                目標牌組
+            model_name: the target note type
+                目標模型
+            parameters: the parameters validated by ``SpeakingCoachCreateParams``, plus ``tg_bot``
+                ``SpeakingCoachCreateParams`` 驗證後的參數與 ``tg_bot``
 
         Returns:
-            建立成功的 Note ID（單元素陣列）。The created note ID, as a list.
+            the created note ID, as a one-element list
+            建立成功的 Note ID（單元素陣列）
         """
         prompt_text = parameters.get("prompt", "")
         context_text = parameters.get("context", "")
@@ -220,28 +244,40 @@ class SpeakingCoachHandler(BaseHandler):
         note_id: int,
         parameters: dict
     ) -> None:
-        """客製化更新，例如新增或刪除錄音紀錄。
+        """Apply a task-specific update, for example adding or deleting a recording.
 
-        Task-specific update, e.g. adding or deleting recordings.
+        客製化更新，例如新增或刪除錄音紀錄。
 
-        parameters 支援:
-        - {"action": "add_recording", "recording": {"date": "...", "score": 90, ...}}
-        - {"action": "delete_recording", "index": 1}
-        - {"action": "update_fields", "fields": {"Context": "new context"}}
+        Supported ``parameters``:
 
-        Supported actions: add_recording, delete_recording, add_audio,
-        update_fields (see the examples above).
+        - ``{"action": "add_recording", "recording": {"date": "...", "score": 90, ...}}``
+        - ``{"action": "delete_recording", "index": 1}`` (an out-of-range index is ignored)
+        - ``{"action": "add_audio", "field_name": "Prompt_Audios" | "References", "index": ..., "audio": ...}``
+          (optionally ``speaker`` and ``avatar``; ``index`` ``"last"`` or ``"none"`` means the end)
+        - ``{"action": "update_fields", "fields": {"Context": "new context"}}``
+
+        parameters 支援：
+
+        - ``{"action": "add_recording", "recording": {"date": "...", "score": 90, ...}}``
+        - ``{"action": "delete_recording", "index": 1}``（超出範圍的 index 忽略）
+        - ``{"action": "add_audio", "field_name": "Prompt_Audios" | "References", "index": ..., "audio": ...}``
+          （可另帶 ``speaker``、``avatar``；``index`` 為 ``"last"`` 或 ``"none"`` 表示最後）
+        - ``{"action": "update_fields", "fields": {"Context": "new context"}}``
 
         Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            note_id: 目標 Note ID。Target note ID.
-            parameters: 更新參數（需含 action）。Update params (must
-                contain 'action').
+            card_service: the card service
+                卡片服務
+            relation_service: the relation service (unused)
+                關聯服務（不使用）
+            note_id: the target note ID
+                目標 Note ID
+            parameters: the update parameters (must contain ``action``)
+                更新參數（需含 ``action``）
 
         Raises:
-            ValueError: 參數缺漏或不支援的 action。On missing params or
-                unsupported action.
+            ValueError: if ``add_audio`` lacks ``field_name``, ``index`` or ``audio``, or the action is not
+                supported
+                若 ``add_audio`` 缺少 ``field_name``、``index`` 或 ``audio``，或 action 不支援
         """
         action = parameters.get("action")
         

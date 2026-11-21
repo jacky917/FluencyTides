@@ -1,7 +1,11 @@
-"""
-Telegram Bot 回呼按鈕 (Inline Keyboard) 處理模組。
+"""Telegram Bot callback button (inline keyboard) handler module.
 
-Telegram Bot callback button (inline keyboard) handler module.
+Telegram Bot 回調按鈕 (Inline Keyboard) 處理模組。
+
+Handles the avatar-selection buttons of the audio-upload flow (system avatar, custom upload, no avatar, back) and
+writes the uploaded audio back to Anki once the avatar and speaker are chosen.
+
+處理上傳語音流程的選頭像按鈕（系統頭像、上傳自訂圖片、不用頭像、返回），選定頭像與說話者後把上傳的語音寫回 Anki。
 """
 
 import logging
@@ -34,21 +38,24 @@ AVATARS_DIR = Path("app/assets/avatars")
 
 
 async def _sync_with_warning(anki_client: AnkiClient) -> str:
-    """寫入後強制同步，回傳接在 TG 回覆後面的提醒（同步成功時為空字串）。
+    """Force a sync after writing and return the warning to append to the TG reply.
 
-    Force a sync after writing and return the warning suffix for a reply.
+    寫入後強制同步，回傳接在 TG 回覆後面的提醒。
+
+    For write paths that do not go through the service layer yet (deletion in ``commands.py``, creating a speaking
+    card in ``speaking_fsm.py``, and overwriting an old card in ``expression_fsm.py``); the warning text is the same
+    as the service layer's (``note_service.sync_warning``).
 
     給還沒經過服務層的寫入點用（``commands.py`` 的刪除、``speaking_fsm.py`` 建對話卡、
     ``expression_fsm.py`` 覆蓋舊卡後）；提醒文字與服務層是同一份（``note_service.sync_warning``）。
 
-    For write paths that do not go through the service layer yet; the
-    warning text is the service layer's.
-
     Args:
-        anki_client: AnkiClient 實例。The AnkiClient instance.
+        anki_client: the AnkiConnect client
+            AnkiClient 實例
 
     Returns:
-        提醒文字（開頭帶換行）；同步成功時為空字串。The warning suffix, or "".
+        the warning text, starting with a newline; an empty string when the sync succeeds
+        提醒文字（開頭帶換行）；同步成功時為空字串
     """
     return sync_suffix(await sync_warning(anki_client))
 
@@ -64,21 +71,35 @@ async def _execute_final_update(
     anki_client: AnkiClient,
     note_service: NoteService,
 ) -> None:
-    """共用邏輯：完成頭像與名稱設定後，寫回 Anki 並觸發同步。
+    """Write the uploaded audio back to Anki after the avatar and speaker name are chosen, then sync.
 
-    Shared logic: after avatar and speaker-name selection, write back to
-    Anki and trigger a sync.
+    共用邏輯：完成頭像與名稱設定後，寫回 Anki 並觸發同步。
+
+    A non-empty avatar is first copied from the local avatar directory to Anki Media. The user state is cleared on
+    success, when the card is missing, and on an Anki or business error.
+
+    頭像檔名非空時，先把本地頭像目錄的檔案存進 Anki Media。成功、找不到卡片、或發生 Anki 或業務錯誤時
+    都會清除使用者狀態。
 
     Args:
-        chat_id: Telegram Chat ID。The Telegram chat ID.
-        status_msg_text: 處理中狀態訊息文字。The in-progress status text.
-        callback: 回呼查詢物件。The callback query object.
-        state: 目前的使用者狀態。The current UserState.
-        avatar_filename: 頭像檔名（可為空字串）。Avatar file name (may be empty).
-        speaker_name: 說話者名稱。The speaker's name.
-        user_state_manager: 使用者狀態管理器。The UserStateManager instance.
-        anki_client: AnkiClient 實例。The AnkiClient instance.
-        note_service: 筆記服務；寫入與同步經過它。The NoteService instance.
+        chat_id: the Telegram chat ID
+            Telegram Chat ID
+        status_msg_text: the in-progress status text shown first
+            先顯示的處理中狀態訊息文字
+        callback: the callback query whose message is edited
+            要編輯其訊息的回調查詢
+        state: the current user state
+            目前的使用者狀態
+        avatar_filename: the avatar file name; an empty string means no avatar
+            頭像檔名；空字串表示不用頭像
+        speaker_name: the speaker's name
+            說話者名稱
+        user_state_manager: the user state manager
+            使用者狀態管理器
+        anki_client: the AnkiConnect client
+            AnkiClient 實例
+        note_service: the note service; the write and the sync go through it
+            筆記服務；寫入與同步經過它
     """
     await callback.message.edit_text(status_msg_text)
 
@@ -142,13 +163,19 @@ async def _execute_final_update(
 
 @router.callback_query(F.data == "avatar_sys")
 async def handle_avatar_sys(callback: CallbackQuery, user_state_manager: UserStateManager) -> None:
-    """列出系統內建頭像供使用者選擇。
+    """List the built-in system avatars for the user to choose from.
 
-    List the built-in system avatars for the user to choose from.
+    列出系統內建頭像供使用者選擇。
+
+    The list shown is stored in the state, so the button indices refer to exactly what the user sees.
+
+    顯示的清單會存進狀態，按鈕序號就對應使用者看到的這份清單。
 
     Args:
-        callback: 回呼查詢物件。The callback query object.
-        user_state_manager: 使用者狀態管理器。The UserStateManager instance.
+        callback: the callback query
+            回調查詢物件
+        user_state_manager: the user state manager
+            使用者狀態管理器
     """
     chat_id = callback.message.chat.id
     state = user_state_manager.get_state(chat_id)
@@ -179,9 +206,14 @@ async def handle_avatar_sys(callback: CallbackQuery, user_state_manager: UserSta
 
 
 def _system_avatars() -> list[str]:
-    """系統內建頭像的檔名，依名稱排序（按鈕以序號對應，排序固定才不會選錯）。
+    """Return the built-in avatar file names, sorted by name.
 
-    Built-in avatar file names, sorted so button indices stay stable.
+    回傳系統內建頭像的檔名，依名稱排序。
+
+    Buttons refer to avatars by index, so a fixed order prevents picking the wrong one. Only .jpg, .jpeg, and .png
+    files count; a missing directory gives an empty list.
+
+    按鈕以序號對應，排序固定才不會選錯。只算 .jpg、.jpeg、.png 檔；目錄不存在時回傳空串列。
     """
     if not AVATARS_DIR.exists():
         return []
@@ -199,15 +231,24 @@ async def handle_avatar_sys_select(
     anki_client: AnkiClient,
     note_service: NoteService,
 ) -> None:
-    """處理系統頭像選擇並完成寫回。
+    """Handle a system-avatar selection and finish the write-back.
 
-    Handle a system-avatar selection and finish the write-back.
+    處理系統頭像選擇並完成寫回。
+
+    The avatar's file stem becomes the speaker name. An index that does not match the list stored in the state
+    (including old buttons that carried a file name) is treated as expired.
+
+    頭像的檔名（不含副檔名）作為說話者名稱。序號對不上狀態中存的清單時（含以檔名當 callback data 的舊按鈕）視為過期。
 
     Args:
-        callback: 回呼查詢物件。The callback query object.
-        user_state_manager: 使用者狀態管理器。The UserStateManager instance.
-        anki_client: AnkiClient 實例。The AnkiClient instance.
-        note_service: 筆記服務。The NoteService instance.
+        callback: the callback query
+            回調查詢物件
+        user_state_manager: the user state manager
+            使用者狀態管理器
+        anki_client: the AnkiConnect client
+            AnkiClient 實例
+        note_service: the note service
+            筆記服務
     """
     chat_id = callback.message.chat.id
     state = user_state_manager.get_state(chat_id)
@@ -237,13 +278,15 @@ async def handle_avatar_sys_select(
 
 @router.callback_query(F.data == "avatar_upload")
 async def handle_avatar_upload(callback: CallbackQuery, user_state_manager: UserStateManager) -> None:
-    """切換至等待使用者上傳自訂頭像圖片的狀態。
+    """Switch to the state waiting for the user to upload a custom avatar image.
 
-    Switch to the state waiting for the user to upload a custom avatar image.
+    切換至等待使用者上傳自訂頭像圖片的狀態。
 
     Args:
-        callback: 回呼查詢物件。The callback query object.
-        user_state_manager: 使用者狀態管理器。The UserStateManager instance.
+        callback: the callback query
+            回調查詢物件
+        user_state_manager: the user state manager
+            使用者狀態管理器
     """
     chat_id = callback.message.chat.id
     state = user_state_manager.get_state(chat_id)
@@ -267,16 +310,19 @@ async def handle_avatar_skip(
     anki_client: AnkiClient,
     note_service: NoteService,
 ) -> None:
-    """處理跳過頭像設定並完成寫回（預設說話者為 User）。
+    """Handle skipping the avatar and finish the write-back, with the speaker defaulting to "User".
 
-    Handle skipping avatar selection and finish the write-back
-    (defaults the speaker to "User").
+    處理跳過頭像設定並完成寫回（預設說話者為 User）。
 
     Args:
-        callback: 回呼查詢物件。The callback query object.
-        user_state_manager: 使用者狀態管理器。The UserStateManager instance.
-        anki_client: AnkiClient 實例。The AnkiClient instance.
-        note_service: 筆記服務。The NoteService instance.
+        callback: the callback query
+            回調查詢物件
+        user_state_manager: the user state manager
+            使用者狀態管理器
+        anki_client: the AnkiConnect client
+            AnkiClient 實例
+        note_service: the note service
+            筆記服務
     """
     chat_id = callback.message.chat.id
     state = user_state_manager.get_state(chat_id)
@@ -296,13 +342,15 @@ async def handle_avatar_skip(
 
 @router.callback_query(F.data == "avatar_back")
 async def handle_avatar_back(callback: CallbackQuery, user_state_manager: UserStateManager) -> None:
-    """返回頭像選擇主選單。
+    """Return to the avatar-selection main menu.
 
-    Return to the avatar-selection main menu.
+    返回頭像選擇主選單。
 
     Args:
-        callback: 回呼查詢物件。The callback query object.
-        user_state_manager: 使用者狀態管理器。The UserStateManager instance.
+        callback: the callback query
+            回調查詢物件
+        user_state_manager: the user state manager
+            使用者狀態管理器
     """
     chat_id = callback.message.chat.id
     state = user_state_manager.get_state(chat_id)
@@ -320,7 +368,10 @@ AVATAR_PROMPT = "✅ 已收到語音。選擇搭配的頭像："
 
 
 def avatar_keyboard() -> InlineKeyboardMarkup:
-    """選頭像的按鈕。The avatar-choice keyboard."""
+    """Return the avatar-choice keyboard: system avatar, custom upload, or no avatar.
+
+    回傳選頭像的按鈕：系統頭像、上傳自訂圖片或不用頭像。
+    """
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📂 選擇系統頭像", callback_data="avatar_sys")],
         [InlineKeyboardButton(text="🖼️ 上傳自訂圖片", callback_data="avatar_upload")],

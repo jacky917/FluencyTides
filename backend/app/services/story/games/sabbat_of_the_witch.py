@@ -1,9 +1,12 @@
-"""《魔女的夜宴》的遊戲適配器：只放和預設不同的部分。
+"""Game adapter for 《魔女的夜宴》 (Sabbat of the Witch): only the differences from the default.
 
-Adapter for Sabbat of the Witch; only the differences from the default.
+《魔女的夜宴》的遊戲適配器：只放和預設不同的部分。
 
-- 路線預設只能是設定裡有的分頁，而且旗標必須是整數（遊戲的 ``f.*_flag`` 都是整數）。
-- Route presets must name a known tab and carry integer flags.
+- Route-preset flags must be integers (the game's ``f.*_flag`` are all integers). That a preset names an existing
+  tab is checked when packaging (``scripts/story/common/package.py``), not here.
+
+- 路線預設的旗標必須是整數（遊戲的 ``f.*_flag`` 都是整數）。路線預設必須是存在的分頁，這點在打包時
+  （``scripts/story/common/package.py``）檢查，不在這裡。
 """
 
 from __future__ import annotations
@@ -16,7 +19,10 @@ from app.services.story.registry import register_story_game
 
 
 class SabbatConfig(StoryConfig):
-    """魔女的夜宴的設定：路線旗標一律是整數。Config with integer route flags."""
+    """The config of 《魔女的夜宴》: route flags are always integers.
+
+    魔女的夜宴的設定：路線旗標一律是整數。
+    """
 
     @field_validator("route_presets")
     @classmethod
@@ -30,6 +36,9 @@ class SabbatConfig(StoryConfig):
 
 @register_story_game("SabbatOfTheWitch")
 class SabbatOfTheWitch(StoryGame):
-    """魔女的夜宴。Sabbat of the Witch."""
+    """The adapter for 《魔女的夜宴》 (Sabbat of the Witch).
+
+    魔女的夜宴。
+    """
 
     config_model = SabbatConfig

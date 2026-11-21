@@ -1,6 +1,6 @@
-"""Telegram 崩潰警報模組。
+"""Telegram crash alert module.
 
-Telegram crash alert module.
+Telegram 崩潰警報模組。
 """
 
 import logging
@@ -12,20 +12,26 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 async def send_crash_alert(url: str, method: str, error_msg: str) -> None:
-    """發送 Telegram 崩潰警報給管理員。
+    """Send a Telegram crash alert to the administrator.
 
-    Send a Telegram crash alert to the administrator.
-
-    當系統發生未預期錯誤 (HTTP 500) 時呼叫。
-    使用獨立的 httpx 客戶端，避免依賴可能已經崩潰的 aiogram Bot 實例。
+    發送 Telegram 崩潰警報給管理員。
 
     Called when an unexpected error (HTTP 500) occurs. Uses a standalone
     httpx client to avoid depending on the possibly-crashed aiogram Bot.
+    Does nothing when ``TG_BOT_TOKEN`` or ``TG_ADMIN_CHAT_ID`` is not set; a
+    failure to send is logged and never raised.
+
+    當系統發生未預期錯誤 (HTTP 500) 時呼叫。
+    使用獨立的 httpx 客戶端，避免依賴可能已經崩潰的 aiogram Bot 實例。
+    ``TG_BOT_TOKEN`` 或 ``TG_ADMIN_CHAT_ID`` 未設定時不做任何事；發送失敗只記錄、不往上拋。
 
     Args:
-        url: 發生錯誤的請求 URL。The URL of the failing request.
-        method: HTTP 方法 (GET, POST 等)。HTTP method (GET, POST, etc.).
-        error_msg: 簡短的錯誤摘要或類型。A short error summary or type.
+        url: the URL of the failing request
+            發生錯誤的請求 URL
+        method: the HTTP method (GET, POST, and so on)
+            HTTP 方法 (GET, POST 等)
+        error_msg: a short error summary or type
+            簡短的錯誤摘要或類型
     """
     bot_token = settings.TG_BOT_TOKEN
     chat_id = settings.TG_ADMIN_CHAT_ID

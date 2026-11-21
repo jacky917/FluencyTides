@@ -416,6 +416,46 @@ class TestIntegrityCrossProject:
         assert 300 not in client.deleted_notes
         assert "SabbatOfTheWitch_vp.mp3" in client.media_files
 
+    def test_live_pair_whose_repair_fails_is_kept(self, monkeypatch):
+        """Anki 端配對完整、只是查不到台詞而修不回 DB 紀錄的卡片：只回報，不刪除。
+
+        A live cloze/context pair whose DB record cannot be rebuilt (the
+        line lookup fails) must be reported, not deleted.
+        """
+        vp = get_profile(PROJECT_JP_VERB_PAIR)
+        client = FakeAnkiClient(notes_by_model={
+            vp.master_model: [note(100, vp.master_model, {
+                "Intransitive_Data_JSON": json.dumps(
+                    [{"audio": "SabbatOfTheWitch_vp.mp3", "avatar": "none",
+                      "cloze_note_id": 300, "context_note_id": 200}]
+                ),
+                "Transitive_Data_JSON": "[]",
+            })],
+            vp.context_model: [note(200, vp.context_model, {"Master_Note_ID": "100", "Dialog_JSON": "[]"})],
+            vp.cloze_model: [note(300, vp.cloze_model, {
+                "Audio": "SabbatOfTheWitch_vp.mp3", "Avatar": "none",
+                "Master_Note_ID": "100", "Context_Note_ID": "200",
+                "Verb_Pair_JSON": json.dumps({"used": "intransitive", "intransitive": "開く"}),
+            })],
+        }, media_files={"SabbatOfTheWitch_vp.mp3"})
+        # 另一組健康的紀錄，避免「DB 有紀錄但 Anki 0 張」之類的其他分支干擾
+        session = FakeSession([{"id": 1, "game_id": "SabbatOfTheWitch", "master": 100,
+                                "context": 201, "cloze": 301, "project": PROJECT_JP_VERB_PAIR}])
+        monkeypatch.setattr(
+            integrity_mod, "corpus_async_session_factory", make_session_factory(session)
+        )
+
+        async def not_found(*args, **kwargs):
+            return None
+
+        for name in ("find_line_by_text", "find_line_by_voice", "find_excluded_line"):
+            monkeypatch.setattr(integrity_mod, name, not_found)
+
+        asyncio.run(integrity_mod.run_integrity_check(vp, is_execute=True, client=client))
+
+        assert 300 not in client.deleted_notes
+        assert 200 not in client.deleted_notes
+
 
 # ============================================================
 # 5. child_deleter：步驟順序與回滾
@@ -552,8 +592,8 @@ class TestChildDeleter:
         assert client.deleted_notes == [300, 200]
         assert session.committed == 1
         assert session.rolled_back == 0
-        # 事後完整性檢查以相同 dry_run 設定執行
-        assert integrity_calls == [{"is_execute": True}]
+        # 事後完整性檢查一律只回報，不會自動刪卡
+        assert integrity_calls == [{"is_execute": False}]
 
     def test_allow_regen_requests_hard_delete(self, monkeypatch):
         _, _, repo, _, _ = _run_deleter(monkeypatch, fail_delete=False, allow_regen=True)
@@ -580,7 +620,7 @@ class TestChildDeleter:
         # 子卡未被刪除
         assert client.deleted_notes == []
         # 完整性檢查仍會執行（協助確認殘留狀態）
-        assert integrity_calls == [{"is_execute": True}]
+        assert integrity_calls == [{"is_execute": False}]
 
     def test_commit_failure_after_note_deletion_keeps_master_json(self, monkeypatch, caplog):
         """子卡已從 Anki 刪除後 commit 才失敗：不還原母卡 JSON（否則指回已刪的子卡），記 CRITICAL。
@@ -660,6 +700,52 @@ class TestChildDeleter:
         assert repo.delete_calls == []  # DB 未被標記
         assert client.deleted_notes == []
         assert session.committed == 0
+
+    @pytest.mark.parametrize("partial", [{"cloze_nid": 300}, {"context_nid": 200}])
+    def test_partial_triple_is_skipped_not_widened(self, monkeypatch, partial):
+        """只填了一個子卡 id 的任務要跳過，不能變成「清除該母卡全部子卡」。
+
+        A target with only one child id must be skipped instead of being
+        widened into "delete every child of this master".
+        """
+        vp = get_profile(PROJECT_JP_VERB_PAIR)
+        master_json = json.dumps([{"cloze_note_id": 300, "context_note_id": 200}])
+        client = DeleterFakeAnkiClient(notes_by_model={
+            vp.master_model: [note(100, vp.master_model, {"Intransitive_Data_JSON": master_json})],
+        })
+
+        async def fake_safe_read_list(card_service, note_id, field_name):
+            return json.loads(master_json) if field_name == "Intransitive_Data_JSON" else []
+
+        monkeypatch.setattr(
+            child_deleter_mod.AnkiJsonFieldManager, "safe_read_list", fake_safe_read_list
+        )
+        tasks = asyncio.run(child_deleter_mod._expand_tasks(
+            vp, client, SimpleNamespace(), [{"master_nid": 100, **partial}],
+        ))
+        assert tasks == []
+
+    def test_master_only_target_still_expands(self, monkeypatch):
+        """只填母卡的任務仍照舊展開成該母卡的全部子卡。
+
+        A master-only target still expands to all of the master's children.
+        """
+        vp = get_profile(PROJECT_JP_VERB_PAIR)
+        master_json = json.dumps([{"cloze_note_id": 300, "context_note_id": 200}])
+        client = DeleterFakeAnkiClient(notes_by_model={
+            vp.master_model: [note(100, vp.master_model, {"Intransitive_Data_JSON": master_json})],
+        })
+
+        async def fake_safe_read_list(card_service, note_id, field_name):
+            return json.loads(master_json) if field_name == "Intransitive_Data_JSON" else []
+
+        monkeypatch.setattr(
+            child_deleter_mod.AnkiJsonFieldManager, "safe_read_list", fake_safe_read_list
+        )
+        tasks = asyncio.run(child_deleter_mod._expand_tasks(
+            vp, client, SimpleNamespace(), [{"master_nid": 100}],
+        ))
+        assert tasks == [{"master_nid": 100, "cloze_nid": 300, "context_nid": 200}]
 
 
 # ============================================================

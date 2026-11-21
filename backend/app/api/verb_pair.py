@@ -1,6 +1,6 @@
-"""JP 動詞對（自動詞/他動詞）卡片 API 路由模組。
+"""JP verb pair (intransitive/transitive) card API router module.
 
-JP verb pair (intransitive/transitive) card API router module.
+JP 動詞對（自動詞/他動詞）卡片 API 路由模組。
 """
 
 import logging
@@ -20,16 +20,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/verb-pair", tags=["Verb Pair"])
 
 class GenerateChildCardsRequest(BaseModel):
-    """生成動詞對子卡片的請求結構。
+    """The request body for generating verb pair child cards.
 
-    Request schema for generating verb pair child cards.
+    生成動詞對子卡片的請求結構。
 
     Attributes:
-        master_note_id: 母卡片的 Anki note id。Anki note id of the master card.
-        deck_name: 子卡片目標牌組名稱。Target deck name for child cards.
-        target_verb: 目標動詞。The target verb.
-        source_game: 遊戲來源前綴。Source-game prefix.
-        context_dialogue: 上下文對話陣列。Context dialogue array.
+        master_note_id: the Anki note ID of the master card
+            母卡片的 Anki note id
+        deck_name: the target deck name for child cards
+            子卡片目標牌組名稱
+        target_verb: the target verb
+            目標動詞
+        source_game: the source game prefix
+            遊戲來源前綴
+        context_dialogue: the context dialogue lines
+            上下文對話陣列
     """
 
     master_note_id: int
@@ -44,23 +49,28 @@ async def generate_child_cards(
     card_service: CardService = Depends(get_card_service),
     relation_service: RelationService = Depends(get_relation_service)
 ):
-    """根據傳入的文本生成 Context 和 Cloze 子卡片並追加至母卡片。
+    """Generate Context and Cloze child cards from the given text and attach them to the master card.
 
-    Generate Context and Cloze child cards from the given text and attach
-    them to the master card.
+    根據傳入的文本生成 Context 和 Cloze 子卡片並追加至母卡片。
 
     Args:
-        request: 生成請求。The generation request.
-        card_service: 卡片服務（依賴注入）。Injected CardService.
-        relation_service: 關聯服務（依賴注入）。Injected RelationService.
+        request: the generation request
+            生成請求
+        card_service: the injected card service
+            卡片服務（依賴注入）
+        relation_service: the injected relation service
+            關聯服務（依賴注入）
 
     Returns:
-        含 status、message 與生成結果 data 的字典。
-        Dict containing status, message, and generation result data.
+        a dict with ``status``, ``message``, and the generation result ``data``
+        含 ``status``、``message`` 與生成結果 ``data`` 的字典
 
     Raises:
-        HTTPException: 發生未預期錯誤時回傳 500。
-            Returns 500 on unexpected errors.
+        FluencyTidesError: if the handler reports a business error; passed through to the global
+            handler
+            若 handler 回報業務錯誤；原樣交給全域 handler
+        HTTPException: if an unexpected error occurs (500)
+            若發生未預期錯誤（500）
     """
     handler = JPVerbPairHandler()
     parameters = request.model_dump()

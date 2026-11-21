@@ -1,10 +1,10 @@
-"""
-Task Handlers 模組。
-提供任務驅動架構 (Task-Driven Architecture) 的處理器實作。
+"""Task handlers package.
 
-Task handlers package.
+Task Handlers 套件。
 
 Provides the handler implementations of the task-driven architecture.
+
+提供任務驅動架構（Task-Driven Architecture）的處理器實作。
 """
 
 # 所有正式 handler 都在這裡 import，讓 @register_handler 在 import 套件時就執行。

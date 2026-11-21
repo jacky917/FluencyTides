@@ -1,5 +1,38 @@
-"""
+"""Structured-output LLM client module (OpenAI-compatible HTTP).
+
 LLM 結構化輸出客戶端模組（OpenAI 相容 HTTP）。
+
+This module wraps the interaction with LLMs that follow the OpenAI API format (for example Gemini's
+OpenAI-compatible endpoint, official OpenAI, and third-party relays), using Response Format (JSON Schema) to
+guarantee the output matches the given format.
+
+Refactored from old/Anki/utils/llm_client.py, keeping these key design points:
+
+- uses the AsyncOpenAI client for asynchronous I/O
+- enforces the JSON Schema constraint through the Structured Outputs feature
+- built-in retries (at most 3 attempts) and Markdown cleanup
+- temperature=0.0 for maximum format stability and fewer hallucinations
+
+Phase 2 improvements:
+
+- the return value became the LLMGenerateResult Pydantic model (with the raw text and retry statistics)
+- complete input/output logging was added (per llm-structured-output skill §9)
+- exceptions are wrapped as LLMServiceError, keeping the Infrastructure layer's error boundary uniform
+
+2026-09-06 hierarchy: attached to :class:`~app.infrastructure.llm.base.BaseLLMClient`; the schema tools moved to
+``schema_utils`` (this class keeps a delegating method of the same name for existing callers); retry exhaustion /
+quota / refusal now raise the matching ``LLMServiceError`` subclasses, with unchanged message text.
+
+Design decisions:
+
+- temperature is 0.0 because this LLM's job is "filling JSON fields precisely", not "creative writing", so format
+  consistency must be maximized and hallucinations reduced.
+- the retry interval is a fixed 2 seconds rather than exponential backoff, because LLM API errors are usually
+  transient (such as rate limits) and recover after a short wait.
+
+Dependencies:
+    - openai: the AsyncOpenAI client
+    - pydantic: data validation
 
 本模組封裝與 LLM（相容 OpenAI API 格式，例如 Gemini 的 OpenAI 相容端點、
 OpenAI 官方、各第三方中轉站）的交互，透過 Response Format (JSON Schema)
@@ -16,7 +49,7 @@ Phase 2 改進：
 - 新增完整的 input/output 日誌記錄（符合 llm-structured-output skill §9）。
 - 異常包裝為 LLMServiceError，保持 Infrastructure 層的錯誤邊界統一。
 
-2026-09-06 層級化：掛上 :class:`~app.infrastructure.llm.base.BaseLLMClient`；
+2026-09-06 層級化：掛上 ``BaseLLMClient``；
 schema 工具搬到 ``schema_utils``（本類保留同名轉呼方法供既有呼叫端）；
 重試耗盡 / 額度 / 拒答改拋 ``LLMServiceError`` 的對應子類，訊息文字不變。
 
@@ -26,17 +59,9 @@ schema 工具搬到 ``schema_utils``（本類保留同名轉呼方法供既有�
 - 重試間隔使用固定 2 秒而非指數退避，是因為 LLM API 的錯誤
   通常為瞬時性問題（如速率限制），短暫等待即可恢復。
 
-English summary:
-    Structured-output LLM client over any OpenAI-compatible HTTP endpoint
-    (Google's compatibility layer, OpenAI, third-party gateways). Enforces
-    schema-conformant output via response_format, with fixed-interval
-    retries, Markdown-fence cleanup and temperature=0.0. Now a
-    ``BaseLLMClient`` subclass; failures surface as typed
-    ``LLMServiceError`` subclasses with unchanged message text.
-
-Dependencies:
-    - openai: AsyncOpenAI 客戶端。AsyncOpenAI client.
-    - pydantic: 資料驗證。Data validation.
+依賴：
+    - openai：AsyncOpenAI 客戶端
+    - pydantic：資料驗證
 """
 
 import asyncio
@@ -78,18 +103,26 @@ _NO_SAFETY_SETTINGS_PROVIDERS: frozenset[str] = NO_SAFETY_SETTINGS_IDS
 
 
 class LLMClient(BaseLLMClient):
-    """封裝與 LLM（相容 OpenAI 格式）相關操作的非同步客戶端。
+    """Asynchronous client wrapping operations against an LLM compatible with the OpenAI format.
 
-    Async client wrapping operations against an OpenAI-compatible LLM.
+    封裝與 LLM（相容 OpenAI 格式）相關操作的非同步客戶端。
+
+    Uses the OpenAI API's response_format feature to guarantee structured JSON output; together with the JSON
+    Schema of the Anki models, this makes sure the data the LLM returns maps directly onto Anki note fields.
 
     使用 OpenAI API 的 response_format 功能強制保證結構化 JSON 輸出，
     配合 Anki 模型的 JSON Schema 定義，確保 LLM 回傳的資料能直接
     映射到 Anki 筆記的欄位中。
 
     Attributes:
-        _client: 非同步的 OpenAI API 客戶端實例。The AsyncOpenAI client.
-        _supports_safety_settings: 是否對此端點附帶 safety_settings。
-            Whether safety_settings is sent to this endpoint.
+        MAX_RETRIES: the maximum number of attempts, for handling temporary API errors
+            最大重試次數，用於處理暫時性 API 錯誤
+        RETRY_DELAY_SECONDS: the retry interval in seconds
+            重試間隔秒數
+        _client: the asynchronous OpenAI API client instance
+            非同步的 OpenAI API 客戶端實例
+        _supports_safety_settings: whether safety_settings is attached for this endpoint
+            是否對此端點附帶 safety_settings
     """
 
     # 此類別服務多個 provider 值（google / openai / 各中轉站），工廠不以此路由；
@@ -110,23 +143,22 @@ class LLMClient(BaseLLMClient):
         effort: EffortArg = None,
         endpoint: Endpoint | None = None,
     ) -> None:
-        """依端點（或舊式單組設定）初始化 AsyncOpenAI 客戶端。
+        """Initialize the AsyncOpenAI client from the endpoint (or the legacy single-set settings).
 
-        Initialize the AsyncOpenAI client from the endpoint, or from the
-        legacy settings when no endpoint is given.
+        依端點（或舊式單組設定）初始化 AsyncOpenAI 客戶端。
 
         Args:
-            model: 覆寫模型名；None 沿用 ``LLM_MODEL_NAME``。Instance-scoped
-                model override.
-            effort: 本 provider 不支援；給值即由基底拋錯。Unsupported here;
-                any value is rejected by the base class.
-            endpoint: 端點；None 讀 ``LLM_API_KEY`` / ``LLM_BASE_URL``。The
-                endpoint, or None for the legacy settings.
+            model: the model-name override for this instance; ``None`` keeps ``LLM_MODEL_NAME``
+                覆寫模型名；None 沿用 ``LLM_MODEL_NAME``
+            effort: not supported by this provider; any value is rejected by the base class
+                本 provider 不支援；給值即由基底拋錯
+            endpoint: the endpoint; ``None`` reads ``LLM_API_KEY`` / ``LLM_BASE_URL``
+                端點；None 讀 ``LLM_API_KEY`` / ``LLM_BASE_URL``
 
         Raises:
-            LLMServiceError: 端點類型不符、effort 給值、金鑰或端點網址未設定時。
-                Raised on an endpoint type mismatch, when effort is given, or
-                when the key or base URL is missing.
+            LLMServiceError: if the endpoint type mismatches, effort is given, the key or base URL is not set, or
+                the model name is empty
+                若端點類型不符、effort 給值、金鑰或端點網址未設定，或模型名為空
         """
         self._check_endpoint_type(endpoint)
         if endpoint is not None:
@@ -164,27 +196,40 @@ class LLMClient(BaseLLMClient):
         user_prompt: str,
         response_schema: dict[str, object],
     ) -> LLMGenerateResult:
-        """呼叫 LLM 並取得嚴格符合 response_schema 的 JSON 資料。
+        """Call the LLM and obtain JSON data that strictly conforms to ``response_schema``.
 
-        Call the LLM and obtain JSON data strictly conforming to
-        response_schema.
+        呼叫 LLM 並取得嚴格符合 response_schema 的 JSON 資料。
+
+        Uses the OpenAI API's response_format feature to guarantee compliant JSON output, together with retries and
+        Markdown cleanup, for reliable structured output. The schema is also appended to the system prompt as a
+        second safeguard for relays without strict json_schema support.
 
         利用 OpenAI API 的 response_format 功能保證輸出為合規的 JSON，
-        配合重試機制與 Markdown 格式清理，確保可靠的結構化輸出。
+        配合重試機制與 Markdown 格式清理，確保可靠的結構化輸出。schema 也會附加在系統提示中，
+        作為不支援 strict json_schema 的中轉站的雙重保險。
 
         Args:
-            system_prompt: 指定給 LLM 的系統提示。System prompt.
-            user_prompt: 使用者的輸入內容。User input.
-            response_schema: JSON Schema 定義字典。JSON Schema dict.
+            system_prompt: the system prompt given to the LLM
+                指定給 LLM 的系統提示
+            user_prompt: the user's input
+                使用者的輸入內容
+            response_schema: the JSON Schema definition dict
+                JSON Schema 定義字典
 
         Returns:
-            LLMGenerateResult Pydantic 模型實例。An LLMGenerateResult.
+            an ``LLMGenerateResult`` Pydantic model instance
+            ``LLMGenerateResult`` Pydantic 模型實例
 
         Raises:
-            LLMRetryExhaustedError: 多次重試後仍回傳空內容或非有效 JSON。
-            LLMRefusalError: 空內容且 finish_reason 為安全拒答。
-            LLMQuotaError: 速率限制在所有重試後仍失敗。
-            LLMServiceError: 其他 API 請求失敗。
+            LLMQuotaError: if rate limiting still fails after every retry
+                若速率限制在所有重試後仍失敗
+            LLMRefusalError: if the content is still empty after every retry and the last ``finish_reason`` is a
+                safety refusal
+                若所有重試後仍為空內容，且最後一次的 finish_reason 為安全拒答
+            LLMRetryExhaustedError: if empty content or invalid JSON is still returned after every retry
+                若多次重試後仍回傳空內容或非有效 JSON
+            LLMServiceError: if any other API request fails, or the API keeps returning an invalid format
+                若其他 API 請求失敗，或 API 持續回傳無效格式
         """
         logger.info(
             "LLM 結構化生成請求 -> model: %s, user_prompt 長度: %d 字元",
@@ -342,9 +387,22 @@ class LLMClient(BaseLLMClient):
     def _resolve_json_schema(
         cls, schema: dict[str, object], defs: dict[str, object] | None = None
     ) -> dict[str, object]:
-        """轉呼 :func:`schema_utils.resolve_json_schema`（相容保留）。
+        """Delegate to :func:`schema_utils.resolve_json_schema` (kept for compatibility).
 
-        Delegates to ``schema_utils.resolve_json_schema``; kept for existing
-        callers that reuse the flattener without instantiating a client.
+        轉呼 ``schema_utils.resolve_json_schema``（相容保留）。
+
+        Kept for existing callers that reuse the flattener without instantiating a client.
+
+        保留給不建立客戶端、直接重用攤平功能的既有呼叫端。
+
+        Args:
+            schema: the Pydantic-generated JSON Schema
+                Pydantic 產生的 JSON Schema
+            defs: the top-level ``$defs`` dict; ``None`` reads it from ``schema``
+                最上層的 ``$defs`` 字典；None 從 ``schema`` 讀取
+
+        Returns:
+            the schema with every ``$ref`` inlined and ``$defs`` removed
+            展開所有 ``$ref`` 並移除 ``$defs`` 後的 schema
         """
         return resolve_json_schema(schema, defs)

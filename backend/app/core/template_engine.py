@@ -1,21 +1,21 @@
-"""
+"""Core Jinja2 template engine.
+
 核心 Jinja2 模板引擎。
-
-Core Jinja2 template engine.
-
-本模組負責從檔案系統載入 .j2 格式的模板，
-並使用 Jinja2 渲染引擎將動態變數注入模板中。
 
 This module loads .j2 templates from the filesystem and renders them with
 dynamic variables via the Jinja2 engine.
 
-設計決策：
-    - 採用 StrictUndefined 模式，確保缺少變數時立即報錯，
-      而非靜默輸出空字串導致非預期的渲染結果。
+本模組負責從檔案系統載入 .j2 格式的模板，
+並使用 Jinja2 渲染引擎將動態變數注入模板中。
 
 Design decisions:
     - StrictUndefined mode is used so a missing variable fails immediately
-      instead of silently rendering an empty string.
+      instead of silently rendering an empty string and producing an
+      unexpected result.
+
+設計決策：
+    - 採用 StrictUndefined 模式，確保缺少變數時立即報錯，
+      而非靜默輸出空字串導致非預期的渲染結果。
 """
 
 import logging
@@ -35,45 +35,52 @@ logger = logging.getLogger(__name__)
 
 
 class TemplateEngineError(FluencyTidesError):
-    """模板引擎相關錯誤。
+    """An error related to the template engine.
 
-    Template-engine related error.
+    模板引擎相關錯誤。
     """
     error_code = "TEMPLATE_ENGINE_ERROR"
     status_code = 500
 
 
 class TemplateNotFoundError(TemplateEngineError):
-    """找不到指定的模板檔案時拋出。
+    """The error raised when the specified template file cannot be found.
 
-    Raised when the specified template file cannot be found.
+    找不到指定的模板檔案時拋出。
     """
     error_code = "TEMPLATE_NOT_FOUND"
 
 
 class TemplateEngine:
-    """Jinja2 模板載入與渲染核心引擎。
+    """The core engine for loading and rendering Jinja2 templates.
 
-    Core engine for loading and rendering Jinja2 templates.
-
-    負責從指定目錄載入模板檔案，並根據動態變數渲染內容。
+    Jinja2 模板載入與渲染核心引擎。
 
     Loads template files from a given directory and renders them with
     dynamic variables.
 
+    負責從指定目錄載入模板檔案，並根據動態變數渲染內容。
+
     Attributes:
-        _env: Jinja2 Environment 實例。Jinja2 Environment instance.
-        _template_dir: 模板檔案所在基礎目錄路徑。Base directory of templates.
+        _env: the Jinja2 Environment instance
+            Jinja2 Environment 實例
+        _template_dir: the base directory of the template files
+            模板檔案所在基礎目錄路徑
     """
 
     def __init__(self, template_dir: str | Path) -> None:
-        """初始化 TemplateEngine。
+        """Create an engine that loads templates from ``template_dir``.
 
-        Initialize the TemplateEngine.
+        建立從 ``template_dir`` 載入模板的引擎。
+
+        If the directory does not exist, it is created (with a warning).
+
+        目錄不存在時會自動建立（並記錄警告）。
 
         Args:
-            template_dir: Jinja2 模板檔案所在的基礎目錄路徑。
-                Base directory containing the Jinja2 template files.
+            template_dir: the base directory containing the Jinja2 template
+                files
+                Jinja2 模板檔案所在的基礎目錄路徑
         """
         self._template_dir = Path(template_dir)
 
@@ -103,24 +110,27 @@ class TemplateEngine:
         template_path: str,
         **template_vars: object,
     ) -> str:
-        """載入並渲染指定的 Jinja2 模板。
+        """Load and render the specified Jinja2 template.
 
-        Load and render the specified Jinja2 template.
+        載入並渲染指定的 Jinja2 模板。
 
         Args:
-            template_path: 模板相對路徑 (例如 'prompts/audio_evaluator.j2')。
-                Template path relative to the base directory.
-            **template_vars: 注入模板的動態變數。Dynamic variables injected
-                into the template.
+            template_path: the template path relative to the base directory
+                (for example ``'prompts/audio_evaluator.j2'``)
+                模板相對路徑（例如 ``'prompts/audio_evaluator.j2'``）
+            **template_vars: the dynamic variables injected into the template
+                注入模板的動態變數
 
         Returns:
-            渲染後的完整字串。The fully rendered string.
+            the fully rendered string
+            渲染後的完整字串
 
         Raises:
-            TemplateNotFoundError: 找不到對應的模板檔案時。
-                Raised when the template file cannot be found.
-            TemplateEngineError: 渲染過程中發生變數缺失或其他錯誤時。
-                Raised on missing variables or other rendering errors.
+            TemplateEngineError: if a variable is missing or another error
+                occurs while rendering
+                若渲染過程中發生變數缺失或其他錯誤
+            TemplateNotFoundError: if the template file cannot be found
+                若找不到對應的模板檔案
         """
         try:
             template = self._env.get_template(template_path)
@@ -148,16 +158,17 @@ class TemplateEngine:
             raise TemplateEngineError(f"模板 {template_path} 渲染失敗: {e}") from e
 
     def has_template(self, template_path: str) -> bool:
-        """檢查指定模板是否存在。
+        """Check whether the specified template exists.
 
-        Check whether the specified template exists.
+        檢查指定模板是否存在。
 
         Args:
-            template_path: 模板相對路徑。Template path relative to base dir.
+            template_path: the template path relative to the base directory
+                模板相對路徑
 
         Returns:
-            True 若模板檔案存在，否則 False。True if the template file
-            exists, otherwise False.
+            ``True`` if the template file exists, otherwise ``False``
+            模板檔案存在時為 ``True``，否則為 ``False``
         """
         target_path = self._template_dir / template_path
         return target_path.is_file()

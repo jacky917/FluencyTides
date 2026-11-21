@@ -1,8 +1,38 @@
-"""
-TG ``/setconfig`` 選單：管理每個用途各能力用的工具（能力路由計畫 capability_routing_FEAT_2026-10-19.md §8.5；
-前身為模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D7 的 ``/models``）。
+"""Telegram ``/setconfig`` menu for managing the tools each route key uses per capability.
 
-Telegram ``/setconfig`` menu for managing the tools of each route key and capability.
+TG ``/setconfig`` 選單：管理每個用途各能力用的工具。
+
+Defined by the capability routing plan (capability_routing_FEAT_2026-10-19.md §8.5); it replaces ``/models`` from
+D7 of the model routing plan (llm_model_routing_FEAT_2026-10-15.md).
+
+依據能力路由計畫 capability_routing_FEAT_2026-10-19.md §8.5；前身為模型路由計畫
+llm_model_routing_FEAT_2026-10-15.md D7 的 ``/models``。
+
+Flow::
+
+    /setconfig → route list (paged; the first row is the global *)
+                 └─ pick a route → pick a capability (only those the key declares)
+                                 └─ [Set] → pick provider → pick model → (with efforts) pick effort → confirm → save
+                                 └ [Restore default] → delete that row and show the setting that takes effect instead
+
+Each level lists only whitelisted options: ``llm`` / ``audio_llm`` use the endpoint whitelists in ``.env``, ``stt``
+uses ``STT_MODELS``, and ``audio_eval`` uses the fixed strategy list (a route key may narrow it further). Strategies
+have no model, so picking one goes straight to confirmation; a single effort is picked automatically, and the effort
+level is skipped for models that do not use effort. Every write goes through
+:mod:`app.services.capability_route_service` (whitelist check plus a trial build), the same as the API; settings are
+stored in the database and survive a restart.
+
+**No state machine**: each button's callback data carries the current position, formatted as
+``lr:<action>:<version>:<index…>``; indices replace names to stay within Telegram's 64-byte limit. The "version" is a
+hash of the route list (including each key's capabilities and strategy restrictions) and the per-capability
+whitelists: when the list changes (for example a redeploy changed ``.env``, or an orphan row was deleted), an old
+button's index may point at a different item, so the menu always reports "menu expired" instead of acting on it.
+Exception: the close button ``lr:x`` carries no version and works at any time. No state is left behind, and the menu
+never competes with other flows for user input. Only ``TG_ADMIN_CHAT_ID`` may use it.
+
+When the database cannot be read, ``/setconfig`` still shows the list (all ``.env`` defaults, with a warning) but
+accepts no action except the close button: the stored settings are unknown then, and the admin must not be led to
+think "nothing was set".
 
 流程::
 
@@ -26,12 +56,6 @@ effort 只有一個時自動選上，模型不使用 effort 時跳過這一層�
 
 讀不到資料庫時，``/setconfig`` 仍列出清單（皆為 ``.env`` 預設並附警示），但不接受任何
 操作（關閉鈕除外）——那時無法判斷各用途存了什麼，不能讓管理員以為「本來就沒有設定」。
-
-English summary:
-    Stateless inline-keyboard menu: every callback carries its position
-    (indices plus a version hash of the key list and whitelists), so stale
-    buttons are detected instead of misapplied. Writes go through the same
-    service as the HTTP API. Admin only; read-only while the DB is down.
 """
 
 import hashlib
@@ -107,7 +131,10 @@ _EMPTY_PROVIDERS = {
 
 
 class Action(StrEnum):
-    """callback data 的動作碼。Action codes carried in callback data."""
+    """Action codes carried in callback data.
+
+    callback data 的動作碼。
+    """
 
     LIST = "l"        # 清單（頁碼）
     DETAIL = "k"      # 用途詳情（用途）
@@ -130,22 +157,34 @@ _TOKEN_ARGS = frozenset({Action.CONFIRM, Action.SAVE})
 
 
 class StaleMenuError(Exception):
-    """按鈕所屬的選單已過期（清單變了、序號無效、格式不符）。The button is outdated or malformed."""
+    """An error raised when a button's menu is outdated (the list changed, an index is invalid, or the format is wrong).
+
+    按鈕所屬的選單已過期（清單變了、序號無效、格式不符）。
+    """
 
 
 class _AlreadyAnswered(Exception):
-    """已自行回覆了這次回呼查詢，外層不必再 answer。The callback query was already answered."""
+    """A signal that this callback query was already answered, so the caller must not answer it again.
+
+    已自行回覆了這次回調查詢，外層不必再 answer。
+    """
 
 
 @dataclass(frozen=True)
 class MenuKey:
-    """選單中的一個用途鍵。One route key in the menu.
+    """One route key in the menu.
+
+    選單中的一個用途鍵。
 
     Attributes:
-        key: 用途鍵。The route key.
-        capabilities: 列出的能力（宣告的能力，加上 DB 中存了值、但沒有宣告的）。Listed capabilities.
-        declared: 這個鍵宣告的能力（只有這些可以設定）。Capabilities that may be set.
-        strategies: 允許的評分策略；None 為全部。Allowed strategies, or None.
+        key: the route key
+            用途鍵
+        capabilities: the listed capabilities (the declared ones, plus any stored in the DB but not declared)
+            列出的能力（宣告的能力，加上 DB 中存了值、但沒有宣告的）
+        declared: the capabilities this key declares; only these may be set
+            這個鍵宣告的能力（只有這些可以設定）
+        strategies: the allowed scoring strategies; ``None`` means all
+            允許的評分策略；``None`` 為全部
     """
 
     key: str
@@ -155,7 +194,10 @@ class MenuKey:
 
 
 def _fingerprint(keys: tuple[MenuKey, ...], providers: Mapping[str, tuple[ProviderOption, ...]]) -> str:
-    """用途清單＋各能力白名單的雜湊（6 碼）。A short hash of the key list and whitelists."""
+    """Return a 6-character hash of the route list and the per-capability whitelists.
+
+    回傳用途清單＋各能力白名單的雜湊（6 碼）。
+    """
     text = repr((
         [(k.key, k.capabilities, sorted(k.declared), sorted(k.strategies or ())) for k in keys],
         [
@@ -168,15 +210,20 @@ def _fingerprint(keys: tuple[MenuKey, ...], providers: Mapping[str, tuple[Provid
 
 @dataclass(frozen=True)
 class MenuContext:
-    """一次操作所需的清單快照。The lists one menu interaction works on.
+    """A snapshot of the lists one menu interaction works on.
+
+    一次操作所需的清單快照。
 
     Attributes:
-        keys: 依顯示順序的用途鍵，第一個一定是全域 ``*``。Route keys, ``*`` first.
-        providers: 能力 → 可選的 provider（白名單非空；``audio_eval`` 為全部策略）。
-            Selectable providers per capability.
-        db_ok: 這份快照是否讀到了資料庫。Whether the DB was readable.
-        version: 由 ``keys`` 與 ``providers`` 算出的雜湊，寫進每個按鈕（不可指定）。
-            Derived from ``keys`` and ``providers``; not settable.
+        keys: the route keys in display order; the first is always the global ``*``
+            依顯示順序的用途鍵，第一個一定是全域 ``*``
+        providers: the selectable providers per capability (whitelists are non-empty; ``audio_eval`` lists every
+            strategy)
+            能力 → 可選的 provider（白名單非空；``audio_eval`` 為全部策略）
+        db_ok: whether this snapshot could read the database
+            這份快照是否讀到了資料庫
+        version: the hash derived from ``keys`` and ``providers``, written into every button; not settable
+            由 ``keys`` 與 ``providers`` 算出的雜湊，寫進每個按鈕（不可指定）
     """
 
     keys: tuple[MenuKey, ...]
@@ -185,25 +232,57 @@ class MenuContext:
     version: str = field(init=False)
 
     def __post_init__(self) -> None:
+        """Check that the global ``*`` comes first, then compute ``version``.
+
+        檢查第一項是全域 ``*``，再算出 ``version``。
+
+        Raises:
+            ValueError: if ``keys`` is empty or does not start with the global ``*``
+                若 ``keys`` 為空，或第一項不是全域 ``*``
+        """
         if not self.keys or self.keys[0].key != GLOBAL_ROUTE_KEY:
             raise ValueError("用途清單的第一項必須是全域 *")
         object.__setattr__(self, "version", _fingerprint(self.keys, self.providers))
 
     def key_at(self, index: int) -> MenuKey:
-        """序號對應的用途鍵。The route key at ``index``.
+        """Return the route key at ``index``.
+
+        回傳序號對應的用途鍵。
+
+        Args:
+            index: the key's index in ``keys``
+                用途鍵在 ``keys`` 中的序號
+
+        Returns:
+            the menu key at that index
+            該序號的用途鍵
 
         Raises:
-            StaleMenuError: 序號越界（清單已變）。
+            StaleMenuError: if the index is out of range (the list has changed)
+                若序號越界（清單已變）
         """
         if not 0 <= index < len(self.keys):
             raise StaleMenuError
         return self.keys[index]
 
     def capability_at(self, key_index: int, capability_index: int) -> str:
-        """序號對應的能力。The capability at the given indices.
+        """Return the capability at the given indices.
+
+        回傳序號對應的能力。
+
+        Args:
+            key_index: the route key's index
+                用途鍵的序號
+            capability_index: the capability's index within that key's ``capabilities``
+                能力在該鍵 ``capabilities`` 中的序號
+
+        Returns:
+            the capability name
+            能力名稱
 
         Raises:
-            StaleMenuError: 序號越界。
+            StaleMenuError: if either index is out of range
+                若任一序號越界
         """
         capabilities = self.key_at(key_index).capabilities
         if not 0 <= capability_index < len(capabilities):
@@ -211,10 +290,27 @@ class MenuContext:
         return capabilities[capability_index]
 
     def providers_for(self, key_index: int, capability_index: int) -> tuple[ProviderOption, ...]:
-        """這個鍵在這個能力上可選的 provider（評分策略依鍵的限縮過濾）。The selectable providers.
+        """Return the providers this key may pick for this capability.
+
+        回傳這個鍵在這個能力上可選的 provider。
+
+        Scoring strategies are filtered by the key's restriction.
+
+        評分策略依鍵的限縮過濾。
+
+        Args:
+            key_index: the route key's index
+                用途鍵的序號
+            capability_index: the capability's index within that key
+                能力在該鍵中的序號
+
+        Returns:
+            the selectable providers; empty when the whitelist allows none
+            可選的 provider；白名單沒有允許任何項目時為空
 
         Raises:
-            StaleMenuError: 序號越界。
+            StaleMenuError: if either index is out of range
+                若任一序號越界
         """
         menu_key = self.key_at(key_index)
         capability = self.capability_at(key_index, capability_index)
@@ -224,10 +320,25 @@ class MenuContext:
         return options
 
     def provider_at(self, key_index: int, capability_index: int, provider_index: int) -> ProviderOption:
-        """序號對應的 provider。The provider at the given indices.
+        """Return the provider at the given indices.
+
+        回傳序號對應的 provider。
+
+        Args:
+            key_index: the route key's index
+                用途鍵的序號
+            capability_index: the capability's index within that key
+                能力在該鍵中的序號
+            provider_index: the provider's index in :meth:`providers_for`
+                provider 在 ``providers_for`` 結果中的序號
+
+        Returns:
+            the provider option
+            provider 選項
 
         Raises:
-            StaleMenuError: 序號越界。
+            StaleMenuError: if any index is out of range
+                若任一序號越界
         """
         options = self.providers_for(key_index, capability_index)
         if not 0 <= provider_index < len(options):
@@ -235,10 +346,27 @@ class MenuContext:
         return options[provider_index]
 
     def model_at(self, key_index: int, capability_index: int, provider_index: int, model_index: int) -> ModelOption:
-        """序號對應的白名單模型。The whitelisted model at the given indices.
+        """Return the whitelisted model at the given indices.
+
+        回傳序號對應的白名單模型。
+
+        Args:
+            key_index: the route key's index
+                用途鍵的序號
+            capability_index: the capability's index within that key
+                能力在該鍵中的序號
+            provider_index: the provider's index
+                provider 的序號
+            model_index: the model's index in that provider's ``models``
+                模型在該 provider ``models`` 中的序號
+
+        Returns:
+            the model option
+            模型選項
 
         Raises:
-            StaleMenuError: 序號越界。
+            StaleMenuError: if any index is out of range
+                若任一序號越界
         """
         models = self.provider_at(key_index, capability_index, provider_index).models
         if not 0 <= model_index < len(models):
@@ -249,14 +377,44 @@ class MenuContext:
 def build_context(
     keys: list[MenuKey], providers: Mapping[str, tuple[ProviderOption, ...]] | None = None, *, db_ok: bool = True
 ) -> MenuContext:
-    """組出選單快照（版本由內容算出）；``providers`` 省略時讀目前的白名單。Build a menu context."""
+    """Build a menu snapshot whose version is derived from its contents.
+
+    組出選單快照（版本由內容算出）。
+
+    Args:
+        keys: the route keys in display order; the first must be the global ``*``
+            依顯示順序的用途鍵，第一項必須是全域 ``*``
+        providers: the selectable providers per capability; ``None`` reads the current whitelists
+            能力 → 可選的 provider；``None`` 時讀目前的白名單
+        db_ok: whether the database was readable
+            是否讀到了資料庫
+
+    Returns:
+        the menu snapshot
+        選單快照
+
+    Raises:
+        ValueError: if ``keys`` is empty or does not start with the global ``*``
+            若 ``keys`` 為空，或第一項不是全域 ``*``
+    """
     if providers is None:
         providers = {capability: tuple(list_providers(capability)) for capability in CAPABILITY_ORDER}
     return MenuContext(tuple(keys), dict(providers), db_ok)
 
 
 def menu_key(view: KeyView) -> MenuKey:
-    """服務層的用途鍵狀態轉成選單項目。A key view as a menu key."""
+    """Convert the service layer's view of a route key into a menu key.
+
+    把服務層的用途鍵狀態轉成選單項目。
+
+    Args:
+        view: the service layer's view of one route key
+            服務層的單一用途鍵狀態
+
+    Returns:
+        the menu key with its listed and declared capabilities and allowed strategies
+        帶有列出的能力、宣告的能力與允許策略的選單項目
+    """
     return MenuKey(
         view.route_key,
         view.capabilities,
@@ -266,10 +424,19 @@ def menu_key(view: KeyView) -> MenuKey:
 
 
 async def load_menu() -> tuple[MenuContext, list[KeyView]]:
-    """一次讀取，同時產生選單快照與清單內容（兩者來自同一份 DB 快照）。
+    """Load the menu snapshot and the list rows from a single read.
 
-    Load the menu context and the list rows from a single read, so the
-    version and the rows can never disagree.
+    一次讀取，同時產生選單快照與清單內容。
+
+    Both come from the same DB snapshot, so the version and the rows can never disagree. When the DB cannot be
+    read, the rows fall back to the ``.env`` defaults and the snapshot's ``db_ok`` is ``False``.
+
+    兩者來自同一份 DB 快照，所以版本與清單內容不會對不上。讀不到 DB 時，清單內容退回 ``.env`` 預設，
+    快照的 ``db_ok`` 為 ``False``。
+
+    Returns:
+        the menu snapshot and the service layer's view of every route key
+        選單快照，以及服務層的各用途鍵狀態
     """
     stored, read_ok = await routing.stored_choices()
     views = capability_route_service.views_from(stored, read_ok)
@@ -277,16 +444,38 @@ async def load_menu() -> tuple[MenuContext, list[KeyView]]:
 
 
 async def load_context() -> MenuContext:
-    """讀取目前的用途清單與白名單。Load the current key list and whitelists."""
+    """Load the current route list and whitelists.
+
+    讀取目前的用途清單與白名單。
+
+    Returns:
+        the menu snapshot
+        選單快照
+    """
     ctx, _ = await load_menu()
     return ctx
 
 
 def callback(ctx: MenuContext, action: Action, *args: int | str) -> str:
-    """組 callback data。Compose callback data for a button.
+    """Compose the callback data for a button.
+
+    組出按鈕的 callback data。
+
+    Args:
+        ctx: the menu snapshot whose version goes into the data
+            選單快照，其版本會寫進 data
+        action: the button's action
+            按鈕的動作
+        *args: the action's arguments (indices, or model and effort tokens)
+            動作的參數（序號，或模型與 effort 記號）
+
+    Returns:
+        the data in the form ``lr:<action>:<version>:<args…>``
+        格式為 ``lr:<動作>:<版本>:<參數…>`` 的 data
 
     Raises:
-        ValueError: 超過 64 位元組（序號設計下不應發生；測試鎖住上限）。
+        ValueError: if the data exceeds 64 bytes (should not happen with indices; tests lock the limit)
+            若超過 64 位元組（序號設計下不應發生；測試鎖住上限）
     """
     data = ":".join([PREFIX, action.value, ctx.version, *(str(arg) for arg in args)])
     if len(data.encode("utf-8")) > CALLBACK_DATA_LIMIT:
@@ -295,10 +484,24 @@ def callback(ctx: MenuContext, action: Action, *args: int | str) -> str:
 
 
 def parse_callback(data: str, ctx: MenuContext) -> tuple[Action, list[str]]:
-    """拆出動作與參數，並核對版本與參數個數。Split action and args, checking version and arity.
+    """Split callback data into its action and arguments, checking the version and the argument count.
+
+    拆出動作與參數，並核對版本與參數個數。
+
+    Args:
+        data: the button's callback data
+            按鈕的 callback data
+        ctx: the current menu snapshot whose version the data must match
+            目前的選單快照，data 的版本必須與它相同
+
+    Returns:
+        the action and its raw string arguments
+        動作，以及尚未轉換的字串參數
 
     Raises:
-        StaleMenuError: 格式不符、版本不同、動作未知或參數個數不對。
+        StaleMenuError: if the format is wrong, the version differs, the action is unknown, or the argument count
+            is wrong
+            若格式不符、版本不同、動作未知或參數個數不對
     """
     parts = data.split(":")
     if len(parts) < 3 or parts[0] != PREFIX or parts[2] != ctx.version:
@@ -314,10 +517,13 @@ def parse_callback(data: str, ctx: MenuContext) -> tuple[Action, list[str]]:
 
 
 def _index(raw: str) -> int:
-    """把序號字串轉成整數。Parse an index argument.
+    """Parse an index argument into an integer.
+
+    把序號字串轉成整數。
 
     Raises:
-        StaleMenuError: 不是整數。
+        StaleMenuError: if it is not an integer
+            若不是整數
     """
     try:
         return int(raw)
@@ -334,25 +540,46 @@ def _close_button() -> InlineKeyboardButton:
 
 
 def _title(capability: str) -> str:
-    """能力的中文名稱。The capability's display name."""
+    """Return the capability's Chinese display name, or the capability itself when it has none.
+
+    回傳能力的中文名稱；沒有名稱時回傳能力本身。
+    """
     return CAPABILITY_TITLES.get(capability, capability)
 
 
 def _describe_effective(view: RouteView) -> str:
-    """「(yinli)gemini-3.5-flash（來源：用途）」這樣的一行。One-line effective setting."""
+    """Return the effective setting as one line, such as "(yinli)gemini-3.5-flash（來源：用途）".
+
+    回傳「(yinli)gemini-3.5-flash（來源：用途）」這樣的一行生效設定。
+    """
     return f"<code>{html.escape(view.label)}</code>（來源：{_SOURCE_LABELS[view.resolved.source]}）"
 
 
 def _needs_attention(view: RouteView) -> bool:
-    """孤兒設定、有被略過的層，或生效設定目前無法使用。Whether to mark the row with ⚠️."""
+    """Return whether to mark the row with ⚠️.
+
+    回傳是否要以 ⚠️ 標出這一列。
+
+    A row is marked when it is an orphan setting, a layer was skipped, or the effective setting is unusable.
+
+    孤兒設定、有被略過的層，或生效設定目前無法使用時標出。
+    """
     return not view.capability_declared or bool(view.resolved.rejected) or view.problem is not None
 
 
 def _in_use(view: KeyView) -> list[RouteView]:
-    """目前會用到的能力：有評分策略的鍵只算策略本身與策略用到的能力，其他鍵算全部。
+    """Return the capabilities currently in use.
 
-    清單的 ⚠️ 只看這些——例如策略是 listen 時，STT 沒設定不影響評分，不必標出來。
-    The capabilities currently in use; the list marks only problems among them.
+    回傳目前會用到的能力。
+
+    For a key with a scoring strategy, only the strategy itself and the capabilities it uses count (the global
+    ``*`` also counts its ``llm``, the default of every card-building route); other keys count all. Orphan
+    capabilities are always included. The list's ⚠️ looks only at these: for example, with the listen strategy an
+    unset STT does not affect scoring and need not be marked.
+
+    有評分策略的鍵只算策略本身與策略用到的能力（全域 ``*`` 另外算 ``llm``，它也是各建卡用途的預設），
+    其他鍵算全部；孤兒能力一律算進來。清單的 ⚠️ 只看這些——例如策略是 listen 時，STT 沒設定不影響評分，
+    不必標出來。
     """
     strategy = view.view(CAPABILITY_AUDIO_EVAL)
     if strategy is None:
@@ -364,7 +591,15 @@ def _in_use(view: KeyView) -> list[RouteView]:
 
 
 def _summary_view(view: KeyView) -> RouteView | None:
-    """清單一列要顯示的能力：錄音評分類的鍵顯示評分策略，其他顯示第一個能力。The row's headline."""
+    """Return the capability shown on the key's list row.
+
+    回傳清單一列要顯示的能力。
+
+    Recording-scoring keys show their scoring strategy; other keys (including the global ``*``) show their first
+    capability, or ``None`` when they have none.
+
+    錄音評分類的鍵顯示評分策略；其他鍵（含全域 ``*``）顯示第一個能力，沒有能力時為 ``None``。
+    """
     if view.route_key != GLOBAL_ROUTE_KEY and view.view(CAPABILITY_AUDIO_EVAL) is not None:
         return view.view(CAPABILITY_AUDIO_EVAL)
     return view.views[0] if view.views else None
@@ -376,12 +611,27 @@ def _summary_view(view: KeyView) -> RouteView | None:
 
 
 def render_list(ctx: MenuContext, views: list[KeyView], page: int) -> tuple[str, InlineKeyboardMarkup]:
-    """用途清單（每頁 :data:`PAGE_SIZE` 個）；``⚠️`` 標出孤兒設定、有被略過的層，以及生效設定
-    目前無法使用的用途。頁碼夾在有效範圍內。分支鍵縮排在流程鍵之下。
+    """Render the paged route list, :data:`PAGE_SIZE` keys per page.
 
-    The paged route list; ``⚠️`` marks orphan rows, keys with a skipped
-    layer, and keys whose effective setting is unusable. The page number is
-    clamped into range; branch keys are indented under their flow key.
+    產生用途清單畫面（每頁 ``PAGE_SIZE`` 個）。
+
+    ``⚠️`` marks orphan settings, keys with a skipped layer, and keys whose effective setting is currently unusable.
+    The page number is clamped into the valid range. Branch keys are indented under their flow key.
+
+    ``⚠️`` 標出孤兒設定、有被略過的層，以及生效設定目前無法使用的用途。頁碼夾在有效範圍內。
+    分支鍵縮排在流程鍵之下。
+
+    Args:
+        ctx: the menu snapshot used to build the buttons
+            用來產生按鈕的選單快照
+        views: the service layer's view of every route key, in the same order as ``ctx.keys``
+            服務層的各用途鍵狀態，順序與 ``ctx.keys`` 相同
+        page: the requested page, 0-based; out-of-range values are clamped
+            要顯示的頁碼，從 0 開始；越界時夾回範圍內
+
+    Returns:
+        the message text and keyboard
+        訊息文字與鍵盤
     """
     pages = max(1, -(-len(views) // PAGE_SIZE))
     page = min(max(page, 0), pages - 1)
@@ -422,7 +672,26 @@ def render_list(ctx: MenuContext, views: list[KeyView], page: int) -> tuple[str,
 
 
 def render_detail(ctx: MenuContext, key_index: int, view: KeyView) -> tuple[str, InlineKeyboardMarkup]:
-    """單一用途：各能力目前生效的設定，選一個能力修改。One route's capabilities."""
+    """Render one route key's screen: each capability's effective setting, with a button per capability to change it.
+
+    產生單一用途的畫面：各能力目前生效的設定，選一個能力修改。
+
+    Args:
+        ctx: the menu snapshot
+            選單快照
+        key_index: the route key's index
+            用途鍵的序號
+        view: the freshly loaded view of that key
+            剛讀取的該用途鍵狀態
+
+    Returns:
+        the message text and keyboard
+        訊息文字與鍵盤
+
+    Raises:
+        StaleMenuError: if the index is out of range or the key's capabilities no longer match the snapshot
+            若序號越界，或該鍵的能力已與快照不同
+    """
     menu_key = ctx.key_at(key_index)
     if view.capabilities != menu_key.capabilities:
         raise StaleMenuError
@@ -447,7 +716,29 @@ def render_detail(ctx: MenuContext, key_index: int, view: KeyView) -> tuple[str,
 def render_capability(
     ctx: MenuContext, key_index: int, capability_index: int, view: RouteView
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """單一用途在一種能力上的詳情。One route's details for one capability."""
+    """Render one route key's details for one capability.
+
+    產生單一用途在一種能力上的詳情畫面。
+
+    The "Set" button appears only for declared capabilities, and "Restore default" only when the key has its own
+    stored setting.
+
+    「設定」鈕只在能力有宣告時出現；「恢復預設」只在該用途自己存了設定時出現。
+
+    Args:
+        ctx: the menu snapshot
+            選單快照
+        key_index: the route key's index
+            用途鍵的序號
+        capability_index: the capability's index within that key
+            能力在該鍵中的序號
+        view: the view of that key and capability
+            該用途在該能力上的狀態
+
+    Returns:
+        the message text and keyboard
+        訊息文字與鍵盤
+    """
     lines = [f"<b>{html.escape(view.route_key)}</b> → <b>{_title(view.capability)}</b>（{view.capability}）"]
     if not view.capability_declared:
         lines.append("⚠️ 程式中這個用途已不用這個能力（孤兒設定），可恢復預設以刪除。")
@@ -473,7 +764,10 @@ def render_capability(
 
 
 def _provider_text(capability: str, option: ProviderOption) -> str:
-    """provider 按鈕的文字。The provider button's text."""
+    """Return the text of a provider button.
+
+    回傳 provider 按鈕的文字。
+    """
     if capability == CAPABILITY_AUDIO_EVAL:
         return f"{option.id} — {option.title}" if option.title else option.id
     if option.type == option.id:
@@ -482,10 +776,14 @@ def _provider_text(capability: str, option: ProviderOption) -> str:
 
 
 def _next_after_provider(ctx: MenuContext, key_index: int, capability_index: int, provider_index: int) -> str:
-    """選完 provider 後的下一步：要選模型就去選模型；不選模型（策略）直接到確認。
+    """Return the callback data for picking a provider.
 
-    Where picking a provider leads: the model list, or straight to
-    confirmation for providers without a model.
+    回傳選 provider 按鈕的 callback data。
+
+    It leads to the model list when the provider needs a model; otherwise (a strategy) it goes straight to
+    confirmation.
+
+    要選模型就去選模型；不選模型（策略）直接到確認。
     """
     option = ctx.provider_at(key_index, capability_index, provider_index)
     if option.needs_model:
@@ -494,7 +792,30 @@ def _next_after_provider(ctx: MenuContext, key_index: int, capability_index: int
 
 
 def render_providers(ctx: MenuContext, key_index: int, capability_index: int) -> tuple[str, InlineKeyboardMarkup]:
-    """選 provider。Pick a provider."""
+    """Render the provider-selection screen.
+
+    產生選 provider 的畫面。
+
+    When nothing is selectable, the text explains where the whitelist is configured.
+
+    沒有可選的項目時，文字說明白名單在哪裡設定。
+
+    Args:
+        ctx: the menu snapshot
+            選單快照
+        key_index: the route key's index
+            用途鍵的序號
+        capability_index: the capability's index within that key
+            能力在該鍵中的序號
+
+    Returns:
+        the message text and keyboard
+        訊息文字與鍵盤
+
+    Raises:
+        StaleMenuError: if either index is out of range
+            若任一序號越界
+    """
     key = ctx.key_at(key_index).key
     capability = ctx.capability_at(key_index, capability_index)
     options = ctx.providers_for(key_index, capability_index)
@@ -516,11 +837,14 @@ def render_providers(ctx: MenuContext, key_index: int, capability_index: int) ->
 def _next_after_model(
     ctx: MenuContext, key_index: int, capability_index: int, provider_index: int, model_index: int
 ) -> str:
-    """選完模型後的下一步：多個 effort 去選 effort；只有一個時自動帶入序號 0、不使用 effort
-    時帶 :data:`NO_EFFORT`，直接到確認。
+    """Return the callback data for picking a model.
 
-    Where picking a model leads: the effort list, or straight to confirmation
-    with the single effort (index 0) or :data:`NO_EFFORT`.
+    回傳選模型按鈕的 callback data。
+
+    With several efforts it leads to the effort list; with a single effort it goes straight to confirmation with
+    index 0, and for a model without effort with :data:`NO_EFFORT`.
+
+    多個 effort 去選 effort；只有一個時自動帶入序號 0、不使用 effort 時帶 ``NO_EFFORT``，直接到確認。
     """
     option = ctx.model_at(key_index, capability_index, provider_index, model_index)
     if len(option.efforts) > 1:
@@ -532,7 +856,28 @@ def _next_after_model(
 def render_models(
     ctx: MenuContext, key_index: int, capability_index: int, provider_index: int
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """選模型。Pick a model."""
+    """Render the model-selection screen.
+
+    產生選模型的畫面。
+
+    Args:
+        ctx: the menu snapshot
+            選單快照
+        key_index: the route key's index
+            用途鍵的序號
+        capability_index: the capability's index within that key
+            能力在該鍵中的序號
+        provider_index: the provider's index
+            provider 的序號
+
+    Returns:
+        the message text and keyboard
+        訊息文字與鍵盤
+
+    Raises:
+        StaleMenuError: if any index is out of range
+            若任一序號越界
+    """
     key = ctx.key_at(key_index).key
     capability = ctx.capability_at(key_index, capability_index)
     provider = ctx.provider_at(key_index, capability_index, provider_index)
@@ -551,7 +896,30 @@ def render_models(
 def render_efforts(
     ctx: MenuContext, key_index: int, capability_index: int, provider_index: int, model_index: int
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """選 effort。Pick an effort."""
+    """Render the effort-selection screen.
+
+    產生選 effort 的畫面。
+
+    Args:
+        ctx: the menu snapshot
+            選單快照
+        key_index: the route key's index
+            用途鍵的序號
+        capability_index: the capability's index within that key
+            能力在該鍵中的序號
+        provider_index: the provider's index
+            provider 的序號
+        model_index: the model's index
+            模型的序號
+
+    Returns:
+        the message text and keyboard
+        訊息文字與鍵盤
+
+    Raises:
+        StaleMenuError: if any index is out of range
+            若任一序號越界
+    """
     key = ctx.key_at(key_index).key
     provider = ctx.provider_at(key_index, capability_index, provider_index)
     option = ctx.model_at(key_index, capability_index, provider_index, model_index)
@@ -575,10 +943,31 @@ def render_efforts(
 def resolve_selection(
     ctx: MenuContext, key_index: int, capability_index: int, provider_index: int, model_token: str, effort_token: str
 ) -> tuple[ProviderOption, str, str | None]:
-    """把序號換成 ``(provider, 模型名, effort)``。Turn indices into the actual choice.
+    """Turn the indices and tokens into the actual ``(provider, model name, effort)`` choice.
+
+    把序號換成 ``(provider, 模型名, effort)``。
+
+    Args:
+        ctx: the menu snapshot
+            選單快照
+        key_index: the route key's index
+            用途鍵的序號
+        capability_index: the capability's index within that key
+            能力在該鍵中的序號
+        provider_index: the provider's index
+            provider 的序號
+        model_token: a model index, or :data:`NO_MODEL` for a provider without a model
+            模型序號；不選模型的 provider 為 ``NO_MODEL``
+        effort_token: an effort index, or :data:`NO_EFFORT` for a model without effort
+            effort 序號；不使用 effort 的模型為 ``NO_EFFORT``
+
+    Returns:
+        the provider, the model name (empty without a model), and the effort (``None`` without effort)
+        provider、模型名（不選模型時為空字串）與 effort（不使用 effort 時為 ``None``）
 
     Raises:
-        StaleMenuError: 序號無效，或模型、effort 記號與白名單不符。
+        StaleMenuError: if an index is invalid, or the model or effort token does not match the whitelist
+            若序號無效，或模型、effort 記號與白名單不符
     """
     provider = ctx.provider_at(key_index, capability_index, provider_index)
     if model_token == NO_MODEL:
@@ -599,7 +988,32 @@ def resolve_selection(
 def render_confirm(
     ctx: MenuContext, key_index: int, capability_index: int, provider_index: int, model_token: str, effort_token: str
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """儲存前確認，顯示生效後的標籤。Confirm before saving."""
+    """Render the confirmation screen before saving, showing the label that will take effect.
+
+    產生儲存前的確認畫面，顯示生效後的標籤。
+
+    Args:
+        ctx: the menu snapshot
+            選單快照
+        key_index: the route key's index
+            用途鍵的序號
+        capability_index: the capability's index within that key
+            能力在該鍵中的序號
+        provider_index: the provider's index
+            provider 的序號
+        model_token: a model index, or :data:`NO_MODEL`
+            模型序號，或 ``NO_MODEL``
+        effort_token: an effort index, or :data:`NO_EFFORT`
+            effort 序號，或 ``NO_EFFORT``
+
+    Returns:
+        the message text and keyboard
+        訊息文字與鍵盤
+
+    Raises:
+        StaleMenuError: if an index or token is invalid
+            若序號或記號無效
+    """
     key = ctx.key_at(key_index).key
     capability = ctx.capability_at(key_index, capability_index)
     provider, model, effort = resolve_selection(
@@ -629,12 +1043,26 @@ def render_confirm(
 def render_result(
     ctx: MenuContext, key_index: int, title: str, view: RouteView | None, *, view_unavailable: bool = False
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """儲存或恢復預設後的結果。The result after a save or delete.
+    """Render the result screen after a save or a restore-to-default.
+
+    產生儲存或恢復預設後的結果畫面。
 
     Args:
-        view: 之後的狀態；刪除孤兒設定、或組不出狀態時為 None。The state afterwards.
-        view_unavailable: 寫入已完成但組不出之後的狀態（與孤兒設定刪除後的 None 區分）。
-            Whether the state could not be built.
+        ctx: the menu snapshot used for the "back to list" button
+            用來產生「返回清單」按鈕的選單快照
+        key_index: the route key's index, used to pick the list page to return to
+            用途鍵的序號，用來決定返回清單的哪一頁
+        title: the first line of the message
+            訊息的第一行
+        view: the state afterwards; ``None`` after deleting an orphan setting or when the state could not be built
+            之後的狀態；刪除孤兒設定、或組不出狀態時為 ``None``
+        view_unavailable: whether the write completed but the state afterwards could not be built (distinguishes
+            this from the ``None`` after deleting an orphan setting)
+            寫入已完成但組不出之後的狀態（與孤兒設定刪除後的 ``None`` 區分）
+
+    Returns:
+        the message text and keyboard
+        訊息文字與鍵盤
     """
     lines = [title]
     if view is not None:
@@ -652,7 +1080,24 @@ def render_result(
 def render_error(
     ctx: MenuContext, key_index: int, capability_index: int, message: str
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """寫入被拒時的畫面。Shown when a write is rejected."""
+    """Render the screen shown when a write is rejected.
+
+    產生寫入被拒時的畫面。
+
+    Args:
+        ctx: the menu snapshot
+            選單快照
+        key_index: the route key's index
+            用途鍵的序號
+        capability_index: the capability's index, for the "back" button
+            能力的序號，供「返回」按鈕使用
+        message: the rejection reason; it is HTML-escaped here
+            被拒的原因；這裡會做 HTML 跳脫
+
+    Returns:
+        the message text and keyboard
+        訊息文字與鍵盤
+    """
     rows = [[_button("⬅️ 返回", callback(ctx, Action.CAPABILITY, key_index, capability_index)), _close_button()]]
     return f"❌ 無法儲存：{html.escape(message)}", InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -663,7 +1108,18 @@ def render_error(
 
 
 def admin_denial(user: User | None) -> str | None:
-    """不是管理員時的提示；是管理員時為 None。Why the user may not use the menu, or None."""
+    """Return why the user may not use the menu.
+
+    回傳使用者不能使用選單的原因。
+
+    Args:
+        user: the Telegram user who sent the command or pressed the button; ``None`` is denied
+            送出指令或按下按鈕的 Telegram 使用者；``None`` 一律拒絕
+
+    Returns:
+        the denial message when ``TG_ADMIN_CHAT_ID`` is unset or the user is not the admin; ``None`` for the admin
+        未設定 ``TG_ADMIN_CHAT_ID`` 或不是管理員時的提示；是管理員時為 ``None``
+    """
     if settings.TG_ADMIN_CHAT_ID is None:
         return f"⛔ 系統未設定管理員（TG_ADMIN_CHAT_ID），/{COMMAND} 目前無法使用。"
     if user is None or user.id != settings.TG_ADMIN_CHAT_ID:
@@ -672,10 +1128,20 @@ def admin_denial(user: User | None) -> str | None:
 
 
 async def _edit(callback_query: CallbackQuery, screen: tuple[str, InlineKeyboardMarkup]) -> None:
-    """更新選單訊息；內容沒變時 Telegram 會回 400，視為成功。Update the menu message.
+    """Update the menu message with a screen.
+
+    以畫面更新選單訊息。
+
+    When the content is unchanged Telegram answers 400; that is treated as success.
+
+    內容沒變時 Telegram 會回 400，視為成功。
 
     Raises:
-        StaleMenuError: 訊息已刪除或無法存取（handle_menu 已先擋下，這裡是型別防護）。
+        StaleMenuError: if the message is deleted or inaccessible (``handle_menu`` already blocks this; this is a
+            type guard)
+            若訊息已刪除或無法存取（``handle_menu`` 已先擋下，這裡是型別防護）
+        TelegramBadRequest: if Telegram rejects the edit for any reason other than unchanged content
+            若 Telegram 因內容未變以外的原因拒絕更新
     """
     text, markup = screen
     message = callback_query.message
@@ -691,7 +1157,19 @@ async def _edit(callback_query: CallbackQuery, screen: tuple[str, InlineKeyboard
 
 @router.message(Command(COMMAND))
 async def command_setconfig_handler(message: Message) -> None:
-    """``/setconfig``：顯示用途清單。Show the route list."""
+    """Handle ``/setconfig`` by showing the route list.
+
+    處理 ``/setconfig``：顯示用途清單。
+
+    Non-admins get the denial message. Any failure while opening is logged with its traceback and reported to the
+    admin.
+
+    非管理員收到拒絕提示。開啟時的任何失敗都記下完整 traceback 並回報給管理員。
+
+    Args:
+        message: the command message
+            指令訊息
+    """
     denial = admin_denial(message.from_user)
     if denial is not None:
         await message.answer(denial)
@@ -711,7 +1189,18 @@ async def command_setconfig_handler(message: Message) -> None:
 # handle_menu 的過濾條件排除了 lr:x，兩者互斥，與註冊順序無關
 @router.callback_query(F.data == CLOSE_DATA)
 async def handle_close(callback_query: CallbackQuery) -> None:
-    """關閉選單。Close the menu."""
+    """Close the menu.
+
+    關閉選單。
+
+    The close button carries no version, so it works even on an expired menu.
+
+    關閉鈕不帶版本，選單過期後也能按。
+
+    Args:
+        callback_query: the close button's callback query
+            關閉鈕的回調查詢
+    """
     denial = admin_denial(callback_query.from_user)
     if denial is not None:
         await answer_callback(callback_query, denial, show_alert=True)
@@ -735,18 +1224,34 @@ _LEGACY_SETCONFIG_PREFIXES = ("setconfig_", "setcfg_val:")
 
 @router.callback_query(F.data.startswith(_LEGACY_SETCONFIG_PREFIXES))
 async def handle_legacy_setconfig(callback_query: CallbackQuery) -> None:
-    """舊 ``/setconfig`` 選單的按鈕。Buttons left over from the removed ``/setconfig`` menu."""
+    """Answer buttons left over from the removed ``/setconfig`` menu with the "menu expired" alert.
+
+    以「選單已過期」回覆舊 ``/setconfig`` 選單留下的按鈕。
+
+    Args:
+        callback_query: the old button's callback query
+            舊按鈕的回調查詢
+    """
     await answer_callback(callback_query, _STALE_ALERT, show_alert=True)
 
 
 @router.callback_query(F.data.startswith(f"{PREFIX}:") & (F.data != CLOSE_DATA))
 async def handle_menu(callback_query: CallbackQuery, app: Any = None) -> None:
-    """處理選單中的所有按鈕（關閉鈕除外）。Handle every menu button except close.
+    """Handle every menu button except the close button.
+
+    處理選單中的所有按鈕（關閉鈕除外）。
+
+    Expired or malformed buttons, and any action while the DB cannot be read, get an alert instead of acting.
+
+    過期或格式不符的按鈕，以及讀不到 DB 時的任何操作，都只回覆提示、不執行。
 
     Args:
-        callback_query: 回呼查詢。The callback query.
-        app: dispatcher 注入的 FastAPI app（寫入或刪除全域 ``*`` 的 ``llm`` 後重建診斷用的全域客戶端；
-            沒有時略過重建）。The FastAPI app injected by the dispatcher.
+        callback_query: the button's callback query
+            按鈕的回調查詢
+        app: the FastAPI app injected by the dispatcher, used to rebuild the diagnostics' global client after the
+            global ``*`` row's ``llm`` is written or deleted; the rebuild is skipped when it is missing
+            dispatcher 注入的 FastAPI app（寫入或刪除全域 ``*`` 的 ``llm`` 後重建診斷用的全域客戶端；
+            沒有時略過重建）
     """
     denial = admin_denial(callback_query.from_user)
     if denial is not None:
@@ -800,7 +1305,10 @@ async def handle_menu(callback_query: CallbackQuery, app: Any = None) -> None:
 
 
 def _target_key(ctx: MenuContext | None, data: str) -> str | None:
-    """盡量從 callback data 找出操作的用途鍵（只用於 log）。Best-effort key for logging."""
+    """Return the route key the callback data acts on, on a best-effort basis (for logging only).
+
+    盡量從 callback data 找出操作的用途鍵（只用於 log）。
+    """
     parts = data.split(":")
     if ctx is None or len(parts) < 4:
         return None
@@ -818,12 +1326,17 @@ async def _dispatch(
     args: list[str],
     app: Any = None,
 ) -> None:
-    """依動作切換畫面或寫入（參數個數已由 :func:`parse_callback` 檢查）。
+    """Switch screens or write, depending on the action.
 
-    Switch screens or write, by action (arity already checked).
+    依動作切換畫面或寫入。
+
+    The argument count has already been checked by :func:`parse_callback`.
+
+    參數個數已由 ``parse_callback`` 檢查。
 
     Raises:
-        StaleMenuError: 參數無效。
+        StaleMenuError: if an argument is invalid
+            若參數無效
     """
     count = len(args) - 2 if action in _TOKEN_ARGS else len(args)
     n = [_index(arg) for arg in args[:count]]
@@ -858,13 +1371,18 @@ async def _show_after_write(
     done: str,
     key: str,
 ) -> None:
-    """寫入已提交後組出並顯示結果畫面；任何一步失敗都明說「已完成」，不讓外層報成操作失敗。
+    """Build and show the result screen after a write has been committed.
 
-    Build and show the result of a committed write. If either step fails,
-    say the write succeeded instead of letting it surface as a failure.
+    寫入已提交後組出並顯示結果畫面。
+
+    If either step fails, the alert says the write was completed instead of letting the caller report it as a
+    failed operation.
+
+    任何一步失敗都明說「已完成」，不讓外層報成操作失敗。
 
     Raises:
-        _AlreadyAnswered: 畫面組不出或更新失敗、已改以提示回報。
+        _AlreadyAnswered: if building or updating the screen failed and an alert was sent instead
+            若畫面組不出或更新失敗、已改以提示回報
     """
     try:
         await _edit(callback_query, await build_screen())
@@ -885,14 +1403,18 @@ async def _show_after_write(
 
 
 async def _refresh_global_client_if(key: str, capability: str, app: Any) -> None:
-    """改的是全域 ``*`` 的 ``llm`` 時重建診斷用的全域客戶端（與 API 相同，模型路由計畫 D9）。
+    """Rebuild the diagnostics' global client when the change touched the global ``*`` row's ``llm``.
 
-    寫入或刪除後不論成敗都呼叫（結果未知時 DB 可能已改）。``app`` 由 dispatcher 注入
-    （``main.py`` 的 ``dp["app"]``）；沒有時無法重建，記 WARNING——不然診斷端點會一直停在舊的
+    改的是全域 ``*`` 的 ``llm`` 時重建診斷用的全域客戶端。
+
+    Same as the API (model routing plan D9). Called after every write or delete whether it succeeded or not, since
+    the DB may have changed when the outcome is unknown. ``app`` is injected by the dispatcher (``dp["app"]`` in
+    ``main.py``); without it the client cannot be rebuilt and a WARNING is logged, because otherwise the diagnostics
+    endpoint would silently keep the old global setting.
+
+    與 API 相同（模型路由計畫 D9）。寫入或刪除後不論成敗都呼叫（結果未知時 DB 可能已改）。``app`` 由 dispatcher
+    注入（``main.py`` 的 ``dp["app"]``）；沒有時無法重建，記 WARNING——不然診斷端點會一直停在舊的
     全域設定，卻沒有任何線索。
-
-    Rebuild the diagnostics' global client after any attempt to change the
-    global ``llm`` row; warn when the app was not injected.
     """
     if key != GLOBAL_ROUTE_KEY or capability != CAPABILITY_LLM:
         return
@@ -912,6 +1434,14 @@ async def _save(
     effort_token: str,
     app: Any = None,
 ) -> None:
+    """Save the selected setting and show the result.
+
+    儲存選定的設定並顯示結果。
+
+    A rejected write shows the error screen. The global client is refreshed whether or not the write succeeded.
+
+    寫入被拒時顯示錯誤畫面。不論寫入成敗都會重建全域客戶端。
+    """
     key = ctx.key_at(key_index).key
     capability = ctx.capability_at(key_index, capability_index)
     provider, model, effort = resolve_selection(
@@ -937,6 +1467,15 @@ async def _save(
 async def _delete(
     callback_query: CallbackQuery, ctx: MenuContext, key_index: int, capability_index: int, app: Any = None
 ) -> None:
+    """Delete the key's own setting for the capability (restore default) and show the result.
+
+    刪除該用途在這個能力上的設定（恢復預設）並顯示結果。
+
+    The result screen is built from a freshly loaded menu, because deleting an orphan setting shortens the list and
+    changes the version. The global client is refreshed whether or not the delete succeeded.
+
+    結果畫面用重新載入的選單產生，因為刪除孤兒設定會讓清單變短、版本改變。不論刪除成敗都會重建全域客戶端。
+    """
     key = ctx.key_at(key_index).key
     capability = ctx.capability_at(key_index, capability_index)
     try:

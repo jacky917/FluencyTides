@@ -1,6 +1,10 @@
-"""建卡草稿 API 的請求與回應模型（``docs/wip/server_drafts_FEAT_2026-11-04.md`` §4）。
+"""Request and response models of the create draft API.
 
-Request and response models of the create draft API.
+建卡草稿 API 的請求與回應模型（``docs/wip/server_drafts_FEAT_2026-11-04.md`` §4）。
+
+See ``docs/wip/server_drafts_FEAT_2026-11-04.md`` §4.
+
+詳見 ``docs/wip/server_drafts_FEAT_2026-11-04.md`` §4。
 """
 
 from typing import Any
@@ -13,7 +17,10 @@ from app.services.task_handlers.base import DuplicateDecision
 
 
 class DraftResult(BaseModel):
-    """生成結果：預先填好的建立參數。The generated create parameters."""
+    """The generation result: pre-filled create parameters.
+
+    生成結果：預先填好的建立參數。
+    """
 
     params: dict[str, Any] = Field(description="建立參數的草稿；勾選、修改後送到 POST /handlers/{name}/notes")
     suggested_tags: list[SuggestedTag] = Field(
@@ -22,7 +29,10 @@ class DraftResult(BaseModel):
 
 
 class DraftError(BaseModel):
-    """生成失敗的原因。Why the generation failed."""
+    """Why the generation failed.
+
+    生成失敗的原因。
+    """
 
     error_code: str = Field(
         description="沿用生成失敗時的錯誤碼，例如 LLM_SERVICE_ERROR；未預期的錯誤為 DRAFT_GENERATION_FAILED"
@@ -31,7 +41,14 @@ class DraftError(BaseModel):
 
 
 class DraftOut(BaseModel):
-    """一份建卡草稿（§4.1）。全站同一時間最多一份。One create draft; at most one site-wide."""
+    """One create draft (§4.1).
+
+    一份建卡草稿（§4.1）。
+
+    At most one exists site-wide at any time.
+
+    全站同一時間最多一份。
+    """
 
     id: str
     handler: str = Field(description="handler 名稱")
@@ -52,7 +69,10 @@ class DraftOut(BaseModel):
 
 
 class StartDraftRequest(BaseModel):
-    """``POST /handlers/{name}/drafts``：開始生成。"""
+    """The body of ``POST /handlers/{name}/drafts``, which starts generation.
+
+    ``POST /handlers/{name}/drafts``：開始生成。
+    """
 
     params: dict[str, Any] = Field(default_factory=dict, description="草稿輸入，依 draft_schema")
     duplicate_decision: DuplicateDecision | None = Field(
@@ -65,14 +85,20 @@ class StartDraftRequest(BaseModel):
 
 
 class UpdateDraftRequest(BaseModel):
-    """``PATCH /drafts/{id}``：存網頁的編輯狀態。"""
+    """The body of ``PATCH /drafts/{id}``, which saves the web page's editing state.
+
+    ``PATCH /drafts/{id}``：存網頁的編輯狀態。
+    """
 
     state: dict[str, Any] = Field(description="網頁的編輯狀態（勾選、修改過的內容），後端不解讀；上限 256 KB")
     version: int = Field(description="讀到的草稿版本")
 
 
 class RetryDraftRequest(BaseModel):
-    """``POST /drafts/{id}/retry``：生成失敗後重試。"""
+    """The body of ``POST /drafts/{id}/retry``, which retries after a failed generation.
+
+    ``POST /drafts/{id}/retry``：生成失敗後重試。
+    """
 
     version: int = Field(description="讀到的草稿版本")
     params: dict[str, Any] | None = Field(default=None, description="新的草稿輸入；省略時沿用原本的輸入")

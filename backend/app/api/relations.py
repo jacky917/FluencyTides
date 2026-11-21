@@ -1,13 +1,12 @@
-"""
+"""Card relation REST API router module.
+
 卡片關聯 REST API 路由模組。
-
-Card relation REST API router module.
-
-提供知識圖譜查詢與關聯資料的手動增刪改查介面。
-遵守 Clean Architecture，所有業務邏輯委託給 RelationService 執行。
 
 Provides knowledge-graph queries and manual CRUD endpoints for relation data.
 Follows Clean Architecture: all business logic is delegated to RelationService.
+
+提供知識圖譜查詢與關聯資料的手動增刪改查介面。
+遵守 Clean Architecture，所有業務邏輯委託給 RelationService 執行。
 """
 
 import logging
@@ -47,19 +46,21 @@ async def get_graph_data(
     anki_client: AnkiClient = Depends(get_anki_client),
     relation_service: RelationService = Depends(get_relation_service),
 ) -> dict[str, list[dict]]:
-    """取得知識圖譜資料的 Controller 端點。
+    """Return the knowledge graph data.
 
-    Controller endpoint that returns global knowledge graph data.
+    取得知識圖譜資料。
 
     Args:
-        deck_name: (可選) 篩選特定牌組的名稱。Optional deck name filter.
-        anki_client: 注入的 AnkiClient 實例。Injected AnkiClient instance.
-        relation_service: 注入的 RelationService 實例。
-            Injected RelationService instance.
+        deck_name: the deck to filter by; ``None`` means all decks
+            篩選特定牌組的名稱；``None`` 為全部牌組
+        anki_client: the injected AnkiClient instance
+            注入的 AnkiClient 實例
+        relation_service: the injected RelationService instance
+            注入的 RelationService 實例
 
     Returns:
-        圖譜資料字典: {"nodes": [...], "links": [...]}。
-        Graph data dict: {"nodes": [...], "links": [...]}.
+        the graph data ``{"nodes": [...], "links": [...]}``
+        圖譜資料字典 ``{"nodes": [...], "links": [...]}``
     """
     query = deck_term(deck_name) if deck_name else "deck:*"
     note_ids = await anki_client.find_notes(query)
@@ -88,17 +89,19 @@ async def create_relation(
     request: CardRelationCreate,
     relation_service: RelationService = Depends(get_relation_service),
 ) -> CardRelationRead:
-    """手動建立關聯的 Controller 端點。
+    """Create a card relation manually.
 
-    Controller endpoint that manually creates a card relation.
+    手動建立卡片關聯。
 
     Args:
-        request: 關聯建立 DTO。The relation-creation DTO.
-        relation_service: 注入的 RelationService 實例。
-            Injected RelationService instance.
+        request: the relation creation DTO
+            關聯建立 DTO
+        relation_service: the injected RelationService instance
+            注入的 RelationService 實例
 
     Returns:
-        已建立的關聯資料。The created relation record.
+        the created relation record
+        已建立的關聯資料
     """
     return await relation_service.create_relation(request)
 
@@ -112,16 +115,17 @@ async def create_relation(
 async def get_relation_types(
     relation_service: RelationService = Depends(get_relation_service),
 ) -> list[str]:
-    """取得關聯類型的 Controller 端點。
+    """Return all registered relation type names.
 
-    Controller endpoint that returns all registered relation type names.
+    取得所有已註冊的關聯類型名稱。
 
     Args:
-        relation_service: 注入的 RelationService 實例。
-            Injected RelationService instance.
+        relation_service: the injected RelationService instance
+            注入的 RelationService 實例
 
     Returns:
-        關聯類型名稱列表。A list of relation type names.
+        the relation type names
+        關聯類型名稱串列
     """
     return await relation_service.get_all_relation_types()
 
@@ -136,18 +140,19 @@ async def delete_relation_by_nodes(
     request: CardRelationDelete,
     relation_service: RelationService = Depends(get_relation_service),
 ) -> dict[str, int]:
-    """刪除指定關聯的 Controller 端點。
+    """Delete the specified relation between two nodes.
 
-    Controller endpoint that precisely deletes the relation between two nodes.
+    精準刪除兩個節點之間的指定關聯。
 
     Args:
-        request: 關聯刪除 DTO。The relation-deletion DTO.
-        relation_service: 注入的 RelationService 實例。
-            Injected RelationService instance.
+        request: the relation deletion DTO
+            關聯刪除 DTO
+        relation_service: the injected RelationService instance
+            注入的 RelationService 實例
 
     Returns:
-        刪除結果摘要，例如 {"deleted_count": 2}。
-        Deletion summary, e.g. {"deleted_count": 2}.
+        the deletion summary, for example ``{"deleted_count": 2}``
+        刪除結果摘要，例如 ``{"deleted_count": 2}``
     """
     return await relation_service.delete_relation_by_nodes(request)
 
@@ -162,18 +167,19 @@ async def delete_relations_by_note_id(
     note_id: int,
     relation_service: RelationService = Depends(get_relation_service),
 ) -> dict[str, int]:
-    """連動刪除卡片關聯的 Controller 端點。
+    """Delete every relation that involves a removed note.
 
-    Controller endpoint that cascades relation deletion for a removed note.
+    連動刪除與已刪除筆記相關的所有關聯。
 
     Args:
-        note_id: 目標 Anki Note ID。Target Anki note ID.
-        relation_service: 注入的 RelationService 實例。
-            Injected RelationService instance.
+        note_id: the target Anki note ID
+            目標 Anki Note ID
+        relation_service: the injected RelationService instance
+            注入的 RelationService 實例
 
     Returns:
-        刪除結果摘要，例如 {"deleted_count": 2}。
-        Deletion summary, e.g. {"deleted_count": 2}.
+        the deletion summary, for example ``{"deleted_count": 2}``
+        刪除結果摘要，例如 ``{"deleted_count": 2}``
     """
     deleted_count = await relation_service.delete_relations_by_note_id(note_id)
     return {"deleted_count": deleted_count}
@@ -203,24 +209,29 @@ async def sync_relations(
     anki_client: AnkiClient = Depends(get_anki_client),
     relation_service: RelationService = Depends(get_relation_service),
 ) -> RelationSyncResponse:
-    """同步清理孤兒關聯的 Controller 端點。
+    """Sync with Anki and prune orphan relations.
 
-    Controller endpoint that syncs with Anki and prunes orphan relations.
+    與 Anki 同步並清理孤兒關聯。
 
     Args:
-        force: 要刪超過一半時仍執行（Anki 回傳 0 張筆記時照樣拒絕）。Delete even
-            when more than half would go; an empty Anki answer is still refused.
-        anki_client: 注入的 AnkiClient 實例。Injected AnkiClient instance.
-        relation_service: 注入的 RelationService 實例。
-            Injected RelationService instance.
+        force: delete even when more than half would go (an Anki answer of 0 notes is still refused)
+            要刪超過一半時仍執行（Anki 回傳 0 張筆記時照樣拒絕）
+        anki_client: the injected AnkiClient instance
+            注入的 AnkiClient 實例
+        relation_service: the injected RelationService instance
+            注入的 RelationService 實例
 
     Returns:
-        結果摘要。The summary.
+        the result summary
+        結果摘要
 
     Raises:
-        RelationSyncEmptyAnkiError: 409——Anki 回傳 0 張筆記（``force`` 也無效）。
-        RelationSyncNeedsForceError: 409——要刪超過一半且未帶 ``force``。
-        AnkiConnectError: 502——連不上 Anki 或 Anki 回報錯誤（不刪任何資料）。
+        AnkiConnectError: if Anki is unreachable or reports an error; nothing is deleted (502)
+            若連不上 Anki 或 Anki 回報錯誤；不刪任何資料（502）
+        RelationSyncEmptyAnkiError: if Anki returns 0 notes; ``force`` does not help (409)
+            若 Anki 回傳 0 張筆記；``force`` 也無效（409）
+        RelationSyncNeedsForceError: if more than half would be deleted and ``force`` is not set (409)
+            若要刪超過一半且未帶 ``force``（409）
     """
     result = await relation_service.sync_with_anki(anki_client, force=force)
     return RelationSyncResponse(

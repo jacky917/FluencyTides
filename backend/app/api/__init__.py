@@ -1,4 +1,4 @@
-"""REST API 路由套件。
+"""REST API routers package.
 
-REST API routers package.
+REST API 路由套件。
 """

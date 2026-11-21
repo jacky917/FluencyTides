@@ -1,5 +1,4 @@
-"""
-共用工具模組。
+"""Shared utility modules.
 
-Shared utility modules.
+共用工具模組。
 """

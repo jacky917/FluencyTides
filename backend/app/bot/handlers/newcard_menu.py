@@ -1,27 +1,26 @@
-"""
+"""Unified /newcard command entry module.
+
 統一 /newcard 指令入口模組。
+
+When the user types /newcard, the bot shows an inline keyboard of card types for the user to choose from. Adding a
+new note type in the future only requires an entry in the ``CARD_TYPES`` list plus a dispatch branch in
+``handle_newcard_select`` — no new commands to memorize.
 
 當使用者輸入 /newcard 時，Bot 會彈出 Inline Keyboard 按鈕列表，
 讓使用者選擇要新增的卡片類型。未來新增筆記類型時，只需在
-CARD_TYPES 清單中加一筆即可，無需記憶新指令。
+``CARD_TYPES`` 清單中加一筆，並在 ``handle_newcard_select`` 加上對應的分派即可，無需記憶新指令。
+
+Design principles:
+
+- This module belongs to the bot controller layer and must contain no business logic.
+- Pagination keeps each page to at most 4 buttons to avoid crowding on mobile screens.
+- The actual flow of each card type is delegated to its handler module.
 
 設計原則：
+
 - 此模組屬於 Bot Controller 層，嚴禁包含任何業務邏輯。
 - 分頁邏輯確保每頁最多 4 個按鈕，避免行動裝置畫面擁擠。
 - 各卡片類型的實際處理流程委派給對應的 handler 模組。
-
-Unified /newcard command entry module.
-
-When the user types /newcard, the bot shows an inline keyboard of card
-types. Adding a new note type in the future only requires appending an
-entry to CARD_TYPES — no new commands to memorize.
-
-Design principles:
-- This module belongs to the bot controller layer and must contain no
-  business logic.
-- Pagination keeps each page to at most 4 buttons to avoid crowding on
-  mobile screens.
-- The actual flow of each card type is delegated to its handler module.
 """
 
 import logging
@@ -44,10 +43,10 @@ router = Router(name="newcard_menu_router")
 # ============================================================================
 # 卡片類型註冊表 (Card Type Registry)
 # ============================================================================
-# 未來新增筆記類型時，只需在這裡多加一筆即可。
+# 未來新增筆記類型時，在這裡多加一筆，並在 handle_newcard_select 加上對應的分派。
 # - key: 唯一識別碼，用於 callback_data 的路由。
 # - label: 顯示在 Inline Keyboard 按鈕上的文字。
-# - description: 簡短的功能描述，供 /help 使用。
+# - description: 簡短的功能描述（目前沒有程式讀取；/help 的文字寫在 commands.py）。
 
 CARD_TYPES: list[dict[str, str]] = [
     {
@@ -81,25 +80,29 @@ ITEMS_PER_PAGE = 4
 # ============================================================================
 
 def build_newcard_keyboard(page: int = 0) -> InlineKeyboardMarkup:
-    """構建帶分頁的卡片類型選擇 Inline Keyboard。
+    """Build the paginated card-type selection inline keyboard.
 
-    Build the paginated card-type selection inline keyboard.
-
-    分頁規則：
-    - 每頁最多 ITEMS_PER_PAGE 個卡片類型按鈕。
-    - 若總數 ≤ ITEMS_PER_PAGE：不顯示翻頁按鈕。
-    - 若有上/下頁：在底部加入翻頁導航列。
+    構建帶分頁的卡片類型選擇 Inline Keyboard。
 
     Pagination rules:
-    - Each page holds at most ITEMS_PER_PAGE card-type buttons.
-    - If the total is <= ITEMS_PER_PAGE, no paging buttons are shown.
-    - When previous/next pages exist, a navigation row is appended.
+
+    - Each page holds at most ``ITEMS_PER_PAGE`` card-type buttons.
+    - If the total is at most ``ITEMS_PER_PAGE``, no paging buttons are shown.
+    - When previous or next pages exist, a navigation row is appended at the bottom.
+
+    分頁規則：
+
+    - 每頁最多 ``ITEMS_PER_PAGE`` 個卡片類型按鈕。
+    - 若總數 ≤ ``ITEMS_PER_PAGE``：不顯示翻頁按鈕。
+    - 若有上/下頁：在底部加入翻頁導航列。
 
     Args:
-        page: 目前的頁碼（從 0 開始）。Current page number (0-based).
+        page: the current page number, 0-based; out-of-range values are clamped into range
+            目前的頁碼（從 0 開始）；越界時夾回有效範圍
 
     Returns:
-        組裝好的 InlineKeyboardMarkup。The assembled InlineKeyboardMarkup.
+        the assembled keyboard
+        組裝好的 InlineKeyboardMarkup
     """
     total = len(CARD_TYPES)
     total_pages = max(1, math.ceil(total / ITEMS_PER_PAGE))
@@ -144,18 +147,18 @@ def build_newcard_keyboard(page: int = 0) -> InlineKeyboardMarkup:
 
 @router.message(Command("newcard"))
 async def cmd_newcard(message: Message) -> None:
-    """統一的 /newcard 指令入口。
+    """Handle the unified /newcard command entry point.
 
-    Unified /newcard command entry point.
+    統一的 /newcard 指令入口。
+
+    Shows the inline keyboard menu of all available card types; tapping one enters the corresponding creation flow.
 
     顯示所有可用卡片類型的 Inline Keyboard 選單，
     讓使用者點選後進入對應的新增流程。
 
-    Shows the inline keyboard menu of all available card types so the user
-    can enter the corresponding creation flow.
-
     Args:
-        message: Telegram 訊息物件。The Telegram message object.
+        message: the Telegram message
+            Telegram 訊息物件
     """
     keyboard = build_newcard_keyboard(page=0)
     await message.answer(
@@ -170,12 +173,17 @@ async def cmd_newcard(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("newcard_page:"))
 async def handle_newcard_page(callback: CallbackQuery) -> None:
-    """處理分頁翻頁按鈕的回呼。
+    """Handle the callbacks of the pagination buttons.
 
-    Handle pagination button callbacks.
+    處理分頁翻頁按鈕的回調。
+
+    Tapping the button for the page already shown is not an error.
+
+    連點同一顆換頁按鈕（已經是這一頁）不算錯誤。
 
     Args:
-        callback: 回呼查詢物件。The callback query object.
+        callback: the callback query
+            回調查詢物件
     """
     page_str = callback.data.replace("newcard_page:", "", 1)
     try:
@@ -205,21 +213,25 @@ async def handle_newcard_select(
     card_service: CardService,
     anki_client: AnkiClient,
 ) -> None:
-    """處理使用者選擇的卡片類型，分派到對應的處理流程。
+    """Handle the user's card-type selection and dispatch to the matching flow.
 
-    Handle the user's card-type selection and dispatch to the matching flow.
+    處理使用者選擇的卡片類型，分派到對應的處理流程。
+
+    Acts strictly as a dispatcher with no business logic; each card type's actual flow is delegated to the public
+    function of its module. An unknown key gets a "not implemented" message.
 
     此處嚴格作為分派器（Dispatcher），不包含任何業務邏輯。
-    各卡片類型的實際處理流程委派給對應模組的公開函式。
-
-    Acts strictly as a dispatcher with no business logic; each card type's
-    actual flow is delegated to the public function of its module.
+    各卡片類型的實際處理流程委派給對應模組的公開函式。未知的類型會回覆「尚未實作」。
 
     Args:
-        callback: 回呼查詢物件。The callback query object.
-        state: aiogram FSM 上下文。The aiogram FSM context.
-        card_service: 注入的 CardService。Injected CardService instance.
-        anki_client: 注入的 AnkiClient。Injected AnkiClient instance.
+        callback: the callback query
+            回調查詢物件
+        state: the aiogram FSM context
+            aiogram FSM 上下文
+        card_service: the injected card service (currently unused here)
+            注入的 CardService（目前這裡沒有用到）
+        anki_client: the injected AnkiConnect client (currently unused here)
+            注入的 AnkiClient（目前這裡沒有用到）
     """
     card_type_key = callback.data.replace("newcard:", "", 1)
     await answer_callback(callback)

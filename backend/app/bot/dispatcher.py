@@ -1,13 +1,12 @@
-"""
+"""Telegram Bot dispatcher configuration module.
+
 Telegram Bot Dispatcher 配置模組。
-
-Telegram Bot dispatcher configuration module.
-
-本模組負責初始化 aiogram 的 Dispatcher 與 Bot 實例，
-並註冊所有的 Router (Handlers) 與 Middlewares。
 
 This module initializes the aiogram Dispatcher and Bot instances,
 and registers all routers (handlers) and middlewares.
+
+本模組負責初始化 aiogram 的 Dispatcher 與 Bot 實例，
+並註冊所有的 Router (Handlers) 與 Middlewares。
 """
 
 import logging
@@ -24,16 +23,18 @@ logger = logging.getLogger(__name__)
 
 
 def setup_dispatcher() -> Dispatcher:
-    """初始化並配置 aiogram Dispatcher。
+    """Initialize and configure the aiogram Dispatcher.
 
-    Initialize and configure the aiogram Dispatcher.
+    初始化並配置 aiogram Dispatcher。
 
-    註冊全域的 Middlewares 以及所有業務 Handlers。
+    Registers global middlewares, all business handlers, and the global
+    error handler. Updates from the same person are processed one at a time.
 
-    Registers global middlewares and all business handlers.
+    註冊全域的 Middlewares、所有業務 Handlers 與全域錯誤處理。同一個人的 update 排隊處理。
 
     Returns:
-        配置好的 Dispatcher 實例。The configured Dispatcher instance.
+        the configured Dispatcher instance
+        配置好的 Dispatcher 實例
     """
     # 同一個人（bot＋聊天室＋使用者）的 update 排隊處理，不同人互不影響。
     # 沒有它時，Telegram 變慢、使用者連點按鈕，同一個人的多個 update 會並行執行，
@@ -81,18 +82,19 @@ def setup_dispatcher() -> Dispatcher:
 
 
 def create_bot() -> Bot | None:
-    """建立 aiogram Bot 實例。
+    """Create the aiogram Bot instance, with HTML as the default parse mode.
 
-    Create the aiogram Bot instance.
+    建立 aiogram Bot 實例，預設解析模式為 HTML。
 
-    若環境變數中未設定 TG_BOT_TOKEN，將回傳 None，
-    表示不啟用 Bot 服務。
-
-    Returns None when TG_BOT_TOKEN is not set in the environment,
+    Returns ``None`` when TG_BOT_TOKEN is not set in the environment,
     meaning the bot service is disabled.
 
+    若環境變數中未設定 TG_BOT_TOKEN，將回傳 ``None``，
+    表示不啟用 Bot 服務。
+
     Returns:
-        Bot 實例或 None。The Bot instance, or None.
+        the Bot instance, or ``None`` if no token is set
+        Bot 實例；未設定 token 時為 ``None``
     """
     token = settings.TG_BOT_TOKEN
     if not token:

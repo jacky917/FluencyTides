@@ -1,15 +1,14 @@
-"""單字卡生成 Telegram Bot FSM Handler。
+"""Vocabulary-card creation Telegram Bot FSM handler.
+
+單字卡生成 Telegram Bot FSM Handler。
+
+This module implements the interactive creation flow for word/phrase cards, replacing the previous stateless
+fallback generation. Flow: start the vocabulary flow -> wait for a word -> create an Anki card holding only the word
+through the service layer (no LLM call yet) -> finish.
 
 本模組實作單字/片語卡的互動式新增流程，取代原本無狀態的兜底生成邏輯。
 流程：
 啟動單字卡流程 -> 等待輸入單字 -> 經服務層建立只有單字的 Anki 卡片（尚未呼叫 LLM） -> 結束。
-
-Vocabulary-card creation Telegram Bot FSM handler.
-
-This module implements the interactive creation flow for word/phrase cards,
-replacing the previous stateless fallback generation. Flow:
-start the vocabulary flow -> wait for a word -> create an Anki card holding
-only the word through the service layer (no LLM yet) -> finish.
 """
 
 import logging
@@ -35,35 +34,33 @@ DEFAULT_DECK = "Default"
 
 
 class VocabularyStates(StatesGroup):
-    """單字卡生成流程的 FSM 狀態定義。
+    """FSM state definitions for the vocabulary-card creation flow.
 
-    FSM state definitions for the vocabulary-card creation flow.
+    單字卡生成流程的 FSM 狀態定義。
+
+    Defines the state in which the bot waits for the user to enter a word.
 
     定義了使用者與機器人互動的單字查詢狀態。
-
-    Defines the word-lookup interaction state.
     """
     waiting_for_word = State()
 
 
 async def start_vocabulary_fsm_flow(message: types.Message, state: FSMContext) -> None:
-    """啟動單字卡新增 FSM 流程的公開入口。
+    """Start the vocabulary-card creation FSM flow; the public entry point.
 
-    Public entry point that starts the vocabulary-card creation FSM flow.
+    啟動單字卡新增 FSM 流程的公開入口。
 
-    由 newcard_menu.py 的 Inline Keyboard 回呼觸發，
-    設定 FSM 狀態並提示使用者輸入單字。
+    Triggered by the inline keyboard callback in newcard_menu.py; clears any previous FSM state, sets the new one,
+    and prompts the user for a word.
 
-    Triggered by the inline keyboard callback in newcard_menu.py; sets the
-    FSM state and prompts the user for a word.
+    由 newcard_menu.py 的 Inline Keyboard 回調觸發，
+    清除先前的 FSM 狀態、設定新狀態並提示使用者輸入單字。
 
     Args:
-        message: Telegram 訊息物件（來自 callback.message）。
-            The Telegram message object (from callback.message).
-        state: aiogram FSM 上下文。The aiogram FSM context.
-
-    Returns:
-        None
+        message: the Telegram message (from ``callback.message``)
+            Telegram 訊息物件（來自 ``callback.message``）
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     await state.clear()
     await state.set_state(VocabularyStates.waiting_for_word)
@@ -82,16 +79,15 @@ async def start_vocabulary_fsm_flow(message: types.Message, state: FSMContext) -
 
 @router.callback_query(lambda c: c.data == "vocab_cancel", VocabularyStates.waiting_for_word)
 async def process_vocab_cancel(callback_query: types.CallbackQuery, state: FSMContext) -> None:
-    """處理取消操作。
+    """Handle the cancel action.
 
-    Handle the cancel action.
+    處理取消操作。
 
     Args:
-        callback_query: Telegram 回呼查詢。The Telegram callback query.
-        state: aiogram FSM 上下文。The aiogram FSM context.
-
-    Returns:
-        None
+        callback_query: the Telegram callback query
+            Telegram 回調查詢
+        state: the aiogram FSM context
+            aiogram FSM 上下文
     """
     if callback_query.message:
         await callback_query.message.edit_reply_markup(reply_markup=None)
@@ -106,25 +102,30 @@ async def process_word(
     state: FSMContext,
     note_service: NoteService,
 ) -> None:
-    """處理使用者輸入的單字，經服務層建立單字卡。
+    """Handle the user-entered word and create the card through the service layer.
 
-    Handle the user-entered word and create the card through the service
-    layer.
+    處理使用者輸入的單字，經服務層建立單字卡。
+
+    Takes the same path as web creation (``NoteService.create`` → the base class's standard creation): the card is
+    created in the Default deck with the note type the handler declares (TOEIC_Coach_Dark_v2), with only
+    ``Expression`` filled and the other fields left blank; the service layer handles the sync after writing.
 
     走與網頁建卡同一條路（``NoteService.create`` → 基底的標準建立）：建在 Default 牌組、
     handler 宣告的筆記類型（TOEIC_Coach_Dark_v2），只填 ``Expression``，其餘欄位空白；
     寫入後的同步由服務層負責。
 
-    Same path as web creation: the Default deck, the handler's note type,
-    only ``Expression`` filled; the service layer syncs afterwards.
+    Whitespace-only text keeps the flow on this step; once creation is attempted, the FSM state is cleared whether
+    it succeeds or fails.
+
+    只有空白時維持在這一步；一旦嘗試建立，不論成敗都會清除 FSM 狀態。
 
     Args:
-        message: 包含單字文字的訊息。The message containing the word text.
-        state: aiogram FSM 上下文。The aiogram FSM context.
-        note_service: 筆記服務。The NoteService instance.
-
-    Returns:
-        None
+        message: the message containing the word text
+            包含單字文字的訊息
+        state: the aiogram FSM context
+            aiogram FSM 上下文
+        note_service: the note service
+            筆記服務
     """
     if not message.text:
         return

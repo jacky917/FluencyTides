@@ -1,5 +1,30 @@
-"""
+"""Structured-output client module for the Claude Code CLI (headless).
+
 Claude Code CLI (headless) 結構化輸出客戶端模組。
+
+Uses the locally logged-in Claude Code CLI (`claude -p`) instead of a billed API for structured generation,
+offering exactly the same interface as the other providers, so upstream and downstream (each Task Handler, the
+generation scripts) are unaware when the provider is switched.
+
+Usage boundary (important):
+    This provider is only for "user-initiated, finite batch jobs of one's own". Forbidden forms: a resident
+    daemon, a public network endpoint, use by third parties, and integration into multi-user production paths.
+
+2026-09-06 hierarchy: the subprocess call, schema flattening, payload re-validation, repair retries, path
+resolution, and audit writing all moved up to :class:`~app.infrastructure.llm.cli_base.HeadlessCliLLMClient`;
+this class keeps only the claude-specific parts: the command-line flags, the auth environment (scrubbed on a
+desktop / token injected when headless), CLI envelope parsing and failure triage, and the desktop-app install
+path as a fallback.
+
+Key design decisions (all backed by measurements, see ``docs/archive/claude_cli_env_setup_FEAT_2026-08-27.md``):
+
+- the subprocess environment scrubs ``CLAUDE_CODE_OAUTH_TOKEN`` by default: it takes priority over the on-disk
+  credentials, and a leftover bad value overrides a valid login and causes 401. Exception: in a headless
+  environment (container/server), once ``LLM_CLAUDE_CODE_OAUTH_TOKEN`` is set, that value is injected instead,
+  because there are no on-disk credentials there and the env token is the only way to authenticate
+  (docs/archive/claude_cli_in_container_FEAT_2026-08-29.md §D2).
+- on an invalid ``--effort`` value the CLI "silently falls back" to the default effort without reporting an
+  error, so the value must be validated against the allowlist on the Python side (the base ``_validate_effort``).
 
 以本機已登入的 Claude Code CLI（`claude -p`）取代計費 API 完成結構化生成，
 對外提供與其他 provider 完全相同的介面，因此上下游（各 Task Handler、
@@ -12,7 +37,7 @@ Claude Code CLI (headless) 結構化輸出客戶端模組。
 
 2026-09-06 層級化：subprocess 呼叫、schema 展平、payload 複核、修復重試、
 路徑解析與審計落盤全部上移到
-:class:`~app.infrastructure.llm.cli_base.HeadlessCliLLMClient`；本類只剩
+``HeadlessCliLLMClient``；本類只剩
 claude 專屬的部分——命令列旗標、認證環境（桌機剔除 / headless 注入 token）、
 CLI 信封解析與失敗分流、桌面版安裝路徑兜底。
 
@@ -25,13 +50,6 @@ CLI 信封解析與失敗分流、桌面版安裝路徑兜底。
   （docs/archive/claude_cli_in_container_FEAT_2026-08-29.md §D2）。
 - ``--effort`` 非法值時 CLI 會「靜默回退」到預設力度而不報錯，故必須在
   Python 端以白名單驗證（基底 ``_validate_effort``）。
-
-English summary:
-    Headless Claude Code CLI client. Drives the locally authenticated
-    `claude -p` binary to produce schema-conformant JSON. Intended solely
-    for user-initiated, finite batch jobs. The subprocess pipeline lives in
-    ``HeadlessCliLLMClient``; this class supplies only the claude-specific
-    argv, credential environment, envelope triage and install-path probe.
 """
 
 import json
@@ -55,14 +73,17 @@ logger = logging.getLogger(__name__)
 
 
 class ClaudeCodeLLMClient(HeadlessCliLLMClient):
-    """以 Claude Code CLI (headless) 產生結構化 JSON 的客戶端。
+    """Client that produces structured JSON through the Claude Code CLI (headless).
 
-    Client producing structured JSON via the headless Claude Code CLI.
+    以 Claude Code CLI (headless) 產生結構化 JSON 的客戶端。
 
     Attributes:
-        _cli_path: 已解析的 claude 執行檔絕對路徑。Resolved CLI path.
-        _model_name: 送給 ``--model`` 的模型名或別名。Model name/alias.
-        _effort: 送給 ``--effort`` 的力度。Effort level.
+        _cli_path: the resolved path of the claude executable
+            已解析的 claude 執行檔路徑
+        _model_name: the model name or alias sent to ``--model``
+            送給 ``--model`` 的模型名或別名
+        _effort: the effort sent to ``--effort``; ``None`` omits the flag
+            送給 ``--effort`` 的力度；None 時省略此旗標
     """
 
     PROVIDER_NAME: ClassVar[str] = "claude-code"
@@ -104,19 +125,23 @@ class ClaudeCodeLLMClient(HeadlessCliLLMClient):
         effort: EffortArg = None,
         endpoint: Endpoint | None = None,
     ) -> None:
-        """驗證 effort 白名單與 token 格式，並解析 CLI 路徑（順序由基底維持）。
+        """Validate the effort allowlist and the token format, then resolve the CLI path (order kept by the base).
 
-        Validate effort and the token format, then resolve the CLI path.
+        驗證 effort 白名單與 token 格式，並解析 CLI 路徑（順序由基底維持）。
 
         Args:
-            model: 覆寫模型名；None 沿用 ``LLM_MODEL_NAME``。Model override.
-            effort: 覆寫思考深度；None 沿用 ``LLM_CLAUDE_CODE_EFFORT``，
-                ``OMIT_EFFORT`` 不傳 ``--effort``。Effort override.
-            endpoint: 內建 ``claude-code`` 端點。The built-in endpoint.
+            model: the model-name override; ``None`` keeps ``LLM_MODEL_NAME``
+                覆寫模型名；None 沿用 ``LLM_MODEL_NAME``
+            effort: the thinking-depth override; ``None`` keeps ``LLM_CLAUDE_CODE_EFFORT``, ``OMIT_EFFORT`` sends no
+                ``--effort``
+                覆寫思考深度；None 沿用 ``LLM_CLAUDE_CODE_EFFORT``，``OMIT_EFFORT`` 不傳 ``--effort``
+            endpoint: the built-in ``claude-code`` endpoint
+                內建 ``claude-code`` 端點
 
         Raises:
-            LLMServiceError: effort 非白名單值、token 內含空白、或找不到
-                claude 執行檔時。
+            LLMServiceError: if the endpoint type mismatches, effort is not an allowlisted value, the token contains
+                whitespace, the model name is empty, or the claude executable cannot be found
+                若端點類型不符、effort 非白名單值、token 內含空白、模型名為空，或找不到 claude 執行檔
         """
         super().__init__(model=model, effort=effort, endpoint=endpoint)
         logger.info(
@@ -131,7 +156,10 @@ class ClaudeCodeLLMClient(HeadlessCliLLMClient):
 
     @classmethod
     def _runtime(cls) -> CliRuntime:
-        """從 ``LLM_CLAUDE_CODE_*`` 設定組出執行參數。Runtime from settings."""
+        """Assemble the runtime parameters from the ``LLM_CLAUDE_CODE_*`` settings.
+
+        從 ``LLM_CLAUDE_CODE_*`` 設定組出執行參數。
+        """
         return CliRuntime(
             cli_path_setting=settings.LLM_CLAUDE_CODE_CLI_PATH,
             workdir_setting=settings.LLM_CLAUDE_CODE_WORKDIR,
@@ -141,11 +169,18 @@ class ClaudeCodeLLMClient(HeadlessCliLLMClient):
         )
 
     def _check_credentials(self) -> None:
-        """token 格式防呆：內含空白幾乎必是複製時斷行。
+        """Guard the token format: whitespace inside is almost always a line break from copying.
 
-        Reject a token containing whitespace — almost always a copy/paste
-        line-break (2026-08-31: one stray space cost a container a night of
-        401s). Caught at construction so a bad token never reaches generation.
+        token 格式防呆：內含空白幾乎必是複製時斷行。
+
+        On 2026-08-31 one stray space cost a container a night of 401s. It is caught at construction, so a bad
+        token never reaches generation. An unset token passes.
+
+        2026-08-31 曾因一個多餘空白讓容器整夜 401。在建構時攔下，壞 token 就不會進到生成階段。未設定 token 時通過。
+
+        Raises:
+            LLMServiceError: if ``LLM_CLAUDE_CODE_OAUTH_TOKEN`` contains whitespace
+                若 ``LLM_CLAUDE_CODE_OAUTH_TOKEN`` 內含空白字元
         """
         token = (settings.LLM_CLAUDE_CODE_OAUTH_TOKEN or "").strip()
         if token and any(ch.isspace() for ch in token):
@@ -156,9 +191,13 @@ class ClaudeCodeLLMClient(HeadlessCliLLMClient):
             )
 
     def _extra_cli_candidates(self) -> list[Path]:
-        """桌面版 App 內嵌的版本化路徑（升版後會變，僅作最後兜底）。
+        """Return the versioned path embedded in the desktop app (changes after upgrades; only a last resort).
 
-        The desktop app's versioned install directory, used as a last resort.
+        桌面版 App 內嵌的版本化路徑（升版後會變，僅作最後兜底）。
+
+        Only the last match in sorted order under ``%APPDATA%`` is returned; empty when ``APPDATA`` is unset.
+
+        只回傳 ``%APPDATA%`` 下排序後的最後一個符合者；未設 ``APPDATA`` 時為空。
         """
         appdata = os.environ.get("APPDATA")
         if not appdata:
@@ -167,7 +206,12 @@ class ClaudeCodeLLMClient(HeadlessCliLLMClient):
         return [candidates[-1]] if candidates else []
 
     def _build_command(self, system_prompt: str, schema_text: str) -> list[str]:
-        """組裝 CLI 命令列參數。Assemble the CLI argument vector.
+        """Assemble the CLI command-line arguments.
+
+        組裝 CLI 命令列參數。
+
+        When ``self._effort`` is ``None`` (``OMIT_EFFORT`` was received at construction), ``--effort`` is omitted and
+        the CLI uses its own default (verified to complete normally with claude 2.1.292 on 2026-10-15).
 
         ``self._effort`` 為 None（建構時收到 ``OMIT_EFFORT``）時省略 ``--effort``，
         由 CLI 用自己的預設（2026-10-15 以 claude 2.1.292 實測可正常完成）。
@@ -187,9 +231,17 @@ class ClaudeCodeLLMClient(HeadlessCliLLMClient):
         ]
 
     def _build_env(self) -> dict[str, str]:
-        """依認證模式處理 token 變數。
+        """Handle the token variables according to the authentication mode.
 
-        Handle auth variables according to the configured credential mode.
+        依認證模式處理 token 變數。
+
+        Two modes (depending on whether ``LLM_CLAUDE_CODE_OAUTH_TOKEN`` is set):
+
+        - desktop mode (unset, the default): scrub all SCRUBBED_ENV_VARS; a bad token left in the environment takes
+          priority over the on-disk credentials and would override a valid login, causing 401, so the on-disk
+          credentials are forced.
+        - headless mode (set, container/server): no on-disk credentials are available, so the configured token is
+          injected for the CLI to authenticate; ANTHROPIC_* is still scrubbed (the hygiene guard is unchanged).
 
         兩種模式（依 ``LLM_CLAUDE_CODE_OAUTH_TOKEN`` 是否設定）：
         - 桌機模式（未設定，預設）：剔除全部 SCRUBBED_ENV_VARS——環境殘留的
@@ -205,13 +257,17 @@ class ClaudeCodeLLMClient(HeadlessCliLLMClient):
         return env
 
     def _extract_result(self, stdout_text: str, stderr_text: str) -> str:
-        """解析 CLI 信封並分流失敗形態。
+        """Parse the CLI envelope and triage the failure forms.
 
-        Parse the CLI envelope and triage failures.
+        解析 CLI 信封並分流失敗形態。
 
         Raises:
-            LLMServiceError: 認證、設定、額度等致命失敗。
-            _RetryableCliError: 結構化重試耗盡、result 為空等可重試失敗。
+            LLMQuotaError: if the CLI reports a quota or rate limit
+                若 CLI 回報額度或速率限制
+            LLMServiceError: on fatal failures such as authentication, settings, or a missing or unparsable envelope
+                認證、設定、信封缺失或無法解析等致命失敗
+            _RetryableCliError: on retryable failures such as exhausted structured-output retries or an empty result
+                結構化重試耗盡、result 為空等可重試失敗
         """
         self._raise_for_fatal_markers(stderr_text)
 
@@ -230,11 +286,21 @@ class ClaudeCodeLLMClient(HeadlessCliLLMClient):
     # ------------------------------------------------------------------
 
     def _raise_for_fatal_markers(self, stderr_text: str) -> None:
-        """偵測 stderr 中的致命標記並拋出對應錯誤。
+        """Detect fatal markers in stderr and raise the matching error.
+
+        偵測 stderr 中的致命標記並拋出對應錯誤。
+
+        Only stderr is checked: measurements confirm the CLI writes these two markers specifically to stderr, while
+        stdout carries only the JSON envelope. Scanning stdout as well would misjudge generated content that
+        happens to contain these strings.
 
         僅檢查 stderr：實測確認這兩個標記由 CLI 專門寫入 stderr，而 stdout
         僅承載 JSON 信封。若連 stdout 一起掃描，生成內容剛好含有這些字串時
         會造成誤判。
+
+        Raises:
+            LLMServiceError: if the model name is unrecognized or the JSON Schema is invalid
+                若模型名不被認得，或 JSON Schema 無效
         """
         if "unrecognized_model" in stderr_text:
             raise LLMServiceError(
@@ -250,7 +316,19 @@ class ClaudeCodeLLMClient(HeadlessCliLLMClient):
     def _raise_for_error_envelope(
         self, envelope: dict[str, object], stderr_text: str
     ) -> None:
-        """依信封內容分流錯誤形態。Triage the error envelope."""
+        """Triage the error form according to the envelope content; this method always raises.
+
+        依信封內容分流錯誤形態；此方法一律拋出例外。
+
+        Raises:
+            LLMQuotaError: if the quota or rate limit is exhausted
+                若額度或速率限制耗盡
+            LLMServiceError: if not authenticated, or the account cannot use the model
+                若未認證，或本帳號無法使用該模型
+            _RetryableCliError: for every other error, with repair feedback when the CLI's structured-output retries
+                are exhausted
+                其他所有錯誤；CLI 內建結構化輸出重試耗盡時附修復回饋
+        """
         result_text = str(envelope.get("result") or "")
         errors = envelope.get("errors")
         errors_text = "; ".join(str(item) for item in errors) if isinstance(errors, list) else ""
@@ -291,13 +369,23 @@ class ClaudeCodeLLMClient(HeadlessCliLLMClient):
 
     @staticmethod
     def _extract_envelope(stdout_text: str, stderr_text: str) -> dict[str, object]:
-        """從 stdout 取出 ``--output-format json`` 的信封物件。
+        """Extract the ``--output-format json`` envelope object from stdout.
+
+        從 stdout 取出 ``--output-format json`` 的信封物件。
+
+        The CLI occasionally prints warning lines before the envelope, so parsing starts at the first ``{``;
+        ``raw_decode`` consumes only the first complete JSON object, tolerating trailing output.
 
         CLI 偶爾會在信封前輸出警告行，故取第一個 ``{`` 之後的內容解析；
         以 ``raw_decode`` 只吃掉第一個完整的 JSON 物件，容忍尾隨輸出。
 
+        Returns:
+            the envelope dict
+            信封字典
+
         Raises:
-            LLMServiceError: stdout 中找不到可解析的 JSON 信封時。
+            LLMServiceError: if no parsable JSON envelope object is found in stdout
+                stdout 中找不到可解析的 JSON 信封物件時
         """
         start = stdout_text.find("{")
         if start == -1:

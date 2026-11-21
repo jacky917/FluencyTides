@@ -1,18 +1,20 @@
-"""JP_CoreVerb（核心動詞）卡片的 LLM 結構化輸出 Schema。
+"""LLM structured-output schemas for the JP_CoreVerb (core-verb) cards.
 
-LLM structured-output schemas for the JP_CoreVerb (core-verb) cards.
+JP_CoreVerb（核心動詞）卡片的 LLM 結構化輸出 Schema。
+
+Very similar to ``jp_verb_pair.py``, but the LLM task changes from
+transitivity judgment to deep verb analysis (the five ``VerbAnalysis``
+fields): conjugation chain, transitivity, collocation, nuance, and
+colloquial naturalness.
 
 與 ``jp_verb_pair.py`` 高度相似，但 LLM 任務由「自他判定」
 改為「深度動詞解析」（``VerbAnalysis`` 五欄）：
 變化過程、自他分類、搭配、語感、口語自然度。
 
-Context 段直接共用 ``VerbPairContextResult``（模型定義共用、卡片實體不共用）。
+The Context part reuses ``VerbPairContextResult`` directly (the model
+definition is shared; the card instances are not).
 
-Very similar to ``jp_verb_pair.py``, but the LLM task changes from
-transitivity judgment to deep verb analysis (the five ``VerbAnalysis``
-fields): conjugation chain, transitivity, collocation, nuance, and
-colloquial naturalness. The Context part reuses ``VerbPairContextResult``
-(shared model definition, not shared card instances).
+Context 段直接共用 ``VerbPairContextResult``（模型定義共用、卡片實體不共用）。
 """
 
 from typing import Literal

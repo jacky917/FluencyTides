@@ -1,6 +1,6 @@
-"""健康檢查 API 路由模組。
+"""Health check API router module.
 
-Health check API router module.
+健康檢查 API 路由模組。
 """
 
 import os
@@ -19,12 +19,12 @@ _UNKNOWN_SHA = "unknown"
 
 @router.get("/health", summary="Health Check")
 async def health_check() -> dict[str, str]:
-    """檢查 API 是否正常運作，並回報映像對應的 git commit。
+    """Check that the API is running and report the image's git commit.
 
-    Check if the API is running correctly and report the image's git commit.
+    檢查 API 是否正常運作，並回報映像對應的 git commit。
 
     Returns:
-        狀態字典 {"status": "ok", "git_sha": "<commit sha 或 unknown>"}。
-        Status dict {"status": "ok", "git_sha": "<commit sha or unknown>"}.
+        the status dict ``{"status": "ok", "git_sha": "<commit sha or unknown>"}``
+        狀態字典 ``{"status": "ok", "git_sha": "<commit sha 或 unknown>"}``
     """
     return {"status": "ok", "git_sha": os.getenv("APP_GIT_SHA") or _UNKNOWN_SHA}

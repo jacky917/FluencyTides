@@ -1,23 +1,23 @@
-"""語料庫 ``fluencytides_corpus`` 的表名常數與關係圖的表結構。
+"""Table-name constants for the ``fluencytides_corpus`` corpus database, plus the relation-graph table definitions.
 
-Table-name constants for the ``fluencytides_corpus`` corpus database, plus
-the SQLAlchemy Core definitions of the relation-graph tables.
+語料庫 ``fluencytides_corpus`` 的表名常數與關係圖的表結構。
+
+Table names are centralized here so no module hard-codes them (the naming rules in D0 of
+docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md). The single source of the table DDL is
+``backend/scripts/database/corpus_rebuild/schema.sql``; the SQLAlchemy Core ``Table`` objects here only describe
+the columns the website reads and writes in ``rel_types`` / ``rel_links``, and do not create tables in MySQL
+(they are created with ``corpus_metadata.create_all`` only when tests use SQLite).
 
 表名集中在這裡，程式各處不寫死（docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D0
 的命名規則）。建表 SQL 的唯一來源是 ``backend/scripts/database/corpus_rebuild/schema.sql``；
 這裡的 ``Table`` 只描述網站讀寫 ``rel_types`` / ``rel_links`` 會用到的欄位，
 不負責在 MySQL 建表（測試用 SQLite 時才以 ``corpus_metadata.create_all`` 建）。
 
-Table names live here so no module hard-codes them (naming rules in D0 of
-the corpus rebuild plan). ``schema.sql`` is the single source of the DDL;
-the ``Table`` objects below only describe the columns the website reads and
-writes, and are created with ``corpus_metadata.create_all`` only in SQLite
-tests.
+Prefixes and purposes: ``game_`` game content, ``nlp_`` linguistic annotations, ``card_`` card-generation ledger,
+``rel_`` general relation graph, ``story_`` story flowchart.
 
 前綴與用途：``game_`` 遊戲內容、``nlp_`` 語言標注、``card_`` 建卡帳本、
 ``rel_`` 通用關係圖、``story_`` 劇情流程圖。
-Prefixes: ``game_`` content, ``nlp_`` annotations, ``card_`` card ledger,
-``rel_`` relation graph, ``story_`` story flowchart.
 """
 
 import re
@@ -91,39 +91,46 @@ _LANG_TAG = re.compile(r"[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*")
 
 
 def term_key(lemma: str, lang: str = LANG_JA_JP) -> str:
-    """由原形組出詞的鍵（``見る`` → ``ja-JP:見る``）。
+    """Build the term key from a lemma (``見る`` to ``ja-JP:見る``).
 
-    Build the term key from a lemma.
+    由原形組出詞的鍵（``見る`` → ``ja-JP:見る``）。
 
     Args:
-        lemma: 詞的原形。The lemma.
-        lang: BCP 47 語言代碼。The BCP 47 language tag.
+        lemma: the lemma of the term
+            詞的原形
+        lang: the BCP 47 language tag
+            BCP 47 語言代碼
 
     Returns:
-        str: ``<lang>:<lemma>``。
+        the key in the form ``<lang>:<lemma>``
+        格式為 ``<lang>:<lemma>`` 的鍵
     """
     return f"{lang}:{lemma}"
 
 
 def parse_term_key(key: str) -> tuple[str, str]:
-    """把詞的鍵拆成 ``(語言代碼, 原形)``（``ja-JP:見る`` → ``("ja-JP", "見る")``）。
+    """Split a term key into ``(language tag, lemma)`` (``ja-JP:見る`` to ``("ja-JP", "見る")``).
 
-    Split a term key into ``(language tag, lemma)``.
+    把詞的鍵拆成 ``(語言代碼, 原形)``（``ja-JP:見る`` → ``("ja-JP", "見る")``）。
+
+    The single parser of the term-key format; ``lemma_of`` and the story flowchart's reads both go through here.
+    Splits at the first ``:``, so the lemma itself may contain ``:``.
 
     詞的鍵格式的唯一解析處；``lemma_of`` 與劇情流程圖的讀取都經過這裡。以第一個 ``:`` 切開，
     原形本身可以含 ``:``。
-    The single parser of the term-key format; splits at the first ``:``, so
-    the lemma itself may contain ``:``.
 
     Args:
-        key: 詞的鍵。The term key.
+        key: the term key
+            詞的鍵
 
     Returns:
-        tuple[str, str]: ``(語言代碼, 原形)``。``(lang, lemma)``.
+        ``(lang, lemma)``
+        ``(語言代碼, 原形)``
 
     Raises:
-        ValueError: 不是 ``<BCP 47 語言代碼>:<原形>``（沒有 ``:``、語言代碼不合格式、原形空白）。
-            When the key is not ``<BCP 47 tag>:<lemma>``.
+        ValueError: if the key is not ``<BCP 47 language tag>:<lemma>`` (no ``:``, a malformed language tag, a
+            blank lemma, or a non-string key)
+            若不是 ``<BCP 47 語言代碼>:<原形>``（沒有 ``:``、語言代碼不合格式、原形空白，或鍵不是字串）
     """
     lang, sep, lemma = key.partition(":") if isinstance(key, str) else ("", "", "")
     if not sep or not _LANG_TAG.fullmatch(lang) or not lemma.strip():
@@ -132,21 +139,27 @@ def parse_term_key(key: str) -> tuple[str, str]:
 
 
 def lemma_of(key: str, lang: str = LANG_JA_JP) -> str:
-    """從詞的鍵取回原形；鍵格式不對或不是這個語言時報錯（不會把整個鍵當成原形）。
+    """Recover the lemma from a term key, raising on a malformed key or another language.
 
-    Recover the lemma from a term key; raises on a malformed key or another
-    language instead of silently treating the whole key as the lemma.
+    從詞的鍵取回原形；鍵格式不對或不是這個語言時報錯。
+
+    It never silently treats the whole key as the lemma.
+
+    不會把整個鍵當成原形。
 
     Args:
-        key: 詞的鍵。The term key.
-        lang: 預期的語言代碼。The expected language tag.
+        key: the term key
+            詞的鍵
+        lang: the expected language tag
+            預期的語言代碼
 
     Returns:
-        str: 原形。The lemma.
+        the lemma
+        原形
 
     Raises:
-        ValueError: 鍵格式不對（見 :func:`parse_term_key`），或語言不是 ``lang``。When the key
-            is malformed or of another language.
+        ValueError: if the key is malformed (see :func:`parse_term_key`) or its language is not ``lang``
+            若鍵格式不對（見 ``parse_term_key``），或語言不是 ``lang``
     """
     key_lang, lemma = parse_term_key(key)
     if key_lang != lang:

@@ -1,12 +1,16 @@
-"""``story_builds``／``story_node_lines`` 的查詢，以及 join 語料庫的 ``game_*``、``rel_links``。
+"""Queries over ``story_builds`` / ``story_node_lines``, joined with the corpus ``game_*`` tables and ``rel_links``.
 
-Queries over ``story_builds``/``story_node_lines`` joined with the corpus
-``game_*`` tables and ``rel_links`` (D2「索引對應的查詢」).
+``story_builds``／``story_node_lines`` 的查詢，以及 join 語料庫的 ``game_*``、``rel_links``。
 
-全部是唯讀查詢；寫入只在匯入腳本。服務層只依賴 :class:`StoryRepository` 介面，測試用記憶體
+See D2 「索引對應的查詢」.
+
+見 D2「索引對應的查詢」。
+
+All queries are read-only; writes happen only in the import script. The service layer depends only on the
+:class:`StoryRepository` interface, so tests can swap in an in-memory version.
+
+全部是唯讀查詢；寫入只在匯入腳本。服務層只依賴 ``StoryRepository`` 介面，測試用記憶體
 版本替換。
-Read-only; writes happen in the import script. The service depends on the
-:class:`StoryRepository` protocol so tests can swap in a fake.
 """
 
 from __future__ import annotations
@@ -35,13 +39,17 @@ logger = logging.getLogger(__name__)
 EXAMPLE_FROM = REL_EXAMPLE_FROM
 TEACHES = REL_TEACHES
 CHILD_RELATIONS = (REL_HAS_CONTEXT, REL_HAS_CLOZE)
-#: 關係圖 SQL 共用的繫結參數（端點類型、狀態），不在 SQL 裡寫死字串。Shared bind params.
+#: Bind parameters shared by the relation-graph SQL (endpoint types, status), so no strings are hard-coded in SQL.
+#: 關係圖 SQL 共用的繫結參數（端點類型、狀態），不在 SQL 裡寫死字串。
 _REL_PARAMS = {"note": ENTITY_NOTE, "line": ENTITY_SCRIPT_LINE, "active": REL_STATUS_ACTIVE}
 
 
 @dataclass
 class BuildRecord:
-    """一個流程圖版本（不含 graph）。A build without its graph."""
+    """One flowchart build, without its graph.
+
+    一個流程圖版本（不含 graph）。
+    """
 
     build_id: int
     game_id: str
@@ -55,12 +63,15 @@ class BuildRecord:
 
 @dataclass(frozen=True)
 class LineBgm:
-    """一句台詞播放的一首 BGM（``game_line_bgm`` join ``game_bgm_tracks``）。One track of a line.
+    """One BGM track played during a line (``game_line_bgm`` joined with ``game_bgm_tracks``).
+
+    一句台詞播放的一首 BGM（``game_line_bgm`` join ``game_bgm_tracks``）。
+
+    ``archive_index`` is the track's file index inside the game archive (``bgm.xp3``) and is not returned by the API;
+    it is kept for matching BGM audio files later.
 
     ``archive_index`` 是曲子在遊戲封包（``bgm.xp3``）裡的檔案序號，API 不回傳；留著是為了之後
     整理 BGM 音檔時對照。
-    ``archive_index`` (file index inside the game archive) is not exposed by
-    the API; it is kept for matching audio files later.
     """
 
     code: str
@@ -73,7 +84,10 @@ class LineBgm:
 
 @dataclass
 class LineRecord:
-    """一句台詞（抽屜與存檔用）。One line for the drawer and saves."""
+    """One line, for the drawer and saves.
+
+    一句台詞（抽屜與存檔用）。
+    """
 
     line_id: int
     seq: int
@@ -91,17 +105,23 @@ class LineRecord:
     h_label: str | None
     chapter_label: str | None
     attrs: dict[str, Any]
-    #: 依 ``ord`` 排列；沒有 BGM 時是空清單。In ``ord`` order; empty when none.
+    #: The BGM tracks in ``ord`` order; an empty list when there is no BGM.
+    #: 依 ``ord`` 排列；沒有 BGM 時是空清單。
     bgm: list[LineBgm] = field(default_factory=list)
-    #: ``game_lines.bgm_detect``（``A``／``實測``／``B推定``／None）。How the BGM was detected.
+    #: How the BGM was detected: ``game_lines.bgm_detect`` (``A``, ``實測``, ``B推定``, or ``None``).
+    #: ``game_lines.bgm_detect``（``A``／``實測``／``B推定``／``None``）。
     bgm_detect: str | None = None
-    #: ``game_lines.bgm_may_change``。Whether the BGM may change during the line.
+    #: Whether the BGM may change during the line: ``game_lines.bgm_may_change``.
+    #: ``game_lines.bgm_may_change``。
     bgm_may_change: bool = False
 
 
 @dataclass
 class CardLink:
-    """一張筆記取自一句台詞。A note whose example comes from a line."""
+    """A note whose example comes from a line.
+
+    一張筆記取自一句台詞。
+    """
 
     line_id: int
     note_id: int
@@ -110,19 +130,186 @@ class CardLink:
 
 
 class StoryRepository(Protocol):
-    """服務層需要的查詢。Queries used by the service."""
+    """The queries the service layer needs.
 
-    async def active_builds(self) -> list[BuildRecord]: ...
-    async def active_build(self, game_id: str) -> BuildRecord | None: ...
-    async def build(self, game_id: str, build_id: int) -> BuildRecord | None: ...
-    async def graph(self, build_id: int) -> dict[str, Any]: ...
-    async def node_lines(self, build_id: int, node_key: str, offset: int, limit: int) -> tuple[int, list[LineRecord]]: ...
-    async def line_in_build(self, build_id: int, line_id: int) -> tuple[str, LineRecord] | None: ...
-    async def card_links(self, line_ids: list[int]) -> list[CardLink]: ...
-    async def next_annotated_seq(self, build_id: int, node_key: str, after: int) -> int | None: ...
-    async def annotation_counts(self, build_id: int) -> list[tuple[str, str | None, int]]: ...
-    async def verb_index(self, build_id: int) -> list[tuple[str, str | None, str]]: ...
-    async def lines_of_note(self, note_id: int) -> list[int]: ...
+    服務層需要的查詢。
+    """
+
+    async def active_builds(self) -> list[BuildRecord]:
+        """Return the active build of every game.
+
+        回傳每款遊戲上線中的版本。
+
+        Returns:
+            the active builds, ordered by game id
+            上線中的版本，依遊戲代號排序
+        """
+        ...
+
+    async def active_build(self, game_id: str) -> BuildRecord | None:
+        """Return the active build of a game.
+
+        回傳一款遊戲上線中的版本。
+
+        Args:
+            game_id: the game id
+                遊戲代號
+
+        Returns:
+            the active build, or ``None`` if the game has none
+            上線中的版本；沒有時為 ``None``
+        """
+        ...
+
+    async def build(self, game_id: str, build_id: int) -> BuildRecord | None:
+        """Return a readable build of a game (``active``, ``retired``, or ``ready``).
+
+        回傳一款遊戲可讀的版本（``active``、``retired`` 或 ``ready``）。
+
+        Args:
+            game_id: the game id
+                遊戲代號
+            build_id: the build id
+                版本 ID
+
+        Returns:
+            the build, or ``None`` if it does not exist, belongs to another game, or is not readable
+            版本；不存在、屬於別款遊戲或不能讀時為 ``None``
+        """
+        ...
+
+    async def graph(self, build_id: int) -> dict[str, Any]:
+        """Return the stored graph JSON of a build.
+
+        回傳版本存下來的劇情圖 JSON。
+
+        Args:
+            build_id: the build id; must exist
+                版本 ID；必須存在
+        """
+        ...
+
+    async def node_lines(self, build_id: int, node_key: str, offset: int, limit: int) -> tuple[int, list[LineRecord]]:
+        """Return one page of a node's lines, with their BGM.
+
+        回傳一個節點的一頁台詞（含 BGM）。
+
+        Args:
+            build_id: the build id
+                版本 ID
+            node_key: the node
+                節點
+            offset: the first ``seq`` of the page
+                這一頁的第一個 ``seq``
+            limit: the page size
+                每頁筆數
+
+        Returns:
+            the node's total line count and the lines with ``offset <= seq < offset + limit``, in ``seq`` order
+            節點的台詞總數，以及 ``offset <= seq < offset + limit`` 的台詞（依 ``seq`` 排序）
+        """
+        ...
+
+    async def line_in_build(self, build_id: int, line_id: int) -> tuple[str, LineRecord] | None:
+        """Find a line in a build.
+
+        在版本中找一句台詞。
+
+        Args:
+            build_id: the build id
+                版本 ID
+            line_id: the line id
+                台詞 ID
+
+        Returns:
+            the node key and the line (with its BGM), or ``None`` if the line is not in the build
+            節點鍵與台詞（含 BGM）；台詞不在版本中時為 ``None``
+        """
+        ...
+
+    async def card_links(self, line_ids: list[int]) -> list[CardLink]:
+        """Return the active notes whose examples come from the given lines.
+
+        回傳例句取自這些台詞、且有效的筆記。
+
+        Args:
+            line_ids: the lines
+                台詞
+
+        Returns:
+            one link per note and taught term; ``verb`` is ``None`` when the term is missing or cannot be parsed;
+            empty if ``line_ids`` is empty
+            每個筆記與所教的詞各一筆；沒有詞或無法解析時 ``verb`` 為 ``None``；``line_ids`` 為空時為空串列
+        """
+        ...
+
+    async def next_annotated_seq(self, build_id: int, node_key: str, after: int) -> int | None:
+        """Return the next ``seq`` in a node, after ``after``, whose line has a card.
+
+        回傳節點中 ``after`` 之後、下一句有卡片的台詞 ``seq``。
+
+        Args:
+            build_id: the build id
+                版本 ID
+            node_key: the node
+                節點
+            after: the ``seq`` to search after (exclusive)
+                從這個 ``seq`` 之後找（不含）
+
+        Returns:
+            the ``seq``, or ``None`` if there is none
+            ``seq``；沒有時為 ``None``
+        """
+        ...
+
+    async def annotation_counts(self, build_id: int) -> list[tuple[str, str | None, int]]:
+        """Return, per node and card type, the number of distinct lines carrying cards.
+
+        回傳每個節點、每種卡片類型有卡片的台詞句數（不重複）。
+
+        Args:
+            build_id: the build id
+                版本 ID
+
+        Returns:
+            ``(node_key, card_type, line count)`` tuples
+            ``(node_key, card_type, 台詞句數)`` 元組
+        """
+        ...
+
+    async def verb_index(self, build_id: int) -> list[tuple[str, str | None, str]]:
+        """Return the distinct verbs taught by cards in each node.
+
+        回傳每個節點中，卡片所教的不重複動詞。
+
+        Args:
+            build_id: the build id
+                版本 ID
+
+        Returns:
+            ``(node_key, card_type, verb)`` tuples; terms that cannot be parsed are left out
+            ``(node_key, card_type, 動詞)`` 元組；無法解析的詞不列入
+        """
+        ...
+
+    async def lines_of_note(self, note_id: int) -> list[int]:
+        """Return the lines a note's examples come from.
+
+        回傳筆記的例句取自哪些台詞。
+
+        When the parent note has no direct example, the lines are found through its child notes (context, cloze).
+
+        母卡沒有直接的例句時，經由子卡（情境、填空）找。
+
+        Args:
+            note_id: the note id
+                筆記 ID
+
+        Returns:
+            the line ids; empty if none
+            台詞 ID；沒有時為空串列
+        """
+        ...
 
 
 def _json(raw: Any) -> Any:
@@ -132,13 +319,23 @@ def _json(raw: Any) -> Any:
 
 
 def _verb(term: str | None) -> str | None:
-    """詞的鍵 → 原形（``ja-JP:見る`` → ``見る``）；解析一律交給 ``corpus_tables.lemma_of``。
+    """Turn a term key into its lemma (``ja-JP:見る`` → ``見る``).
 
-    格式不對或不是日文的鍵記 WARNING 並回 None（這張卡就不帶動詞），不讓一筆壞資料拖垮整個
-    註記或台詞 API。
-    Term key to lemma via the single strict parser in
-    :mod:`app.infrastructure.database.corpus_tables`; a malformed or
-    non-Japanese key is logged and yields None instead of failing the request.
+    詞的鍵 → 原形（``ja-JP:見る`` → ``見る``）。
+
+    Parsing is always left to ``corpus_tables.lemma_of``. A malformed or non-Japanese key is logged as WARNING and
+    yields ``None`` (the card then carries no verb), so one bad record cannot break the whole annotation or line API.
+
+    解析一律交給 ``corpus_tables.lemma_of``。格式不對或不是日文的鍵記 WARNING 並回 ``None``（這張卡就不帶動詞），
+    不讓一筆壞資料拖垮整個註記或台詞 API。
+
+    Args:
+        term: the term key; ``None`` or empty yields ``None``
+            詞的鍵；``None`` 或空字串時回 ``None``
+
+    Returns:
+        the lemma, or ``None``
+        原形，或 ``None``
     """
     if not term:
         return None
@@ -173,9 +370,24 @@ def _line_record(r: Any) -> LineRecord:
 
 
 class MySQLStoryRepository:
-    """以語料庫的非同步引擎實作。MySQL implementation over the corpus engine."""
+    """The MySQL implementation of :class:`StoryRepository` over the corpus async engine.
+
+    以語料庫的非同步引擎實作的 ``StoryRepository``。
+
+    See :class:`StoryRepository` for the contract of each query.
+
+    各查詢的契約見 ``StoryRepository``。
+    """
 
     def __init__(self, session_factory=None) -> None:
+        """Create a repository.
+
+        建立資料庫存取物件。
+
+        Args:
+            session_factory: the async session factory; ``None`` uses ``story_session_factory()`` at each query
+                非同步 session 工廠；``None`` 時每次查詢使用 ``story_session_factory()``
+        """
         self._factory = session_factory
 
     def _session(self):
@@ -196,24 +408,64 @@ class MySQLStoryRepository:
             languages=_json(r.languages) or []) for r in rows]
 
     async def active_builds(self) -> list[BuildRecord]:
+        """Return the active build of every game.
+
+        回傳每款遊戲上線中的版本。
+
+        See ``StoryRepository.active_builds`` for the contract.
+
+        契約見 ``StoryRepository.active_builds``。
+        """
         return await self._build_rows("b.status = 'active'", {})
 
     async def active_build(self, game_id: str) -> BuildRecord | None:
+        """Return the active build of a game.
+
+        回傳一款遊戲上線中的版本。
+
+        See ``StoryRepository.active_build`` for the contract.
+
+        契約見 ``StoryRepository.active_build``。
+        """
         rows = await self._build_rows("b.game_id = :g AND b.status = 'active'", {"g": game_id})
         return rows[0] if rows else None
 
     async def build(self, game_id: str, build_id: int) -> BuildRecord | None:
+        """Return a readable build of a game.
+
+        回傳一款遊戲可讀的版本。
+
+        See ``StoryRepository.build`` for the contract.
+
+        契約見 ``StoryRepository.build``。
+        """
         rows = await self._build_rows("b.game_id = :g AND b.build_id = :b AND b.status IN ('active', 'retired', 'ready')",
                                       {"g": game_id, "b": build_id})
         return rows[0] if rows else None
 
     async def graph(self, build_id: int) -> dict[str, Any]:
+        """Return the stored graph JSON of a build.
+
+        回傳版本存下來的劇情圖 JSON。
+
+        See ``StoryRepository.graph`` for the contract.
+
+        契約見 ``StoryRepository.graph``。
+        """
         async with self._session() as session:
             raw = (await session.execute(text("SELECT graph FROM story_builds WHERE build_id = :b"),
                                          {"b": build_id})).scalar_one()
         return _json(raw)
 
     async def node_lines(self, build_id: int, node_key: str, offset: int, limit: int) -> tuple[int, list[LineRecord]]:
+        """Return one page of a node's lines, with their BGM.
+
+        回傳一個節點的一頁台詞（含 BGM）。
+
+        See ``StoryRepository.node_lines`` for the contract.
+
+        契約見 ``StoryRepository.node_lines``。
+        """
         async with self._session() as session:
             total = (await session.execute(
                 text("SELECT COUNT(*) FROM story_node_lines WHERE build_id = :b AND node_key = :k"),
@@ -227,6 +479,14 @@ class MySQLStoryRepository:
         return int(total), records
 
     async def line_in_build(self, build_id: int, line_id: int) -> tuple[str, LineRecord] | None:
+        """Find a line in a build.
+
+        在版本中找一句台詞。
+
+        See ``StoryRepository.line_in_build`` for the contract.
+
+        契約見 ``StoryRepository.line_in_build``。
+        """
         async with self._session() as session:
             row = (await session.execute(text(f"""
                 SELECT n.node_key, {_LINE_COLUMNS} {_LINE_JOINS}
@@ -238,7 +498,10 @@ class MySQLStoryRepository:
         return row.node_key, record
 
     async def _attach_bgm(self, session, records: list[LineRecord]) -> None:
-        """一次查出這些台詞的 BGM（依 ``ord``）並填進 ``record.bgm``。Batch-load the lines' BGM."""
+        """Load the BGM of these lines in one query (in ``ord`` order) and fill ``record.bgm``.
+
+        一次查出這些台詞的 BGM（依 ``ord``）並填進 ``record.bgm``。
+        """
         if not records:
             return
         sql = text("""
@@ -255,6 +518,14 @@ class MySQLStoryRepository:
             rec.bgm = by_line.get(rec.line_id, [])
 
     async def card_links(self, line_ids: list[int]) -> list[CardLink]:
+        """Return the active notes whose examples come from the given lines.
+
+        回傳例句取自這些台詞、且有效的筆記。
+
+        See ``StoryRepository.card_links`` for the contract.
+
+        契約見 ``StoryRepository.card_links``。
+        """
         if not line_ids:
             return []
         sql = text("""
@@ -270,6 +541,14 @@ class MySQLStoryRepository:
         return [CardLink(int(r.dst_id), int(r.src_id), r.card_type, _verb(r.term)) for r in rows]
 
     async def next_annotated_seq(self, build_id: int, node_key: str, after: int) -> int | None:
+        """Return the next ``seq`` in a node, after ``after``, whose line has a card.
+
+        回傳節點中 ``after`` 之後、下一句有卡片的台詞 ``seq``。
+
+        See ``StoryRepository.next_annotated_seq`` for the contract.
+
+        契約見 ``StoryRepository.next_annotated_seq``。
+        """
         sql = text("""
             SELECT MIN(n.seq) FROM story_node_lines n
             JOIN rel_links r ON r.dst_type = :line AND r.dst_id = CAST(n.line_id AS CHAR) COLLATE utf8mb4_bin
@@ -281,6 +560,14 @@ class MySQLStoryRepository:
         return int(value) if value is not None else None
 
     async def annotation_counts(self, build_id: int) -> list[tuple[str, str | None, int]]:
+        """Return, per node and card type, the number of distinct lines carrying cards.
+
+        回傳每個節點、每種卡片類型有卡片的台詞句數（不重複）。
+
+        See ``StoryRepository.annotation_counts`` for the contract.
+
+        契約見 ``StoryRepository.annotation_counts``。
+        """
         sql = text("""
             SELECT n.node_key, JSON_UNQUOTE(JSON_EXTRACT(r.attrs, '$.card_type')) AS card_type,
                    COUNT(DISTINCT n.line_id) AS line_count
@@ -293,6 +580,14 @@ class MySQLStoryRepository:
         return [(r.node_key, r.card_type, int(r.line_count)) for r in rows]
 
     async def verb_index(self, build_id: int) -> list[tuple[str, str | None, str]]:
+        """Return the distinct verbs taught by cards in each node.
+
+        回傳每個節點中，卡片所教的不重複動詞。
+
+        See ``StoryRepository.verb_index`` for the contract.
+
+        契約見 ``StoryRepository.verb_index``。
+        """
         sql = text("""
             SELECT DISTINCT n.node_key, JSON_UNQUOTE(JSON_EXTRACT(r.attrs, '$.card_type')) AS card_type, t.dst_id AS term
             FROM rel_links r
@@ -306,7 +601,22 @@ class MySQLStoryRepository:
         return [(node_key, card_type, verb) for node_key, card_type, verb in verbs if verb]
 
     async def lines_of_note(self, note_id: int) -> list[int]:
-        """筆記取自哪些台詞；母卡沒有直接的例句時，經由子卡（情境、填空）找。Lines of a note."""
+        """Return the lines a note's examples come from, through child notes if there is no direct one.
+
+        回傳筆記取自哪些台詞；母卡沒有直接的例句時，經由子卡（情境、填空）找。
+
+        Line ids that are not integers are skipped.
+
+        不是整數的台詞 ID 會略過。
+
+        Args:
+            note_id: the note id
+                筆記 ID
+
+        Returns:
+            the line ids; empty if none
+            台詞 ID；沒有時為空串列
+        """
         direct = text("""
             SELECT dst_id FROM rel_links
             WHERE relation_type = :rel AND src_type = :note AND src_id = :n AND dst_type = :line

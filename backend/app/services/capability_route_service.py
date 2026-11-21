@@ -1,10 +1,29 @@
-"""
-能力路由設定的讀寫服務（能力路由計畫 capability_routing_FEAT_2026-10-19.md；前身為模型路由計畫
-llm_model_routing_FEAT_2026-10-15.md D6）。
+"""Read/write service for capability route settings.
+
+能力路由設定的讀寫服務。
+
+Capability routing plan capability_routing_FEAT_2026-10-19.md; its predecessor is the model routing plan
+llm_model_routing_FEAT_2026-10-15.md D6.
+
+能力路由計畫 capability_routing_FEAT_2026-10-19.md；前身為模型路由計畫
+llm_model_routing_FEAT_2026-10-15.md D6。
+
+The API (``/api/v1/capability-routes``) and the TG ``/setconfig`` menu share this layer: list the setting
+currently in effect for each capability of each route, write a set of choices, and restore the default. Every
+operation targets a "route key × capability" (for capabilities see :mod:`app.infrastructure.llm.capabilities`).
+Before writing, these checks run in order:
 
 API（``/api/v1/capability-routes``）與 TG ``/setconfig`` 選單共用這一層：列出每個用途各能力目前
 生效的設定、寫入一組選擇、恢復預設。每個操作都針對「用途鍵 × 能力」（能力見
 :mod:`app.infrastructure.llm.capabilities`）。寫入前依序檢查：
+
+1. The route key is declared (or is the global ``*``) and declares this capability.
+2. ``(provider, model, effort)`` is on the whitelist (``audio_eval`` also checks the strategies the route key
+   allows), using the same :func:`~app.infrastructure.llm.routing.check_choice` as the reading side.
+3. A trial build: ``llm`` builds a client (whether the CLI can be found, the key is set, the package is
+   installed), ``audio_llm`` builds the listening evaluator, ``stt`` builds the Whisper client; ``audio_eval`` only
+   checks the strategy name. No API is called (whether the model name itself exists is only known from a real
+   call), but CLI-type clients do create their working directory.
 
 1. 用途鍵已宣告（或為全域 ``*``），且宣告了這個能力
 2. ``(provider, 模型, effort)`` 在白名單內（``audio_eval`` 另檢查用途鍵允許的策略）——與讀取端
@@ -13,15 +32,35 @@ API（``/api/v1/capability-routes``）與 TG ``/setconfig`` 選單共用這一�
    建聽音檔的評分器、``stt`` 建 Whisper 客戶端；``audio_eval`` 只檢查策略名。不打 API（模型名本身
    是否存在仍要實際呼叫才知道），但 CLI 類會建立工作目錄
 
+After a successful write the route cache is cleared, so the next call uses the new setting.
+
 寫入成功後清空路由快取，下一次呼叫即生效。
+
+There are three kinds of errors (all :class:`~app.core.exceptions.FluencyTidesError`; the API's global handler
+turns them into the matching status codes):
 
 錯誤分三種（都是 :class:`~app.core.exceptions.FluencyTidesError`，API 由全域 handler
 轉成對應狀態碼）：
+
+- :class:`~app.core.exceptions.RouteNotFoundError` (404): the route key does not exist (when writing: not
+  declared)
+- :class:`~app.core.exceptions.InvalidRouteError` (422): the setting is invalid, or the route key does not declare
+  this capability (the caller can fix it)
+- :class:`~app.core.exceptions.RouteStoreUnavailableError` (503): the DB cannot be read, or the database failed
+  while writing or deleting (outcome unknown)
 
 - :class:`~app.core.exceptions.RouteNotFoundError`（404）：用途鍵不存在（寫入時：未宣告）
 - :class:`~app.core.exceptions.InvalidRouteError`（422）：設定不合格，或用途鍵沒有宣告這個能力（呼叫端可修正）
 - :class:`~app.core.exceptions.RouteStoreUnavailableError`（503）：讀不到 DB，或寫入／刪除時
   資料庫異常（結果未知）
+
+**Reads do not reuse the generation path's fallback**: when the routing layer cannot read the DB it returns "no
+setting" so generation is not interrupted, but if the management interface accepted that, it would report
+"unreadable" as "does not exist". So operations that need to know whether a key has a stored value (describing a
+single route, deleting an orphan key) raise 503 when the DB cannot be read (and log the reason); listing everything
+still returns, with every row marked ``db_unavailable``. Listing and describing read the DB only once per request,
+and every row is resolved from the same snapshot. Database errors while writing are likewise turned into 503
+(outcome unknown; the user is told to check again).
 
 **讀取不沿用生成路徑的退回**：路由層讀不到 DB 時會回「沒有設定」好讓生成不中斷，但
 管理介面若照單全收，就會把「讀不到」說成「不存在」。所以需要知道某個鍵有沒有存值的
@@ -29,17 +68,16 @@ API（``/api/v1/capability-routes``）與 TG ``/setconfig`` 選單共用這一�
 標上 ``db_unavailable``。列出與查詢時每個請求只讀一次 DB，所有列都由同一份快照解析。
 寫入時的資料庫錯誤同樣轉成 503（結果未知，提示重新查看）。
 
+**The list does not fail to open because one row is broken**: computing an ``llm`` label requires loading the
+endpoint's client class; when the third-party package the endpoint needs is missing or the wrong version, that row
+uses a label without prefix stripping and explains in ``problem``, and the rest are listed as usual, because the
+administrator needs exactly this interface to switch the setting to a working endpoint. Mistakes in the ``.env``
+layer (endpoint skipped, key or STT server not set, invalid strategy name) are also marked in ``problem``.
+
 **清單不因單列壞掉而打不開**：算 ``llm`` 的標籤需要載入端點的客戶端類別；端點需要的第三方套件沒裝
 或版本不符時，該列改用不去前綴的標籤並在 ``problem`` 說明，其餘照常列出——管理員正需要這個介面把
 設定改到能用的端點。``.env`` 那一層的設定有誤（端點被跳過、金鑰或 STT 伺服器沒設、策略名無效）
 同樣標在 ``problem``。
-
-English summary:
-    Read/write service for capability route settings, shared by the HTTP API
-    and the Telegram ``/setconfig`` menu. Every operation targets a route key
-    and a capability. Writes are validated against declared keys and
-    capabilities, the whitelist and a trial build. Reads use one snapshot
-    per request and never mistake an unreadable database for "not found".
 """
 
 import logging
@@ -110,15 +148,21 @@ _WRITE_FAILED_MESSAGE = (
 
 
 class RouteKeyEntry(NamedTuple):
-    """清單中的一個用途鍵。One route key in display order.
+    """One route key in the list.
+
+    清單中的一個用途鍵。
 
     Attributes:
-        key: 用途鍵；``*`` 為全域。The route key.
-        description: 說明；孤兒鍵為 None。Description, None for orphans.
-        declared: 是否為程式中宣告的鍵（或全域）；False＝DB 裡的孤兒列。
-            False for orphan rows whose key is no longer declared.
-        capabilities: 這個鍵可設定的能力：宣告的鍵為它宣告的能力，全域為所有能力，孤兒鍵為空。
-            The capabilities that may be set for the key; empty for orphans.
+        key: the route key; ``*`` is the global one
+            用途鍵；``*`` 為全域
+        description: the description; ``None`` for orphan keys
+            說明；孤兒鍵為 ``None``
+        declared: whether the key is declared in the code (or is the global one); ``False`` means an orphan row in
+            the DB
+            是否為程式中宣告的鍵（或全域）；``False``＝DB 裡的孤兒列
+        capabilities: the capabilities that may be set for this key: a declared key's own declared capabilities,
+            every capability for the global key, and none for orphan keys
+            這個鍵可設定的能力：宣告的鍵為它宣告的能力，全域為所有能力，孤兒鍵為空
     """
 
     key: str
@@ -129,20 +173,30 @@ class RouteKeyEntry(NamedTuple):
 
 @dataclass(frozen=True)
 class RouteView:
-    """一個用途鍵在一種能力上的完整狀態（給 API 與 TG 顯示）。One key's state for one capability.
+    """The complete state of one route key for one capability (for display by the API and TG).
+
+    一個用途鍵在一種能力上的完整狀態（給 API 與 TG 顯示）。
 
     Attributes:
-        entry: 用途鍵與說明。The key and its description.
-        resolved: 實際生效的設定（含能力）。The effective setting.
-        effective_effort: 實際生效的 effort。``llm`` 的 ``.env`` 那一層為 ``.env`` 的預設值
-            （CLI 類），不是 None——與標籤一致。The effort actually used.
-        label: 生效設定的顯示標籤（``llm`` 為寫進卡片的標籤）。The display label.
-        stored: DB 中這個鍵在這個能力上存的選擇（可能已不在白名單）。The row stored
-            for this key and capability, if any.
-        problem: 生效設定目前無法使用的原因（端點需要的套件未安裝或版本不符、``.env`` 那一層的
-            設定有誤）；有問題時 ``label`` 與 ``effective_effort`` 可能與實際不符。None 只表示
-            沒有偵測到這些問題，不代表已驗證可用。Why the effective setting cannot be
-            used right now; None does not mean it was verified.
+        entry: the route key and its description
+            用途鍵與說明
+        resolved: the setting actually in effect (capability included)
+            實際生效的設定（含能力）
+        effective_effort: the effort actually in effect. For the ``llm`` ``.env`` layer it is the ``.env`` default
+            (CLI types), not ``None``, consistent with the label.
+            實際生效的 effort。``llm`` 的 ``.env`` 那一層為 ``.env`` 的預設值
+            （CLI 類），不是 ``None``——與標籤一致。
+        label: the display label of the effective setting (for ``llm``, the label written into cards)
+            生效設定的顯示標籤（``llm`` 為寫進卡片的標籤）
+        stored: the choice stored in the DB for this key and capability (it may no longer be on the whitelist)
+            DB 中這個鍵在這個能力上存的選擇（可能已不在白名單）
+        problem: why the effective setting cannot be used right now (a package the endpoint needs is missing or
+            the wrong version, or the ``.env`` layer is misconfigured); when there is a problem, ``label`` and
+            ``effective_effort`` may not match reality. ``None`` only means none of these problems was detected,
+            not that the setting was verified to work.
+            生效設定目前無法使用的原因（端點需要的套件未安裝或版本不符、``.env`` 那一層的
+            設定有誤）；有問題時 ``label`` 與 ``effective_effort`` 可能與實際不符。``None`` 只表示
+            沒有偵測到這些問題，不代表已驗證可用。
     """
 
     entry: RouteKeyEntry
@@ -162,41 +216,62 @@ class RouteView:
 
     @property
     def route_key(self) -> str:
-        """用途鍵。The route key."""
+        """The route key.
+
+        用途鍵。
+        """
         return self.entry.key
 
     @property
     def description(self) -> str | None:
-        """說明。The description."""
+        """The description.
+
+        說明。
+        """
         return self.entry.description
 
     @property
     def declared(self) -> bool:
-        """用途鍵是否已宣告。Whether the key is declared."""
+        """Whether the route key is declared.
+
+        用途鍵是否已宣告。
+        """
         return self.entry.declared
 
     @property
     def capability(self) -> str:
-        """能力。The capability."""
+        """The capability.
+
+        能力。
+        """
         return self.resolved.capability
 
     @property
     def capability_declared(self) -> bool:
-        """這個鍵是否宣告了這個能力；False＝孤兒設定（鍵或能力已不在程式中），只能刪除。
+        """Whether this key declares this capability.
 
-        Whether the key declares this capability; False rows can only be deleted.
+        這個鍵是否宣告了這個能力。
+
+        ``False`` means an orphan setting (the key or the capability is no longer in the code), which can only be
+        deleted.
+
+        ``False``＝孤兒設定（鍵或能力已不在程式中），只能刪除。
         """
         return self.entry.declared and self.capability in self.entry.capabilities
 
 
 @dataclass(frozen=True)
 class KeyView:
-    """一個用途鍵與它各能力的狀態。One route key and its per-capability states.
+    """One route key and the states of its capabilities.
+
+    一個用途鍵與它各能力的狀態。
 
     Attributes:
-        entry: 用途鍵與說明。The key.
-        views: 各能力的狀態：宣告的能力依顯示順序，之後是 DB 中存了值、但這個鍵沒有宣告的能力。
-            The states, declared capabilities first, then orphan ones.
+        entry: the route key and its description
+            用途鍵與說明
+        views: the state of each capability: declared capabilities in display order, followed by capabilities the
+            DB stores a value for but this key does not declare
+            各能力的狀態：宣告的能力依顯示順序，之後是 DB 中存了值、但這個鍵沒有宣告的能力
     """
 
     entry: RouteKeyEntry
@@ -204,37 +279,62 @@ class KeyView:
 
     @property
     def route_key(self) -> str:
-        """用途鍵。The route key."""
+        """The route key.
+
+        用途鍵。
+        """
         return self.entry.key
 
     @property
     def description(self) -> str | None:
-        """說明。The description."""
+        """The description.
+
+        說明。
+        """
         return self.entry.description
 
     @property
     def declared(self) -> bool:
-        """用途鍵是否已宣告。Whether the key is declared."""
+        """Whether the route key is declared.
+
+        用途鍵是否已宣告。
+        """
         return self.entry.declared
 
     @property
     def capabilities(self) -> tuple[str, ...]:
-        """列出的能力（與 ``views`` 同順序）。The listed capabilities."""
+        """The listed capabilities (in the same order as ``views``).
+
+        列出的能力（與 ``views`` 同順序）。
+        """
         return tuple(view.capability for view in self.views)
 
     def view(self, capability: str) -> RouteView | None:
-        """某個能力的狀態；沒有列出時為 None。The state of one capability."""
+        """Return the state of one capability.
+
+        回傳某個能力的狀態。
+
+        Args:
+            capability: the capability
+                能力
+
+        Returns:
+            the state, or ``None`` if the capability is not listed
+            狀態；沒有列出時為 ``None``
+        """
         return next((view for view in self.views if view.capability == capability), None)
 
 
 def _session_factory() -> Callable[[], AsyncSession]:
-    """主資料庫的 session 工廠。The main database's session factory.
+    """Return the main database's session factory.
+
+    回傳主資料庫的 session 工廠。
+
+    ``database.async_session_factory`` is read only on each call (a deferred import, not bound at import time), so
+    a test that patches that module attribute affects both the routing layer's reads and this service's writes.
 
     每次呼叫才讀 ``database.async_session_factory``（延遲 import，也不在 import 時綁定），
     所以測試 patch 該模組屬性即可同時影響路由層的讀取與本服務的寫入。
-
-    Read on every call, so patching the database module attribute affects
-    both the resolver's reads and this service's writes.
     """
     from app.infrastructure.database.database import async_session_factory
 
@@ -242,32 +342,52 @@ def _session_factory() -> Callable[[], AsyncSession]:
 
 
 def _client_class_for(endpoint_id: str) -> Any:
-    """端點對應的客戶端類別；端點不存在時以 ID 當 provider 查。
+    """Return the client class for an endpoint, looking the ID up as a provider when the endpoint does not exist.
+
+    回傳端點對應的客戶端類別；端點不存在時以 ID 當 provider 查。
+
+    Only the ``.env`` layer can meet a missing endpoint: the custom endpoint ``LLM_PROVIDER`` points to was skipped
+    because it is misconfigured (see :func:`_env_endpoint_problem`). Choices in the DB layer have passed
+    ``check_choice``, so their endpoint always exists.
 
     只有 ``.env`` 那一層會遇到端點不存在：``LLM_PROVIDER`` 指向的自訂端點因設定有誤被
-    跳過（見 :func:`_env_endpoint_problem`）。DB 層的選擇已通過 ``check_choice``，端點一定存在。
-
-    The client class for an endpoint; falls back to treating the ID as a
-    provider value, which only happens on the ``.env`` layer when its custom
-    endpoint was skipped as invalid.
+    跳過（見 ``_env_endpoint_problem``）。DB 層的選擇已通過 ``check_choice``，端點一定存在。
 
     Raises:
-        ImportError: 客戶端模組 import 失敗（套件未安裝或版本不符）。
+        ImportError: if importing the client module fails (the package is not installed or is the wrong version)
+            若客戶端模組 import 失敗（套件未安裝或版本不符）
     """
     endpoint = get_endpoint(endpoint_id)
     return factory.resolve_client_class(endpoint.type if endpoint is not None else endpoint_id)
 
 
 def effective_effort(endpoint_id: str, effort: str | None, *, env_layer: bool) -> str | None:
-    """``llm`` 實際會用的 effort。The effort an ``llm`` setting actually uses.
+    """Return the effort an ``llm`` setting actually uses.
 
-    effort 為 None 的意思依層而不同：DB 的選擇裡 None＝「此模型不使用 effort」（客戶端收到
-    ``OMIT_EFFORT``）；``.env`` 那一層的 None＝「沿用 ``.env`` 預設」（CLI 類帶 ``LLM_*_EFFORT``）。
+    回傳 ``llm`` 實際會用的 effort。
+
+    What an effort of ``None`` means depends on the layer: in a DB choice, ``None`` means "this model takes no
+    effort" (the client receives ``OMIT_EFFORT``); in the ``.env`` layer, ``None`` means "use the ``.env`` default"
+    (CLI types carry ``LLM_*_EFFORT``).
+
+    effort 為 ``None`` 的意思依層而不同：DB 的選擇裡 ``None``＝「此模型不使用 effort」（客戶端收到
+    ``OMIT_EFFORT``）；``.env`` 那一層的 ``None``＝「沿用 ``.env`` 預設」（CLI 類帶 ``LLM_*_EFFORT``）。
 
     Args:
-        endpoint_id: 端點 ID。Endpoint ID.
-        effort: effort 值或 None。The effort, or None.
-        env_layer: 是否為 ``.env`` 那一層。Whether this is the ``.env`` layer.
+        endpoint_id: the endpoint ID
+            端點 ID
+        effort: the effort value, or ``None``
+            effort 值或 ``None``
+        env_layer: whether this is the ``.env`` layer
+            是否為 ``.env`` 那一層
+
+    Returns:
+        the effort actually used; ``None`` when no effort is used
+        實際使用的 effort；不使用 effort 時為 ``None``
+
+    Raises:
+        ImportError: if the ``.env`` default is needed and the client module cannot be imported
+            若需要 ``.env`` 預設，而客戶端模組 import 失敗
     """
     if env_layer and effort is None:
         return _client_class_for(endpoint_id).default_effort()
@@ -277,20 +397,36 @@ def effective_effort(endpoint_id: str, effort: str | None, *, env_layer: bool) -
 def preview_label(
     endpoint_id: str, model: str, effort: str | None, *, env_layer: bool = False, capability: str = CAPABILITY_LLM
 ) -> str:
-    """不建立客戶端，算出這組設定的顯示標籤。Compute a setting's label without building a client.
+    """Compute the display label of a setting without building a client.
+
+    不建立客戶端，算出這組設定的顯示標籤。
+
+    The ``llm`` label follows the same rules as the client's ``model_label`` (prefix stripping and the default
+    effort come from the client class itself), so it is exactly the label written into cards; ``audio_eval`` uses
+    the strategy name; other capabilities use ``(provider)model``.
 
     ``llm`` 的標籤與客戶端的 ``model_label`` 規則相同（去前綴與預設 effort 取自客戶端類別本身），
     就是寫進卡片的標籤；``audio_eval`` 為策略名；其他能力為 ``(provider)模型``。
 
     Args:
-        endpoint_id: provider。The provider.
-        model: 模型名。Model name.
-        effort: effort 值或 None（意思見 :func:`effective_effort`）。The effort.
-        env_layer: 是否為 ``.env`` 那一層。Whether this is the ``.env`` layer.
-        capability: 能力。The capability.
+        endpoint_id: the provider
+            provider
+        model: the model name
+            模型名
+        effort: the effort value or ``None`` (for its meaning see :func:`effective_effort`)
+            effort 值或 ``None``（意思見 ``effective_effort``）
+        env_layer: whether this is the ``.env`` layer
+            是否為 ``.env`` 那一層
+        capability: the capability
+            能力
 
     Returns:
-        標籤，例如 ``(yinli)gemini-3.5-flash``、``(claude-code)opus-5@high``、``listen``。The label.
+        the label, for example ``(yinli)gemini-3.5-flash``, ``(claude-code)opus-5@high`` or ``listen``
+        標籤，例如 ``(yinli)gemini-3.5-flash``、``(claude-code)opus-5@high``、``listen``
+
+    Raises:
+        ImportError: for ``llm``, if the client module cannot be imported
+            ``llm`` 時，若客戶端模組 import 失敗
     """
     if capability == CAPABILITY_AUDIO_EVAL:
         return endpoint_id
@@ -302,14 +438,30 @@ def preview_label(
 
 
 def _stored_keys(stored: Snapshot) -> set[str]:
-    """DB 中存了任一能力的用途鍵。Keys with a row for any capability."""
+    """Return the route keys that have a stored value in the DB for any capability.
+
+    回傳 DB 中存了任一能力的用途鍵。
+    """
     return {key for rows in stored.values() for key in rows}
 
 
 def ordered_route_keys(stored: Snapshot) -> list[RouteKeyEntry]:
-    """顯示順序：全域 ``*``、已宣告的鍵（依鍵排序，分支緊跟在流程鍵之後）、DB 中的孤兒鍵（依鍵排序）。
+    """List every route key in display order.
 
-    Display order: ``*``, declared keys, then orphan keys found in the DB.
+    依顯示順序列出所有用途鍵。
+
+    Display order: the global ``*``, the declared keys (sorted by key, so branches follow right after their flow
+    key), then orphan keys in the DB (sorted by key).
+
+    顯示順序：全域 ``*``、已宣告的鍵（依鍵排序，分支緊跟在流程鍵之後）、DB 中的孤兒鍵（依鍵排序）。
+
+    Args:
+        stored: the snapshot of stored settings
+            已存設定的快照
+
+    Returns:
+        the route key entries in display order
+        依顯示順序的用途鍵項目
     """
     declared = {route.key: route for route in routing.list_route_keys()}
     entries = [RouteKeyEntry(GLOBAL_ROUTE_KEY, GLOBAL_DESCRIPTION, True, CAPABILITIES)]
@@ -325,10 +477,24 @@ def ordered_route_keys(stored: Snapshot) -> list[RouteKeyEntry]:
 
 
 def key_capabilities(entry: RouteKeyEntry, stored: Snapshot) -> tuple[str, ...]:
-    """一個鍵要列出的能力：宣告的能力（依顯示順序），再加 DB 中存了值、但沒有宣告的能力。
+    """Return the capabilities to list for a key.
 
-    The capabilities listed for a key: declared ones in display order, then
-    orphan rows stored for capabilities the key does not declare.
+    回傳一個鍵要列出的能力。
+
+    The declared capabilities (in display order), followed by capabilities the DB stores a value for but the key
+    does not declare (sorted).
+
+    宣告的能力（依顯示順序），再加 DB 中存了值、但沒有宣告的能力（排序）。
+
+    Args:
+        entry: the route key entry
+            用途鍵項目
+        stored: the snapshot of stored settings
+            已存設定的快照
+
+    Returns:
+        the capabilities to list
+        要列出的能力
     """
     declared = [capability for capability in CAPABILITY_ORDER if capability in entry.capabilities]
     stored_caps = sorted(
@@ -338,12 +504,16 @@ def key_capabilities(entry: RouteKeyEntry, stored: Snapshot) -> tuple[str, ...]:
 
 
 def _env_endpoint_problem() -> str | None:
-    """``llm`` 的 ``.env`` 那一層的端點設定有誤、已被跳過時的說明；沒問題時為 None。
+    """Explain why the ``llm`` ``.env`` layer's endpoint was skipped as misconfigured, or return ``None`` if it was not.
+
+    ``llm`` 的 ``.env`` 那一層的端點設定有誤、已被跳過時的說明；沒問題時為 ``None``。
+
+    When ``LLM_PROVIDER`` points to a malformed endpoint in ``LLM_ENDPOINTS``, an ERROR was logged at startup, but
+    every generation in this layer fails (the factory reports "endpoint does not exist"). Without marking it, the
+    list would show it as a normal default.
 
     ``LLM_PROVIDER`` 指向 ``LLM_ENDPOINTS`` 中寫錯的端點時，啟動時記過 ERROR，但這一層的
     每次生成都會失敗（工廠報「端點不存在」）。不標出來的話，清單會把它顯示成正常的預設。
-
-    Why the ``.env`` layer's custom endpoint was skipped, or None.
     """
     if not env_endpoint_is_custom() or get_endpoint() is not None:
         return None
@@ -353,9 +523,9 @@ def _env_endpoint_problem() -> str | None:
 
 
 def _env_choice_problem(resolved: ResolvedRoute) -> str | None:
-    """``.env`` 那一層的預設目前無法使用的原因；沒偵測到問題時為 None。
+    """Return why the ``.env`` layer's default cannot be used right now, or ``None`` if no problem is detected.
 
-    Why the ``.env`` layer's default cannot be used right now, or None.
+    回傳 ``.env`` 那一層的預設目前無法使用的原因；沒偵測到問題時為 ``None``。
     """
     choice = resolved.env_choice
     capability = resolved.capability
@@ -384,15 +554,21 @@ def _env_choice_problem(resolved: ResolvedRoute) -> str | None:
 
 
 def _label_for(resolved: ResolvedRoute) -> tuple[str | None, str, str | None]:
-    """生效設定的 ``(effort, 標籤, 問題)``；``llm`` 端點需要的第三方套件沒裝或版本不符時退化並說明，
-    不讓整份清單失敗。退化時標籤不去前綴，``.env`` 那一層的 effort 也取不到預設（為 None）。
+    """Return the ``(effort, label, problem)`` of the effective setting.
 
-    The effective effort, label and problem of a resolved route; a missing
-    or incompatible third-party package degrades this one row instead of
-    failing the list.
+    回傳生效設定的 ``(effort, 標籤, 問題)``。
+
+    When the third-party package an ``llm`` endpoint needs is missing or the wrong version, this row degrades and
+    explains why, instead of failing the whole list. When degraded, the label is not prefix-stripped and the
+    ``.env`` layer's effort default cannot be obtained either (it is ``None``).
+
+    ``llm`` 端點需要的第三方套件沒裝或版本不符時退化並說明，
+    不讓整份清單失敗。退化時標籤不去前綴，``.env`` 那一層的 effort 也取不到預設（為 ``None``）。
 
     Raises:
-        ImportError: import 失敗的是專案自己的模組（程式錯誤，照常拋出）。
+        ImportError: if the failed import is one of the project's own modules (a programming error, raised as
+            usual)
+            若 import 失敗的是專案自己的模組（程式錯誤，照常拋出）
     """
     if resolved.capability != CAPABILITY_LLM:
         label = preview_label(resolved.endpoint, resolved.model, None, capability=resolved.capability)
@@ -416,7 +592,10 @@ def _label_for(resolved: ResolvedRoute) -> tuple[str | None, str, str | None]:
 
 
 def _view(entry: RouteKeyEntry, stored: Snapshot, read_ok: bool, capability: str = CAPABILITY_LLM) -> RouteView:
-    """以一份快照組出一個用途在一種能力上的狀態。Build one key's state for one capability."""
+    """Build the state of one route for one capability from a snapshot.
+
+    以一份快照組出一個用途在一種能力上的狀態。
+    """
     resolved = routing.resolve_with(entry.key, stored, read_ok, capability)
     effort, label, problem = _label_for(resolved)
     if problem is None and resolved.choice is None:
@@ -432,21 +611,28 @@ def _view(entry: RouteKeyEntry, stored: Snapshot, read_ok: bool, capability: str
 
 
 def _key_view(entry: RouteKeyEntry, stored: Snapshot, read_ok: bool) -> KeyView:
-    """以一份快照組出一個用途鍵各能力的狀態。Build one key's per-capability states."""
+    """Build the states of every capability of one route key from a snapshot.
+
+    以一份快照組出一個用途鍵各能力的狀態。
+    """
     return KeyView(
         entry, tuple(_view(entry, stored, read_ok, capability) for capability in key_capabilities(entry, stored))
     )
 
 
 async def _strict_snapshot() -> Snapshot:
-    """讀出全部設定；讀不到時記下原因並拋 503，不當成「沒有設定」。
+    """Read every stored setting; when the DB cannot be read, log the reason and raise 503 instead of "no setting".
 
-    Read every stored choice, refusing to treat an unreadable DB as empty;
-    the underlying error is logged with its traceback each time (management
-    calls are rare, so this does not flood the log).
+    讀出全部設定；讀不到時記下原因並拋 503，不當成「沒有設定」。
+
+    The underlying error is logged with its traceback every time (management calls are rare, so this does not
+    flood the log).
+
+    每次都會記下底層錯誤與 traceback（管理操作很少，不會洗版）。
 
     Raises:
-        RouteStoreUnavailableError: 讀不到 DB 時。
+        RouteStoreUnavailableError: if the DB cannot be read
+            若讀不到 DB
     """
     try:
         return await routing.stored_choices_strict()
@@ -456,33 +642,65 @@ async def _strict_snapshot() -> Snapshot:
 
 
 def views_from(stored: Snapshot, read_ok: bool) -> list[KeyView]:
-    """以一份已讀出的快照組出全部用途鍵的狀態（依顯示順序）。All key views from one snapshot.
+    """Build the states of every route key (in display order) from an already-read snapshot.
 
-    TG 選單用它讓「選單版本」與「清單內容」來自同一次讀取。Lets the menu derive its
-    version and its rows from the same read.
+    以一份已讀出的快照組出全部用途鍵的狀態（依顯示順序）。
+
+    The TG menu uses this so the "menu version" and the "list content" come from the same read.
+
+    TG 選單用它讓「選單版本」與「清單內容」來自同一次讀取。
+
+    Args:
+        stored: the snapshot of stored settings
+            已存設定的快照
+        read_ok: whether the snapshot was read from the DB successfully
+            快照是否成功從 DB 讀出
+
+    Returns:
+        the state of every route key, in display order
+        各用途鍵的狀態，依顯示順序
     """
     return [_key_view(entry, stored, read_ok) for entry in ordered_route_keys(stored)]
 
 
 async def list_routes() -> tuple[list[KeyView], bool]:
-    """全部用途鍵（含全域與孤兒鍵）各能力目前的狀態，依顯示順序。All route keys' states.
+    """List the current state of every capability of every route key (global and orphan keys included).
 
-    讀不到 DB 時仍回傳（各列為 ``.env`` 預設、標上 ``db_unavailable``；孤兒鍵看不到），
+    列出全部用途鍵（含全域與孤兒鍵）各能力目前的狀態，依顯示順序。
+
+    Results are in display order. When the DB cannot be read, this still returns (every row shows the ``.env``
+    default and is marked ``db_unavailable``; orphan keys are not visible), and the caller shows a warning.
+
+    依顯示順序。讀不到 DB 時仍回傳（各列為 ``.env`` 預設、標上 ``db_unavailable``；孤兒鍵看不到），
     由呼叫端顯示警示。
 
     Returns:
-        ``(各用途鍵狀態, DB 是否讀取成功)``。``(key views, read_ok)``.
+        ``(key views, whether the DB was read successfully)``
+        ``(各用途鍵狀態, DB 是否讀取成功)``
     """
     stored, read_ok = await routing.stored_choices()
     return views_from(stored, read_ok), read_ok
 
 
 async def describe(route_key: str) -> KeyView:
-    """單一用途鍵各能力的狀態。The state of one route key.
+    """Return the state of every capability of a single route key.
+
+    回傳單一用途鍵各能力的狀態。
+
+    Args:
+        route_key: the route key or ``*``
+            用途鍵或 ``*``
+
+    Returns:
+        the key's states
+        這個鍵的狀態
 
     Raises:
-        RouteNotFoundError: 用途鍵既未宣告、DB 中也沒有。
-        RouteStoreUnavailableError: 讀不到 DB（無法判斷孤兒鍵是否存在、本身存了什麼）。
+        RouteNotFoundError: if the route key is neither declared nor present in the DB
+            若用途鍵既未宣告、DB 中也沒有
+        RouteStoreUnavailableError: if the DB cannot be read (so it cannot tell whether an orphan key exists or what
+            the key itself stores)
+            若讀不到 DB（無法判斷孤兒鍵是否存在、本身存了什麼）
     """
     stored = await _strict_snapshot()
     for entry in ordered_route_keys(stored):
@@ -492,7 +710,10 @@ async def describe(route_key: str) -> KeyView:
 
 
 def _declared_entry(route_key: str) -> RouteKeyEntry | None:
-    """已宣告的鍵（或全域）的清單項目；未宣告時為 None。The entry for a declared key."""
+    """Return the list entry for a declared key (or the global key), or ``None`` if it is not declared.
+
+    回傳已宣告的鍵（或全域）的清單項目；未宣告時為 ``None``。
+    """
     if route_key == GLOBAL_ROUTE_KEY:
         return RouteKeyEntry(GLOBAL_ROUTE_KEY, GLOBAL_DESCRIPTION, True, CAPABILITIES)
     declared = routing.get_route(route_key)
@@ -502,21 +723,28 @@ def _declared_entry(route_key: str) -> RouteKeyEntry | None:
 
 
 def _check_capability(capability: str) -> None:
-    """能力必須是程式支援的。The capability must be a known one.
+    """Require the capability to be one the code supports.
+
+    能力必須是程式支援的。
 
     Raises:
-        InvalidRouteError: 不支援的能力。Unknown capability.
+        InvalidRouteError: if the capability is not supported
+            若為不支援的能力
     """
     if capability not in CAPABILITIES:
         raise InvalidRouteError(f"不支援的能力 '{capability}'（可用：{', '.join(sorted(CAPABILITIES))}）")
 
 
 def _trial_build(capability: str, choice: RouteChoice) -> None:
-    """依能力試建一次（不打 API）。Build the tool once without calling any API.
+    """Build the tool for the capability once, without calling any API.
 
-    Raises:
-        LLMServiceError / STTServiceError / AudioEvaluatorUnavailableError / ImportError / OSError:
-            建不出來時。When it cannot be built.
+    依能力試建一次（不打 API）。
+
+    ``audio_eval`` builds nothing. When the tool cannot be built, this raises ``LLMServiceError``,
+    ``STTServiceError``, ``AudioEvaluatorUnavailableError``, ``ImportError`` or ``OSError``.
+
+    ``audio_eval`` 不建立任何東西。建不出來時拋 ``LLMServiceError``、``STTServiceError``、
+    ``AudioEvaluatorUnavailableError``、``ImportError`` 或 ``OSError``。
     """
     if capability == CAPABILITY_LLM:
         factory.create_llm_client(
@@ -537,22 +765,37 @@ def validate_choice(
     route_key: str = GLOBAL_ROUTE_KEY,
     updated_by: str = "?",
 ) -> None:
-    """白名單檢查加試建。Whitelist check plus a trial build.
+    """Check the choice against the whitelist, then do a trial build.
+
+    白名單檢查加試建。
+
+    Deployment problems the trial build catches: the CLI cannot be found or the key is not set
+    (``LLMServiceError``), the STT server is not set (``STTServiceError``), a third-party package the endpoint needs
+    is missing or the wrong version (``ImportError``), the CLI working directory cannot be created (``OSError``). If
+    the failed import is one of the project's own ``app.*`` modules (a wrong registry module name, a mistyped import
+    inside a provider, a renamed provider), it is a programming error and is raised as usual, since installing a
+    package will not fix it (see :func:`~app.infrastructure.llm.routing.is_internal_import`).
 
     試建會攔下的部署問題：CLI 找不到、金鑰沒設（``LLMServiceError``）、STT 伺服器沒設
     （``STTServiceError``）、端點需要的第三方套件沒裝或版本不符（``ImportError``）、CLI 工作目錄
     無法建立（``OSError``）。import 失敗的若是專案自己的 ``app.*`` 模組（註冊表模組名、provider 內
     import 名稱打錯、provider 改名）則是程式錯誤，照常拋出——裝套件解決不了（見
-    :func:`~app.infrastructure.llm.routing.is_internal_import`）。
+    ``app.infrastructure.llm.routing.is_internal_import``）。
 
     Args:
-        choice: 要檢查的選擇。The choice.
-        capability: 能力。The capability.
-        route_key: 用途鍵（``audio_eval`` 據此檢查允許的策略，也用於 log）。Route key.
-        updated_by: 修改者（只用於 log）。Who asked, for logging.
+        choice: the choice to check
+            要檢查的選擇
+        capability: the capability
+            能力
+        route_key: the route key (``audio_eval`` uses it to check the allowed strategies; also used in the log)
+            用途鍵（``audio_eval`` 據此檢查允許的策略，也用於 log）
+        updated_by: who made the change (used only in the log)
+            修改者（只用於 log）
 
     Raises:
-        InvalidRouteError: 不在白名單，或試建失敗（訊息含原因）。
+        InvalidRouteError: if the choice is not on the whitelist, or the trial build fails (the message includes
+            the reason)
+            若不在白名單，或試建失敗（訊息含原因）
     """
     problem = routing.check_choice(choice, capability, route_key=route_key)
     if problem is not None:
@@ -578,15 +821,21 @@ def validate_choice(
 
 
 def _row_filter(route_key: str, capability: str) -> Any:
-    """``(用途鍵, 能力)`` 這一列的查詢條件。The filter for one key and capability."""
+    """Return the query filter for the ``(route key, capability)`` row.
+
+    回傳 ``(用途鍵, 能力)`` 這一列的查詢條件。
+    """
     return (col(CapabilityRouteSetting.route_key) == route_key) & (col(CapabilityRouteSetting.capability) == capability)
 
 
 async def _row_exists(route_key: str, capability: str) -> bool:
-    """該用途鍵在該能力上是否已有一列。Whether a row exists for the key and capability.
+    """Return whether a row already exists for the route key and capability.
 
-    Raises:
-        DBAPIError / sqlalchemy.exc.TimeoutError / OSError: 資料庫異常。
+    回傳該用途鍵在該能力上是否已有一列。
+
+    Raises ``DBAPIError``, ``sqlalchemy.exc.TimeoutError`` or ``OSError`` when the database fails.
+
+    資料庫異常時拋 ``DBAPIError``、``sqlalchemy.exc.TimeoutError`` 或 ``OSError``。
     """
     async with _session_factory()() as session:
         result = await session.execute(
@@ -596,13 +845,20 @@ async def _row_exists(route_key: str, capability: str) -> bool:
 
 
 async def _upsert(route_key: str, capability: str, choice: RouteChoice, updated_by: str) -> None:
-    """有就更新、沒有就新增一列（先查再寫，不是原子操作：並發的第一次寫入可能撞唯一鍵）。
+    """Update the row if it exists, otherwise insert one.
 
-    Update the row if present, insert it otherwise. Strategies store a NULL model.
+    有就更新、沒有就新增一列。
+
+    It queries before writing, so it is not atomic: concurrent first writes may collide on the unique key.
+    Strategies (an empty model) store a NULL model. Other database failures raise ``DBAPIError``,
+    ``sqlalchemy.exc.TimeoutError`` or ``OSError``.
+
+    先查再寫，不是原子操作：並發的第一次寫入可能撞唯一鍵。策略（模型為空）存成 NULL。其他資料庫異常時拋
+    ``DBAPIError``、``sqlalchemy.exc.TimeoutError`` 或 ``OSError``。
 
     Raises:
-        IntegrityError: 查的時候還沒有、提交時已被另一筆寫入建立。
-        DBAPIError / sqlalchemy.exc.TimeoutError / OSError: 其他資料庫異常。
+        IntegrityError: if the row did not exist when queried but was created by another write before the commit
+            若查的時候還沒有、提交時已被另一筆寫入建立
     """
     model = choice.model or None
     async with _session_factory()() as session:
@@ -631,36 +887,50 @@ async def set_route(
     updated_by: str,
     capability: str = CAPABILITY_LLM,
 ) -> RouteView:
-    """驗證並寫入一個用途鍵在一種能力上的選擇（有就更新、沒有就新增），寫入後立即生效。
+    """Validate and write the choice for a route key and capability; it takes effect immediately.
 
-    Validate and store the choice for a route key and capability (update or
-    insert), then invalidate the routing cache so the next call uses it.
+    驗證並寫入一個用途鍵在一種能力上的選擇（有就更新、沒有就新增），寫入後立即生效。
+
+    The row is updated if it exists and inserted otherwise. The returned state is built from the value to write
+    **before** writing and the DB is not read again: after the commit only clearing the cache and logging remain,
+    so once the write is committed it is always reported as successful and never called "operation failed"
+    because reading back or building the state failed. The effective value of the route layer is exactly the value
+    written (which passed the whitelist).
 
     回傳的狀態在寫入**之前**就由要寫的值組好、不再讀 DB：提交之後只剩清快取與記 log，
     寫入一旦提交就一定回報成功，不會因為讀回或組狀態失敗而被說成「操作失敗」。用途層的
     生效值就是要寫的值（已通過白名單）。
 
-    The returned state is built from the value before writing and never
-    re-read, so nothing that can fail runs after the commit.
-
     Args:
-        route_key: 用途鍵或 ``*``。Route key or ``*``.
-        endpoint: provider（去空白、不分大小寫）：``llm`` / ``audio_llm`` 為端點 ID、``stt`` 為
-            ``whisper``、``audio_eval`` 為策略名。The provider, case-insensitive.
-        model: 模型名（去空白、區分大小寫）；``audio_eval`` 不選模型（None 或空字串）。
-            Model name, case-sensitive; empty for strategies.
-        effort: 思考深度（去空白、不分大小寫）；不使用 effort 時為 None，空字串視同 None。
-            Effort, case-insensitive; None or "" when the model takes none.
-        updated_by: 修改者（``tg:<user id>`` 或 ``api``）。Who made the change.
-        capability: 能力。The capability.
+        route_key: the route key or ``*``
+            用途鍵或 ``*``
+        endpoint: the provider (trimmed, case-insensitive): the endpoint ID for ``llm`` / ``audio_llm``,
+            ``whisper`` for ``stt``, and the strategy name for ``audio_eval``
+            provider（去空白、不分大小寫）：``llm`` / ``audio_llm`` 為端點 ID、``stt`` 為
+            ``whisper``、``audio_eval`` 為策略名
+        model: the model name (trimmed, case-sensitive); ``audio_eval`` takes no model (``None`` or an empty string)
+            模型名（去空白、區分大小寫）；``audio_eval`` 不選模型（``None`` 或空字串）
+        effort: the thinking depth (trimmed, case-insensitive); ``None`` when no effort is used, and an empty
+            string is treated as ``None``
+            思考深度（去空白、不分大小寫）；不使用 effort 時為 ``None``，空字串視同 ``None``
+        updated_by: who made the change (``tg:<user id>`` or ``api``)
+            修改者（``tg:<user id>`` 或 ``api``）
+        capability: the capability
+            能力
 
     Returns:
-        寫入後的狀態。The state after the write.
+        the state after the write
+        寫入後的狀態
 
     Raises:
-        RouteNotFoundError: 用途鍵未宣告（DB 中有孤兒列也一樣：孤兒鍵只能刪除）。
-        InvalidRouteError: 不支援的能力、用途鍵沒有宣告這個能力、不在白名單，或試建失敗。
-        RouteStoreUnavailableError: 寫入時資料庫異常（結果未知，請重新查看）。
+        InvalidRouteError: if the capability is not supported, the route key does not declare it, the choice is not
+            on the whitelist, or the trial build fails
+            若為不支援的能力、用途鍵沒有宣告這個能力、不在白名單，或試建失敗
+        RouteNotFoundError: if the route key is not declared (even if the DB has an orphan row: orphan keys can only
+            be deleted)
+            若用途鍵未宣告（DB 中有孤兒列也一樣：孤兒鍵只能刪除）
+        RouteStoreUnavailableError: if the database fails while writing (outcome unknown; check again)
+            若寫入時資料庫異常（結果未知，請重新查看）
     """
     entry = _declared_entry(route_key)
     if entry is None:
@@ -713,16 +983,25 @@ async def set_route(
 
 @dataclass(frozen=True)
 class DeleteResult:
-    """恢復預設的結果。The result of restoring the default.
+    """The result of restoring the default.
 
-    ``view`` 為 None 有兩種意思，以 ``view_unavailable`` 區分：孤兒設定刪除後本來就沒有狀態
-    （False），或刪除已提交、但組不出刪除後的狀態（True，原因在後端 log）。
+    恢復預設的結果。
+
+    A ``None`` ``view`` has two meanings, told apart by ``view_unavailable``: an orphan setting has no state after
+    deletion anyway (``False``), or the deletion was committed but the state afterwards could not be built
+    (``True``; the reason is in the backend log).
+
+    ``view`` 為 ``None`` 有兩種意思，以 ``view_unavailable`` 區分：孤兒設定刪除後本來就沒有狀態
+    （``False``），或刪除已提交、但組不出刪除後的狀態（``True``，原因在後端 log）。
 
     Attributes:
-        deleted: 是否真的刪了一列（原本沒有設定時為 False）。Whether a row was removed.
-        view: 刪除後這個能力的狀態；孤兒設定、或組不出狀態時為 None。The state afterwards.
-        view_unavailable: 刪除已提交，但組不出刪除後的狀態。True when the delete
-            committed but the state afterwards could not be built.
+        deleted: whether a row was actually deleted (``False`` when there was no setting)
+            是否真的刪了一列（原本沒有設定時為 ``False``）
+        view: the state of this capability after deletion; ``None`` for an orphan setting or when the state cannot
+            be built
+            刪除後這個能力的狀態；孤兒設定、或組不出狀態時為 ``None``
+        view_unavailable: whether the deletion was committed but the state afterwards could not be built
+            刪除已提交，但組不出刪除後的狀態
     """
 
     deleted: bool
@@ -735,24 +1014,37 @@ class DeleteResult:
 
 
 async def delete_route(route_key: str, *, updated_by: str, capability: str = CAPABILITY_LLM) -> DeleteResult:
-    """刪除一個用途鍵在一種能力上的設定（恢復預設：退回上一層）。孤兒設定也可以刪（清理用）。
+    """Delete a route key's setting for one capability (restore the default: fall back to the layer above).
 
-    Delete a route key's row for one capability so it falls back to the next
-    layer; orphan rows may be deleted too.
+    刪除一個用途鍵在一種能力上的設定（恢復預設：退回上一層）。
 
-    刪除後的狀態要再讀一次 DB（才知道退回到哪一層）；那次讀不到時不拋錯（刪除已提交），
+    Orphan settings can be deleted too (for cleanup). The state after deletion requires reading the DB again (to
+    know which layer it fell back to); if that read fails, no error is raised (the deletion was committed) and the
+    state is marked ``db_unavailable``.
+
+    孤兒設定也可以刪（清理用）。刪除後的狀態要再讀一次 DB（才知道退回到哪一層）；那次讀不到時不拋錯（刪除已提交），
     狀態標上 ``db_unavailable``。
 
     Args:
-        route_key: 用途鍵或 ``*``。Route key or ``*``.
-        updated_by: 操作者（只寫進 log，該列已刪除）。Who did it; logged only.
-        capability: 能力。The capability.
+        route_key: the route key or ``*``
+            用途鍵或 ``*``
+        updated_by: who did it (written only to the log, since the row is deleted)
+            操作者（只寫進 log，該列已刪除）
+        capability: the capability
+            能力
+
+    Returns:
+        the deletion result
+        刪除結果
 
     Raises:
-        RouteNotFoundError: 用途鍵既未宣告、DB 中也沒有。
-        InvalidRouteError: 不支援的能力。Unknown capability.
-        RouteStoreUnavailableError: 讀不到 DB（無法判斷孤兒鍵是否存在），或刪除時資料庫
-            異常（結果未知，請重新查看）。
+        InvalidRouteError: if the capability is not supported
+            若為不支援的能力
+        RouteNotFoundError: if the route key is neither declared nor present in the DB
+            若用途鍵既未宣告、DB 中也沒有
+        RouteStoreUnavailableError: if the DB cannot be read (so it cannot tell whether an orphan key exists), or
+            the database fails while deleting (outcome unknown; check again)
+            若讀不到 DB（無法判斷孤兒鍵是否存在），或刪除時資料庫異常（結果未知，請重新查看）
     """
     _check_capability(capability)
     entry = _declared_entry(route_key)
@@ -794,7 +1086,10 @@ def _choice_read(choice: RouteChoice) -> ChoiceRead:
 
 
 def _state_read(view: RouteView) -> CapabilityStateRead:
-    """一個能力的狀態轉成回應模型。Convert one capability's state."""
+    """Convert the state of one capability into the response model.
+
+    把一個能力的狀態轉成回應模型。
+    """
     resolved = view.resolved
     return CapabilityStateRead(
         source=resolved.source,
@@ -809,10 +1104,22 @@ def _state_read(view: RouteView) -> CapabilityStateRead:
 
 
 def to_read(view: KeyView | RouteView) -> RouteRead:
-    """服務層的狀態轉成對外的回應模型（API 與診斷端點共用）。Convert a view into the response model.
+    """Convert a service-layer state into the external response model (shared by the API and diagnostics endpoint).
+
+    把服務層的狀態轉成對外的回應模型（API 與診斷端點共用）。
+
+    A ``KeyView`` lists every capability of the key; a single-capability ``RouteView`` (the result of a write or a
+    deletion) lists only that one.
 
     ``KeyView`` 列出這個鍵的所有能力；單一能力的 ``RouteView``（寫入或刪除的結果）只列那一個。
-    A key view lists every capability; a single ``RouteView`` lists just its own.
+
+    Args:
+        view: the state to convert
+            要轉換的狀態
+
+    Returns:
+        the response model
+        回應模型
     """
     views = view.views if isinstance(view, KeyView) else (view,)
     return RouteRead(
@@ -824,11 +1131,20 @@ def to_read(view: KeyView | RouteView) -> RouteRead:
 
 
 async def refresh_global_client(app_state: Any) -> None:
-    """依「全域 ``*``（DB）→ ``.env``」重建 ``app_state.llm_client``（模型路由計畫 D9）。
+    """Rebuild ``app_state.llm_client`` from "global ``*`` (DB) → ``.env``" (model routing plan D9).
 
-    Rebuild ``app_state.llm_client`` from the global route, so the
-    diagnostics endpoint's label and CLI probe match the actual global
-    setting.
+    依「全域 ``*``（DB）→ ``.env``」重建 ``app_state.llm_client``（模型路由計畫 D9）。
+
+    Called at startup and after writing or deleting the global ``*``, whether or not the write succeeded (when
+    the outcome is unknown, the DB may have changed). This client is used only by the diagnostics endpoint (label,
+    CLI probe); each route still builds its own client from its route key on every generation. The diagnostics
+    endpoint also checks whether it matches the global setting (``llm_client_matches_global``), for example when the
+    DB could not be read at startup so ``.env`` was used, and the DB recovered later.
+
+    A build failure is not raised (as at startup, other features are unaffected); the client is set to ``None``.
+    Configuration problems (``LLMServiceError``, for example the key is not set or the CLI cannot be found) are
+    logged as WARNING; other exceptions may be programming or environment errors and are logged as ERROR with a
+    traceback. For DB-layer setting or package problems, ``client_for`` first logs a separate ERROR.
 
     啟動時、以及寫入或刪除全域 ``*`` 之後呼叫——不論寫入成敗（結果未知時 DB 可能已改）。
     這個客戶端只給診斷端點用（標籤、CLI 探測）；各用途生成時仍每次依自己的用途鍵建立。
@@ -839,9 +1155,9 @@ async def refresh_global_client(app_state: Any) -> None:
     （``LLMServiceError``，例如金鑰沒設、找不到 CLI）記 WARNING；其他例外可能是程式或環境
     錯誤，記 ERROR 附 traceback。DB 層設定或套件問題時 ``client_for`` 會先另記一次 ERROR。
 
-    Called at startup and after any write to the global row. Failures leave
-    ``None``: configuration errors are warnings, anything else is logged as
-    an error with its traceback.
+    Args:
+        app_state: the application state object whose ``llm_client`` attribute is replaced
+            要替換 ``llm_client`` 屬性的應用程式狀態物件
     """
     try:
         resolved = await routing.resolve(GLOBAL_ROUTE_KEY)

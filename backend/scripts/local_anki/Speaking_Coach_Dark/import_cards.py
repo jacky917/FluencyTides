@@ -60,6 +60,7 @@ from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.utils.id_generator import generate_unique_card_id
 from app.schemas.anki import AnkiNote, AnkiNoteOptions
+from scripts.local_anki.common.reference_audios import preserve_reference_audios
 from scripts.local_anki.common.card_identity import (
     KEY_CARD_ID,
     KEY_NOTE_ID,
@@ -548,6 +549,16 @@ async def import_cards(
                 update_fields = {
                     k: v for k, v in fields.items() if k not in PROTECTED_FIELDS
                 }
+                # References 裡有 TG 上傳的參考音檔（JSON 檔沒有）：併入既有音檔，JSON 沒寫就不覆寫
+                try:
+                    update_fields = await preserve_reference_audios(
+                        client, note_id, update_fields, ("References",),
+                        set(card.get("fields", {})), card_label,
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ [{card_label}] 讀不到既有參考答案，為免音檔遺失跳過更新 note_id={note_id}: {e}")
+                    stats["failed"] += 1
+                    continue
                 if dry_run:
                     logger.info(
                         f"🧪 [DRY-RUN] [{card_label}] {deck_name} <- 更新 note_id={note_id}: {prompt_text[:40]}"

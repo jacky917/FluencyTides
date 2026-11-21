@@ -1,7 +1,13 @@
-"""日文同表層多讀動詞的讀音判讀端點（專案無關）。
+"""Project-agnostic endpoint for judging the reading of a Japanese verb whose kanji surface has multiple readings.
 
-Project-agnostic endpoint for judging the reading of a Japanese verb whose
-kanji surface has multiple readings.
+日文同表層多讀動詞的讀音判讀端點（專案無關）。
+
+The path includes ``jp``: this service also hosts TOEIC/English and other modules, and "one surface,
+several readings" is a Japanese-specific problem; a language-specific capability should not look
+generic (docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.4).
+
+The model is decided by the route key ``jp_verb_reading`` (Telegram ``/setconfig``); requests cannot
+override it.
 
 路徑帶 ``jp``：本服務同時承載 TOEIC/英語等模組，「同表層多讀」是日文特有
 的問題，語言專屬能力不該看起來像通用的
@@ -20,18 +26,23 @@ router = APIRouter(prefix="/jp/verb-readings", tags=["JP Verb Readings"])
 
 @router.post("/judge", response_model=JudgeReadingsResponse, status_code=status.HTTP_200_OK)
 async def judge_readings(request: JudgeReadingsRequest) -> JudgeReadingsResponse:
-    """判讀一批台詞中多讀動詞的實際讀音。
+    """Judge the actual reading of a multi-reading verb in a batch of lines.
 
-    Judge the actual reading of a multi-reading verb in a batch of lines.
+    判讀一批台詞中多讀動詞的實際讀音。
 
     Args:
-        request: 待判句子（≤ 40）。帶已移除的 ``model`` / ``effort`` 等多餘欄位時，由
-            FastAPI 回 422。Items to judge; unknown fields are rejected.
+        request: the sentences to judge (at most 40). Extra fields such as the removed ``model`` /
+            ``effort`` make FastAPI return 422.
+            待判句子（≤ 40）。帶已移除的 ``model`` / ``effort`` 等多餘欄位時，由 FastAPI 回 422。
 
     Returns:
-        JudgeReadingsResponse: 實際使用的模型標籤與逐句結果；無法判定為空字串。
+        the label of the model actually used and the per-sentence results; an empty string when a
+        reading cannot be determined
+        實際使用的模型標籤與逐句結果；無法判定為空字串
 
     Raises:
-        LLMServiceError: client 建立或 LLM 呼叫失敗，交由全域例外處理。
+        LLMServiceError: if building the client or calling the LLM fails; left to the global exception
+            handling
+            若 client 建立或 LLM 呼叫失敗，交由全域例外處理
     """
     return await JpVerbReadingService().judge(request.items)

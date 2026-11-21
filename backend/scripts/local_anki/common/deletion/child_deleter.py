@@ -14,8 +14,12 @@ The irreversible deleteNotes runs last: the master-JSON edit is backed up
 and the MySQL change stays uncommitted until the Anki deletion succeeds,
 so any failure rolls everything back cleanly.
 
-全部任務結束後自動以同一 dry_run 設定調用完整性檢查。
-An integrity check runs afterwards with the same dry_run setting.
+全部任務結束後自動跑一次完整性檢查，但一律只回報（dry-run）：檢查發現的孤兒卡可能與這次刪除無關，
+要修復請先看報告，再自行執行 check_integrity.py --execute。
+An integrity check runs afterwards in report-only (dry-run) mode: the
+orphans it finds may have nothing to do with this deletion, so fixing
+them is left to an explicit check_integrity.py --execute after reading
+the report.
 """
 
 import json
@@ -87,24 +91,33 @@ async def _expand_tasks(
     card_service: CardService,
     raw_targets: list[dict],
 ) -> list[dict[str, int]]:
-    """把任務清單展開為 (master, cloze, context) 三元組列表。
+    """Expand the raw target list into (master, cloze, context) triples.
 
-    Expand the raw target list into (master, cloze, context) triples.
+    把任務清單展開為 (master, cloze, context) 三元組列表。
 
-    僅含 master_nid 的條目視為「清除該母卡片下的所有子卡片」，
-    會掃描母卡的全部 JSON 欄位動態提取。
-    Entries with only master_nid mean "delete every child of this master";
-    the master's JSON fields are scanned to enumerate them.
+    An entry with only ``master_nid`` means "delete every child of this
+    master"; the master's JSON fields are scanned to enumerate them. An
+    entry that gives only one of ``cloze_nid`` and ``context_nid`` is
+    treated as a typo: it is logged as an error and skipped, so a missing
+    id never widens the deletion to every child of the master.
+
+    僅含 ``master_nid`` 的條目視為「清除該母卡片下的所有子卡片」，會掃描母卡的全部 JSON 欄位動態提取。
+    只填了 ``cloze_nid`` 與 ``context_nid`` 其中之一的條目視為填寫錯誤：記錄錯誤並跳過，
+    不會因為漏填一個 id 就把刪除範圍擴大成該母卡的全部子卡。
 
     Args:
-        profile: 專案描述子。Project profile.
-        anki_client: AnkiConnect 客戶端。AnkiConnect client.
-        card_service: 卡片服務（JSON 欄位讀取用）。Card service used for
-            JSON-field reads.
-        raw_targets: 原始任務清單。Raw target list.
+        profile: the project profile
+            專案描述子
+        anki_client: the AnkiConnect client
+            AnkiConnect 客戶端
+        card_service: the card service used for JSON-field reads
+            卡片服務（JSON 欄位讀取用）
+        raw_targets: the raw target list
+            原始任務清單
 
     Returns:
-        list[dict[str, int]]: 展開後的任務。Expanded tasks.
+        the expanded tasks
+        展開後的任務
     """
     tasks: list[dict[str, int]] = []
 
@@ -123,6 +136,16 @@ async def _expand_tasks(
                 "cloze_nid": cloze_nid,
                 "context_nid": context_nid
             })
+            continue
+
+        if cloze_nid or context_nid:
+            # Only one child id was given: most likely a typo. Falling
+            # through would delete every child of this master.
+            # 只填了一個子卡 id，多半是漏填；若往下走會刪掉該母卡的全部子卡。
+            logger.error(
+                f"   ❌ 母卡片 {master_nid} 的任務只填了 cloze_nid 或 context_nid 其中之一，"
+                f"請兩個都填（精確刪除）或都不填（清除全部子卡片）。跳過。"
+            )
             continue
 
         # 僅有母卡片，視為清除該母卡片所有子卡片
@@ -172,25 +195,38 @@ async def run_child_deletion(
     config_path: Path | None = None,
     tasks: list[dict] | None = None,
 ) -> None:
-    """執行批量子卡片刪除（含事後完整性檢查與資源清理）。
+    """Run the batch child-card deletion, then a report-only integrity check.
 
-    Run the batch child-card deletion, followed by an integrity check.
+    執行批量子卡片刪除，接著跑一次只回報的完整性檢查。
+
+    The integrity check never deletes or repairs anything here, even with
+    ``dry_run=False``: it may flag cards unrelated to this deletion, and
+    those should only be fixed after the user has read the report.
+
+    即使 ``dry_run=False``，這裡的完整性檢查也不會刪除或修復任何東西：它可能標出與這次刪除無關的卡片，
+    應該在使用者看過報告後才修復。
 
     Args:
-        profile: 專案描述子。Project profile.
-        dry_run: True 時僅預覽，不做任何實質變更。Preview only when True.
-        allow_regen: True 時硬刪除 DB 紀錄（該句可重新生成）；預設軟刪除
-            （該句不再生成）。Hard-delete the DB record when True so the
-            sentence may be regenerated; default is soft delete.
-        master_nid: 指定單張母卡片，刪除其下所有子卡片（優先於 JSON）。
-            Master note whose children are all deleted (wins over JSON).
-        config_path: JSON 任務清單路徑；master_nid 未指定時使用。Task-list
-            JSON path, used when master_nid is absent.
-        tasks: 呼叫端預先組好的任務清單（每項含 master_nid / cloze_nid /
-            context_nid），優先於 master_nid 與 config_path——供
-            id_deleter 這類已完成解析的上游使用。Pre-built task triples,
-            taking precedence over master_nid and config_path; used by
-            upstream callers (e.g. id_deleter) that already resolved them.
+        profile: the project profile
+            專案描述子
+        dry_run: preview only when ``True``
+            ``True`` 時僅預覽，不做任何實質變更
+        allow_regen: hard-delete the DB record when ``True`` so the sentence
+            may be regenerated; the default soft delete keeps it from being
+            generated again
+            ``True`` 時硬刪除 DB 紀錄（該句可重新生成）；預設軟刪除（該句不再生成）
+        master_nid: a master note whose children are all deleted; wins over
+            ``config_path``
+            指定單張母卡片，刪除其下所有子卡片（優先於 JSON）
+        config_path: the task-list JSON path, used when ``master_nid`` is
+            absent
+            JSON 任務清單路徑；``master_nid`` 未指定時使用
+        tasks: pre-built task triples (``master_nid`` / ``cloze_nid`` /
+            ``context_nid``), taking precedence over ``master_nid`` and
+            ``config_path``; used by upstream callers such as ``id_deleter``
+            that already resolved them
+            呼叫端預先組好的任務清單（每項含 master_nid / cloze_nid / context_nid），優先於 master_nid 與
+            config_path，供 ``id_deleter`` 這類已完成解析的上游使用
     """
     if dry_run:
         logger.info("⚠️ 預設啟用 DRY-RUN 模式，將不會對 Anki 或資料庫進行實質變更 (若要真實執行請加上 --execute 參數)")
@@ -417,7 +453,7 @@ async def run_child_deletion(
             logger.info(f"🗃️ 實際共{db_action} MySQL 去重紀錄: {mysql_affected_count} 筆")
         logger.info("=" * 50)
 
-        # ── 事後完整性檢查（同進程直接調用，dry_run 設定同步傳遞） ──
+        # ── 事後完整性檢查（同進程直接調用，一律只回報） ──
         # 刪除操作涉及 Anki JSON、子卡片、MySQL 三方同步，任何一環出錯都可能
         # 導致資料不一致；自動跑一次完整性檢查能即時發現並提醒使用者。
         logger.info("")
@@ -425,7 +461,13 @@ async def run_child_deletion(
         logger.info("🔍 正在進行刪除後完整性驗證...")
         logger.info("=" * 50)
         try:
-            await run_integrity_check(profile, is_execute=not dry_run, client=anki_client)
+            # 只回報：檢查可能標出與這次刪除無關的卡片，不能沒給使用者看過就刪
+            issue_count = await run_integrity_check(profile, is_execute=False, client=anki_client)
+            if issue_count:
+                logger.warning(
+                    f"⚠️ 完整性檢查發現 {issue_count} 個問題（以上只是報告，沒有修改任何東西）。"
+                    f"確認後可執行 {profile.display_name} 的 check_integrity.py --execute 修復。"
+                )
         except Exception as integrity_e:
             logger.error(f"❌ 完整性檢查時發生錯誤: {integrity_e}")
 

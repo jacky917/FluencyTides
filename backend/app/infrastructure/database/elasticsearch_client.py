@@ -1,7 +1,6 @@
-"""
-Elasticsearch 非同步客戶端與語料檢索模組。
+"""Async Elasticsearch client and corpus search module (Sudachi analyzer).
 
-Async Elasticsearch client and corpus search module (Sudachi analyzer).
+Elasticsearch 非同步客戶端與語料檢索模組（Sudachi 分詞器）。
 """
 
 import logging
@@ -14,21 +13,21 @@ logger = logging.getLogger(__name__)
 _es_client: AsyncElasticsearch | None = None
 
 def get_elasticsearch_client() -> AsyncElasticsearch:
-    """
+    """Get or create the singleton AsyncElasticsearch client.
+
     獲取或建立 AsyncElasticsearch 客戶端的單例 (Singleton)。
 
-    Get or create the singleton AsyncElasticsearch client.
+    Creates an async connection to Elasticsearch based on the ``ELASTICSEARCH_HOSTS`` setting, using basic auth
+    only when both ``ELASTICSEARCH_USERNAME`` and ``ELASTICSEARCH_PASSWORD`` are set. If a client already exists,
+    the existing instance is returned to avoid redundant connections and save system resources.
 
-    此函數會根據環境變數 `ELASTICSEARCH_HOSTS` 建立與 Elasticsearch 的非同步連線。
+    此函數會根據環境變數 ``ELASTICSEARCH_HOSTS`` 建立與 Elasticsearch 的非同步連線；
+    ``ELASTICSEARCH_USERNAME`` 與 ``ELASTICSEARCH_PASSWORD`` 都有設定時才使用 basic auth。
     如果客戶端已經存在，則直接回傳現有的實例，避免重複建立連線，節省系統資源。
 
-    Creates an async connection to Elasticsearch based on the
-    `ELASTICSEARCH_HOSTS` setting. If a client already exists, the existing
-    instance is returned to avoid redundant connections.
-
     Returns:
-        AsyncElasticsearch: 非同步 Elasticsearch 客戶端實例。The async
-            Elasticsearch client instance.
+        the async Elasticsearch client instance
+        非同步 Elasticsearch 客戶端實例
     """
     global _es_client
     if _es_client is not None:
@@ -52,18 +51,17 @@ def get_elasticsearch_client() -> AsyncElasticsearch:
     return _es_client
 
 async def dispose_elasticsearch_client():
-    """
+    """Gracefully close the Elasticsearch client's connection pool and release its resources.
+
     優雅地關閉 Elasticsearch 客戶端連線池並釋放資源。
 
-    Gracefully close the Elasticsearch client's connection pool and release
-    its resources.
+    Should be called at application shutdown (for example, the FastAPI lifespan shutdown event) to ensure all
+    network connections to Elasticsearch are closed properly and no resources leak. Does nothing if no client
+    exists; the next ``get_elasticsearch_client`` call creates a new one.
 
     在應用程式關閉 (例如 FastAPI 的 lifespan shutdown 事件) 時應該呼叫此函數，
-    以確保所有與 Elasticsearch 的網路連線都被正確關閉，防止資源外洩。
-
-    Should be called at application shutdown (e.g. FastAPI lifespan shutdown)
-    to ensure all network connections to Elasticsearch are closed properly
-    and no resources leak.
+    以確保所有與 Elasticsearch 的網路連線都被正確關閉，防止資源外洩。客戶端不存在時不做任何事；
+    下次呼叫 ``get_elasticsearch_client`` 會建立新的客戶端。
     """
     global _es_client
     if _es_client is not None:
@@ -72,34 +70,33 @@ async def dispose_elasticsearch_client():
         logger.info("🧹 Elasticsearch Client 已關閉。")
 
 async def recreate_index():
-    """
-    重新建立 `fluencytides_dialogue` 索引，並套用 Sudachi 日文分詞器設定。
+    """Recreate the ``fluencytides_dialogue`` index with the Sudachi Japanese analyzer settings applied.
 
-    Recreate the `fluencytides_dialogue` index with the Sudachi Japanese
-    analyzer settings applied.
+    重新建立 ``fluencytides_dialogue`` 索引，並套用 Sudachi 日文分詞器設定。
 
-    此函數會定義索引的 Mapping，特別針對 `dialogue` 欄位指定 `sudachi_analyzer`，
+    Defines the index mapping, assigning ``sudachi_analyzer`` to the ``dialogue`` field so that, both at index and
+    search time, Sudachi **reduces Japanese verbs and adjectives to their base forms and unifies their spelling**
+    (気づく/気付く, もらう/貰う, バレる/ばれる converge to the same token) for precise retrieval. The mapping
+    declares only ``analyzer`` and no ``search_analyzer``; ES uses the same analyzer at query time by default, so
+    the index side and the query side always agree.
+
+    此函數會定義索引的 Mapping，特別針對 ``dialogue`` 欄位指定 ``sudachi_analyzer``，
     以確保寫入與搜尋時皆能透過 Sudachi 將日文動詞/形容詞**還原為原型並統一
     表記**（気づく/気付く、もらう/貰う、バレる/ばれる 收斂為同一 token），
-    達到精準檢索。mapping 只宣告 `analyzer`、不宣告 `search_analyzer`，
+    達到精準檢索。mapping 只宣告 ``analyzer``、不宣告 ``search_analyzer``，
     ES 預設查詢時沿用同一個 analyzer，索引端與查詢端必然一致。
 
-    Defines the index mapping, assigning `sudachi_analyzer` to the
-    `dialogue` field so Japanese verbs/adjectives are reduced to their
-    normalized dictionary forms both at index and search time.
+    Warning: any existing index with the same name is checked for and deleted first, which means all data in it is
+    wiped! Intended only as initialization before a full data sync (MySQL -> ES).
 
     ⚠️ 警告: 此操作會先檢查並刪除同名的現有索引，這意味著該索引內的所有資料將被清空！
     僅適用於全量資料同步 (MySQL -> ES) 前的初始化操作。
-
-    Warning: any existing index with the same name is deleted first, wiping
-    all of its data. Intended only as initialization before a full data sync
-    (MySQL -> ES).
     """
     client = get_elasticsearch_client()
     index_name = "fluencytides_dialogue"
 
     # Define index settings and mappings for Sudachi
-    # Using 'search_analyzer' to ensure we use Sudachi at search time as well.
+    # No 'search_analyzer' is declared, so ES uses Sudachi at search time as well.
     index_body = {
         "settings": {
             "analysis": {
@@ -151,41 +148,38 @@ async def recreate_index():
     logger.info("✅ 索引建立完成！")
 
 async def search_dialogue_by_verb(target_verb: str, game_name_jp: str = None, limit: int = 100, last_script_id: int = 0) -> list[dict]:
-    """
+    """Search dialogue lines containing the given verb via Elasticsearch, using Sudachi's inflection normalization.
+
     透過 Elasticsearch 搜尋包含指定動詞的台詞，自動運用 Sudachi 的變形還原能力。
 
-    Search dialogue lines containing the given verb via Elasticsearch,
-    leveraging Sudachi's inflection normalization.
+    Supports cursor-based pagination on ``script_id`` for stable, efficient ordering. If the verb contains kanji,
+    each run of consecutive kanji must also appear literally in the line, which filters out tokenizer false
+    positives (for example, ``潤かす`` being split into ``潤`` and ``かす``).
 
-    支援基於 `script_id` 的游標分頁 (Cursor-based Pagination)，確保檢索順序穩定且高效。
-
-    Supports cursor-based pagination on `script_id` for stable, efficient
-    ordering.
+    支援基於 ``script_id`` 的游標分頁 (Cursor-based Pagination)，確保檢索順序穩定且高效。若動詞含漢字，
+    台詞還必須逐字包含每段連續漢字，藉此濾掉分詞假陽性（例如 ``潤かす`` 被拆成 ``潤`` 與 ``かす``）。
 
     Args:
-        target_verb: 要搜尋的日文動詞（原型），例如 "広める"。The Japanese
-            verb (base form) to search for, e.g. "広める".
-        game_name_jp: 欲過濾的遊戲來源名稱，若未提供則搜尋全域語料庫，
-            預設為 None。Optional game-source filter; searches the whole
-            corpus when None (default).
-        limit: 限制回傳的最大筆數，預設為 100。Maximum number of results,
-            defaults to 100.
-        last_script_id: 游標 ID，僅回傳 `script_id` 大於此值的結果，用於
-            高效向後翻頁，預設為 0。Cursor: only rows with `script_id`
-            greater than this value are returned; defaults to 0.
+        target_verb: the Japanese verb (base form) to search for, for example ``"広める"``
+            要搜尋的日文動詞（原型），例如 ``"広める"``
+        game_name_jp: the game-source name to filter by; ``None`` (the default) searches the whole corpus
+            欲過濾的遊戲來源名稱，若未提供則搜尋全域語料庫，預設為 ``None``
+        limit: the maximum number of results to return; defaults to 100
+            限制回傳的最大筆數，預設為 100
+        last_script_id: the cursor; only rows with ``script_id`` greater than this value are returned, for
+            efficient forward paging. Defaults to 0.
+            游標 ID，僅回傳 ``script_id`` 大於此值的結果，用於高效向後翻頁，預設為 0
 
     Returns:
-        list[dict]: 包含匹配台詞資訊的字典列表。A list of dicts describing
-            matched dialogue lines.
-            每個字典包含以下鍵值 (each dict contains):
-            - script_id (int): 腳本在 MySQL 中的原始 ID。Original script ID
-              in MySQL.
-            - source (str): 來源遊戲名稱。Source game name.
-            - dialogue (str): 台詞文本。Dialogue text.
+        a list of dicts describing matched dialogue lines, sorted by ``script_id`` ascending; each dict contains
+        ``script_id`` (the original script ID in MySQL), ``source`` (the source game name) and ``dialogue`` (the
+        dialogue text)
+        包含匹配台詞資訊的字典串列，依 ``script_id`` 遞增排序；每個字典包含 ``script_id``（腳本在 MySQL
+        中的原始 ID）、``source``（來源遊戲名稱）與 ``dialogue``（台詞文本）
 
     Raises:
-        elasticsearch.ApiError: 當 ES|QL 語法錯誤或查詢失敗時拋出。Raised
-            when the ES|QL syntax is invalid or the query fails.
+        elasticsearch.ApiError: if the ES|QL syntax is invalid or the query fails
+            若 ES|QL 語法錯誤或查詢失敗
     """
     client = get_elasticsearch_client()
 

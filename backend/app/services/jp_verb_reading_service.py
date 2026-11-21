@@ -1,15 +1,19 @@
-"""日文同表層多讀動詞的讀音判讀服務。
+"""Reading-judgment service for Japanese verbs whose kanji surface has multiple readings.
 
-Reading-judgment service for Japanese verbs whose kanji surface has
-multiple readings.
+日文同表層多讀動詞的讀音判讀服務。
+
+Render ``JP_VerbReading_Judge.j2``, call the LLM client in effect for the route key ``jp_verb_reading``, and
+narrow the output to a safe result: a reading outside the item's candidates, or an item missing from the output,
+is always treated as "undetermined" (an empty string); better blank than wrong. To change the model, configure
+this route with TG ``/setconfig`` (model routing plan llm_model_routing_FEAT_2026-10-15.md D8: a request can no
+longer override the model or effort).
 
 渲染 ``JP_VerbReading_Judge.j2``、以用途鍵 ``jp_verb_reading`` 生效的 LLM client
 呼叫，並把輸出收斂成安全的結果：讀音不在該句候選內、或缺漏的句子，一律視為
 「無法判定」（空字串），寧缺勿錯。要換模型請用 TG ``/setconfig`` 設定這個用途
 （模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D8：請求不再能覆寫模型 / effort）。
-Renders the judge template, calls the client of the ``jp_verb_reading``
-route, and normalizes the output: readings outside the item's
-candidates, or missing items, become "" (undetermined).
+
+Corresponds to plan docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.2.
 
 對應計畫 docs/wip/verb_reading_judgments_FEAT_2026-09-02.md §3.2。
 """
@@ -41,18 +45,24 @@ SYSTEM_PROMPT = (
 def normalize_results(
     items: list[JudgeReadingItem], raw: ReadingJudgmentLLMOutput
 ) -> list[ReadingJudgment]:
-    """把 LLM 輸出對齊到請求的每一句，並套用 fail-closed 規則。
+    """Align the LLM output to each requested item and apply the fail-closed rules.
 
-    Align LLM output to the request items and apply fail-closed rules:
-    a reading not among the item's candidates, or an item missing from the
-    output, becomes "".
+    把 LLM 輸出對齊到請求的每一句，並套用 fail-closed 規則。
+
+    A reading not among the item's candidates, or an item missing from the output, becomes ``""``. If the output
+    repeats a ``script_id``, the first occurrence wins.
+
+    讀音不在該句候選內、或輸出缺少該句，一律變成 ``""``。輸出重複同一個 ``script_id`` 時以第一筆為準。
 
     Args:
-        items: 請求的句子。Request items.
-        raw: LLM 結構化輸出。Parsed LLM output.
+        items: the requested items
+            請求的句子
+        raw: the structured LLM output
+            LLM 結構化輸出
 
     Returns:
-        list[ReadingJudgment]: 與 items 同序、同長度。Same order/length as items.
+        the judgments, in the same order and of the same length as ``items``
+        判讀結果，與 ``items`` 同序、同長度
     """
     by_id: dict[int, str] = {}
     for r in raw.results:
@@ -75,19 +85,27 @@ def normalize_results(
 
 
 class JpVerbReadingService:
-    """讀音判讀服務。Reading-judgment service."""
+    """Reading-judgment service.
+
+    讀音判讀服務。
+    """
 
     async def judge(self, items: list[JudgeReadingItem]) -> JudgeReadingsResponse:
-        """判讀一批台詞。Judge one batch of lines.
+        """Judge one batch of lines.
+
+        判讀一批台詞。
 
         Args:
-            items: 待判句子（≤ 40）。Items to judge.
+            items: the items to judge (at most 40)
+                待判句子（≤ 40）
 
         Returns:
-            JudgeReadingsResponse: 實際模型標籤與逐句結果。
+            the label of the model actually used and the per-item results
+            實際模型標籤與逐句結果
 
         Raises:
-            LLMServiceError: client 建立失敗（伺服器設定問題），或 LLM 呼叫失敗。
+            LLMServiceError: if the client cannot be created (a server configuration problem) or the LLM call fails
+                若 client 建立失敗（伺服器設定問題），或 LLM 呼叫失敗
         """
         # 每次請求建立自己的 client（與生成 handler 相同的既有模式）
         llm_client = await JUDGE_LLM.client()
