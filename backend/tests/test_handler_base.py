@@ -664,11 +664,13 @@ class TestRelationGraph:
             {"source": "anyway", "target": "allocate", "label": "Antonym", "relation_id": 13},
         ]
 
-    def test_no_notes_queries_all_relations(self):
+    def test_no_notes_gives_an_empty_graph_without_reading_relations(self):
+        """牌組裡沒有這個 handler 的筆記時回空圖，不能退回查全部關聯（否則每個牌組都顯示同一張圖）。"""
         relations = _relations()
-        graph = _run(self._handler().execute_read_graph(_card_service(FakeAnki()), relations))
-        relations.get_relations_by_note_ids.assert_awaited_once_with(None)
-        assert graph["nodes"] == [] and graph["links"] == []
+        relations.get_relations_by_note_ids.return_value = [_relation(10, "痩せる", "痩せる_cloze", "has_cloze", 7, 8)]
+        graph = _run(self._handler().execute_read_graph(_card_service(FakeAnki()), relations, "JP_VerbPair"))
+        relations.get_relations_by_note_ids.assert_not_awaited()
+        assert graph == {"nodes": [], "links": [], "label_fields": [], "label_field": "Expression"}
 
     def test_label_field_not_accepted(self):
         with pytest.raises(InvalidNoteQueryError, match="Expression"):

@@ -891,22 +891,25 @@ class RelationService:
 
         根據一組 Note IDs 查詢相關的「筆記 → 筆記」有效關聯。
 
-        With note_ids, only relations whose source or target is included are queried; ``None`` or an empty set
-        queries all of them.
+        With ``note_ids``, only relations whose source or target is included are queried, and an empty set
+        matches nothing; only ``None`` queries all of them.
 
-        若傳入 note_ids，只查詢 source 或 target 包含在內的關聯。
-        若傳入 ``None`` 或空集合，查詢全部。
+        傳入 ``note_ids`` 時，只查詢 source 或 target 包含在內的關聯，空集合查不到任何關聯；
+        只有 ``None`` 才查詢全部。
 
         Args:
-            note_ids: the note IDs to filter by (optional)
-                要篩選的 Note ID 集合（可選）
+            note_ids: the note IDs to filter by; ``None`` means no filter
+                要篩選的 Note ID 集合；``None`` 表示不篩選
 
         Returns:
-            the RelationRecord list (same attributes as the old CardRelation), ordered by relation_id
-            RelationRecord 串列（欄位同舊的 CardRelation），依 relation_id 排序
+            the RelationRecord list (same attributes as the old CardRelation), ordered by relation_id; empty if
+            ``note_ids`` is an empty set
+            RelationRecord 串列（欄位同舊的 CardRelation），依 relation_id 排序；``note_ids`` 為空集合時為空串列
         """
+        if note_ids is not None and not note_ids:
+            return []
         stmt = select(*_RECORD_COLUMNS).where(_active(), _note_to_note())
-        if note_ids:
+        if note_ids is not None:
             refs = [str(int(note_id)) for note_id in note_ids]
             stmt = stmt.where(or_(_links.c.src_id.in_(refs), _links.c.dst_id.in_(refs)))
         rows = (await self._db_session.execute(stmt.order_by(_links.c.relation_id))).all()
@@ -922,14 +925,16 @@ class RelationService:
         合併 Anki 實際卡片與語料庫的關聯紀錄，建立完整的知識圖譜。
 
         Nodes are keyed by the ``Expression`` field; notes without it get no node of their own. When notes are given,
-        only relations touching them are included (which amounts to filtering by deck); otherwise all relations are.
+        only relations touching them are included (which amounts to filtering by deck), so an empty list gives an
+        empty graph; only ``None`` includes all relations.
 
         節點以 ``Expression`` 欄位為鍵；沒有這個欄位的筆記不建立自己的節點。有傳入筆記時只納入與它們相關的關聯
-        （等於過濾牌組）；否則納入全部關聯。
+        （等於過濾牌組），所以空串列得到空的圖譜；只有 ``None`` 才納入全部關聯。
 
         Args:
-            notes_info: the note details fetched from Anki, used to create the "isolated nodes" of the graph
-                從 Anki 取得的卡片詳細資訊列表。用來建立圖譜中的「孤立節點」
+            notes_info: the note details fetched from Anki, used to create the "isolated nodes" of the graph;
+                ``None`` means include every relation
+                從 Anki 取得的卡片詳細資訊列表，用來建立圖譜中的「孤立節點」；``None`` 表示納入全部關聯
             cards_info: the card status info fetched from Anki, used to decide the node proficiency colors
                 從 Anki 取得的卡片狀態資訊列表。用來決定節點的熟練度顏色
 
@@ -994,8 +999,9 @@ class RelationService:
                     "status": status,
                 }
 
-        # 2. 從資料庫查詢關聯紀錄（有傳入 Anki 卡片時，只查詢與這些卡片相關的關聯，等於過濾牌組）
-        relations = await self.get_relations_by_note_ids(valid_note_ids or None)
+        # 2. 從資料庫查詢關聯紀錄（有傳入 Anki 卡片時，只查詢與這些卡片相關的關聯，等於過濾牌組）。
+        #    牌組沒有卡片時傳入的是空串列，要查到空的，不能退回查全部
+        relations = await self.get_relations_by_note_ids(valid_note_ids if notes_info is not None else None)
 
         # 3. 合併關聯與建立懸空節點
         for rel in relations:

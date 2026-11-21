@@ -57,9 +57,11 @@ class RelationGraphMixin(BaseHandler):
         關聯圖譜：筆記節點依學習狀態上色，加上關聯連線與只記了文字的幽靈節點。
 
         Ghost nodes stand for relation ends that exist only as text, with no note node. Notes whose
-        ``RELATION_LABEL_FIELD`` is empty get no node.
+        ``RELATION_LABEL_FIELD`` is empty get no node. Only relations touching the selected notes are included,
+        so when the deck has none of this handler's notes the graph is empty.
 
         幽靈節點代表關聯中只記了文字、沒有筆記節點的一端。``RELATION_LABEL_FIELD`` 為空的筆記不產生節點。
+        只納入與選到的筆記相關的關聯，所以牌組裡沒有這個 handler 的筆記時，圖譜是空的。
 
         Args:
             card_service: the card service
@@ -117,8 +119,11 @@ class RelationGraphMixin(BaseHandler):
                 "status": status_by_note.get(note.noteId, "new"),
             }
 
-        # 2. 關聯連線；另一端沒有筆記節點的，補一個幽靈節點
-        relations = await relation_service.get_relations_by_note_ids(valid_note_ids or None)
+        # 2. 關聯連線；另一端沒有筆記節點的，補一個幽靈節點。沒有筆記時不查關聯：
+        #    若改成不過濾，每個沒有這種筆記的牌組都會顯示全部的關聯
+        if not valid_note_ids:
+            return {"nodes": [], "links": [], "label_fields": [], "label_field": label_name}
+        relations = await relation_service.get_relations_by_note_ids(valid_note_ids)
         for rel in relations:
             source_id = rel.source_label
             target_id = rel.target_label
