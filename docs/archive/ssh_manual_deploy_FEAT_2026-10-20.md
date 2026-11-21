@@ -48,7 +48,12 @@
 ## 3. 前提
 
 - 在 Git Bash（或任何 bash）裡執行，本機要有 `git`、`ssh`。
-- 能免密碼 SSH 到正式機（預設 `jacky917@192.168.50.172`），而且該使用者能直接執行 `docker`。
+- 能免密碼 SSH 到正式機，而且該使用者能直接執行 `docker`。
+- 設定環境變數 `DEPLOY_HOST`（SSH 目標，例如 `user@host`）。repo 是公開的，主機位址不寫進 repo，腳本也沒有預設值，沒設定時會直接停下。建議寫進本機的 `~/.bashrc`，之後每次開 Git Bash 都會生效：
+
+  ```bash
+  echo 'export DEPLOY_HOST=user@host' >> ~/.bashrc
+  ```
 - 正式機上要有 `git`、`docker compose`、`curl`、`flock`（目前都有）。
 - 第一次執行會在正式機的 `~/fluencytides-deploy/src` 建一個 git repo，之後沿用。
 
@@ -115,7 +120,7 @@ cd frontend && npm run lint && npm test && npm run build
 列出正式機上有哪些回滾點：
 
 ```bash
-ssh jacky917@192.168.50.172 'docker images ghcr.io/jacky917/fluencytides-frontend --format "{{.Tag}}\t{{.CreatedSince}}"'
+ssh "$DEPLOY_HOST" 'docker images ghcr.io/jacky917/fluencytides-frontend --format "{{.Tag}}\t{{.CreatedSince}}"'
 ```
 
 ### 4.4 說明與設定
@@ -126,11 +131,11 @@ ssh jacky917@192.168.50.172 'docker images ghcr.io/jacky917/fluencytides-fronten
 
 | 環境變數 | 預設 | 用途 |
 |---|---|---|
-| `DEPLOY_HOST` | `jacky917@192.168.50.172` | SSH 目標 |
+| `DEPLOY_HOST` | 無（必填） | SSH 目標，例如 `user@host` |
 | `REMOTE_DIR` | 登入使用者的 `~/fluencytides-deploy` | 正式機上放原始碼與鎖檔的目錄 |
 | `REMOTE_DATA` | `/DATA/AppData/FluencyTides` | 讀後端 `.env` 的資料目錄 |
 
-例如部署到另一台主機：
+只有這一次部署到另一台主機（不改 `~/.bashrc` 的設定）：
 
 ```bash
 DEPLOY_HOST=user@other-host ./deploy_remote.sh frontend
@@ -168,7 +173,8 @@ DEPLOY_HOST=user@other-host ./deploy_remote.sh frontend
 
 | 狀況 | 原因與處理 |
 |---|---|
-| `無法以 SSH 連線到 …` | 檢查本機能否 `ssh jacky917@192.168.50.172`；正式機記憶體耗盡時 SSH 會卡在交換 banner（2026-10-20 發生過） |
+| `請先設定 DEPLOY_HOST` | 依 §3 設定 `DEPLOY_HOST`；寫進 `~/.bashrc` 後要重開 Git Bash，或先執行 `source ~/.bashrc` |
+| `無法以 SSH 連線到 …` | 檢查本機能否 `ssh "$DEPLOY_HOST"`；正式機記憶體耗盡時 SSH 會卡在交換 banner（2026-10-20 發生過） |
 | `工作區有未 commit 的修改` | 先 commit；或改用 `--ref` 部署已 commit 的版本；或加 `--allow-dirty` 連同修改一起部署 |
 | `另一個部署正在進行中` | 等前一個部署結束；確定沒有其他部署時，刪掉正式機上的 `~/fluencytides-deploy/.deploy.lock` 再試 |
 | `… 在 120 秒內沒有回報預期的版本` | 腳本已印出容器 log；修正後重新部署，或先 `./deploy_remote.sh rollback <目標>` |
