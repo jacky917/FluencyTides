@@ -1,6 +1,6 @@
-"""表達糾錯相關的 LLM 結構化輸出 Schema。
+"""LLM structured-output schemas for expression correction.
 
-LLM structured-output schemas for expression correction.
+表達糾錯相關的 LLM 結構化輸出 Schema。
 """
 
 from pydantic import BaseModel, Field

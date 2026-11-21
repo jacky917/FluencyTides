@@ -1,14 +1,13 @@
-"""
+"""Relation graph (handlers plan D12): study status, relation links, and ghost nodes on the standard graph.
+
 關聯圖譜（handlers 計畫書 D12）：在標準的單點圖譜上加上學習狀態、關聯連線與幽靈節點。
 
-Relation graph: adds study status, relation links and ghost nodes on top of
-the standard single-node graph.
+The logic is ported as is from the former ``execute_read_graph`` of ``vocabulary_mining``; only the hard-coded
+fields became declarations: node labels read ``RELATION_LABEL_FIELD``, and the subtitle and part of speech
+read ``GRAPH.subtitle`` and ``GRAPH.pos``.
 
 邏輯原樣搬自 ``vocabulary_mining`` 原本的 ``execute_read_graph``，只把寫死的欄位改成讀宣告：
 節點名稱讀 ``RELATION_LABEL_FIELD``，副標、詞性讀 ``GRAPH.subtitle``、``GRAPH.pos``。
-
-Ported as is from ``vocabulary_mining``'s former graph; only the hard-coded
-fields became declarations.
 """
 
 from __future__ import annotations
@@ -32,16 +31,16 @@ GHOST_SIZE = 10
 
 
 class RelationGraphMixin(BaseHandler):
-    """改用關聯圖譜的 handler 繼承這個類別，並宣告 ``RELATION_LABEL_FIELD``。
+    """A base for handlers that use the relation graph; subclasses must declare ``RELATION_LABEL_FIELD``.
 
-    Handlers using the relation graph inherit this and declare
-    ``RELATION_LABEL_FIELD``.
+    改用關聯圖譜的 handler 繼承這個類別，並宣告 ``RELATION_LABEL_FIELD``。
+
+    Relations identify nodes by text (each link records ``source_label`` and ``target_label`` for its two
+    ends), so node labels always come from ``RELATION_LABEL_FIELD`` and switching with ``label_field`` is not
+    offered (after a switch the links would no longer match).
 
     關聯表以文字辨認節點（每條連線記了兩端的 ``source_label``、``target_label``），所以節點名稱
     固定用 ``RELATION_LABEL_FIELD``，不開放 ``label_field`` 切換（切換了連線會對不上）。
-
-    Relations identify nodes by text, so node names always come from
-    ``RELATION_LABEL_FIELD``; ``label_field`` is not accepted.
     """
 
     async def execute_read_graph(
@@ -53,23 +52,34 @@ class RelationGraphMixin(BaseHandler):
         note_type: str | None = None,
         label_field: str | None = None,
     ) -> dict[str, object]:
-        """關聯圖譜：筆記節點依學習狀態上色，加上關聯連線與只記了文字的幽靈節點。
+        """Return the relation graph: note nodes colored by study status, plus relation links and ghost nodes.
 
-        Relation graph: note nodes coloured by study status, plus relation
-        links and ghost nodes that only exist as text.
+        關聯圖譜：筆記節點依學習狀態上色，加上關聯連線與只記了文字的幽靈節點。
+
+        Ghost nodes stand for relation ends that exist only as text, with no note node. Notes whose
+        ``RELATION_LABEL_FIELD`` is empty get no node.
+
+        幽靈節點代表關聯中只記了文字、沒有筆記節點的一端。``RELATION_LABEL_FIELD`` 為空的筆記不產生節點。
 
         Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            deck_name: 牌組；None 表示全部。The deck, or None for all.
-            note_type: 只看其中一種筆記類型。One of the handler's note types.
-            label_field: 不適用，帶了就拒絕。Not accepted.
+            card_service: the card service
+                卡片服務
+            relation_service: the relation service
+                關聯服務
+            deck_name: the deck; ``None`` means all
+                牌組；``None`` 表示全部
+            note_type: only one of the handler's note types; ``None`` means all
+                只看其中一種筆記類型；``None`` 表示全部
+            label_field: not applicable; rejected when given
+                不適用，帶了就拒絕
 
         Returns:
-            ``{"nodes", "links", "label_fields": [], "label_field": RELATION_LABEL_FIELD}``。
+            ``{"nodes", "links", "label_fields": [], "label_field": RELATION_LABEL_FIELD}``
+            ``{"nodes", "links", "label_fields": [], "label_field": RELATION_LABEL_FIELD}``
 
         Raises:
-            InvalidNoteQueryError: 帶了 ``label_field``，或 ``note_type`` 不歸這個 handler。
+            InvalidNoteQueryError: if ``label_field`` is given, or ``note_type`` is not this handler's
+                若帶了 ``label_field``，或 ``note_type`` 不歸這個 handler
         """
         label_name = self.RELATION_LABEL_FIELD
         if label_field is not None:
@@ -146,13 +156,17 @@ class RelationGraphMixin(BaseHandler):
 
 
 def _status_by_note(cards_info: list[dict[str, object]]) -> dict[int, str]:
-    """依卡片的 queue 判斷學習狀態。Study status from each card's queue.
+    """Determine each note's study status from its card's queue.
+
+    依卡片的 queue 判斷學習狀態。
 
     Args:
-        cards_info: AnkiConnect ``cardsInfo`` 的結果。The cardsInfo result.
+        cards_info: the result of AnkiConnect ``cardsInfo``
+            AnkiConnect ``cardsInfo`` 的結果
 
     Returns:
-        ``{note_id: "new" | "learning" | "review" | "suspended"}``。
+        ``{note_id: "new" | "learning" | "review" | "suspended"}``
+        ``{note_id: "new" | "learning" | "review" | "suspended"}``
     """
     statuses: dict[int, str] = {}
     for card in cards_info:
@@ -174,7 +188,10 @@ def _status_by_note(cards_info: list[dict[str, object]]) -> dict[int, str]:
 
 
 def _target_group(relation_type: str) -> int:
-    """幽靈終點節點的 group：同義詞、搭配詞各一色，其他同幽靈節點。Ghost target group."""
+    """Return the group of a ghost target node: one color each for synonyms and collocations, else the ghost group.
+
+    幽靈終點節點的 group：同義詞、搭配詞各一色，其他同幽靈節點。
+    """
     if relation_type == "synonym":
         return SYNONYM_GROUP
     if relation_type == "collocation":

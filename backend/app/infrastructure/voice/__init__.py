@@ -1,1 +1,4 @@
-"""語音合成基礎設施子套件。Voice synthesis infrastructure subpackage."""
+"""Voice synthesis infrastructure subpackage.
+
+語音合成基礎設施子套件。
+"""

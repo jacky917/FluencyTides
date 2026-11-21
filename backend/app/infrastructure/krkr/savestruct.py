@@ -1,26 +1,42 @@
-"""吉里吉里內建 saveStruct 存檔（壓縮 TJS 文字）的編解碼與寫入器。
+"""Codec and save writer for KiriKiri's built-in ``saveStruct`` saves (compressed TJS text).
 
-KiriKiri's built-in ``saveStruct`` save format (compressed TJS text) and its
-save writer, ported from the calibration tool ``SB_calib/work/sbsave.py``
+吉里吉里內建 saveStruct 存檔（壓縮 TJS 文字）的編解碼與寫入器。
+
+Ported from the calibration tool ``SB_calib/work/sbsave.py``
 (docs/wip/senren_banka_corpus_import_FEAT_2026-11-08.md D7).
+
+移植自校準工具 ``SB_calib/work/sbsave.py``（docs/wip/senren_banka_corpus_import_FEAT_2026-11-08.md D7）。
+
+For games that do not use PackinOne, such as YUZUSOFT's Senren * Banka:
+
+    data_*.bmp    a pack follows the BMP thumbnail (after the file size recorded in the BMP header)
+    *.ksd         the whole file is the pack
 
 適用於 ゆずソフト《千恋＊万花》等不用 PackinOne 的遊戲：
 
     data_*.bmp    BMP 縮圖之後（BMP 檔頭記的檔案大小之後）接一段封包
     *.ksd         整個檔案就是封包
 
+Pack: ``FE FE 02 FF FE`` + compressed length u64 + original length u64 + zlib(TJS text in
+UTF-16LE). The text is a TJS expression, for example
+``(const) %[ "core" => (const) %[ ... ], "user" => %[ ... ] ]``: strings, integers, reals (the
+hexadecimal form ``0x1.9p4 /* 25 */``), ``void``, arrays, dicts and octets.
+
 封包：``FE FE 02 FF FE`` ＋ 壓縮後長度 u64 ＋ 原始長度 u64 ＋ zlib(UTF-16LE 的 TJS 文字)。
 文字是 TJS 運算式，例 ``(const) %[ "core" => (const) %[ ... ], "user" => %[ ... ] ]``：
 字串、整數、小數（``0x1.9p4 /* 25 */`` 十六進位寫法）、``void``、陣列、字典、octet。
 
+**Writes must follow the game's own format exactly** (``(const)`` before every array/dict, one
+space of indent per level, a line break even in empty containers, reals in hexadecimal with a
+comment, ``\\r\\n`` line breaks), or the game reports "栞を読み込めないか…(Syntax error)".
+
 **寫回時必須完全照遊戲的寫法**（每個陣列／字典前加 ``(const)``、一層縮排一個空白、空容器也換行、
 小數用十六進位並附註解、換行 ``\\r\\n``），否則遊戲報「栞を読み込めないか…(Syntax error)」。
 
-所有格式錯誤一律拋 :class:`SaveStructError`（附位置或長度等脈絡），呼叫端只需要接這一種。
+Every format error raises :class:`SaveStructError` (with context such as the position or length),
+so callers only need to catch this one exception.
 
-Writes must mimic the game's own serializer exactly (``(const)`` prefixes,
-one-space indent, CRLF, hex reals with comments), or the game rejects the
-save with a syntax error. Every format problem raises :class:`SaveStructError`.
+所有格式錯誤一律拋 ``SaveStructError``（附位置或長度等脈絡），呼叫端只需要接這一種。
 """
 
 from __future__ import annotations
@@ -42,18 +58,32 @@ _INT64 = (-(1 << 63), (1 << 63) - 1)
 
 
 class SaveStructError(ValueError):
-    """存檔格式錯誤。Malformed save data."""
+    """An error for malformed save data.
+
+    存檔格式錯誤。
+    """
 
 
 # ---------- 容器 / container ----------
 
 
 def bmp_size(data: bytes) -> int:
-    """BMP 檔頭記的檔案大小；檔頭不完整或大小不合理時拋錯。The BMP header's file size.
+    """Return the file size recorded in the BMP header; raise if the header or size is invalid.
+
+    回傳 BMP 檔頭記的檔案大小；檔頭不完整或大小不合理時拋錯。
+
+    Args:
+        data: the bytes starting with the BMP
+            以 BMP 開頭的位元組
+
+    Returns:
+        the recorded file size
+        檔頭記的檔案大小
 
     Raises:
-        SaveStructError: 不是 BMP、檔頭不完整，或記的大小小於檔頭、大於資料長度。
-            Not a BMP, a truncated header, or an impossible size.
+        SaveStructError: if ``data`` is not a BMP, the header is incomplete, or the recorded size is
+            smaller than the header or larger than the data
+            若不是 BMP、檔頭不完整，或記的大小小於檔頭、大於資料長度
     """
     if data[:2] != b"BM":
         raise SaveStructError(f"不是 BMP（開頭 {data[:4]!r}）")
@@ -66,11 +96,22 @@ def bmp_size(data: bytes) -> int:
 
 
 def split_container(data: bytes) -> tuple[bytes, bytes]:
-    """回傳（BMP 縮圖, 封包）；``.ksd`` 時縮圖為空。Return (BMP image, pack).
+    """Split a save file into (BMP thumbnail, pack).
+
+    拆出（BMP 縮圖, 封包）。
+
+    Args:
+        data: the save file bytes
+            存檔位元組
+
+    Returns:
+        (BMP thumbnail, pack); the thumbnail is empty for a ``.ksd``
+        （BMP 縮圖, 封包）；``.ksd`` 時縮圖為空
 
     Raises:
-        SaveStructError: 不是 BMP 存檔也不是 ``.ksd`` 封包，或 BMP 之後沒有封包。
-            Neither a BMP save nor a ``.ksd`` pack, or no pack after the BMP.
+        SaveStructError: if ``data`` is neither a BMP save nor a ``.ksd`` pack, or there is no pack
+            after the BMP
+            若不是 BMP 存檔也不是 ``.ksd`` 封包，或 BMP 之後沒有封包
     """
     if data[:2] == b"BM":
         size = bmp_size(data)
@@ -83,7 +124,23 @@ def split_container(data: bytes) -> tuple[bytes, bytes]:
 
 
 def unpack_text(pack: bytes) -> str:
-    """封包 → TJS 文字。Pack → TJS text."""
+    """Decode a pack into TJS text.
+
+    封包 → TJS 文字。
+
+    Args:
+        pack: the pack bytes, starting with the magic number
+            以魔術數字開頭的封包位元組
+
+    Returns:
+        the TJS text
+        TJS 文字
+
+    Raises:
+        SaveStructError: if the magic number is wrong, the header or body is truncated, decompression
+            fails, the length does not match, or the text is not valid UTF-16LE
+            若魔術數字不符、檔頭或本體被截斷、解壓失敗、長度不符，或文字不是合法的 UTF-16LE
+    """
     if pack[:5] != MAGIC:
         raise SaveStructError(f"不是壓縮 TJS 封包（開頭 {pack[:5]!r}）")
     if len(pack) < 21:
@@ -105,7 +162,18 @@ def unpack_text(pack: bytes) -> str:
 
 
 def pack_text(text: str) -> bytes:
-    """TJS 文字 → 封包。TJS text → pack."""
+    """Encode TJS text into a pack.
+
+    TJS 文字 → 封包。
+
+    Args:
+        text: the TJS text
+            TJS 文字
+
+    Returns:
+        the pack bytes
+        封包位元組
+    """
     raw = text.encode("utf-16le")
     z = zlib.compress(raw, 6)
     return MAGIC + struct.pack("<QQ", len(z), len(raw)) + z
@@ -115,7 +183,15 @@ def pack_text(text: str) -> bytes:
 
 
 class Real(float):
-    """TJS 的實數；``src`` 保留原文（含 ``/* 註解 */``），寫回時一字不差。A TJS real."""
+    """A TJS real number.
+
+    TJS 的實數。
+
+    Attributes:
+        src: the original source text (including the ``/* comment */``), written back verbatim;
+            ``None`` for a value not read from a save
+            保留的原文（含 ``/* 註解 */``），寫回時一字不差；不是從存檔讀出的值為 ``None``
+    """
 
     src: str | None = None
 
@@ -176,11 +252,26 @@ def _tokens(text: str) -> list[tuple[str, str, int]]:
 
 
 def parse(text: str) -> Any:
-    """TJS 文字 → Python 值（字典、串列、字串、整數、:class:`Real`、None）。Parse TJS text.
+    """Parse TJS text into a Python value (dict, list, str, int, :class:`Real` or ``None``).
+
+    TJS 文字 → Python 值（字典、串列、字串、整數、``Real``、``None``）。
+
+    An octet is returned as ``{"__octet__": "<hex digits>"}``.
+
+    octet 回傳為 ``{"__octet__": "<十六進位字元>"}``。
+
+    Args:
+        text: the TJS text
+            TJS 文字
+
+    Returns:
+        the root value
+        根值
 
     Raises:
-        SaveStructError: 語法錯誤、文字被截斷、缺逗號，或根值之後還有多餘內容。
-            Syntax errors, truncation, missing commas or trailing content.
+        SaveStructError: if there is a syntax error, the text is truncated, a comma is missing, or
+            there is extra content after the root value
+            若語法錯誤、文字被截斷、缺逗號，或根值之後還有多餘內容
     """
     toks = _tokens(text)
     i = 0
@@ -191,7 +282,10 @@ def parse(text: str) -> Any:
         return toks[i][0]
 
     def after_item(where: str) -> None:
-        """元素之後只能是逗號或結尾括號。After an element: a comma or the closing bracket."""
+        """Consume the comma after an element; only a comma or the closing bracket may follow it.
+
+        吃掉元素之後的逗號；元素之後只能是逗號或結尾括號。
+        """
         nonlocal i
         kind = peek()
         if kind == "comma":
@@ -270,7 +364,18 @@ def _quote(s: str) -> str:
 
 
 def _real(v: float) -> str:
-    """仿照遊戲的寫法：``0x1.86A0000000000p15 /* 50000 */``。Mimic the game's real format."""
+    """Format a real the way the game does: ``0x1.86A0000000000p15 /* 50000 */``.
+
+    仿照遊戲的寫法：``0x1.86A0000000000p15 /* 50000 */``。
+
+    A :class:`Real` read from a save is written back with its original text.
+
+    從存檔讀出的 ``Real`` 以原文寫回。
+
+    Raises:
+        SaveStructError: if the value is NaN or infinite
+            若值為 NaN 或無限大
+    """
     src = getattr(v, "src", None)
     if src is not None:
         return src
@@ -287,11 +392,28 @@ def _real(v: float) -> str:
 
 
 def dump(v: Any, indent: int = 0) -> str:
-    """Python 值 → 遊戲讀得懂的 TJS 文字。Serialize the way the game does.
+    """Serialize a Python value into TJS text the game can read.
+
+    Python 值 → 遊戲讀得懂的 TJS 文字。
+
+    ``bool`` is written as an integer, and ``{"__octet__": ...}`` as an octet.
+
+    ``bool`` 寫成整數，``{"__octet__": ...}`` 寫成 octet。
+
+    Args:
+        v: the value to serialize
+            要序列化的值
+        indent: the current nesting level; each level indents one space
+            目前的巢狀層數；每層縮排一個空白
+
+    Returns:
+        the TJS text, with ``\\r\\n`` line breaks
+        TJS 文字，換行為 ``\\r\\n``
 
     Raises:
-        SaveStructError: 不能序列化的型別、非字串的字典鍵、超出 64 位元的整數、NaN／無限大。
-            Unsupported types, non-string keys, out-of-range ints, NaN/inf.
+        SaveStructError: if a type cannot be serialized, a dict key is not a string, an integer is
+            outside 64 bits, or a real is NaN/infinite
+            若有不能序列化的型別、非字串的字典鍵、超出 64 位元的整數、NaN／無限大
     """
     pad = " " * indent
     if v is None:
@@ -325,14 +447,41 @@ def dump(v: Any, indent: int = 0) -> str:
 
 
 def load(data: bytes) -> Any:
-    """存檔位元組 → 根字典。Save bytes → root object."""
+    """Decode save file bytes into the root object.
+
+    存檔位元組 → 根字典。
+
+    Args:
+        data: the save file bytes (BMP slot save or ``.ksd`` pack)
+            存檔位元組（BMP 欄位存檔或 ``.ksd`` 封包）
+
+    Returns:
+        the parsed root value
+        解析出的根值
+
+    Raises:
+        SaveStructError: if the container, pack or TJS text is malformed
+            若容器、封包或 TJS 文字格式錯誤
+    """
     return parse(unpack_text(split_container(data)[1]))
 
 
 def first_difference(a: Any, b: Any, path: str = "root") -> str | None:
-    """兩個值第一個不同的位置（``root.core.scenePlayer.point`` 這種路徑）；相同時回 None。
+    """Return where two values first differ, as a path like ``root.core.scenePlayer.point``.
 
-    Path of the first difference between two values, or None when equal.
+    回傳兩個值第一個不同的位置（``root.core.scenePlayer.point`` 這種路徑）。
+
+    Args:
+        a: the first value
+            第一個值
+        b: the second value
+            第二個值
+        path: the path of ``a`` and ``b`` themselves
+            ``a`` 與 ``b`` 本身的路徑
+
+    Returns:
+        the path of the first difference, with a short note on what differs; ``None`` when equal
+        第一個不同的路徑，附上差異的簡短說明；相同時回 ``None``
     """
     if isinstance(a, dict) and isinstance(b, dict):
         for k in list(a) + [k for k in b if k not in a]:
@@ -356,49 +505,74 @@ def first_difference(a: Any, b: Any, path: str = "root") -> str | None:
 # ---------- 存檔寫入器 / save writer ----------
 
 def _is_bare_bmp(data: bytes) -> bool:
-    """是不是一張完整、後面沒接其他資料的 BMP。Whether ``data`` is exactly one BMP image."""
+    """Return whether ``data`` is exactly one complete BMP with nothing after it.
+
+    回傳是不是一張完整、後面沒接其他資料的 BMP。
+    """
     try:
         return bmp_size(data) == len(data)
     except SaveStructError:
         return False
 
 
+#: The template keys kept in ``user``; everything else is replaced by the path variables. These are
+#: choice-screen state, not story flags.
 #: ``user`` 裡要保留的樣板鍵以外，其他都換成路徑變數；這些是選項畫面的狀態，不是劇情旗標。
-#: Template ``user`` keys that describe choice-screen state rather than story flags.
 _USER_STATE_KEYS = ("selectDoneFlag", "selectInfos", "selectTotalCount")
 
 
 class SaveStructSaveWriter:
-    """``kirikiri_savestruct`` 引擎的存檔寫入器。Save writer for the saveStruct engine."""
+    """The save writer for the ``kirikiri_savestruct`` engine.
+
+    ``kirikiri_savestruct`` 引擎的存檔寫入器。
+    """
 
     engine = "kirikiri_savestruct"
-    #: 這個寫入器能用的縮圖格式（存檔服務只為它讀這種縮圖）。The thumbnail format it accepts.
+    #: The thumbnail format this writer can use (the save service reads only this format for it).
+    #: 這個寫入器能用的縮圖格式（存檔服務只為它讀這種縮圖）。
     thumb_format = "bmp"
 
     def write(self, template: bytes, position: dict[str, Any], variables: dict[str, Any], meta: SaveMeta) -> bytes:
-        """以樣板產生一個欄位存檔（做法同校準時的 ``advance_run.write_save``）。
+        """Write a slot save from the template (the same way as ``advance_run.write_save`` in calibration).
 
-        Write a slot save from the template, the way the calibration did.
+        以樣板產生一個欄位存檔（做法同校準時的 ``advance_run.write_save``）。
+
+        - ``core.scenePlayer`` changes only ``scene``/``point``; the backlog ``core.historyData.data``
+          is cleared.
+        - ``user`` (the game's ``f.*``): all of the template's story flags are dropped and replaced by
+          ``variables``; the choice-screen state (``selectDoneFlag`` and so on) follows the template.
+          ``scenePlayer.histories[].flags`` is replaced too, otherwise rewinding after loading would
+          bring back the template's flags.
+        - ``bookMarkInfo.lastText`` and ``storeTime`` follow ``meta`` (``storeTime`` only when the
+          template already has it).
+        - Thumbnail: replaced only when ``meta.thumb`` is a complete BMP; any other format keeps the
+          template's thumbnail (it only affects the preview in the save list).
 
         - ``core.scenePlayer`` 只改 ``scene``／``point``；回想紀錄 ``core.historyData.data`` 清空。
         - ``user``（遊戲的 ``f.*``）：樣板的劇情旗標全部去掉，換成 ``variables``；選項畫面狀態
           （``selectDoneFlag`` 等）照樣板。``scenePlayer.histories[].flags`` 一起換，否則讀檔後
           倒回時會帶回樣板的旗標。
-        - ``bookMarkInfo.lastText``、``storeTime`` 依 ``meta``。
+        - ``bookMarkInfo.lastText``、``storeTime`` 依 ``meta``（樣板本來就有 ``storeTime`` 時才改）。
         - 縮圖：``meta.thumb`` 是完整的 BMP 才換；其他格式沿用樣板的縮圖（只影響存檔清單的預覽）。
 
         Args:
-            template: 樣板存檔（``data_quick_01.bmp`` 等）。The template save.
-            position: ``{"scene": "<檔名>.ks*<標籤>", "point": N}``。The story position.
-            variables: 遊戲變數（``f.*``）。Game variables.
-            meta: 台詞、縮圖、時間。Line text, thumbnail and time.
+            template: the template save (``data_quick_01.bmp`` and so on)
+                樣板存檔（``data_quick_01.bmp`` 等）
+            position: the story position, ``{"scene": "<file name>.ks*<label>", "point": N}``
+                故事位置，``{"scene": "<檔名>.ks*<標籤>", "point": N}``
+            variables: the game variables (``f.*``)
+                遊戲變數（``f.*``）
+            meta: the line text, thumbnail and time
+                台詞、縮圖、時間
 
         Returns:
-            新的存檔位元組。The new save bytes.
+            the new save bytes
+            新的存檔位元組
 
         Raises:
-            SaveStructError: 樣板格式不對、缺少 ``core.scenePlayer``／``core.historyData``，或寫回後
-                解不回同樣的內容。A malformed template or a failed round trip.
+            SaveStructError: if the template is malformed, lacks ``core.scenePlayer``/``core.historyData``,
+                or the written save does not decode back to the same content
+                若樣板格式不對、缺少 ``core.scenePlayer``／``core.historyData``，或寫回後解不回同樣的內容
         """
         image, pack = split_container(template)
         root = parse(unpack_text(pack))

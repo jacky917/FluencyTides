@@ -1,10 +1,23 @@
-"""
+"""Async MinIO (S3-compatible) object-storage client module.
+
 非同步 MinIO (S3 相容) 物件存儲客戶端模組。
+
+This module wraps every interaction with the MinIO object-storage service, including:
+- Bucket management: create, check, set policies
+- Object management: upload, download, delete, list
+- Presigned URL generation: time-limited links for external access
 
 本模組封裝與 MinIO 物件存儲服務的所有交互操作，包括：
 - 儲存桶（Bucket）管理：建立、檢查、設定策略
 - 檔案（Object）管理：上傳、下載、刪除、列舉
 - 預簽名 URL 產生：提供有時效性的外部存取連結
+
+Refactored from old/VOICEPEAK/utils/minio_store.py, with these improvements:
+- The sync MinIO SDK is wrapped with asyncio.to_thread() for async I/O.
+- All connection parameters are managed by core.config.Settings, no longer by scattered .env loading.
+- Pydantic models validate the returned data structures (MinioUploadResult, MinioObjectInfo, and so on).
+- A custom exception, MinioStorageError, unifies error handling.
+- All CRUD functions missing from the old code are added (download, delete, list, policy).
 
 重構自 old/VOICEPEAK/utils/minio_store.py，改進如下：
 - 使用 asyncio.to_thread() 包裝同步 MinIO SDK，實現非同步 I/O。
@@ -13,29 +26,27 @@
 - 新增自訂異常 MinioStorageError 統一錯誤處理。
 - 補齊舊代碼中所有 CRUD 功能（download、delete、list、policy）。
 
+Design decisions:
+- asyncio.to_thread() is used instead of a native async client because the official minio-py SDK has no native
+  async support yet. to_thread() delegates sync I/O to a thread pool so the FastAPI event loop is not blocked;
+  the overhead is negligible at low to medium concurrency.
+- Secrets are masked in logs: initialization logs only the access_key, with the secret_key masked by asterisks,
+  so sensitive credentials never leak into logs.
+- Presigned URLs are valid for 7 days by default, matching the MinIO limit; longer values are rejected.
+
 設計決策：
 - 使用 asyncio.to_thread() 而非原生 async 客戶端，是因為官方 minio-py SDK
   目前尚無原生 async 支援。to_thread() 將同步 I/O 操作委託給執行緒池，
   避免阻塞 FastAPI 的事件迴圈，在中低並發場景下效能損耗可忽略。
 - 密碼日誌遮蔽：初始化時僅記錄 access_key，secret_key 以星號遮蔽，
   避免在日誌中洩露敏感憑證。
-- presigned URL 的有效期限預設 7 天，對齊 MinIO 伺服器端上限，
-  超過此值伺服器會自動拒絕。
-
-English summary:
-    Async MinIO (S3-compatible) object-storage client module. Wraps all
-    interactions with MinIO: bucket management (create, check, policies),
-    object management (upload, download, delete, list), and presigned URL
-    generation for time-limited external access. The sync minio-py SDK is
-    wrapped with asyncio.to_thread() since no native async client exists;
-    thread-pool delegation keeps the FastAPI event loop unblocked with
-    negligible overhead at low/medium concurrency. Secrets are masked in
-    logs, and presigned URLs default to 7 days, matching the MinIO
-    server-side maximum.
+- presigned URL 的有效期限預設 7 天，對齊 MinIO 上限，超過此值會被拒絕。
 
 Dependencies:
-    - minio: MinIO Python SDK (同步)。MinIO Python SDK (sync).
-    - pydantic: 資料驗證。Data validation.
+    - minio: the MinIO Python SDK (sync)
+      MinIO Python SDK（同步）
+    - pydantic: data validation
+      資料驗證
 """
 
 import asyncio
@@ -57,45 +68,54 @@ logger = logging.getLogger(__name__)
 
 
 class MinioStorageError(Exception):
-    """MinIO 物件存儲操作錯誤異常類別。
+    """Exception for MinIO object-storage operation errors.
 
-    Exception for MinIO object-storage operation errors.
+    MinIO 物件存儲操作錯誤異常類別。
 
-    當 MinIO SDK 操作失敗、連線逾時或參數錯誤時拋出此異常，
-    統一 Infrastructure 層的錯誤處理界面。
+    Raised when a MinIO operation returns an S3 error or the client is initialized with invalid parameters,
+    unifying the infrastructure-layer error interface. Network errors such as connection timeouts are not wrapped
+    and propagate from the SDK unchanged.
 
-    Raised when a MinIO SDK operation fails, times out, or receives invalid
-    parameters, unifying the infrastructure-layer error interface.
+    當 MinIO 操作回傳 S3 錯誤，或客戶端以錯誤參數初始化時拋出此異常，
+    統一 Infrastructure 層的錯誤處理界面。連線逾時等網路錯誤不會被包裝，會直接從 SDK 拋出。
 
     Attributes:
-        message: 錯誤訊息字串。The error message string.
+        message: the error message string
+            錯誤訊息字串
     """
 
     def __init__(self, message: str) -> None:
-        """初始化 MinioStorageError。
+        """Initialize MinioStorageError.
 
-        Initialize MinioStorageError.
+        初始化 MinioStorageError。
 
         Args:
-            message: 描述錯誤原因的訊息字串。Message describing the error
-                cause.
+            message: a message describing the cause of the error
+                描述錯誤原因的訊息字串
         """
         super().__init__(message)
         self.message = message
 
 
 class MinioClient:
-    """非同步 MinIO (S3 相容) 物件存儲客戶端。
+    """Async MinIO (S3-compatible) object-storage client.
 
-    Async MinIO (S3-compatible) object-storage client.
+    非同步 MinIO (S3 相容) 物件存儲客戶端。
+
+    Provides async Python wrappers for all common MinIO operations,
+    delegating the sync SDK to a thread pool via asyncio.to_thread() to fit
+    FastAPI's high-concurrency async architecture.
 
     提供對 MinIO 所有常用操作的 Python 非同步封裝。
     使用 asyncio.to_thread() 將同步 SDK 操作委託給執行緒池，
     適配 FastAPI 的高併發非同步架構。
 
-    Provides async Python wrappers for all common MinIO operations,
-    delegating the sync SDK to a thread pool via asyncio.to_thread() to fit
-    FastAPI's high-concurrency async architecture.
+    All connection information is read from core.config.Settings:
+    - MINIO_HOST: the MinIO server host address
+    - MINIO_PORT: the MinIO server port
+    - MINIO_ACCESS_KEY: the access key
+    - MINIO_SECRET_KEY: the secret key
+    - MINIO_SECURE: whether to use HTTPS
 
     所有連線資訊從 core.config.Settings 統一讀取：
     - MINIO_HOST: MinIO 伺服器主機位址
@@ -105,8 +125,10 @@ class MinioClient:
     - MINIO_SECURE: 是否使用 HTTPS
 
     Attributes:
-        _client: MinIO SDK 客戶端實例。The MinIO SDK client instance.
-        _endpoint: 組裝後的完整連線端點字串。The assembled endpoint string.
+        _client: the MinIO SDK client instance
+            MinIO SDK 客戶端實例
+        _endpoint: the assembled endpoint string (``host:port``)
+            組裝後的完整連線端點字串（``host:port``）
 
     Example:
         >>> client = MinioClient()
@@ -120,19 +142,19 @@ class MinioClient:
     DEFAULT_PRESIGNED_EXPIRES_DAYS = 7
 
     def __init__(self) -> None:
-        """根據 Settings 的設定初始化 MinIO 客戶端。
+        """Initialize the MinIO client from Settings.
 
-        Initialize the MinIO client from Settings.
+        根據 Settings 的設定初始化 MinIO 客戶端。
+
+        Reads connection parameters from global Settings, creates the MinIO
+        SDK client instance, and logs initialization info with sensitive credentials masked.
 
         從全域 Settings 讀取連線參數，建立 MinIO SDK 客戶端實例，
         並記錄初始化資訊（遮蔽敏感憑證）。
 
-        Reads connection parameters from global Settings, creates the MinIO
-        SDK client, and logs initialization info with credentials masked.
-
         Raises:
-            MinioStorageError: MinIO 客戶端初始化失敗時。Raised when client
-                initialization fails.
+            MinioStorageError: if the SDK rejects the initialization parameters
+                若 SDK 拒絕初始化參數
         """
         self._endpoint = f"{settings.MINIO_HOST}:{settings.MINIO_PORT}"
 
@@ -173,25 +195,23 @@ class MinioClient:
     # ========================================================================
 
     async def ensure_bucket_exists(self, bucket_name: str) -> None:
-        """檢查指定的儲存桶是否存在，若不存在則自動建立。
+        """Ensure the given bucket exists, creating it if missing.
 
-        Ensure the given bucket exists, creating it if missing.
+        檢查指定的儲存桶是否存在，若不存在則自動建立。
+
+        This method is idempotent: repeated calls cause no errors or side
+        effects.
 
         此方法是冪等的——重複呼叫不會產生錯誤或副作用。
 
-        This method is idempotent — repeated calls cause no errors or side
-        effects.
-
         Args:
-            bucket_name: 欲檢查或建立的儲存桶名稱，命名規則需符合 S3 標準
-                （小寫字母、數字、連字號）。Bucket name to check or create;
-                must follow S3 naming rules (lowercase letters, digits,
-                hyphens).
+            bucket_name: the bucket name to check or create; must follow S3 naming rules (lowercase letters, digits,
+                hyphens)
+                欲檢查或建立的儲存桶名稱，命名規則需符合 S3 標準（小寫字母、數字、連字號）
 
         Raises:
-            MinioStorageError: 操作 Bucket 失敗時（例如權限不足）。Raised
-                when the bucket operation fails (e.g. insufficient
-                permissions).
+            MinioStorageError: if the bucket operation fails (for example, insufficient permissions)
+                若操作 Bucket 失敗（例如權限不足）
 
         Example:
             >>> await client.ensure_bucket_exists("anki-media")
@@ -213,25 +233,26 @@ class MinioClient:
             ) from err
 
     async def set_bucket_public_read(self, bucket_name: str) -> None:
-        """透過 Policy 將指定的 Bucket 設置為永久公開唯讀。
+        """Make the given bucket permanently public read-only via a policy.
 
-        Make the given bucket permanently public read-only via a policy.
+        透過 Policy 將指定的 Bucket 設置為永久公開唯讀。
+
+        Security warning: every object in the bucket becomes directly accessible to
+        anyone via URL without authentication. Recommended only for
+        development or scenarios that explicitly need public access; in production,
+        prefer presigned URLs for time-limited access.
 
         ⚠️ 安全警告：此操作會讓 Bucket 內所有物件可被任何人透過 URL 直接存取，
         不需要認證。僅建議在開發環境或明確需要公開存取的場景下使用。
         在生產環境中，應優先使用 presigned URL 提供有時效性的存取。
 
-        Security warning: every object in the bucket becomes accessible to
-        anyone via URL without authentication. Recommended only for
-        development or explicitly public scenarios; prefer presigned URLs in
-        production.
-
         Args:
-            bucket_name: 目標儲存桶名稱。Target bucket name.
+            bucket_name: the target bucket name
+                目標儲存桶名稱
 
         Raises:
-            MinioStorageError: 設定策略失敗時。Raised when setting the
-                policy fails.
+            MinioStorageError: if setting the policy fails
+                若設定策略失敗
         """
         # 使用 Pydantic 模型組裝 S3 標準的公開唯讀 Policy，
         # 確保 JSON 結構合法且可追蹤。
@@ -279,31 +300,33 @@ class MinioClient:
         object_name: str,
         file_path: str,
     ) -> MinioUploadResult:
-        """將本機檔案上傳至指定的儲存桶。
+        """Upload a local file to the given bucket.
 
-        Upload a local file to the given bucket.
+        將本機檔案上傳至指定的儲存桶。
+
+        Uploads via the MinIO SDK's fput_object and returns a structured
+        upload result (a Pydantic model).
 
         使用 MinIO SDK 的 fput_object 方法進行上傳，
         並回傳結構化的上傳結果（Pydantic 模型）。
 
-        Uploads via the MinIO SDK's fput_object and returns a structured
-        Pydantic result.
-
         Args:
-            bucket_name: 目標儲存桶名稱。Target bucket name.
-            object_name: 上傳後在 MinIO 上的物件名稱（可包含路徑前綴，例如
-                'voice/20240101/audio.wav'）。Object name on MinIO, may
-                include a path prefix.
-            file_path: 本機端要上傳的檔案實體路徑。Local path of the file to
-                upload.
+            bucket_name: the target bucket name
+                目標儲存桶名稱
+            object_name: the object name on MinIO after upload; may include a path prefix, for example
+                ``"voice/20240101/audio.wav"``
+                上傳後在 MinIO 上的物件名稱（可包含路徑前綴，例如 ``"voice/20240101/audio.wav"``）
+            file_path: the local path of the file to upload
+                本機端要上傳的檔案實體路徑
 
         Returns:
-            MinioUploadResult: 包含 bucket_name、object_name、
-                file_size_bytes 的結構化結果。Structured result containing
-                bucket_name, object_name and file_size_bytes.
+            a structured result containing bucket_name, object_name and file_size_bytes; file_size_bytes is 0 if
+            the SDK result carries no size
+            包含 bucket_name、object_name、file_size_bytes 的結構化結果；SDK 結果沒有大小時 file_size_bytes 為 0
 
         Raises:
-            MinioStorageError: 檔案上傳失敗時。Raised when the upload fails.
+            MinioStorageError: if the upload fails
+                若檔案上傳失敗
 
         Example:
             >>> result = await client.upload_file("media", "audio/test.wav", "/tmp/test.wav")
@@ -312,7 +335,10 @@ class MinioClient:
         """
 
         def _sync_upload() -> int:
-            """同步上傳並回傳檔案大小。Upload synchronously and return size."""
+            """Upload synchronously and return the file size.
+
+            同步上傳並回傳檔案大小。
+            """
             result = self._client.fput_object(bucket_name, object_name, file_path)
             return result.size if hasattr(result, "size") else 0
 
@@ -342,26 +368,27 @@ class MinioClient:
         object_name: str,
         file_path: str,
     ) -> None:
-        """自指定的儲存桶下載檔案至本機。
+        """Download a file from the given bucket to the local machine.
 
-        Download a file from the given bucket to the local machine.
+        自指定的儲存桶下載檔案至本機。
+
+        Downloads via the MinIO SDK's fget_object; the parent directory of
+        the target path is not created automatically if missing.
 
         使用 MinIO SDK 的 fget_object 方法進行下載，
         目標路徑的父目錄若不存在不會自動建立。
 
-        Downloads via the MinIO SDK's fget_object; the parent directory of
-        the target path is not created automatically.
-
         Args:
-            bucket_name: 來源儲存桶名稱。Source bucket name.
-            object_name: MinIO 上的物件名稱（含路徑前綴）。Object name on
-                MinIO, including any path prefix.
-            file_path: 下載至本機的目標路徑與檔名。Local target path and
-                file name.
+            bucket_name: the source bucket name
+                來源儲存桶名稱
+            object_name: the object name on MinIO, including any path prefix
+                MinIO 上的物件名稱（含路徑前綴）
+            file_path: the local target path and file name
+                下載至本機的目標路徑與檔名
 
         Raises:
-            MinioStorageError: 檔案下載失敗時。Raised when the download
-                fails.
+            MinioStorageError: if the download fails
+                若檔案下載失敗
 
         Example:
             >>> await client.download_file("media", "audio/test.wav", "/tmp/downloaded.wav")
@@ -395,23 +422,24 @@ class MinioClient:
         bucket_name: str,
         object_name: str,
     ) -> None:
-        """刪除指定儲存桶內的目標檔案。
+        """Delete the target object from the given bucket.
 
-        Delete the target object from the given bucket.
+        刪除指定儲存桶內的目標檔案。
+
+        This operation is idempotent: no error is raised if the object does
+        not exist.
 
         此操作是冪等的——若物件不存在，不會拋出錯誤。
 
-        This operation is idempotent — no error is raised if the object does
-        not exist.
-
         Args:
-            bucket_name: 目標儲存桶名稱。Target bucket name.
-            object_name: 欲刪除的物件名稱（含路徑前綴）。Object name to
-                delete, including any path prefix.
+            bucket_name: the target bucket name
+                目標儲存桶名稱
+            object_name: the object name to delete, including any path prefix
+                欲刪除的物件名稱（含路徑前綴）
 
         Raises:
-            MinioStorageError: 刪除操作失敗時（例如權限不足）。Raised when
-                deletion fails (e.g. insufficient permissions).
+            MinioStorageError: if deletion fails (for example, insufficient permissions)
+                若刪除操作失敗（例如權限不足）
 
         Example:
             >>> await client.delete_file("media", "audio/old_file.wav")
@@ -437,30 +465,30 @@ class MinioClient:
         prefix: str | None = None,
         recursive: bool = True,
     ) -> list[MinioObjectInfo]:
-        """列出指定儲存桶內的物件資訊清單。
+        """List object information within the given bucket.
 
-        List object information within the given bucket.
+        列出指定儲存桶內的物件資訊清單。
+
+        Returns a structured list of Pydantic models rather than bare dicts
+        or log output only.
 
         回傳結構化的 Pydantic 模型列表，而非裸字典或僅列印日誌。
 
-        Returns a structured list of Pydantic models rather than bare dicts
-        or log output.
-
         Args:
-            bucket_name: 欲查詢的儲存桶名稱。Bucket name to query.
-            prefix: 物件名稱前綴過濾（例如 'voice/20240101/'），若為 None
-                則列出所有物件。Optional object-name prefix filter; lists
-                everything when None.
-            recursive: 是否遞迴掃描子目錄，預設 True。Whether to scan
-                sub-directories recursively; defaults to True.
+            bucket_name: the bucket name to query
+                欲查詢的儲存桶名稱
+            prefix: an object-name prefix filter (for example ``"voice/20240101/"``); ``None`` lists every object
+                物件名稱前綴過濾（例如 ``"voice/20240101/"``），若為 ``None`` 則列出所有物件
+            recursive: whether to scan sub-directories recursively; defaults to ``True``
+                是否遞迴掃描子目錄，預設 ``True``
 
         Returns:
-            MinioObjectInfo Pydantic 模型實例列表。A list of MinioObjectInfo
-            model instances.
+            a list of MinioObjectInfo model instances; empty if nothing matches
+            MinioObjectInfo Pydantic 模型實例串列；沒有符合者時為空串列
 
         Raises:
-            MinioStorageError: 讀取檔案清單失敗時。Raised when listing
-                fails.
+            MinioStorageError: if listing fails
+                若讀取檔案清單失敗
 
         Example:
             >>> objects = await client.list_objects("media", prefix="voice/")
@@ -515,30 +543,33 @@ class MinioClient:
         object_name: str,
         expires_days: int = DEFAULT_PRESIGNED_EXPIRES_DAYS,
     ) -> str:
-        """產生帶有時效性的預簽名下載網址 (Presigned URL)。
+        """Generate a time-limited presigned download URL.
 
-        Generate a time-limited presigned download URL.
+        產生帶有時效性的預簽名下載網址 (Presigned URL)。
+
+        Useful for sharing temporary access to private buckets with external
+        systems (for example, audio links returned by the Telegram bot, or media downloaded directly by the
+        frontend).
 
         適合用於私有 Bucket 分享臨時存取權限給外部系統（如 Telegram Bot
         回傳音檔連結、或前端直接下載媒體檔）。
 
-        Useful for sharing temporary access to private buckets with external
-        systems (e.g. Telegram bot audio links, frontend media downloads).
-
         Args:
-            bucket_name: 目標儲存桶名稱。Target bucket name.
-            object_name: 欲產生連結的物件名稱（含路徑前綴）。Object name to
-                link, including any path prefix.
-            expires_days: URL 的有效天數，預設為 7 天；MinIO 伺服器端上限
-                通常為 7 天，超過會被拒絕。URL validity in days, defaults
-                to 7; the MinIO server-side limit is typically 7 days.
+            bucket_name: the target bucket name
+                目標儲存桶名稱
+            object_name: the object name to link, including any path prefix
+                欲產生連結的物件名稱（含路徑前綴）
+            expires_days: the URL validity in days; defaults to 7. The MinIO limit is 7 days, and longer values are
+                rejected.
+                URL 的有效天數，預設為 7 天；MinIO 上限為 7 天，超過會被拒絕
 
         Returns:
-            產生的預簽名 URL 字串。The generated presigned URL string.
+            the generated presigned URL string
+            產生的預簽名 URL 字串
 
         Raises:
-            MinioStorageError: 產生 URL 失敗時。Raised when URL generation
-                fails.
+            MinioStorageError: if URL generation fails with an S3 error
+                若產生 URL 時發生 S3 錯誤
 
         Example:
             >>> url = await client.get_presigned_url("media", "audio/test.wav", expires_days=3)

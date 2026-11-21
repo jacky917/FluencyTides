@@ -1,6 +1,19 @@
-"""日文分詞詞典的查詢端點（診斷用）。
+"""Diagnostic endpoint exposing which Japanese tokenizer dictionary is loaded.
 
-Diagnostic endpoint exposing which Japanese tokenizer dictionary is loaded.
+日文分詞詞典的查詢端點（診斷用）。
+
+Why it exists: the dictionary depends on the runtime environment (full unidic, or the fallback
+unidic-lite), and the two judge boundaries such as nominalized continuative forms differently; the
+difference shows up only in the generated cards, never as an error. Making it a queryable endpoint
+lets environment differences be confirmed before a run, instead of being inferred from the cards
+afterwards (see the module docstring of app/infrastructure/utils/jp_tokenizer.py).
+
+The path includes ``jp``: this service also hosts other language modules, and the tokenizer
+dictionary is Japanese-specific infrastructure.
+
+Scope: this endpoint reports which dictionary the **backend process** uses. The card generation
+scripts tokenize in their own processes, and each reveals its dictionary in its startup log; the two
+are guaranteed to match only inside the same container.
 
 存在理由：詞典由執行環境決定（完整版 unidic 或回退的 unidic-lite），兩者
 對連用形名詞化等邊界的判定不同，而差異只會表現在產出的卡片上、不會報錯。
@@ -11,8 +24,6 @@ Diagnostic endpoint exposing which Japanese tokenizer dictionary is loaded.
 
 注意範圍：本端點回答的是**後端行程**用哪本詞典。生卡腳本在自己的行程裡
 分詞，其詞典由該腳本啟動時的 log 揭露；兩者在同一個容器內才必然一致。
-Scope: this reports the backend process's dictionary. The generation
-scripts tokenize in their own process and log theirs at startup.
 """
 
 from fastapi import APIRouter
@@ -25,14 +36,13 @@ router = APIRouter(prefix="/jp/tokenizer", tags=["JP Tokenizer"])
 
 @router.get("/dictionary", response_model=TokenizerDictionaryResponse)
 async def get_dictionary() -> TokenizerDictionaryResponse:
-    """回報本行程實際載入的分詞詞典。
+    """Report the tokenizer dictionary actually loaded by this process.
 
-    Report the tokenizer dictionary loaded by this process.
+    回報本行程實際載入的分詞詞典。
 
     Returns:
-        TokenizerDictionaryResponse: 詞典種類、版本、路徑，以及是否為偏好
-            的完整版。Kind, version, path, and whether it is the preferred
-            full dictionary.
+        the dictionary's kind, version, and path, and whether it is the preferred full dictionary
+        詞典種類、版本、路徑，以及是否為偏好的完整版
     """
     dictionary = resolve_dictionary()
     return TokenizerDictionaryResponse(

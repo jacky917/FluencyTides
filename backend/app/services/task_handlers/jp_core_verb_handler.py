@@ -1,19 +1,18 @@
-"""JP_CoreVerb（核心動詞）卡片專屬 Handler。
+"""Dedicated handler for JP_CoreVerb (core verb) cards.
+
+JP_CoreVerb（核心動詞）卡片專屬 Handler。
+
+Adapted from ``jp_verb_pair_handler.py``: the LLM task changes from transitivity judgment to deep verb
+analysis (five Verb_Analysis_JSON fields), the master write-back changes from the two transitivity fields to
+the single ``Word_Data_JSON`` field, and a script-provided ``target_verb_span`` is supported for cloze
+cross-validation. Cloze positioning and dialog assembly are shared with VerbPair through
+``shared/cloze_positioning.py``.
 
 以 ``jp_verb_pair_handler.py`` 為藍本改造：
 LLM 任務由「自他判定」改為「深度動詞解析」（Verb_Analysis_JSON 五欄），
 Master 回寫由自他雙欄改為單欄 ``Word_Data_JSON``，
 並支援腳本側傳入的 ``target_verb_span`` 挖空交叉驗證。
 挖空定位與對話組裝邏輯與 VerbPair 共用 ``shared/cloze_positioning.py``。
-
-Dedicated handler for JP_CoreVerb (core verb) cards.
-
-Adapted from ``jp_verb_pair_handler.py``: the LLM task changes from
-transitivity judgment to deep verb analysis (five Verb_Analysis_JSON
-fields), the master write-back uses the single ``Word_Data_JSON`` field,
-and a script-provided ``target_verb_span`` is supported for cloze
-cross-validation. Cloze positioning and dialog assembly are shared with
-VerbPair via ``shared/cloze_positioning.py``.
 """
 
 import json
@@ -55,10 +54,9 @@ CHILD_CARD_LLM = route("jp_core_verb", "核心動詞子卡生成", capabilities=
 
 @register_handler
 class JPCoreVerbHandler(BaseHandler):
-    """日文核心動詞（高頻多義動詞）專屬處理器。
+    """Dedicated handler for Japanese core verbs (high-frequency polysemous verbs).
 
-    Dedicated handler for Japanese core verbs (high-frequency polysemous
-    verbs).
+    日文核心動詞（高頻多義動詞）專屬處理器。
     """
 
     # 子卡由本機批次腳本產生（D7）；母卡 JSON 與查重紀錄互相參照，網頁只能檢視（D4）
@@ -75,84 +73,89 @@ class JPCoreVerbHandler(BaseHandler):
     @property
     @override
     def handler_name(self) -> str:
-        """回傳處理器名稱。
+        """The handler name used in URLs: ``"jp_core_verb"``.
 
-        Return the handler name.
-
-        Returns:
-            str: 處理器唯一識別名稱 "jp_core_verb"。Unique handler name
-                "jp_core_verb".
+        處理器唯一識別名稱 ``"jp_core_verb"``，出現在網址裡。
         """
         return "jp_core_verb"
 
     @property
     @override
     def title(self) -> str:
-        """中文名稱。Display title."""
+        """The Chinese display title.
+
+        中文名稱。
+        """
         return "核心動詞"
 
     @property
     @override
     def supported_models(self) -> list[str]:
-        """回傳本處理器支援的 Anki 模型名稱清單。
+        """The Anki note types this handler owns.
 
-        Return the Anki model names supported by this handler.
+        本處理器負責的 Anki 筆記類型。
+
+        Context cards use the ``JP_Context_Dark`` model shared with JP_VerbPair (the model definition is
+        shared; card instances stay private, 1 Context : 1 Cloze).
 
         Context 卡使用與 JP_VerbPair 共用的 ``JP_Context_Dark`` 模型
         （共用的是模型定義，卡片實體仍為 1 Context : 1 Cloze 私有）。
-        Context cards reuse the ``JP_Context_Dark`` model shared with
-        JP_VerbPair (the model definition is shared; card instances stay
-        private, 1 Context : 1 Cloze).
-
-        Returns:
-            list[str]: 支援的模型名稱。Supported model names.
         """
         return ["JP_CoreVerb_Master_Dark", "JP_Context_Dark", "JP_CoreVerb_Cloze_Dark"]
 
     @override
     async def execute_generate(self, card_service: "CardService", relation_service: "RelationService", parameters: dict) -> dict:
-        """根據文本生成 Context 和 Cloze 子卡片，並將結果追加至母卡片 JSON 中。
+        """Generate Context and Cloze child cards from text and append the result to the master card's JSON.
 
-        Generate Context and Cloze child cards from text and append the
-        result into the master card's JSON.
+        根據文本生成 Context 和 Cloze 子卡片，並將結果追加至母卡片 JSON 中。
+
+        Differences from JP_VerbPair:
+
+        1. The LLM output becomes ``CoreVerbCardGenerationResult`` (with five verb_analysis fields).
+        2. The Cloze card uses ``Verb_Analysis_JSON`` instead of the transitivity-pair fields.
+        3. The master write-back always targets the single ``Word_Data_JSON`` field.
+        4. The optional parameter ``target_verb_span`` is supported: the target verb's character span verified
+           morphologically on the script side, cross-validated against the LLM cloze positions (fail-fast when
+           they do not overlap).
 
         與 JP_VerbPair 的差異：
+
         1. LLM 輸出改為 ``CoreVerbCardGenerationResult``（含 verb_analysis 五欄）。
         2. Cloze 卡欄位以 ``Verb_Analysis_JSON`` 取代自他對照欄位。
         3. Master 回寫固定為單欄 ``Word_Data_JSON``。
         4. 支援可選參數 ``target_verb_span``：腳本側形態素驗證過的
            目標動詞字元 span，與 LLM 挖空位置交叉驗證（不重疊即 fail-fast）。
 
-        Differences from JP_VerbPair: the LLM output becomes
-        ``CoreVerbCardGenerationResult`` (with five verb_analysis
-        fields), the cloze card uses ``Verb_Analysis_JSON`` instead of
-        the transitivity-pair fields, the master write-back targets the
-        single ``Word_Data_JSON`` field, and an optional
-        ``target_verb_span`` (morphologically verified char span) is
-        cross-validated against the LLM cloze positions (fail-fast on no
-        overlap).
+        The two child cards and the master JSON write-back are rolled back together if any of them fails. A
+        failure to create the graph relations afterwards does not raise; it is reported as
+        ``relation_failed``.
+
+        兩張子卡與母卡 JSON 回寫任一步失敗時一起回滾。之後建立圖譜關聯失敗不會拋錯，改以
+        ``relation_failed`` 回報。
 
         Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            parameters: 生成參數，需包含 master_note_id / deck_name /
-                target_verb / source_game / context_dialogue，
-                可選 target_verb_span ([start, end])。Generation params;
-                requires master_note_id / deck_name / target_verb /
-                source_game / context_dialogue, optional target_verb_span
-                ([start, end]).
+            card_service: the card service
+                卡片服務
+            relation_service: the relation service
+                關聯服務
+            parameters: the generation parameters; master_note_id, deck_name, target_verb, and
+                context_dialogue are required, source_game (added as a ``Game::`` tag when given) and
+                target_verb_span (``[start, end]``) are optional
+                生成參數，需包含 master_note_id / deck_name / target_verb / context_dialogue；
+                source_game（有值時加上 ``Game::`` 標籤）與 target_verb_span（``[start, end]``）選填
 
         Returns:
-            dict: 包含 context_note_id、cloze_note_id、kept_dialog、
-                llm_model。Dict with context_note_id, cloze_note_id,
-                kept_dialog, llm_model.
+            a dict with context_note_id, cloze_note_id, kept_dialog, llm_model, and relation_failed
+            包含 context_note_id、cloze_note_id、kept_dialog、llm_model、relation_failed 的字典
 
         Raises:
-            ValueError: 參數缺漏、牌組不存在、母卡不存在或 LLM 產出失敗時。
-                On missing params, missing deck/master card, or LLM
-                failure.
-            ClozePositioningError: 挖空定位失敗或 span 交叉驗證失敗時。On
-                cloze positioning or span cross-validation failure.
+            ClozePositioningError: if cloze positioning or the span cross-validation fails
+                若挖空定位失敗或 span 交叉驗證失敗
+            ValueError: if a required parameter is missing, ``target_verb_span`` is not a two-element array, no
+                sentence is marked as the target, the deck or the master card does not exist, or the LLM output
+                fails
+                若參數缺漏、``target_verb_span`` 不是兩元素陣列、沒有標記目標句、牌組不存在、母卡不存在或
+                LLM 產出失敗
         """
         master_note_id = parameters.get("master_note_id")
         deck_name = parameters.get("deck_name")
@@ -315,17 +318,17 @@ class JPCoreVerbHandler(BaseHandler):
             # 則將面板文字退化為純平假名，避免造成學習者尋找漢字的困惑
             if mismatch:
                 def to_pure_kana(text: str) -> str:
-                    """把 furigana 標音格式的 Base[Ruby] 退化為純假名 Ruby。
+                    """Degrade furigana ``Base[Ruby]`` notation into the pure kana ``Ruby``.
 
-                    Degrade furigana Base[Ruby] notation into pure kana.
+                    把 furigana 標音格式的 Base[Ruby] 退化為純假名 Ruby。
 
                     Args:
-                        text: furigana 標音字串，例如 "見[み]る"。Furigana
-                            string, e.g. "見[み]る".
+                        text: the furigana string, for example ``"見[み]る"``
+                            furigana 標音字串，例如 ``"見[み]る"``
 
                     Returns:
-                        str: 純假名字串，例如 "みる"。Pure kana string, e.g.
-                            "みる".
+                        the pure kana string, for example ``"みる"``
+                        純假名字串，例如 ``"みる"``
                     """
                     # 把 Base[Ruby] 替換為 Ruby
                     # 例如 "見[み]る" -> "みる"

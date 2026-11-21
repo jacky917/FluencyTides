@@ -1,14 +1,14 @@
-"""Telegram 表達糾錯請求 Schema。
+"""Telegram expression-correction request schemas.
 
-Telegram expression-correction request schemas.
+Telegram 表達糾錯請求 Schema。
 """
 
 from pydantic import BaseModel, Field
 
 class TGExpressionCorrectionRequest(BaseModel):
-    """TG 傳送過來的糾錯請求資料。
+    """The correction request data sent from Telegram.
 
-    Correction request data sent from Telegram.
+    TG 傳送過來的糾錯請求資料。
     """
     native_language: str = Field(description="使用者的母語，例如：zh, 中文")
     target_language: str = Field(description="欲學習的目標語言，例如：ja, 日文")

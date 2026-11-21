@@ -1,6 +1,43 @@
-"""
+"""Capability routing: obtaining tools by route key.
+
 能力路由：依用途鍵取得工具（能力路由計畫 capability_routing_FEAT_2026-10-19.md；前身為模型路由計畫
 llm_model_routing_FEAT_2026-10-15.md D1 / D2 / D4）。
+
+See the capability-routing plan capability_routing_FEAT_2026-10-19.md; its predecessor is the model-routing plan
+llm_model_routing_FEAT_2026-10-15.md D1 / D2 / D4.
+
+A module that uses tools declares, at module level, its route key and the capabilities it uses, then obtains the
+client through it at call time (see the example in the Chinese section below).
+
+The naming rules for route keys are in §4 of the plan (alphanumerics and ``. _ -``, length ≤ 64, at most two
+levels ``<flow>.<branch>``). A key is registered when declared, so :func:`list_route_keys` is the admin UI's list of
+valid keys. Settings are stored in ``capability_routes``, each row being one route key's choice for one
+capability; capabilities and allowlists are in :mod:`app.infrastructure.llm.capabilities`.
+
+Each capability resolves **independently** in this order (plan §5)::
+
+    <flow>.<branch> (DB) → <flow> (DB) → global ``*`` (DB) → .env
+
+Every DB layer must be within the allowlist, otherwise it is skipped with a WARNING; the .env layer always
+applies. For ``llm``, the .env layer builds the client with ``create_llm_client()`` without any argument, exactly
+the same call as before routing was introduced. The .env defaults of the other capabilities are in
+:func:`~app.infrastructure.llm.capabilities.env_default`.
+
+A route key may give a capability its own default at declaration (``env_defaults``; branches inherit their flow
+key's), for example recording evaluation's ``llm`` defaults to the audio endpoint plus ``STT_LLM_MODEL_NAME``.
+**Such a default ranks before the global ``*``**: once it is reached, ``*`` is no longer consulted. The global
+``*`` ``llm`` is the card-building default (for example Claude Code) and should not also change the cheap model
+used for recording evaluation. To make this use switch to other settings, configure the key itself (or its flow
+key) directly.
+
+The settings rows are cached in-process after being read; once the writer calls :func:`invalidate_cache`, the
+next call takes effect (the backend runs only one worker, so cross-process sync is not handled); clients are still
+built on every call. When the database is failing, resolution falls back to ``.env``: the start of the outage
+logs a WARNING (with traceback), recovery logs INFO, every call retries in between, and the result is marked
+``db_unavailable``. "Database failure" means errors the DB reports (``DBAPIError``: connection, missing table,
+missing column, including a model changed without running the migration), connection-pool timeouts, and network
+errors; programming problems such as ORM configuration errors, import errors, and attribute errors are not
+intercepted and propagate as usual.
 
 會用到工具的模組在模組層宣告用途鍵與它用到的能力，呼叫時以它取客戶端::
 
@@ -9,8 +46,8 @@ llm_model_routing_FEAT_2026-10-15.md D1 / D2 / D4）。
     llm = await CHILD_CARD.client()
 
 用途鍵的命名規範見計畫書 §4（英數字與 ``. _ -``，長度 ≤ 64，最多兩層 ``<流程>.<分支>``）。
-宣告時即登記，:func:`list_route_keys` 就是管理介面的合法鍵清單。設定存在 ``capability_routes``，
-每列是一個用途鍵在一種能力上的選擇；能力與白名單見 :mod:`app.infrastructure.llm.capabilities`。
+宣告時即登記，``list_route_keys`` 就是管理介面的合法鍵清單。設定存在 ``capability_routes``，
+每列是一個用途鍵在一種能力上的選擇；能力與白名單見 ``app.infrastructure.llm.capabilities``。
 
 每個能力**各自**依下列順序解析（計畫書 §5）::
 
@@ -18,28 +55,19 @@ llm_model_routing_FEAT_2026-10-15.md D1 / D2 / D4）。
 
 DB 的各層必須在白名單內，否則跳過並記 WARNING；.env 那一層一律生效。``llm`` 的 .env 那一層
 以不帶任何參數的 ``create_llm_client()`` 建立客戶端——與導入路由前的呼叫完全相同。其他能力的
-.env 預設見 :func:`~app.infrastructure.llm.capabilities.env_default`。
+.env 預設見 ``capabilities.env_default``。
 
 用途鍵可在宣告時為某個能力另給預設（``env_defaults``，分支沿用流程鍵的），例如錄音評分的 ``llm``
 預設為 audio 端點加上 ``STT_LLM_MODEL_NAME``。**這種預設排在全域 ``*`` 之前**：解析到它時不再看
 ``*``——全域 ``*`` 的 ``llm`` 是建卡用的預設（例如 Claude Code），不該連帶改掉錄音評分用的便宜
 模型。要讓這個用途改用別的設定，就直接設定它本身（或它的流程鍵）。
 
-設定列讀出後放在程序內快取，寫入方呼叫 :func:`invalidate_cache` 後下一次呼叫即
+設定列讀出後放在程序內快取，寫入方呼叫 ``invalidate_cache`` 後下一次呼叫即
 生效（後端只跑一個 worker，不處理跨程序同步）；客戶端仍每次呼叫才建立。資料庫
 異常時退回 ``.env``：故障開始記 WARNING（附 traceback）、恢復時記 INFO，期間每次
 呼叫都重試，解析結果標上 ``db_unavailable``。「資料庫異常」指 DB 回報的錯誤
 （``DBAPIError``：連線、缺表、缺欄位——包括模型改了卻沒跑 migration）、連線池
 逾時與網路錯誤；ORM 設定錯誤、import 錯誤、屬性錯誤等程式問題不攔截，照常往上拋。
-
-English summary:
-    Route-key based tool resolution. Modules declare route keys and the
-    capabilities they use with :func:`route` and obtain clients through the
-    returned handle. Each capability resolves on its own: branch row →
-    flow row → global ``*`` row → ``.env``; rows outside the whitelist are
-    skipped with a warning. With no rows the LLM client is built exactly as
-    before routing existed. Only database errors fall back to ``.env``;
-    programming errors propagate.
 """
 
 import logging
@@ -110,11 +138,15 @@ _db_failing = False
 
 @dataclass(frozen=True)
 class RejectedLayer:
-    """被跳過的一層與原因。A skipped layer and why.
+    """A skipped layer and the reason.
+
+    被跳過的一層與原因。
 
     Attributes:
-        route_key: 該層的鍵（用途鍵或 ``*``）。The layer's key.
-        reason: 不合格的原因。Why it was skipped.
+        route_key: the layer's key (a route key or ``*``)
+            該層的鍵（用途鍵或 ``*``）
+        reason: why it is invalid
+            不合格的原因
     """
 
     route_key: str
@@ -123,21 +155,28 @@ class RejectedLayer:
 
 @dataclass(frozen=True)
 class ResolvedRoute:
-    """一個用途鍵在一種能力上實際生效的設定。The effective setting for a route key.
+    """The setting that actually takes effect for one route key on one capability.
+
+    一個用途鍵在一種能力上實際生效的設定。
 
     Attributes:
-        route_key: 查詢的用途鍵。The queried route key.
-        source: 生效的層：``route``（用途鍵本身）/ ``parent``（分支往上的流程鍵）/
-            ``global``（全域）/ ``env``。The layer that won.
-        choice: 生效的 DB 選擇；``env`` 層為 None。The winning stored choice,
-            or None on the env layer.
-        rejected: 被跳過的層與原因（已不在白名單），依嘗試順序。Skipped
-            layers, in the order tried.
-        db_unavailable: DB 讀取失敗、DB 的各層沒有參與解析（與「DB 沒有任何
-            設定」區分）。True when the stored settings could not be read.
-        capability: 解析的能力。The capability resolved.
-        env_choice: ``env`` 層的預設選擇；``llm`` 沒有另給預設時為 None（客戶端讀
-            ``LLM_*``）。The env layer's default, None for the plain ``llm`` default.
+        route_key: the queried route key
+            查詢的用途鍵
+        source: the layer that took effect: ``route`` (the key itself) / ``parent`` (the flow key above a branch) /
+            ``global`` (global) / ``env``
+            生效的層：``route``（用途鍵本身）/ ``parent``（分支往上的流程鍵）/ ``global``（全域）/ ``env``
+        choice: the DB choice that took effect; ``None`` on the ``env`` layer
+            生效的 DB 選擇；``env`` 層為 None
+        rejected: the skipped layers and reasons (no longer in the allowlist), in the order tried
+            被跳過的層與原因（已不在白名單），依嘗試順序
+        db_unavailable: the DB read failed and the DB layers took no part in resolution (as distinct from "the DB
+            has no settings")
+            DB 讀取失敗、DB 的各層沒有參與解析（與「DB 沒有任何設定」區分）
+        capability: the resolved capability
+            解析的能力
+        env_choice: the ``env`` layer's default choice; ``None`` when ``llm`` has no separate default (the client
+            reads ``LLM_*``)
+            ``env`` 層的預設選擇；``llm`` 沒有另給預設時為 None（客戶端讀 ``LLM_*``）
     """
 
     route_key: str
@@ -149,6 +188,14 @@ class ResolvedRoute:
     env_choice: RouteChoice | None = None
 
     def __post_init__(self) -> None:
+        """Check that only the ``env`` layer lacks a DB choice and that DB layers carry no ``env_choice``.
+
+        檢查只有 ``env`` 層沒有 DB 選擇，且 DB 層不帶 ``env_choice``。
+
+        Raises:
+            ValueError: if either rule is broken
+                若違反任一規則
+        """
         if (self.source == "env") != (self.choice is None):
             raise ValueError("只有 env 層沒有 DB 選擇")
         if self.choice is not None and self.env_choice is not None:
@@ -156,29 +203,39 @@ class ResolvedRoute:
 
     @property
     def effective_choice(self) -> RouteChoice | None:
-        """生效的選擇（DB 層或 ``env`` 層的預設）；``llm`` 的一般 ``.env`` 預設為 None。
+        """The effective choice (a DB layer's, or the ``env`` layer's default); ``None`` for the plain ``llm`` default.
 
-        The effective choice; None only for the plain ``llm`` env default.
+        生效的選擇（DB 層或 ``env`` 層的預設）；``llm`` 的一般 ``.env`` 預設為 None。
         """
         return self.choice if self.choice is not None else self.env_choice
 
     @property
     def endpoint(self) -> str:
-        """生效的 provider（端點 ID、``whisper`` 或策略）；``llm`` 的 ``env`` 層為 ``LLM_PROVIDER``。
+        """The effective provider (an endpoint ID, ``whisper``, or a strategy).
 
-        The effective provider.
+        生效的 provider（端點 ID、``whisper`` 或策略）；``llm`` 的 ``env`` 層為 ``LLM_PROVIDER``。
+
+        For the plain ``llm`` ``env`` layer it is the normalized ``LLM_PROVIDER``.
+
+        ``llm`` 的一般 ``env`` 層為正規化後的 ``LLM_PROVIDER``。
         """
         choice = self.effective_choice
         return choice.endpoint if choice is not None else env_endpoint_id()
 
     @property
     def provider(self) -> str:
-        """同 :attr:`endpoint`。Same as :attr:`endpoint`."""
+        """Same as :attr:`endpoint`.
+
+        同 ``endpoint``。
+        """
         return self.endpoint
 
     @property
     def model(self) -> str:
-        """生效的模型名；``llm`` 的 ``env`` 層為 ``LLM_MODEL_NAME``。The effective model name."""
+        """The effective model name; ``LLM_MODEL_NAME`` for the plain ``llm`` ``env`` layer.
+
+        生效的模型名；``llm`` 的 ``env`` 層為 ``LLM_MODEL_NAME``。
+        """
         choice = self.effective_choice
         if choice is not None:
             return choice.model
@@ -186,33 +243,42 @@ class ResolvedRoute:
 
     @property
     def effort(self) -> str | None:
-        """DB 層選定的 effort。``env`` 層為 None——意思是「客戶端沿用 ``.env`` 預設」，
-        不是「不使用 effort」（CLI 類仍會帶 ``LLM_*_EFFORT``）。
+        """The effort chosen on a DB layer.
 
-        The chosen effort. None on the env layer means "the client's
-        configured default", not "no effort".
+        DB 層選定的 effort。
+
+        ``None`` on the ``env`` layer means "the client keeps the ``.env`` default", not "no effort" (CLI types
+        still carry ``LLM_*_EFFORT``). This holds even when the ``env`` layer uses a route key's declared default.
+
+        ``env`` 層為 None——意思是「客戶端沿用 ``.env`` 預設」，
+        不是「不使用 effort」（CLI 類仍會帶 ``LLM_*_EFFORT``）。``env`` 層使用用途鍵宣告的預設時也是如此。
         """
         return self.choice.effort if self.choice is not None else None
 
 
 @dataclass(frozen=True)
 class Route:
-    """已宣告的用途鍵與它用到的能力；以 :meth:`client` 取得該用途的 LLM 客戶端。
+    """A declared route key and the capabilities it uses; :meth:`client` obtains the LLM client for the use.
 
-    A declared route key and the capabilities it uses; :meth:`client`
-    returns its LLM client. Create through :func:`route` so the key is
-    registered; the format is also checked here, so a direct construction
-    cannot hold an invalid key.
+    已宣告的用途鍵與它用到的能力；以 ``client`` 取得該用途的 LLM 客戶端。
+
+    Create it through :func:`route` so the key is registered; the format is also checked here, so a direct
+    construction cannot hold an invalid key.
+
+    透過 ``route`` 建立才會登記；格式在這裡也會檢查，直接建構也不可能持有不合規的鍵。
 
     Attributes:
-        key: 用途鍵。The route key.
-        description: 給人看的說明（管理介面顯示）。Human-readable purpose.
-        capabilities: 這個用途會用到的能力；設定只接受這些能力。The capabilities
-            it uses; settings for other capabilities are refused.
-        strategies: 宣告 ``audio_eval`` 時允許的評分策略；None 為全部（分支沒有限縮時
-            沿用流程鍵的）。The recording-evaluation strategies allowed, or None.
-        env_defaults: 能力 → 這個鍵（與它的分支）在 ``.env`` 那一層的預設。Per-capability
-            ``.env`` defaults for this key and its branches.
+        key: the route key
+            用途鍵
+        description: the human-readable description (shown in the admin UI)
+            給人看的說明（管理介面顯示）
+        capabilities: the capabilities this use needs; settings accept only these capabilities
+            這個用途會用到的能力；設定只接受這些能力
+        strategies: the recording-evaluation strategies allowed when ``audio_eval`` is declared; ``None`` means all
+            (a branch without its own narrowing inherits its flow key's)
+            宣告 ``audio_eval`` 時允許的評分策略；None 為全部（分支沒有限縮時沿用流程鍵的）
+        env_defaults: capability → the ``.env``-layer default of this key (and its branches)
+            能力 → 這個鍵（與它的分支）在 ``.env`` 那一層的預設
     """
 
     key: str
@@ -222,6 +288,21 @@ class Route:
     env_defaults: Mapping[str, EnvDefault] | None = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
+        """Validate the key, the capabilities, the strategy narrowing, and ``env_defaults``.
+
+        檢查用途鍵、能力、策略限縮與 ``env_defaults``。
+
+        ``capabilities`` and ``strategies`` are converted to frozensets.
+
+        ``capabilities`` 與 ``strategies`` 會轉成 frozenset。
+
+        Raises:
+            ValueError: if the key is invalid or ``*``, the capabilities are empty or unknown, the strategy narrowing
+                lacks ``audio_eval`` or is not a non-empty subset of the strategies, or ``env_defaults`` names an
+                undeclared capability
+                若鍵不合規或為 ``*``、能力為空或未知、策略限縮未宣告 ``audio_eval`` 或不是策略的非空子集，
+                或 ``env_defaults`` 含未宣告的能力
+        """
         if (
             self.key == GLOBAL_ROUTE_KEY
             or len(self.key) > ROUTE_KEY_MAX_LENGTH
@@ -248,16 +329,34 @@ class Route:
             raise ValueError(f"用途鍵 {self.key!r} 的 env_defaults 含未宣告的能力。")
 
     async def resolve(self, capability: str = CAPABILITY_LLM) -> ResolvedRoute:
-        """此用途某個能力目前生效的設定。The effective setting for this route."""
+        """Return the setting currently in effect for one capability of this use.
+
+        回傳此用途某個能力目前生效的設定。
+
+        Args:
+            capability: the capability
+                能力
+
+        Returns:
+            the effective setting and its source
+            生效的設定與來源
+        """
         return await resolve(self.key, capability)
 
     async def client(self) -> BaseLLMClient:
-        """依目前生效的設定建立 LLM 客戶端。Build the LLM client for this route.
+        """Build the LLM client from the setting currently in effect.
+
+        依目前生效的設定建立 LLM 客戶端。
+
+        Returns:
+            the LLM client for this use
+            此用途的 LLM 客戶端
 
         Raises:
-            ValueError: 這個用途沒有宣告 ``llm`` 能力（程式錯誤）。The route does
-                not declare the ``llm`` capability.
-            LLMServiceError: 客戶端初始化失敗時（與 ``create_llm_client`` 相同）。
+            LLMServiceError: if client initialization fails (see :func:`client_for`)
+                客戶端初始化失敗時（見 ``client_for``）
+            ValueError: if this use does not declare the ``llm`` capability (a programming error)
+                這個用途沒有宣告 ``llm`` 能力（程式錯誤）
         """
         if CAPABILITY_LLM not in self.capabilities:
             raise ValueError(f"用途鍵 {self.key!r} 沒有宣告 llm 能力，不能取 LLM 客戶端。")
@@ -275,26 +374,38 @@ def route(
     strategies: set[str] | frozenset[str] | None = None,
     env_defaults: Mapping[str, EnvDefault] | None = None,
 ) -> Route:
-    """宣告並登記一個用途鍵與它用到的能力。Declare and register a route key.
+    """Declare and register a route key and the capabilities it uses.
+
+    宣告並登記一個用途鍵與它用到的能力。
+
+    Call it at module level: the key is registered at import time, and an invalid format or a duplicate
+    declaration raises on the spot (a misspelled but well-formed key only registers one more new key, whose DB
+    settings never take effect; the admin UI lists it). Re-importing the same module (for example
+    ``importlib.reload``) also raises because of the duplicate declaration.
 
     在模組層呼叫：import 時即登記，格式不合規或重複宣告當場拋錯（拼錯但格式合規的鍵
     只會多登記一個新鍵，對應的 DB 設定不會生效——管理介面會列出它）。重新 import
     同一模組（如 ``importlib.reload``）也會因重複宣告拋錯。
 
     Args:
-        key: 用途鍵（英數字與 ``. _ -``，長度 ≤ 64，最多兩層，不可為 ``*``）。Route key.
-        description: 給人看的說明。Human-readable purpose.
-        capabilities: 用到的能力（:data:`CAPABILITIES` 的非空子集）。The capabilities used.
-        strategies: 宣告 ``audio_eval`` 時允許的評分策略（None 為全部）。Allowed strategies.
-        env_defaults: 能力 → ``.env`` 那一層的預設（分支沿用流程鍵的）。Per-capability
-            ``.env`` defaults.
+        key: the route key (alphanumerics and ``. _ -``, length ≤ 64, at most two levels, not ``*``)
+            用途鍵（英數字與 ``. _ -``，長度 ≤ 64，最多兩層，不可為 ``*``）
+        description: the human-readable description
+            給人看的說明
+        capabilities: the capabilities used (a non-empty subset of :data:`CAPABILITIES`)
+            用到的能力（``CAPABILITIES`` 的非空子集）
+        strategies: the recording-evaluation strategies allowed when ``audio_eval`` is declared (``None`` means all)
+            宣告 ``audio_eval`` 時允許的評分策略（None 為全部）
+        env_defaults: capability → the ``.env``-layer default (branches inherit their flow key's)
+            能力 → ``.env`` 那一層的預設（分支沿用流程鍵的）
 
     Returns:
-        用途鍵物件。The route handle.
+        the route object
+        用途鍵物件
 
     Raises:
-        ValueError: 鍵或能力不合規，或鍵已被宣告。When the key or capabilities are
-            invalid, or the key is taken.
+        ValueError: if the key or capabilities are invalid, or the key is already declared
+            鍵或能力不合規，或鍵已被宣告
     """
     declared = Route(
         key,
@@ -310,25 +421,66 @@ def route(
 
 
 def list_route_keys() -> list[Route]:
-    """所有已宣告的用途鍵，依鍵排序（分支緊跟在流程鍵之後）。All declared route keys, sorted."""
+    """Return every declared route key, sorted by key (branches right after their flow key).
+
+    回傳所有已宣告的用途鍵，依鍵排序（分支緊跟在流程鍵之後）。
+
+    Returns:
+        the declared routes
+        已宣告的用途鍵
+    """
     return [_DECLARED[key] for key in sorted(_DECLARED)]
 
 
 def get_route(key: str) -> Route | None:
-    """已宣告的用途鍵；未宣告時為 None。The declared route, or None."""
+    """Return the declared route key.
+
+    回傳已宣告的用途鍵。
+
+    Args:
+        key: the route key
+            用途鍵
+
+    Returns:
+        the route; ``None`` when it is not declared
+        用途鍵；未宣告時為 None
+    """
     return _DECLARED.get(key)
 
 
 def parent_key(key: str) -> str | None:
-    """分支鍵的流程鍵（``a.b`` → ``a``）；不是分支時為 None。The flow key of a branch."""
+    """Return the flow key of a branch key (``a.b`` → ``a``).
+
+    回傳分支鍵的流程鍵（``a.b`` → ``a``）。
+
+    Args:
+        key: the route key
+            用途鍵
+
+    Returns:
+        the flow key; ``None`` when the key is not a branch
+        流程鍵；不是分支時為 None
+    """
     head, separator, _ = key.partition(".")
     return head if separator else None
 
 
 def route_layers(route_key: str) -> list[tuple[str, RouteSource]]:
-    """解析時依序查的 DB 層（不含 ``.env``）。The DB layers tried, in order.
+    """Return the DB layers queried in order during resolution (excluding ``.env``).
+
+    解析時依序查的 DB 層（不含 ``.env``）。
+
+    ``a.b`` → ``a.b``, ``a``, ``*``; ``a`` → ``a``, ``*``; ``*`` → ``*``.
 
     ``a.b`` → ``a.b``、``a``、``*``；``a`` → ``a``、``*``；``*`` → ``*``。
+
+    Args:
+        route_key: the route key, or ``*``
+            用途鍵，或 ``*``
+
+    Returns:
+        ``(key, source)`` pairs in query order
+        依查詢順序排列的 ``(鍵, 來源)``
     """
     if route_key == GLOBAL_ROUTE_KEY:
         return [(GLOBAL_ROUTE_KEY, "global")]
@@ -341,16 +493,30 @@ def route_layers(route_key: str) -> list[tuple[str, RouteSource]]:
 
 
 def _declared_chain(route_key: str) -> list[Route]:
-    """用途鍵本身與它的流程鍵中已宣告的（依查詢順序）。Declared routes along the chain."""
+    """Return the declared ones among the route key itself and its flow key (in query order).
+
+    用途鍵本身與它的流程鍵中已宣告的（依查詢順序）。
+    """
     keys = [key for key, _ in route_layers(route_key) if key != GLOBAL_ROUTE_KEY]
     return [_DECLARED[key] for key in keys if key in _DECLARED]
 
 
 def allowed_strategies(route_key: str) -> frozenset[str] | None:
-    """用途鍵允許的評分策略：鍵本身有限縮就用它的，否則看流程鍵；都沒有為 None（全部）。
+    """Return the recording-evaluation strategies a route key allows.
 
-    The strategies a route key allows: its own restriction, else its flow
-    key's, else None.
+    回傳用途鍵允許的評分策略。
+
+    The key's own narrowing is used if it has one, otherwise the flow key's.
+
+    鍵本身有限縮就用它的，否則看流程鍵。
+
+    Args:
+        route_key: the route key
+            用途鍵
+
+    Returns:
+        the allowed strategies; ``None`` (all) when neither narrows them
+        允許的策略；都沒有限縮時為 None（全部）
     """
     for declared in _declared_chain(route_key):
         if declared.strategies is not None:
@@ -359,9 +525,24 @@ def allowed_strategies(route_key: str) -> frozenset[str] | None:
 
 
 def declared_default_for(route_key: str, capability: str) -> RouteChoice | None:
-    """用途鍵（或它的流程鍵）為這個能力宣告的預設；沒有宣告、或宣告的預設目前不適用時為 None。
+    """Return the default declared for this capability by the route key (or its flow key).
 
-    The default declared by the key or its flow key for a capability, or None.
+    回傳用途鍵（或它的流程鍵）為這個能力宣告的預設。
+
+    The key's own default comes first; a declared default whose function returns ``None`` (not applicable right
+    now) is skipped.
+
+    鍵本身的預設優先；宣告的預設函式回 None（目前不適用）時跳過。
+
+    Args:
+        route_key: the route key
+            用途鍵
+        capability: the capability
+            能力
+
+    Returns:
+        the declared default; ``None`` when none is declared or the declared default does not currently apply
+        宣告的預設；沒有宣告、或宣告的預設目前不適用時為 None
     """
     for declared in _declared_chain(route_key):
         default = (declared.env_defaults or {}).get(capability)
@@ -384,11 +565,14 @@ _cache_generation = 0
 
 
 def invalidate_cache() -> None:
-    """清空設定快取；寫入或刪除設定後呼叫。Drop the cached rows after a write.
+    """Clear the settings cache; call after writing or deleting settings.
 
-    同時遞增快取世代，讓寫入前就開始、寫入後才讀完的讀取不會把舊快照寫回快取。
-    Also bumps the generation so a read that started before the write cannot
-    put its stale snapshot back into the cache.
+    清空設定快取；寫入或刪除設定後呼叫。
+
+    Also increments the cache generation, so a read that started before the write and finished after it cannot write
+    the old snapshot back into the cache. The once-only warning record is reset too.
+
+    同時遞增快取世代，讓寫入前就開始、寫入後才讀完的讀取不會把舊快照寫回快取。只記一次的警告紀錄也一併重置。
     """
     global _choices_cache, _cache_generation
     _choices_cache = None
@@ -397,23 +581,45 @@ def invalidate_cache() -> None:
 
 
 def cache_generation() -> int:
-    """目前的快取世代：每次寫入或刪除設定都會變（評分器等依設定建立的物件據此清快取）。
+    """Return the current cache generation, which changes on every write or deletion of settings.
 
-    The cache generation; changes on every write, so caches built from the
-    settings can tell they are outdated.
+    回傳目前的快取世代：每次寫入或刪除設定都會變。
+
+    Objects built from the settings, such as evaluators, use it to clear their own caches.
+
+    評分器等依設定建立的物件據此清快取。
+
+    Returns:
+        the generation number
+        世代編號
     """
     return _cache_generation
 
 
 def copy_snapshot(snapshot: Snapshot) -> Snapshot:
-    """快照的複本（兩層都複製）。A copy of a snapshot."""
+    """Return a copy of a snapshot (both levels are copied).
+
+    快照的複本（兩層都複製）。
+
+    Args:
+        snapshot: the snapshot to copy
+            要複製的快照
+
+    Returns:
+        the copy
+        複本
+    """
     return {capability: dict(rows) for capability, rows in snapshot.items()}
 
 
 def warn_once(message: str) -> None:
-    """同一則警告只記一次（快取失效時重置，設定改過後會再提醒）。
+    """Log the same warning only once (reset when the cache is invalidated, so it reminds again after a change).
 
-    Log a warning once per message; reset whenever the cache is invalidated.
+    同一則警告只記一次（快取失效時重置，設定改過後會再提醒）。
+
+    Args:
+        message: the warning message
+            警告訊息
     """
     if message in _reported:
         return
@@ -422,7 +628,15 @@ def warn_once(message: str) -> None:
 
 
 async def _fetch_choices() -> Snapshot:
-    """從 ``capability_routes`` 讀出全部設定（能力 → 用途鍵 → 選擇）。Read every row.
+    """Read every setting from ``capability_routes`` (capability → route key → choice).
+
+    從 ``capability_routes`` 讀出全部設定（能力 → 用途鍵 → 選擇）。
+
+    The ``model`` column may be empty (strategy capabilities) and is read as an empty string; for capabilities that
+    need a model, an empty one is skipped by the allowlist check.
+
+    The database modules are imported lazily: the engine is created only when first needed, and the LLM layer
+    itself does not depend on the DB.
 
     ``model`` 欄位可為空（策略類能力），讀成空字串；需要模型的能力若是空的，比對白名單時會被
     跳過。
@@ -444,14 +658,18 @@ async def _fetch_choices() -> Snapshot:
 
 
 async def _fetch_and_cache() -> Snapshot:
-    """讀 DB，成功時結束故障狀態並放進快取（讀取期間有寫入則不放）。
+    """Read the DB; on success end the failure state and cache the result (not if a write happened meanwhile).
 
-    Read the table; on success leave the failure state and cache the result,
-    unless a write invalidated the cache while the read was in flight.
+    讀 DB，成功時結束故障狀態並放進快取（讀取期間有寫入則不放）。
 
     Raises:
-        DBAPIError / sqlalchemy.exc.TimeoutError / OSError: 讀不到 DB 時（見
-            :data:`DATABASE_ERRORS`），快取與故障狀態都不動。
+        DBAPIError: if the DB cannot be read (see :data:`DATABASE_ERRORS`); the cache and failure state are left
+            unchanged
+            讀不到 DB 時（見 ``DATABASE_ERRORS``），快取與故障狀態都不動
+        OSError: likewise, on a network error
+            同上，網路錯誤時
+        sqlalchemy.exc.TimeoutError: likewise, on a connection-pool timeout
+            同上，連線池逾時
     """
     global _choices_cache, _db_failing
     generation = _cache_generation
@@ -465,17 +683,21 @@ async def _fetch_and_cache() -> Snapshot:
 
 
 async def _load_choices() -> tuple[Snapshot, bool]:
-    """取設定（有快取用快取）。Get the stored choices, cached.
+    """Get the settings (from the cache when cached).
+
+    取設定（有快取用快取）。
+
+    Only database failures (``DBAPIError``, connection-pool timeouts, ``OSError``) are intercepted: an empty result
+    is returned and not cached (retried next time), with a WARNING plus traceback logged only on "normal →
+    failing" and INFO on "failing → recovered". Other exceptions (programming errors) propagate as usual.
 
     只攔資料庫異常（``DBAPIError``、連線池逾時、``OSError``）：回空、不快取（下次
     重試），只在「正常 → 故障」時記 WARNING 附 traceback、「故障 → 恢復」時記 INFO。
     其他例外（程式錯誤）照常往上拋。
 
-    Only database errors fall back (uncached, logged on state transitions);
-    anything else is a bug and propagates.
-
     Returns:
-        ``(設定, 是否讀取成功)``。``(choices, read_ok)``.
+        ``(choices, read_ok)``
+        ``(設定, 是否讀取成功)``
     """
     global _db_failing
     if _choices_cache is not None:
@@ -495,38 +717,50 @@ async def _load_choices() -> tuple[Snapshot, bool]:
 
 
 async def stored_choices() -> tuple[Snapshot, bool]:
-    """DB 中目前存的全部設定（含不在白名單、或用途鍵已不存在的孤兒列），與解析共用快取。
+    """Return every setting currently stored in the DB, sharing the cache with resolution.
 
-    Every stored choice, including rows outside the whitelist and orphan
-    keys; shares the resolution cache.
+    DB 中目前存的全部設定（含不在白名單、或用途鍵已不存在的孤兒列），與解析共用快取。
+
+    This includes rows outside the allowlist and orphan rows whose route key no longer exists. On a read failure it
+    returns ``({}, False)``, the generation path's "do not interrupt" fallback; **management paths must check
+    ``read_ok``** and must not treat the empty dict as "no settings". The result is a copy, so changes by the caller
+    do not affect the cache.
 
     讀取失敗時回 ``({}, False)``——那是生成路徑「不中斷」的退回，**管理路徑必須檢查
     ``read_ok``**，不能把空字典當成「沒有設定」。回傳的是複本，呼叫端改了也不影響快取。
 
-    On a read failure this returns ``({}, False)``; management callers must
-    check ``read_ok`` rather than treat the empty dict as "nothing stored".
-
     Returns:
-        ``(能力 → 用途鍵 → 選擇, 是否讀取成功)``。``(snapshot, read_ok)``.
+        ``(capability → route key → choice, read_ok)``
+        ``(能力 → 用途鍵 → 選擇, 是否讀取成功)``
     """
     choices, read_ok = await _load_choices()
     return copy_snapshot(choices), read_ok
 
 
 async def stored_choices_strict() -> Snapshot:
-    """與 :func:`stored_choices` 共用快取，但讀不到時拋出原始的資料庫例外（不退回）。
+    """Return the stored settings like :func:`stored_choices`, but raise the original DB error instead of falling back.
 
-    Shares the cache with :func:`stored_choices` but raises the original
-    database error instead of falling back, so management callers can log
-    the real cause.
+    與 ``stored_choices`` 共用快取，但讀不到時拋出原始的資料庫例外（不退回）。
+
+    This lets management callers log the real cause. A successful read likewise writes the cache and ends the "DB
+    failing" state; a failure logs nothing and does not enter the failure state (the caller records the cause), so
+    it does not disturb the generation path's rhythm of "WARNING only when the failure starts". The result is a copy.
 
     讀取成功時同樣寫入快取並結束「DB 故障」狀態；失敗時不記 log、也不進入故障狀態
     （原因交給呼叫端記錄），所以不影響生成路徑「故障開始才記 WARNING」的節奏。
     回傳的是複本。
 
+    Returns:
+        capability → route key → choice
+        能力 → 用途鍵 → 選擇
+
     Raises:
-        DBAPIError / sqlalchemy.exc.TimeoutError / OSError: 讀不到 DB 時（見
-            :data:`DATABASE_ERRORS`）。
+        DBAPIError: if the DB cannot be read (see :data:`DATABASE_ERRORS`)
+            讀不到 DB 時（見 ``DATABASE_ERRORS``）
+        OSError: likewise, on a network error
+            同上，網路錯誤時
+        sqlalchemy.exc.TimeoutError: likewise, on a connection-pool timeout
+            同上，連線池逾時
     """
     if _choices_cache is not None:
         return copy_snapshot(_choices_cache)
@@ -539,25 +773,50 @@ async def stored_choices_strict() -> Snapshot:
 
 
 def is_internal_import(error: ImportError) -> bool:
-    """import 失敗的是專案自己的模組（``app.*``）：那是程式錯誤（註冊表模組名、import 名稱打錯、
-    provider 改名），不是部署少裝套件或版本不符。
+    """Return whether the failed import is one of the project's own modules (``app.*``).
 
+    回傳 import 失敗的是否為專案自己的模組（``app.*``）。
+
+    That is a programming error (a mistyped registry module name or import name, a renamed provider), not a missing
+    package or version mismatch in the deployment. ``name`` is filled in by the import machinery (the missing
+    module, or ``X`` when ``from X import Y`` fails); ``None`` means the exception was raised by hand, usually a
+    third-party package saying "a dependency is missing", which is treated as a deployment problem.
+
+    那是程式錯誤（註冊表模組名、import 名稱打錯、provider 改名），不是部署少裝套件或版本不符。
     ``name`` 由 import 機制填入（缺的模組，或 ``from X import Y`` 失敗時的 ``X``）；為 None 表示
     例外是手動拋出的——通常是第三方套件自己說「缺某個依賴」，視為部署問題。
 
-    Whether the failed import belongs to this project, i.e. a bug rather
-    than a missing or incompatible dependency. ``name`` is None only for a
-    hand-raised error, usually from a third-party package.
+    Args:
+        error: the import failure
+            import 失敗的例外
+
+    Returns:
+        ``True`` if the failing module is under ``app``
+        失敗的模組屬於 ``app`` 時為 ``True``
     """
     return (error.name or "").split(".")[0] == "app"
 
 
 def describe_import_error(endpoint_id: str, error: ImportError) -> str:
-    """第三方套件 import 失敗的說明：沒裝（``ModuleNotFoundError``），或版本不符、無法載入
-    （其他 ``ImportError``，例如 ``cannot import name 'X' from 'google.genai'``）。
+    """Describe a third-party import failure: not installed, or an incompatible / unloadable version.
 
-    Describe a third-party import failure: not installed, or an
-    incompatible / unloadable version.
+    第三方套件 import 失敗的說明：沒裝（``ModuleNotFoundError``），或版本不符、無法載入。
+
+    "Not installed" is a ``ModuleNotFoundError``; any other ``ImportError`` (for example
+    ``cannot import name 'X' from 'google.genai'``) counts as an incompatible or unloadable version.
+
+    沒裝為 ``ModuleNotFoundError``；其他 ``ImportError``（例如 ``cannot import name 'X' from 'google.genai'``）
+    視為版本不符或無法載入。
+
+    Args:
+        endpoint_id: the endpoint ID, for the message
+            端點 ID（訊息用）
+        error: the import failure
+            import 失敗的例外
+
+    Returns:
+        the description
+        說明文字
     """
     if isinstance(error, ModuleNotFoundError):
         return f"端點 '{endpoint_id}' 需要的套件未安裝（{error.name or error}）"
@@ -572,30 +831,44 @@ def describe_import_error(endpoint_id: str, error: ImportError) -> str:
 def check_choice(
     choice: RouteChoice, capability: str = CAPABILITY_LLM, *, route_key: str = GLOBAL_ROUTE_KEY
 ) -> str | None:
-    """檢查一組選擇是否在白名單內（``audio_eval`` 另檢查用途鍵允許的策略）。
+    """Check whether a choice is within the allowlist (for ``audio_eval``, also the route key's allowed strategies).
 
-    Check a choice against the whitelist; for ``audio_eval`` also against
-    the strategies the route key allows.
+    檢查一組選擇是否在白名單內（``audio_eval`` 另檢查用途鍵允許的策略）。
+
+    Args:
+        choice: the choice
+            選擇
+        capability: the capability
+            能力
+        route_key: the route key whose strategy narrowing applies
+            套用其策略限縮的用途鍵
 
     Returns:
-        不合格的原因；合格時為 None。Why it is invalid, or None.
+        the reason it is invalid; ``None`` when valid
+        不合格的原因；合格時為 None
     """
     return check_capability_choice(capability, choice, strategies=allowed_strategies(route_key))
 
 
 async def resolve(route_key: str, capability: str = CAPABILITY_LLM) -> ResolvedRoute:
-    """依「分支 → 流程 → 全域 → .env」解析用途鍵某個能力實際生效的設定。
+    """Resolve the setting in effect for one capability of a route key: branch → flow → global → .env.
 
-    Resolve the effective setting of one capability: branch row, flow row,
-    the global row, then ``.env``. Rows outside the whitelist are skipped
-    with a warning.
+    依「分支 → 流程 → 全域 → .env」解析用途鍵某個能力實際生效的設定。
+
+    Rows outside the allowlist are skipped with a warning. A default declared by the route key ranks before the
+    global layer.
+
+    不在白名單的列會被跳過並記警告。用途鍵宣告的預設排在全域層之前。
 
     Args:
-        route_key: 用途鍵（``*`` 查全域）。Route key, or ``*``.
-        capability: 能力。The capability.
+        route_key: the route key (``*`` queries the global layer)
+            用途鍵（``*`` 查全域）
+        capability: the capability
+            能力
 
     Returns:
-        生效的設定與來源。The effective setting and its source.
+        the effective setting and its source
+        生效的設定與來源
     """
     choices, read_ok = await _load_choices()
     return resolve_with(route_key, choices, read_ok, capability)
@@ -604,22 +877,28 @@ async def resolve(route_key: str, capability: str = CAPABILITY_LLM) -> ResolvedR
 def resolve_with(
     route_key: str, choices: Snapshot, read_ok: bool, capability: str = CAPABILITY_LLM
 ) -> ResolvedRoute:
-    """以一份已讀出的設定快照解析（不碰 DB）。Resolve against a given snapshot.
+    """Resolve against an already-read settings snapshot (without touching the DB).
+
+    以一份已讀出的設定快照解析（不碰 DB）。
+
+    When the admin UI lists every use at once it uses the same snapshot: the DB is read only once, and no row comes
+    from a different read than the others.
 
     管理介面一次列出所有用途時用同一份快照，DB 只讀一次，各列也不會來自不同次讀取。
 
-    Lets a listing resolve every key from one snapshot: one DB read, and no
-    row built from a different read than its neighbours.
-
     Args:
-        route_key: 用途鍵（``*`` 查全域）。Route key, or ``*``.
-        choices: 能力 → 用途鍵 → 選擇。The stored choices.
-        read_ok: 該快照是否讀取成功（失敗時結果標上 ``db_unavailable``）。
-            Whether the snapshot was read successfully.
-        capability: 能力。The capability.
+        route_key: the route key (``*`` queries the global layer)
+            用途鍵（``*`` 查全域）
+        choices: capability → route key → choice
+            能力 → 用途鍵 → 選擇
+        read_ok: whether the snapshot was read successfully (on failure the result is marked ``db_unavailable``)
+            該快照是否讀取成功（失敗時結果標上 ``db_unavailable``）
+        capability: the capability
+            能力
 
     Returns:
-        生效的設定與來源。The effective setting and its source.
+        the effective setting and its source
+        生效的設定與來源
     """
     rows = choices.get(capability, {})
     rejected: list[RejectedLayer] = []
@@ -650,34 +929,67 @@ def resolve_with(
 
 
 async def client_for(route_key: str) -> BaseLLMClient:
-    """依用途鍵建立 LLM 客戶端。Build the LLM client for a route key.
+    """Build the LLM client for a route key.
+
+    依用途鍵建立 LLM 客戶端。
+
+    The ``env`` layer builds it with ``create_llm_client()`` without arguments, exactly as before routing was
+    introduced (when the route key declares its own ``.env`` default, that default's endpoint and model are used
+    instead); a DB layer names the endpoint, model, and effort (passing ``OMIT_EFFORT`` when the model takes no
+    effort). When building from a DB layer (or a route key's declared ``.env`` default) fails, it does not fall
+    back to the next layer (that would hide the configuration error): it logs an ERROR, attaches the routing
+    context to the exception with ``add_note``, and raises it with type and message unchanged.
+
+    When the third-party package an endpoint needs is missing or has the wrong version (``ImportError``), or the CLI
+    working directory cannot be created (``OSError``), the error is converted to ``LLMServiceError`` on any layer,
+    with a message giving the use, the layer, and the reason, so the generation side can tell which setting it is
+    and how to fix it, and it takes the same handling as other LLM errors. If the failing import is one of the
+    project's own modules (a programming error), it propagates as usual.
 
     ``env`` 層以不帶參數的 ``create_llm_client()`` 建立，與導入路由前完全相同（用途鍵另給了
     ``.env`` 預設時改用它的端點與模型）；DB 層指定端點、模型與 effort（模型不使用 effort 時
-    傳 ``OMIT_EFFORT``）。DB 層建立失敗時不退回下一層（那會把設定錯誤藏起來）：記 ERROR，
-    並以 ``add_note`` 把路由脈絡附在例外上，型別與訊息不變地拋出。
+    傳 ``OMIT_EFFORT``）。DB 層（或用途鍵宣告的 ``.env`` 預設）建立失敗時不退回下一層
+    （那會把設定錯誤藏起來）：記 ERROR，並以 ``add_note`` 把路由脈絡附在例外上，型別與訊息不變地拋出。
 
     端點需要的第三方套件沒裝或版本不符（``ImportError``）、CLI 工作目錄建不起來（``OSError``）
     時，不論哪一層都轉成 ``LLMServiceError``，訊息帶用途、層與原因——生成端才看得出是哪個
     設定、能怎麼修，也走與其他 LLM 錯誤相同的處理。import 失敗的若是專案自己的模組（程式
     錯誤）照常拋出。
 
+    Args:
+        route_key: the route key
+            用途鍵
+
+    Returns:
+        the LLM client
+        LLM 客戶端
+
     Raises:
-        LLMServiceError: 客戶端初始化失敗、端點需要的第三方套件無法載入，或 CLI 工作目錄
-            建不起來。When client construction fails, a third-party package cannot
-            be imported, or the CLI working directory cannot be created.
+        LLMServiceError: if client initialization fails, a third-party package the endpoint needs cannot be loaded,
+            or the CLI working directory cannot be created
+            若客戶端初始化失敗、端點需要的第三方套件無法載入，或 CLI 工作目錄建不起來
     """
     return client_from(await resolve(route_key))
 
 
 def client_from(resolved: ResolvedRoute) -> BaseLLMClient:
-    """依 ``llm`` 能力的解析結果建立客戶端（錯誤處理見 :func:`client_for`）。
+    """Build the client from a resolution result of the ``llm`` capability (error handling: see :func:`client_for`).
 
-    Build the LLM client for an already-resolved ``llm`` route.
+    依 ``llm`` 能力的解析結果建立客戶端（錯誤處理見 ``client_for``）。
+
+    Args:
+        resolved: the resolution result of the ``llm`` capability
+            ``llm`` 能力的解析結果
+
+    Returns:
+        the LLM client
+        LLM 客戶端
 
     Raises:
-        ValueError: 解析結果不是 ``llm`` 能力（程式錯誤）。
-        LLMServiceError: 同 :func:`client_for`。
+        LLMServiceError: same as :func:`client_for`
+            同 ``client_for``
+        ValueError: if the resolution result is not for the ``llm`` capability (a programming error)
+            解析結果不是 ``llm`` 能力（程式錯誤）
     """
     if resolved.capability != CAPABILITY_LLM:
         raise ValueError(f"解析結果是 {resolved.capability}，不是 llm，不能建立 LLM 客戶端。")

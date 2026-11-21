@@ -1,15 +1,29 @@
-"""
+"""Card relation business-logic service module.
+
 卡片關聯業務邏輯服務模組。
+
+It works against the generic relation tables ``rel_links`` / ``rel_types`` of the corpus (MySQL
+``fluencytides_corpus``), providing creation, batch creation, cascade deletion (orphan cleanup) of card relations,
+and efficient knowledge-graph data queries.
 
 負責與語料庫（MySQL ``fluencytides_corpus``）的通用關係表 ``rel_links`` / ``rel_types``
 互動，提供卡片關聯的建立、批次建立、連動刪除（清理孤兒節點）以及高效的知識圖譜資料查詢。
 
-Card relation business-logic service module.
+**2026-11-01 revision** (C of D9 in docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md): it used to read and write
+``card_relations`` / ``relation_types`` in the website SQLite, and now reads and writes ``rel_links`` /
+``rel_types`` in the corpus; the two SQLite tables stay as they are, but the code no longer reads or writes them.
+The public interface and API responses are unchanged, so the frontend needs no change:
 
-Works against the generic relation tables ``rel_links`` / ``rel_types`` of
-the corpus database (MySQL ``fluencytides_corpus``), providing creation,
-batch creation, cascade deletion (orphan cleanup), and efficient
-knowledge-graph data queries.
+- Relation types keep their old public names and get a namespace when stored: ``has_context`` ↔
+  ``core.has_context``, ``has_cloze`` ↔ ``core.has_cloze``, and everything else (``synonym``, ``conversation``,
+  user-defined) ↔ ``user.<name>`` (``owner='user'``). Users cannot choose the namespace: ``core.*`` can only be
+  used through the two public names above, and auto-registration only creates ``user.*``.
+- Note endpoints are written as ``src_type/dst_type='note'`` with the ID stored as a string; dangling nodes still
+  rely on labels.
+- Deletion always marks ``status`` as ``deleted`` instead of deleting the row (``rel_links`` is a record table).
+- The knowledge graph only looks at "note → note" relations; the "note → line / term" relations written by the
+  card-creation pipeline do not appear on the graph, but when a card is deleted or sync cleanup runs, any of them
+  with that note as an endpoint is marked ``deleted`` as well.
 
 **2026-11-01 改版**（docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9 的 C）：原本讀寫網站 SQLite 的
 ``card_relations`` / ``relation_types``，改成讀寫語料庫的 ``rel_links`` / ``rel_types``；SQLite 的兩張表
@@ -23,11 +37,6 @@ knowledge-graph data queries.
 - 刪除一律把 ``status`` 標成 ``deleted``，不刪列（``rel_links`` 是紀錄表）。
 - 知識圖譜只看「筆記 → 筆記」的關係；建卡管線寫的「筆記 → 台詞／詞」不出現在圖上，但刪卡與同步清理
   時，只要端點是那張筆記，一樣會被標成 ``deleted``。
-
-The SQLite tables stay in place but are no longer used. Public names and
-API responses are unchanged: relation types are stored namespaced
-(``core.*`` / ``user.*``) and exposed under their old names; deletions mark
-rows ``deleted``; the graph only shows note → note relations.
 """
 
 import json
@@ -101,26 +110,30 @@ _types = rel_types_table
 
 
 def storage_relation_type(name: str) -> str:
-    """把對外的關係名稱轉成 ``rel_types.relation_type``。
+    """Map a public relation name to ``rel_types.relation_type``.
 
-    Map a public relation name to ``rel_types.relation_type``.
+    把對外的關係名稱轉成 ``rel_types.relation_type``。
+
+    ``has_context`` / ``has_cloze`` are system relations (``core.*``); everything else is a user relation and
+    always gets ``user.``. Users cannot choose the namespace themselves: names that are blank, start with
+    ``core.``, contain characters outside the allowed set (for example ``.`` or whitespace), or are too long are
+    rejected, so the website can never create system relations such as ``core.example_from``.
 
     ``has_context`` / ``has_cloze`` 是系統關係（``core.*``）；其餘都是使用者的關係，一律加上
-    ``user.``。使用者不能自己指定命名空間：空白、以 ``core.`` 開頭、或含允許字元以外（例如 ``.``、
-    空白）的名稱都拒絕，避免網站建出 ``core.example_from`` 這類系統關係。
-    The two child-card relations are system types; every other name becomes
-    ``user.<name>``. Blank names, names starting with ``core.`` and names
-    with characters outside the allowed set are rejected, so users can never
-    create or address system relation types.
+    ``user.``。使用者不能自己指定命名空間：空白、以 ``core.`` 開頭、含允許字元以外（例如 ``.``、
+    空白）或過長的名稱都拒絕，避免網站建出 ``core.example_from`` 這類系統關係。
 
     Args:
-        name: 對外的名稱（會轉小寫、去空白）。Public name (lower-cased, stripped).
+        name: the public name (lower-cased and stripped)
+            對外的名稱（會轉小寫、去空白）
 
     Returns:
-        str: 資料庫的關係類型。The stored relation type.
+        the stored relation type
+        資料庫的關係類型
 
     Raises:
-        InvalidRelationTypeError: 名稱不合法（API 回 400）。The name is invalid (HTTP 400).
+        InvalidRelationTypeError: if the name is invalid (the API returns 400)
+            若名稱不合法（API 回 400）
     """
     normalized = name.strip().lower()
     if normalized in _SYSTEM_TYPES:
@@ -137,15 +150,17 @@ def storage_relation_type(name: str) -> str:
 
 
 def display_relation_type(relation_type: str) -> str:
-    """把 ``rel_types.relation_type`` 轉回對外的名稱（去掉 ``core.`` / ``user.``）。
+    """Map a stored ``rel_types.relation_type`` back to its public name (removing ``core.`` / ``user.``).
 
-    Map a stored relation type back to its public name.
+    把 ``rel_types.relation_type`` 轉回對外的名稱（去掉 ``core.`` / ``user.``）。
 
     Args:
-        relation_type: 資料庫的關係類型。The stored relation type.
+        relation_type: the stored relation type
+            資料庫的關係類型
 
     Returns:
-        str: 對外名稱；其他命名空間（卡片類型自己的關係）原樣回傳。The public name.
+        the public name; other namespaces (card types' own relations) are returned unchanged
+        對外名稱；其他命名空間（卡片類型自己的關係）原樣回傳
     """
     for prefix in _DISPLAY_PREFIXES:
         if relation_type.startswith(prefix):
@@ -154,12 +169,18 @@ def display_relation_type(relation_type: str) -> str:
 
 
 def _note_ref(note_id: int | None) -> str | None:
-    """筆記 ID 轉成 ``rel_links`` 的字串 ID。Note id → string endpoint id."""
+    """Convert a note ID to the string endpoint ID of ``rel_links``.
+
+    筆記 ID 轉成 ``rel_links`` 的字串 ID。
+    """
     return str(int(note_id)) if note_id is not None else None
 
 
 def _note_id(value: str | None) -> int | None:
-    """``rel_links`` 的字串 ID 轉回筆記 ID；不是整數時為 None。String endpoint id → note id."""
+    """Convert a string endpoint ID of ``rel_links`` back to a note ID; ``None`` if it is not an integer.
+
+    ``rel_links`` 的字串 ID 轉回筆記 ID；不是整數時為 ``None``。
+    """
     if value is None:
         return None
     try:
@@ -170,19 +191,25 @@ def _note_id(value: str | None) -> int | None:
 
 @dataclass(frozen=True)
 class RelationRecord:
-    """一條「筆記 → 筆記」的關係（欄位名稱沿用舊的 ``CardRelation``，供圖譜與 API 使用）。
+    """One "note → note" relation, keeping the attribute names of the old ``CardRelation`` for graph and API code.
 
-    One note → note relation, with the attribute names of the old
-    ``CardRelation`` model so graph code and ``CardRelationRead`` keep working.
+    一條「筆記 → 筆記」的關係（欄位名稱沿用舊的 ``CardRelation``，供圖譜與 API 使用）。
 
     Attributes:
-        id: ``rel_links.relation_id``。Relation id.
-        source_note_id: 起點筆記 ID；懸空時為 None。Source note id.
-        target_note_id: 終點筆記 ID；懸空時為 None。Target note id.
-        relation_type: 對外的關係名稱（``has_context``、``synonym``…）。Public relation name.
-        source_label: 起點標籤。Source label.
-        target_label: 終點標籤。Target label.
-        created_at: 建立時間。Creation time.
+        id: ``rel_links.relation_id``
+            ``rel_links.relation_id``
+        source_note_id: the source note ID; ``None`` when dangling
+            起點筆記 ID；懸空時為 ``None``
+        target_note_id: the target note ID; ``None`` when dangling
+            終點筆記 ID；懸空時為 ``None``
+        relation_type: the public relation name (``has_context``, ``synonym``, ...)
+            對外的關係名稱（``has_context``、``synonym``…）
+        source_label: the source label
+            起點標籤
+        target_label: the target label
+            終點標籤
+        created_at: the creation time
+            建立時間
     """
 
     id: int
@@ -206,7 +233,10 @@ _RECORD_COLUMNS = (
 
 
 def _record(row: Any) -> RelationRecord:
-    """查詢列轉成 :class:`RelationRecord`。Map a result row to a RelationRecord."""
+    """Map a result row to a :class:`RelationRecord`.
+
+    查詢列轉成 ``RelationRecord``。
+    """
     return RelationRecord(
         id=int(row[0]),
         source_note_id=_note_id(row[1]),
@@ -219,17 +249,26 @@ def _record(row: Any) -> RelationRecord:
 
 
 def _active() -> ColumnElement[bool]:
-    """有效的關係。Active relations."""
+    """Return the condition for active relations.
+
+    回傳有效關係的條件。
+    """
     return _links.c.status == REL_STATUS_ACTIVE
 
 
 def _note_to_note() -> ColumnElement[bool]:
-    """兩端都是筆記的關係（知識圖譜的範圍）。Relations between two notes."""
+    """Return the condition for relations whose two endpoints are notes (the scope of the knowledge graph).
+
+    回傳兩端都是筆記的關係條件（知識圖譜的範圍）。
+    """
     return and_(_links.c.src_type == ENTITY_NOTE, _links.c.dst_type == ENTITY_NOTE)
 
 
 def _touches_notes(note_ids: list[str]) -> ColumnElement[bool]:
-    """任一端是這些筆記的關係。Relations with either endpoint among these notes."""
+    """Return the condition for relations with either endpoint among these notes.
+
+    回傳任一端是這些筆記的關係條件。
+    """
     return or_(
         and_(_links.c.src_type == ENTITY_NOTE, _links.c.src_id.in_(note_ids)),
         and_(_links.c.dst_type == ENTITY_NOTE, _links.c.dst_id.in_(note_ids)),
@@ -237,23 +276,34 @@ def _touches_notes(note_ids: list[str]) -> ColumnElement[bool]:
 
 
 def _row_count(result: Any) -> int | None:
-    """驅動回報的筆數；未回報時為 None。The reported row count, or None."""
+    """Return the row count reported by the driver, or ``None`` if it reported none.
+
+    回傳驅動回報的筆數；未回報時為 ``None``。
+    """
     count = cast(CursorResult[Any], result).rowcount
     return None if count is None or count < 0 else count
 
 
 @dataclass(frozen=True)
 class RelationSyncResult:
-    """同步清理的結果。The result of syncing relations with Anki.
+    """The result of the sync cleanup with Anki.
+
+    同步清理的結果。
 
     Attributes:
-        scanned_notes: Anki 回傳的筆記數。Notes Anki returned.
-        orphan_notes: 關聯引用、但 Anki 已沒有的筆記數。Referenced notes missing in Anki.
-        deleted: 標成刪除的關聯數；資料庫驅動未回報筆數時為預估值。Relations deleted (the estimate
-            when the driver reports no row count).
-        considered: 考慮範圍內（掃描開始前 2 秒以上建立）的關聯數。Relations considered.
-        ankiweb_synced: 取筆記前與 AnkiWeb 的同步是否成功；失敗時以本機收藏為準。必填，不給預設值：
-            忘了傳時不能靜默地報成「同步成功」。Whether the AnkiWeb sync before scanning succeeded.
+        scanned_notes: the number of notes Anki returned
+            Anki 回傳的筆記數
+        orphan_notes: the number of notes referenced by relations but no longer in Anki
+            關聯引用、但 Anki 已沒有的筆記數
+        deleted: the number of relations marked deleted; an estimate when the database driver reports no row count
+            標成刪除的關聯數；資料庫驅動未回報筆數時為預估值
+        considered: the number of relations in scope (created at least 2 seconds before the scan started)
+            考慮範圍內（掃描開始前 2 秒以上建立）的關聯數
+        ankiweb_synced: whether the sync with AnkiWeb before fetching notes succeeded; on failure the local
+            collection is used. It is required with no default, so forgetting to pass it cannot silently report
+            "sync succeeded".
+            取筆記前與 AnkiWeb 的同步是否成功；失敗時以本機收藏為準。必填，不給預設值：
+            忘了傳時不能靜默地報成「同步成功」
     """
 
     scanned_notes: int
@@ -264,36 +314,39 @@ class RelationSyncResult:
 
 
 class RelationService:
-    """卡片關聯管理服務。
+    """The card relation management service.
 
-    Card relation management service.
+    卡片關聯管理服務。
+
+    It provides methods operating on the corpus ``rel_links`` / ``rel_types`` and abstracts the conversion to the
+    graph_data structure the frontend react-force-graph needs.
 
     提供操作語料庫 ``rel_links`` / ``rel_types`` 的方法，
     並抽象出前端 react-force-graph 所需的 graph_data 結構轉換。
 
-    Provides methods operating on the corpus ``rel_links`` / ``rel_types``
-    tables and abstracts the graph_data structure needed by the
-    react-force-graph frontend.
-
     Attributes:
-        _db_session: 注入的語料庫非同步 Session。Injected async corpus session.
+        _db_session: the injected async corpus session
+            注入的語料庫非同步 Session
     """
 
     def __init__(self, db_session: AsyncSession) -> None:
-        """初始化 RelationService。
+        """Initialize the RelationService.
 
-        Initialize the RelationService.
+        初始化 RelationService。
 
         Args:
-            db_session: 語料庫的 AsyncSession（``get_corpus_async_session``）。The
-                corpus AsyncSession.
+            db_session: the corpus AsyncSession (``get_corpus_async_session``)
+                語料庫的 AsyncSession（``get_corpus_async_session``）
         """
         self._db_session = db_session
 
     async def _insert(
         self, request: CardRelationCreate, relation_type: str, *, created_by: str, attrs: dict | None,
     ) -> int:
-        """新增一條「筆記 → 筆記」的關係（不 commit），回傳 relation_id。Insert one relation."""
+        """Insert one "note → note" relation without committing, and return its relation_id.
+
+        新增一條「筆記 → 筆記」的關係（不 commit），回傳 relation_id。
+        """
         result = await self._db_session.execute(
             insert(_links).values(
                 relation_type=relation_type,
@@ -311,7 +364,10 @@ class RelationService:
         return int(result.inserted_primary_key[0])
 
     async def _records_by_ids(self, relation_ids: list[int]) -> list[RelationRecord]:
-        """依 relation_id 讀回關係（保持輸入順序）。Read relations back by id, in input order."""
+        """Read relations back by relation_id, keeping the input order.
+
+        依 relation_id 讀回關係（保持輸入順序）。
+        """
         if not relation_ids:
             return []
         rows = (
@@ -329,17 +385,27 @@ class RelationService:
         created_by: str = USER_CREATED_BY,
         attrs: dict | None = None,
     ) -> CardRelationRead:
-        """建立單筆卡片關聯。
+        """Create a single card relation and commit it.
 
-        Create a single card relation.
+        建立單筆卡片關聯並提交。
 
         Args:
-            request: CardRelationCreate DTO。CardRelationCreate DTO.
-            created_by: ``rel_links.created_by``；卡片 handler 傳自己的卡片類型。Who created it.
-            attrs: ``rel_links.attrs``（例 ``{"card_type": "jp_core_verb"}``）。Extra attributes.
+            request: the CardRelationCreate DTO
+                CardRelationCreate DTO
+            created_by: ``rel_links.created_by``; card handlers pass their own card type
+                ``rel_links.created_by``；卡片 handler 傳自己的卡片類型
+            attrs: ``rel_links.attrs`` (for example ``{"card_type": "jp_core_verb"}``)
+                ``rel_links.attrs``（例 ``{"card_type": "jp_core_verb"}``）
 
         Returns:
-            已建立的 CardRelationRead 實例。The created CardRelationRead.
+            the created CardRelationRead
+            已建立的 CardRelationRead 實例
+
+        Raises:
+            FluencyTidesError: if a system relation type is missing from ``rel_types``
+                若系統關係類型不在 ``rel_types``
+            InvalidRelationTypeError: if the relation type name is invalid
+                若關係類型名稱不合法
         """
         relation_type = await self.get_or_create_relation_type(request.relation_type)
         relation_id = await self._insert(request, relation_type, created_by=created_by, attrs=attrs)
@@ -360,24 +426,34 @@ class RelationService:
         created_by: str = USER_CREATED_BY,
         attrs: dict | None = None,
     ) -> list[CardRelationRead]:
-        """批次建立多筆卡片關聯（同一個 transaction，最後才提交）。
+        """Batch-create multiple card relations in one transaction, committed at the end.
 
-        Batch-create multiple card relations in one transaction.
+        批次建立多筆卡片關聯（同一個 transaction，最後才提交）。
+
+        All or nothing: any failure rolls back and re-raises, so it never leaves half of the relations. An empty list
+        returns immediately. New user relation types are registered (and committed) before the relations are
+        written, so they remain even if the batch is rolled back.
 
         全部寫入或全部不寫：任何一筆失敗就回滾並往上拋，不會只留下一半的關聯。
-        若列表為空則直接返回。
-        All or nothing: any failure rolls back and re-raises, so callers never
-        end up with half of the relations. Returns early on empty input.
+        若列表為空則直接返回。新的使用者關係類型在寫入關聯前就註冊（並提交），批次回滾時仍會留著。
 
         Args:
-            requests: CardRelationCreate DTO 列表。List of DTOs.
-            created_by: ``rel_links.created_by``。Who created them.
-            attrs: 每筆的 ``rel_links.attrs``（例 ``{"card_type": "jp_core_verb"}``）。Extra
-                attributes stored on every relation.
+            requests: the list of CardRelationCreate DTOs
+                CardRelationCreate DTO 串列
+            created_by: ``rel_links.created_by``
+                ``rel_links.created_by``
+            attrs: the ``rel_links.attrs`` of every relation (for example ``{"card_type": "jp_core_verb"}``)
+                每筆的 ``rel_links.attrs``（例 ``{"card_type": "jp_core_verb"}``）
 
         Returns:
-            已建立的 CardRelationRead 實例列表。Created CardRelationRead
-            instances.
+            the created CardRelationRead instances
+            已建立的 CardRelationRead 實例串列
+
+        Raises:
+            FluencyTidesError: if a system relation type is missing from ``rel_types``
+                若系統關係類型不在 ``rel_types``
+            InvalidRelationTypeError: if a relation type name is invalid
+                若關係類型名稱不合法
         """
         if not requests:
             return []
@@ -400,20 +476,24 @@ class RelationService:
         return [CardRelationRead.model_validate(record) for record in await self._records_by_ids(relation_ids)]
 
     async def delete_relations_by_note_id(self, note_id: int) -> int:
-        """根據 Note ID 清理所有相關的關聯（標成 deleted）。
+        """Clean up every relation of the given note ID (marking them deleted).
 
-        Retire every relation referring to the given note ID.
+        根據 Note ID 清理所有相關的關聯（標成 deleted）。
+
+        Bidirectional: any relation whose source or target is this note is marked deleted (including the
+        "note → line / term" relations written by the card-creation pipeline). It is used when a card is deleted, to
+        avoid dead links (orphan nodes).
 
         雙向：只要起點或終點是這張筆記就會被標成刪除（包含建卡管線寫的「筆記 → 台詞／詞」）。
         用於卡片被刪除時避免產生死連結（孤兒節點）。
-        Bidirectional: any relation with this note as an endpoint is retired.
 
         Args:
-            note_id: 目標 Anki Note ID。Target Anki note ID.
+            note_id: the target Anki note ID
+                目標 Anki Note ID
 
         Returns:
-            被標成刪除的關聯數量（驅動未回報時為預估值）。Number of retired relations
-            (an estimate when the driver reports no row count).
+            the number of relations marked deleted (an estimate when the driver reports no row count)
+            被標成刪除的關聯數量（驅動未回報時為預估值）
         """
         deleted_count = await self._retire_note_relations(note_id)
         logger.info(
@@ -422,25 +502,31 @@ class RelationService:
         return deleted_count
 
     async def _retire_note_relations(self, note_id: int) -> int:
-        """把這張筆記的有效關係標成 deleted 並提交。Retire a note's active relations and commit."""
+        """Mark this note's active relations deleted and commit.
+
+        把這張筆記的有效關係標成 deleted 並提交。
+        """
         return await self._retire_where(and_(_active(), _touches_notes([str(int(note_id))])))
 
     async def _retire_where(self, condition: ColumnElement[bool]) -> int:
-        """把符合條件的關係標成 deleted 並提交，回傳筆數。
+        """Mark the matching relations deleted, commit, and return the count.
 
-        Mark the matching relations deleted, commit, and return the count.
+        把符合條件的關係標成 deleted 並提交，回傳筆數。
+
+        The count is first computed in the same transaction; when the driver reports no rowcount, this estimate is
+        used instead and a WARNING is logged, so "unknown" is never reported as 0 (the same approach as
+        :meth:`sync_with_anki`).
 
         先在同一個 transaction 算出筆數；驅動未回報 rowcount 時改用這個預估值並記 WARNING，
-        不把「不知道」報成 0（與 :meth:`sync_with_anki` 同一個做法）。
-        The count is computed first in the same transaction and used, with a
-        WARNING, when the driver reports no row count, so "unknown" is never
-        reported as 0 (same approach as :meth:`sync_with_anki`).
+        不把「不知道」報成 0（與 ``sync_with_anki`` 同一個做法）。
 
         Args:
-            condition: 要標成刪除的關係條件。Which relations to retire.
+            condition: the condition of the relations to mark deleted
+                要標成刪除的關係條件
 
         Returns:
-            int: 標成刪除的筆數。Relations retired.
+            the number of rows marked deleted
+            標成刪除的筆數
         """
         expected = (
             await self._db_session.execute(select(func.count()).select_from(_links).where(condition))
@@ -454,14 +540,36 @@ class RelationService:
         return count
 
     async def sync_with_anki(self, anki_client: "AnkiClient", *, force: bool = False) -> "RelationSyncResult":
-        """依 Anki 現存的筆記清理資料庫中的孤兒關聯（設計書 ``relation_sync_and_search_escape_FIX_2026-10-19.md`` §3）。
+        """Clean up orphan relations in the database against the notes that exist in Anki.
 
-        Retire relations whose notes no longer exist in Anki, refusing when
+        依 Anki 現存的筆記清理資料庫中的孤兒關聯。
+
+        See design doc ``relation_sync_and_search_escape_FIX_2026-10-19.md`` §3. The scope is active relations with
+        at least one note endpoint; orphan relations are marked ``deleted`` (rows are not deleted). It refuses when
         Anki's answer looks incomplete.
 
-        範圍是「至少一端是筆記」的有效關係；孤兒關係標成 ``deleted``（不刪列）。
-        Scope: active relations with at least one note endpoint; orphans are
-        marked ``deleted``.
+        Steps (count first, then delete):
+
+        0. Sync with AnkiWeb once first (a failure does not abort; the local collection is used, the result is
+           recorded in ``ankiweb_synced``, and a WARNING is logged so a deletion can later be tied to the failed
+           sync).
+        1. Record the scan start time with **the database's clock**, then fetch every note ID from Anki. Only
+           relations created at least 2 seconds before this time are considered: for a child card generated during
+           the scan, the note is not in the scan result, so its relations must not be treated as orphans.
+           ``created_at`` is filled in by the database (to the second), so the database's clock is used as well,
+           with a 2-second margin.
+        2. If Anki returns 0 notes: refuse (delete nothing).
+        3. Read the note IDs referenced by relations in scope, subtract Anki's list to get the orphan IDs, and count
+           how many rows would be deleted.
+        4. If the relations to delete exceed half of those in scope and exceed :data:`SYNC_GUARD_MIN_ROWS` rows,
+           refuse unless ``force``: the list may be incomplete (for example the collection is only partly loaded).
+        5. Mark them deleted in batches, using only the orphan IDs as parameters (the parameter count does not grow
+           with the number of Anki notes; production is MySQL, and batching bounds the size of each UPDATE and also
+           keeps the test SQLite under its parameter limit), with the condition still limited to the scope; all
+           batches run in one transaction, committed at the end.
+
+        範圍是「至少一端是筆記」的有效關係；孤兒關係標成 ``deleted``（不刪列）。設計書
+        ``relation_sync_and_search_escape_FIX_2026-10-19.md`` §3。
 
         步驟（先算再刪）：
 
@@ -479,17 +587,26 @@ class RelationService:
            全部批次在同一個 transaction，最後才提交。
 
         Args:
-            anki_client: Anki 客戶端（取全部筆記 ID）。The Anki client.
-            force: 放寬比例防護（空清單仍一律拒絕）。Relax the share guard.
+            anki_client: the Anki client (to fetch every note ID)
+                Anki 客戶端（取全部筆記 ID）
+            force: relax the share guard (an empty list is still always refused)
+                放寬比例防護（空清單仍一律拒絕）
 
         Returns:
-            清理結果。The sync result.
+            the cleanup result
+            清理結果
 
         Raises:
-            RelationSyncEmptyAnkiError: Anki 回傳 0 張筆記（``force`` 也無效）。
-            RelationSyncNeedsForceError: 要刪的比例過高且未指定 ``force``。
-            AnkiConnectError: 連不上 Anki，或 Anki 回報錯誤（``AnkiActionError``）；不刪任何資料。
-            sqlalchemy.exc.SQLAlchemyError: 資料庫錯誤；所有更新在同一個 transaction，未提交即不生效。
+            AnkiConnectError: if Anki cannot be reached or reports an error (``AnkiActionError``) while fetching
+                notes; nothing is deleted
+                若取筆記時連不上 Anki，或 Anki 回報錯誤（``AnkiActionError``）；不刪任何資料
+            RelationSyncEmptyAnkiError: if Anki returns 0 notes (``force`` does not help)
+                若 Anki 回傳 0 張筆記（``force`` 也無效）
+            RelationSyncNeedsForceError: if the share to delete is too high and ``force`` is not given
+                若要刪的比例過高且未指定 ``force``
+            sqlalchemy.exc.SQLAlchemyError: on a database error; all updates are in one transaction and take no
+                effect unless committed
+                若資料庫錯誤；所有更新在同一個 transaction，未提交即不生效
         """
         ankiweb_synced = True
         try:
@@ -583,37 +700,44 @@ class RelationService:
         return replace(result, deleted=deleted)
 
     async def delete_relations_for_note(self, note_id: int) -> int:
-        """刪除指定筆記的所有關聯（無論是來源或目標；標成 deleted）。
+        """Delete all relations of the note, whether it is the source or the target (marking them deleted).
 
-        Retire all relations of the note (as source or target).
+        刪除指定筆記的所有關聯（無論是來源或目標；標成 deleted）。
 
         Args:
-            note_id: 筆記 ID。Note ID.
+            note_id: the note ID
+                筆記 ID
 
         Returns:
-            標成刪除的紀錄數量。Number of retired rows.
+            the number of rows marked deleted (an estimate when the driver reports no row count)
+            標成刪除的紀錄數量（驅動未回報時為預估值）
         """
         deleted_count = await self._retire_note_relations(note_id)
         logger.info("已刪除卡片 %d 的所有關聯，共 %d 筆", note_id, deleted_count)
         return deleted_count
 
     async def update_labels_for_note(self, note_id: int, new_label: str) -> int | None:
-        """更新關聯表裡這張筆記兩端的標籤（handlers 計畫書 D12）。
+        """Update the labels on both ends of the relation table that point at this note (handlers plan D12).
 
-        Update the denormalized labels on both ends that point at this note.
+        更新關聯表裡這張筆記兩端的標籤（handlers 計畫書 D12）。
+
+        Relations identify graph nodes by text; if only the source side were updated, links where this note is the
+        target would keep the old text and the graph would split into two nodes. Relations of every status are
+        updated.
 
         關聯以文字辨認圖譜節點；只更新起點的話，這張筆記當終點的連線還是舊文字，圖譜會分裂成兩個節點。
-        Relations identify graph nodes by text; updating only the source side
-        would split the node in two.
+        所有狀態的關聯都會更新。
 
         Args:
-            note_id: 筆記 ID。The note ID.
-            new_label: 新的標籤文字。The new label.
+            note_id: the note ID
+                筆記 ID
+            new_label: the new label text
+                新的標籤文字
 
         Returns:
-            更新的紀錄數量（同一列兩端都是這張筆記時算兩次）；資料庫驅動未回報筆數時為 None。
-            Rows updated, a row counted once per matching end; None when the
-            driver reports no row count.
+            the number of rows updated (a row whose two ends are both this note counts twice), or ``None`` when the
+            database driver reports no row count
+            更新的紀錄數量（同一列兩端都是這張筆記時算兩次）；資料庫驅動未回報筆數時為 ``None``
         """
         note_ref = str(int(note_id))
         source = await self._db_session.execute(
@@ -636,16 +760,18 @@ class RelationService:
         return updated
 
     async def get_all_relation_types(self) -> list[str]:
-        """取得所有「筆記 → 筆記」的關聯類型（對外名稱）。
+        """Get every "note → note" relation type, by public name.
 
-        Get the public names of every note → note relation type.
+        取得所有「筆記 → 筆記」的關聯類型（對外名稱）。
+
+        The card-creation pipeline's "note → line / term" types are not listed (the web page's dropdown only creates
+        relations between notes).
 
         建卡管線的「筆記 → 台詞／詞」類型不列出（網頁的下拉選單只建立筆記之間的關聯）。
-        Pipeline relation types to lines or terms are not listed.
 
         Returns:
-            按名稱排序的關聯類型字串列表。Relation type names sorted by
-            name.
+            the relation type names, sorted by name
+            按名稱排序的關聯類型字串串列
         """
         rows = (
             await self._db_session.execute(select(_types.c.relation_type, _types.c.src_types, _types.c.dst_types))
@@ -658,27 +784,30 @@ class RelationService:
         return sorted(names)
 
     async def get_or_create_relation_type(self, name: str) -> str:
-        """確保關聯類型存在於 ``rel_types``，使用者的類型不存在時自動新增；回傳資料庫的類型名稱。
+        """Ensure the relation type exists in ``rel_types`` and return the stored type name.
 
-        Ensure the relation type exists in ``rel_types``, auto-registering
-        user types, and return the stored type.
+        確保關聯類型存在於 ``rel_types``，回傳資料庫的類型名稱。
 
-        只會自動註冊 ``user.*``（owner 是 ``user``，「筆記 → 筆記」）；系統關係 ``core.*`` 由語料庫遷移
-        登記，不存在代表資料庫沒建好，直接報錯，不在這裡補。
-        Only ``user.*`` types (owner ``user``, note → note) are registered
-        here; a missing ``core.*`` type means the corpus was not migrated and
-        raises instead of being created.
+        A missing user type is registered automatically (and committed). Only ``user.*`` is registered
+        automatically (owner ``user``, "note → note"); system relations ``core.*`` are registered by the corpus
+        migration, so a missing one means the database was not set up, and it raises instead of being created here.
+
+        使用者的類型不存在時自動新增（並提交）。只會自動註冊 ``user.*``（owner 是 ``user``，「筆記 → 筆記」）；
+        系統關係 ``core.*`` 由語料庫遷移登記，不存在代表資料庫沒建好，直接報錯，不在這裡補。
 
         Args:
-            name: 關聯類型名稱（將被正規化為小寫）。Relation type name
-                (normalized to lowercase).
+            name: the relation type name (normalized to lowercase)
+                關聯類型名稱（將被正規化為小寫）
 
         Returns:
-            str: ``rel_types.relation_type``。The stored type.
+            ``rel_types.relation_type``
+            ``rel_types.relation_type``
 
         Raises:
-            InvalidRelationTypeError: 名稱不合法（見 :func:`storage_relation_type`）。Invalid name.
-            FluencyTidesError: 系統關係類型不在 ``rel_types``。A system type is missing.
+            FluencyTidesError: if a system relation type is not in ``rel_types``
+                若系統關係類型不在 ``rel_types``
+            InvalidRelationTypeError: if the name is invalid (see :func:`storage_relation_type`)
+                若名稱不合法（見 ``storage_relation_type``）
         """
         relation_type = storage_relation_type(name)
 
@@ -712,21 +841,26 @@ class RelationService:
     async def delete_relation_by_nodes(
         self, request: "CardRelationDelete"
     ) -> dict[str, int]:
-        """精準刪除特定關聯（包含雙向；標成 deleted）。
+        """Precisely delete a specific relation, in both directions (marking it deleted).
 
-        Precisely delete a specific relation (both directions).
+        精準刪除特定關聯（包含雙向；標成 deleted）。
 
-        刪除兩個節點之間特定 relation_type 的所有連線 (A->B 與 B->A)。
-        Retires all links of the given relation_type between the two
-        nodes (A->B and B->A).
+        It deletes every active "note → note" link of the given relation_type between the two nodes, matched by
+        label (A->B and B->A).
+
+        刪除兩個節點之間特定 relation_type 的所有有效「筆記 → 筆記」連線，以標籤比對 (A->B 與 B->A)。
 
         Args:
-            request: 包含 source_label, target_label, relation_type 的
-                DTO。DTO with source_label, target_label, relation_type.
+            request: the DTO with source_label, target_label, and relation_type
+                包含 source_label, target_label, relation_type 的 DTO
 
         Returns:
-            刪除的紀錄數量 {"deleted_count": N}。Dict with the deleted row
-            count.
+            the deleted row count, ``{"deleted_count": N}``
+            刪除的紀錄數量 ``{"deleted_count": N}``
+
+        Raises:
+            InvalidRelationTypeError: if the relation type name is invalid
+                若關係類型名稱不合法
         """
         condition = and_(
             _active(),
@@ -753,21 +887,23 @@ class RelationService:
     async def get_relations_by_note_ids(
         self, note_ids: set[int] | None = None
     ) -> list[RelationRecord]:
-        """根據一組 Note IDs 查詢相關的「筆記 → 筆記」有效關聯。
+        """Query the active "note → note" relations related to a set of note IDs.
 
-        Query active note → note relations related to a set of note IDs.
+        根據一組 Note IDs 查詢相關的「筆記 → 筆記」有效關聯。
+
+        With note_ids, only relations whose source or target is included are queried; ``None`` or an empty set
+        queries all of them.
 
         若傳入 note_ids，只查詢 source 或 target 包含在內的關聯。
-        若傳入 None 或空集合，查詢全部。
-        With note_ids, only relations whose source or target is included
-        are returned; None or an empty set returns all rows.
+        若傳入 ``None`` 或空集合，查詢全部。
 
         Args:
-            note_ids: 要篩選的 Note ID 集合 (可選)。Optional set of note
-                IDs to filter by.
+            note_ids: the note IDs to filter by (optional)
+                要篩選的 Note ID 集合（可選）
 
         Returns:
-            RelationRecord 列表（欄位同舊的 CardRelation）。List of relation records.
+            the RelationRecord list (same attributes as the old CardRelation), ordered by relation_id
+            RelationRecord 串列（欄位同舊的 CardRelation），依 relation_id 排序
         """
         stmt = select(*_RECORD_COLUMNS).where(_active(), _note_to_note())
         if note_ids:
@@ -781,22 +917,25 @@ class RelationService:
         notes_info: list["AnkiNoteInfo"] | None = None,
         cards_info: list[dict[str, object]] | None = None,
     ) -> dict[str, list[dict]]:
-        """合併 Anki 實際卡片與語料庫的關聯紀錄，建立完整的知識圖譜。
+        """Merge the actual Anki cards with the corpus relation records into a full knowledge graph.
 
-        Merge actual Anki cards with the corpus relation rows into a full
-        knowledge graph.
+        合併 Anki 實際卡片與語料庫的關聯紀錄，建立完整的知識圖譜。
+
+        Nodes are keyed by the ``Expression`` field; notes without it get no node of their own. When notes are given,
+        only relations touching them are included (which amounts to filtering by deck); otherwise all relations are.
+
+        節點以 ``Expression`` 欄位為鍵；沒有這個欄位的筆記不建立自己的節點。有傳入筆記時只納入與它們相關的關聯
+        （等於過濾牌組）；否則納入全部關聯。
 
         Args:
-            notes_info: 從 Anki 取得的卡片詳細資訊列表。用來建立圖譜中的
-                「孤立節點」。Note details from Anki, used to create
-                isolated nodes in the graph.
-            cards_info: 從 Anki 取得的卡片狀態資訊列表。用來決定節點的熟練度
-                顏色。Card status info from Anki, used to decide node
-                proficiency colors.
+            notes_info: the note details fetched from Anki, used to create the "isolated nodes" of the graph
+                從 Anki 取得的卡片詳細資訊列表。用來建立圖譜中的「孤立節點」
+            cards_info: the card status info fetched from Anki, used to decide the node proficiency colors
+                從 Anki 取得的卡片狀態資訊列表。用來決定節點的熟練度顏色
 
         Returns:
-            圖譜結構字典: {"nodes": [...], "links": [...]}。Graph structure
-            dict with "nodes" and "links".
+            the graph structure ``{"nodes": [...], "links": [...]}``
+            圖譜結構字典 ``{"nodes": [...], "links": [...]}``
         """
         nodes_dict = {}
         links = []
@@ -831,7 +970,7 @@ class RelationService:
                 valid_note_ids.add(note.noteId)
                 fields = note.fields
 
-                # 預設使用 Expression 作為節點名稱 (如果沒有則使用 noteId 作為 fallback)
+                # 預設使用 Expression 作為節點名稱（沒有 Expression 的筆記略過，不建立節點）
                 expression = ""
                 if "Expression" in fields:
                     expression = str(fields["Expression"].get("value", "")).strip()
@@ -900,7 +1039,14 @@ class RelationService:
 
 
 def _json_list(value: Any) -> list:
-    """JSON 欄位值轉成 list（驅動可能回傳字串）。Coerce a JSON column value to a list."""
+    """Coerce a JSON column value to a list (the driver may return a string).
+
+    JSON 欄位值轉成 list（驅動可能回傳字串）。
+
+    Invalid JSON or a non-list value yields an empty list.
+
+    不合法的 JSON 或不是 list 的值回傳空串列。
+    """
     if isinstance(value, str):
         try:
             value = json.loads(value)

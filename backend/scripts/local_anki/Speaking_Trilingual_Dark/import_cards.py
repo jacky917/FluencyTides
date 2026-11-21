@@ -60,6 +60,7 @@ from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.utils.id_generator import generate_unique_card_id
 from app.schemas.anki import AnkiNote, AnkiNoteOptions
 from app.services.task_handlers.shared.trilingual_familiarity import normalize_reference_familiarity
+from scripts.local_anki.common.reference_audios import preserve_reference_audios
 from scripts.local_anki.common.card_identity import (
     KEY_CARD_ID,
     KEY_NOTE_ID,
@@ -80,6 +81,9 @@ JSON_FIELDS = (
     "Recordings_ZH", "Recordings_JA", "Recordings_EN",
     "References_ZH", "References_JA", "References_EN",
 )
+#: The reference-answer fields; their audios come from Telegram and must survive an update.
+#: 參考答案欄位；其中的音檔來自 TG，更新時必須保留。
+REFERENCE_FIELDS = ("References_ZH", "References_JA", "References_EN")
 DEFAULT_SAMPLE = (
     backend_dir / "scripts" / "common" / "samples" / "speaking_trilingual_sample.json"
 )
@@ -573,6 +577,15 @@ async def import_cards(
                     k: v for k, v in fields.items()
                     if k not in ("Prompt_Audios", "Recordings_ZH", "Recordings_JA", "Recordings_EN", "Card_ID", "TG_Bot")
                 }
+                # References 裡有 TG 上傳的參考音檔（JSON 檔沒有）：併入既有音檔，JSON 沒寫的語言不覆寫
+                try:
+                    update_fields = await preserve_reference_audios(
+                        client, note_id, update_fields, REFERENCE_FIELDS, set(raw_fields), card_label
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ [{card_label}] 讀不到既有參考答案，為免音檔遺失跳過更新 note_id={note_id}: {e}")
+                    stats["failed"] += 1
+                    continue
                 if dry_run:
                     logger.info(
                         f"🧪 [DRY-RUN] [{card_label}] {deck_name} <- 更新 note_id={note_id}: {prompt_text[:40]}"

@@ -1,14 +1,13 @@
-"""
+"""Telegram Bot plain-text message handler module.
+
 Telegram Bot 一般文字訊息處理模組。
+
+Handles text outside any FSM flow: while waiting for a speaker name it finishes the uploaded-audio write-back through
+the service layer's ``add_audio`` action; otherwise it replies according to the current waiting state (creating
+vocabulary cards is now handled by the vocabulary flow of /newcard).
 
 處理不屬於任何 FSM 流程的文字：等待說話者名稱時完成上傳語音的寫回（經服務層的 ``add_audio`` 動作），
 其餘依目前的等待狀態回覆說明（建單字卡改由 /newcard 的單字卡流程處理）。
-
-Telegram Bot plain-text message handler module.
-
-Handles text outside any FSM flow: while waiting for a speaker name it
-finishes the uploaded-audio write-back through the service layer's
-``add_audio`` action; otherwise it replies according to the waiting state.
 """
 
 import logging
@@ -36,23 +35,27 @@ async def process_word_handler(
     user_state_manager: UserStateManager,
     anki_client: AnkiClient
 ) -> None:
-    """處理使用者發送的一般文字訊息。
+    """Handle plain text messages sent by the user.
 
-    Handle plain text messages sent by the user.
+    處理使用者發送的一般文字訊息。
 
-    如果狀態為 wait_speaker_name，則攔截作為說話者名稱，並完成上傳語音流程；
-    否則依目前的等待狀態回覆說明。
+    If the state is ``wait_speaker_name``, the text is intercepted as the speaker's name to finish the audio-upload
+    flow; the state is then cleared, also when the card is missing or the write-back fails with an Anki or business
+    error. Otherwise the reply explains what the bot is waiting for. Blank text is ignored.
 
-    If the state is wait_speaker_name, the text is intercepted as the
-    speaker's name to finish the audio-upload flow; otherwise the reply
-    explains what the bot is waiting for.
+    如果狀態為 ``wait_speaker_name``，則攔截作為說話者名稱，並完成上傳語音流程，之後清除狀態（卡片不存在、
+    或寫回時發生 Anki 或業務錯誤也會清除）；
+    否則依目前的等待狀態回覆說明。空白文字直接忽略。
 
     Args:
-        message: Telegram 訊息物件。The Telegram message object.
-        note_service: 注入的筆記服務。Injected NoteService.
-        user_state_manager: 注入的使用者狀態管理器。
-            Injected UserStateManager instance.
-        anki_client: 注入的 AnkiClient。Injected AnkiClient instance.
+        message: the Telegram message
+            Telegram 訊息物件
+        note_service: the injected note service
+            注入的筆記服務
+        user_state_manager: the injected user state manager
+            注入的使用者狀態管理器
+        anki_client: the injected AnkiConnect client
+            注入的 AnkiClient
     """
     word = message.text.strip() if message.text else ""
     if not word:
@@ -117,9 +120,9 @@ async def process_word_handler(
 
 
 def _fallback_reply(action: str | None) -> str:
-    """沒有 handler 接住的文字訊息的回覆，依目前的等待狀態而定。
+    """Return the reply to text no handler took, depending on what the bot is waiting for.
 
-    The reply to unhandled text, depending on what the bot is waiting for.
+    回傳沒有 handler 接住的文字訊息的回覆，依目前的等待狀態而定。
     """
     if action in ("recording", "add_audio"):
         return "🎙️ 正在等語音訊息，文字不會被處理。"

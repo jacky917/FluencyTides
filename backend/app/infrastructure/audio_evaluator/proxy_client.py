@@ -1,25 +1,26 @@
-"""
+"""Speech evaluator implementation for third-party proxy APIs (for example Yinli API).
+
 第三方中轉 API (如引力 API) 的語音評分器實作。
 
-Speech evaluator implementation for third-party proxy APIs (e.g. Yinli API).
+Provides compatibility fallbacks for proxy gateways that do not fully support OpenAI
+`input_audio` or the strict `json_schema` mode.
 
 針對不完全支援 OpenAI `input_audio` 與 `json_schema` 嚴格模式的中轉站，
 提供相容性降級處理。
 
-Provides compatibility fallbacks for proxy gateways that do not fully
-support OpenAI `input_audio` or strict `json_schema` mode.
+Design decisions:
+- Uses response_format={"type": "json_object"} instead of the strict JSON Schema, to avoid proxy
+  parsing errors.
+- Carries the base64 audio inside an `image_url` data URI to get around the proxies' limits on
+  `input_audio`; this is currently the most common multimodal hack for open-source gateways such
+  as OneAPI/NewAPI. ``.ogg`` recordings are first converted to MP3 with FFmpeg and sent as
+  `audio/mp3`; other files are sent as `audio/wav`.
 
 設計決策：
 - 使用 response_format={"type": "json_object"} 替代嚴格的 JSON Schema，避免中轉解析錯誤。
-- 使用 `image_url` 夾帶 `audio/ogg` Base64 的方式，繞過中轉站對 `input_audio` 的限制，
-  此為目前 OneAPI/NewAPI 等開源架構最通用的多模態 Hack 做法。
-
-Design decisions:
-- Uses response_format={"type": "json_object"} instead of strict JSON Schema
-  to avoid proxy parsing errors.
-- Smuggles base64 audio inside an `image_url` data URI to bypass proxies'
-  `input_audio` limitations — the most common multimodal hack for
-  OneAPI/NewAPI-style gateways.
+- 使用 `image_url` 夾帶音訊 Base64 的方式，繞過中轉站對 `input_audio` 的限制，
+  此為目前 OneAPI/NewAPI 等開源架構最通用的多模態 Hack 做法。``.ogg`` 錄音先以 FFmpeg 轉成 MP3、
+  以 `audio/mp3` 送出；其他檔案以 `audio/wav` 送出。
 """
 
 import base64
@@ -39,36 +40,41 @@ logger = logging.getLogger(__name__)
 
 
 class ProxyAudioEvaluator(BaseAudioEvaluator):
-    """針對第三方中轉站特製的語音評分器。
+    """A speech evaluator tailored to third-party proxy gateways.
 
-    Speech evaluator tailored to third-party proxy gateways.
+    針對第三方中轉站特製的語音評分器。
+
+    Uses the OpenAI-compatible AsyncOpenAI SDK, but downgrades the audio by disguising it as an
+    `image_url`, and uses `json_object` to force the proxy to return JSON.
 
     使用 OpenAI 相容的 AsyncOpenAI SDK，但將音檔降級偽裝為 `image_url`，
     並使用 `json_object` 強制要求中轉站回傳 JSON。
 
-    Uses the OpenAI-compatible AsyncOpenAI SDK, but disguises the audio as an
-    `image_url` and forces JSON output via `json_object` mode.
-
     Attributes:
-        _client: AsyncOpenAI 客戶端實例。The AsyncOpenAI client instance.
+        _client: the AsyncOpenAI client instance
+            AsyncOpenAI 客戶端實例
     """
 
     def __init__(
         self, *, api_key: str, model: str, base_url: str | None = None, api_key_setting: str = "AUDIO_API_KEY"
     ) -> None:
-        """初始化 Proxy Audio Evaluator。
+        """Initialize the proxy audio evaluator.
 
-        Initialize the proxy audio evaluator.
+        初始化 Proxy Audio Evaluator。
 
         Args:
-            api_key: API 金鑰。The API key.
-            model: 聽音檔的模型（能力路由的 ``audio_llm``）。The audio model.
-            base_url: 中轉站網址。The proxy's base URL.
-            api_key_setting: 金鑰的設定名（錯誤訊息用）。Setting name of the key.
+            api_key: the API key
+                API 金鑰
+            model: the model that listens to the audio (the ``audio_llm`` capability)
+                聽音檔的模型（能力路由的 ``audio_llm``）
+            base_url: the proxy URL; when ``None`` a warning is logged and the default endpoint is used
+                中轉站網址；為 ``None`` 時記錄警告並使用預設端點
+            api_key_setting: the setting name of the key, used in error messages
+                金鑰的設定名（錯誤訊息用）
 
         Raises:
-            LLMServiceError: 金鑰或模型未設定時。Raised when the key or model
-                is missing.
+            LLMServiceError: if the key or the model is not set
+                若金鑰或模型未設定
         """
         if not api_key:
             raise LLMServiceError(
@@ -98,30 +104,41 @@ class ProxyAudioEvaluator(BaseAudioEvaluator):
         template_name: str = "prompts/audio_evaluator.j2",
         reference_familiarity: list[int | None] | None = None,
     ) -> AudioEvaluationResult:
-        """評估使用者語音，產出結構化評分結果。
+        """Evaluate the user's speech and produce a structured scoring result.
 
-        Evaluate the user's speech and produce a structured scoring result.
+        評估使用者語音，產出結構化評分結果。
+
+        ``.ogg`` audio is converted to MP3 with FFmpeg before sending. The API call times out after
+        90 seconds and is not retried.
+
+        ``.ogg`` 音檔送出前先以 FFmpeg 轉成 MP3。API 呼叫 90 秒逾時，不重試。
 
         Args:
-            audio_data: 音檔的原始二進位資料（.ogg 格式）。Raw audio bytes
-                (.ogg format).
-            audio_filename: 音檔檔名。Audio file name.
-            prompt_text: 卡片 Prompt。The card prompt.
-            context_text: 卡片正面的 Context（文脈）。The card-front context.
-            reference_answers: 參考範本列表。Reference answer list.
-            reference_familiarity: 每句參考答案的熟識度（同 base）。Familiarity of each
-                reference (see the base class).
-            target_language: 目標語言。Target language.
-            template_name: 評分提示詞 j2 樣板。Jinja2 template for the
-                evaluation prompt.
+            audio_data: the raw audio bytes (.ogg format)
+                音檔的原始二進位資料（.ogg 格式）
+            audio_filename: the audio file name
+                音檔檔名
+            prompt_text: the card Prompt
+                卡片 Prompt
+            context_text: the card-front Context
+                卡片正面的 Context（文脈）
+            reference_answers: the reference answers
+                參考範本列表
+            target_language: the target language
+                目標語言
+            template_name: the Jinja2 template for the evaluation prompt
+                評分提示詞 j2 樣板
+            reference_familiarity: the familiarity of each reference answer (as in the base class)
+                每句參考答案的熟識度（同 base）
 
         Returns:
-            AudioEvaluationResult 結構化評分結果。The structured evaluation
-            result.
+            the structured evaluation result, with ``evaluator_label`` set to the model name
+            結構化評分結果，``evaluator_label`` 設為模型名稱
 
         Raises:
-            LLMServiceError: API 呼叫失敗或輸出格式不符時。Raised when the
-                API call fails or the output format is invalid.
+            LLMServiceError: if the audio conversion fails, the API call fails, or the output format
+                is invalid (including a missing required field)
+                若音訊轉檔失敗、API 呼叫失敗或輸出格式不符（含缺少必填欄位）
         """
         from app.infrastructure.ffmpeg.client import FfmpegClient, FfmpegError
         

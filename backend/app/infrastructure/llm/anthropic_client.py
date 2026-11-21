@@ -1,9 +1,27 @@
-"""
+"""Structured-output client module for the first-party Anthropic API (**placeholder STUB, not implemented**).
+
 Anthropic 官方 API 結構化輸出客戶端模組（**佔位 STUB，尚未實作**）。
+
+This module is the extension point reserved for "calling the first-party Anthropic API directly" in the future.
+For now it only reserves the naming and the routing; every instantiation raises ``LLMServiceError``. Before
+implementing it, read ``docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md`` §D11.
 
 本模組為未來「直接呼叫 Anthropic 官方 API」預留的擴充點，目前僅保留命名與
 路由，任何實例化都會拋出 ``LLMServiceError``。實作前請先閱讀
 ``docs/archive/claude_code_llm_provider_FEAT_2026-08-27.md`` §D11。
+
+How the three providers differ:
+
+===================  ===================================  ==========================
+Provider             Channel                              Use case
+===================  ===================================  ==========================
+default (google...)  OpenAI-compatible API (``LLMClient``)  current billed pipeline
+``claude-code``      local headless CLI                   subscription quota, manual
+                                                          batches
+``anthropic``        first-party Anthropic API (**this    stability of a billed API,
+                     module**)                            concurrency, half-price
+                                                          Batch API
+===================  ===================================  ==========================
 
 三個 provider 的定位區隔：
 
@@ -16,15 +34,79 @@ Provider             管道                                  適用情境
                                                           併發、Batch API 半價
 ===================  ===================================  ==========================
 
-英文摘要 / English summary:
-    Placeholder for a future first-party Anthropic API provider. Reserves the
-    naming and factory routing; every instantiation raises ``LLMServiceError``
-    until implemented. Sits alongside the OpenAI-compatible ``LLMClient`` and
-    the headless-CLI ``ClaudeCodeLLMClient``.
-
 --------------------------------------------------------------------------
 實作指引（Implementation checklist）
 --------------------------------------------------------------------------
+
+**1. Dependency and client**
+
+Add ``anthropic`` to ``requirements.txt``; keep the import in this module lazy (the factory already loads
+provider modules lazily) so that, when it is not installed, other providers still start::
+
+    import anthropic
+    client = anthropic.AsyncAnthropic(api_key=settings.LLM_ANTHROPIC_API_KEY)
+
+Note that this file is named ``anthropic_client.py`` rather than ``anthropic.py`` so it does not shadow the
+package.
+
+**2. Structured output (the core of this provider)**
+
+The official API constrains output with ``output_config.format`` (not the deprecated ``output_format``
+parameter). Because this project's ``generate_structured_data`` receives a JSON Schema dict (not a Pydantic
+class), use the raw-schema form (see the code example in the Chinese section below).
+
+**Two schema-preprocessing traps** (the same lessons as the claude-code provider):
+
+- Pydantic's ``model_json_schema()`` produces ``$defs``/``$ref``; flatten them first with
+  ``schema_utils.resolve_json_schema()``.
+- Pydantic does **not** add ``additionalProperties: false`` automatically, while the json_schema format
+  requires both it and ``required``; add them before sending.
+
+**3. Refusals must be handled**
+
+The safety classifier of models such as Opus 5 / Fable 5 may refuse: HTTP 200, ``stop_reason == "refusal"``,
+and ``stop_details.category`` giving the category. **Check ``stop_reason`` before reading ``content``**,
+otherwise you get empty content and misjudge it. Map a refusal to ``LLMServiceError``, with a message containing
+a string the generation scripts' error-grading table recognizes (see point 5 below), so the pipeline takes the
+existing "log the failure and skip this sentence" path; this project's galgame lines are exactly the kind of
+content that tends to trigger refusals.
+
+Enabling server-side fallback may also be considered (beta ``server-side-fallback-2026-07-01`` with
+``fallbacks="default"``), letting the server reassign the model automatically according to the refusal category.
+
+**4. Thinking and effort**
+
+Opus 5 enables adaptive thinking by default, so usually **omit the ``thinking`` parameter**; control the depth
+with ``output_config.effort``. Never use the removed ``thinking={"type": "enabled", "budget_tokens": N}`` (it
+returns 400).
+
+**5. Interface contract (same as the other two providers; must not deviate)**
+
+- signature: ``generate_structured_data(system_prompt, user_prompt, response_schema) -> LLMGenerateResult``
+- every failure raises ``LLMServiceError``; the retry-exhaustion message must contain
+  ``"LLM API 在所有重試後仍回傳空內容"`` and the rate-limit message must contain ``"Quota"``; the generation
+  scripts' error-grading table uses these two strings to decide between "skip the sentence" and "pause 60
+  seconds"
+- fill ``LLMGenerateResult.model_name`` with ``(anthropic){model}``; if an effort setting is added, append
+  ``@{effort}`` as claude-code does, and update the label line of ``generate_child_cards.py`` accordingly (see
+  plan document D7)
+- handle errors with an exception chain "from specific to broad" (``NotFoundError`` → ``RateLimitError`` →
+  ``APIStatusError`` → ``APIConnectionError``); do not catch only one broad class
+
+**6. Settings to add (``app/core/config.py``)**
+
+Deliberately not added yet, to avoid dead settings that nobody reads. Add them during implementation (see the
+code example in the Chinese section below).
+
+Note that ``LLM_ANTHROPIC_EFFORT`` and ``LLM_CLAUDE_CODE_EFFORT`` are **independent settings of two different
+providers**; this is exactly why setting prefixes use the full provider name (not a vague ``LLM_CLAUDE_*``).
+
+**7. Further options**
+
+- the Batch API (``client.messages.batches``) is half price, suitable for this project's production of hundreds
+  of cards
+- prompt caching: each card's prompt is about 18KB, of which the world-setting and rules sections are completely
+  fixed; placing a ``cache_control`` breakpoint at the end of those sections can cut costs substantially
 
 **1. 依賴與客戶端**
 
@@ -132,11 +214,16 @@ _NOT_IMPLEMENTED_MESSAGE = (
 
 
 class AnthropicLLMClient(BaseLLMClient):
-    """Anthropic 官方 API 客戶端（佔位，尚未實作）。
+    """Client for the first-party Anthropic API (placeholder, not implemented).
 
-    Placeholder for the first-party Anthropic API client; not implemented.
+    Anthropic 官方 API 客戶端（佔位，尚未實作）。
 
-    已掛上 :class:`~app.infrastructure.llm.base.BaseLLMClient`，介面契約與
+    Already attached to :class:`~app.infrastructure.llm.base.BaseLLMClient`, with the same interface contract as
+    the other providers, so nothing upstream or downstream needs to change once it is implemented. See the module
+    docstring for the implementation steps; for exceptions use the three subclasses ``LLMRetryExhaustedError`` /
+    ``LLMQuotaError`` / ``LLMRefusalError`` (plan D5) rather than raising only the base class.
+
+    已掛上 ``BaseLLMClient``，介面契約與
     其他 provider 一致，實作後上下游無須任何改動。實作步驟見模組 docstring；
     例外請用 ``LLMRetryExhaustedError`` / ``LLMQuotaError`` / ``LLMRefusalError``
     三個子類（計畫 D5），而非只拋基類。
@@ -155,27 +242,31 @@ class AnthropicLLMClient(BaseLLMClient):
         effort: EffortArg = None,
         endpoint: Endpoint | None = None,
     ) -> None:
-        """尚未實作，一律拋錯；訊息回顯收到的覆寫值。
+        """Raise unconditionally because this client is not implemented; the message echoes any overrides received.
 
-        Not implemented; always raises, echoing any overrides received.
+        尚未實作，一律拋錯；訊息回顯收到的覆寫值。
+
+        It deliberately raises in the constructor (not at call time), so a mistaken ``LLM_PROVIDER=anthropic``
+        surfaces the moment the app starts or a script begins, rather than failing midway through a batch after
+        some cards have already been created. The constructor accepts ``model`` / ``effort`` to make sure the
+        overrides passed by the factory are never silently dropped (usable directly once implemented).
 
         刻意在建構子（而非呼叫時）拋錯：讓誤設 ``LLM_PROVIDER=anthropic``
         的情況在應用啟動或腳本開跑的當下就暴露，而不是在批次跑到一半、
         已建立部分卡片之後才失敗。建構子收 ``model`` / ``effort`` 是為了
         確保工廠傳入的覆寫不會被靜默丟棄（實作時直接可用）。
 
-        Deliberately raises at construction so a misconfigured provider
-        surfaces at startup rather than midway through a batch. Accepting
-        the overrides guarantees the factory's values are never silently
-        dropped once implemented.
-
         Args:
-            model: 覆寫模型名。Model override.
-            effort: 覆寫思考深度。Effort override.
-            endpoint: 端點（stub 不使用）。Endpoint; unused by the stub.
+            model: the model-name override
+                覆寫模型名
+            effort: the thinking-depth override
+                覆寫思考深度
+            endpoint: the endpoint (unused by the stub)
+                端點（stub 不使用）
 
         Raises:
-            LLMServiceError: 一律拋出。Always.
+            LLMServiceError: always
+                一律拋出
         """
         overrides = ", ".join(
             f"{name}={value!r}" for name, value in (("model", model), ("effort", effort))
@@ -190,21 +281,27 @@ class AnthropicLLMClient(BaseLLMClient):
         user_prompt: str,
         response_schema: dict[str, object],
     ) -> LLMGenerateResult:
-        """尚未實作，一律拋錯。
+        """Raise unconditionally because this client is not implemented.
 
-        Not implemented; always raises.
+        尚未實作，一律拋錯。
+
+        The constructor already blocks the normal path; this is the second line of defence when the constructor is
+        bypassed (for example ``__new__``, subclassing, test doubles), making sure no empty result is returned
+        silently.
 
         建構子已擋下一般路徑，此處為繞過建構子（如 ``__new__``、子類化、
         測試替身）時的第二道防線，確保不會靜默回傳空結果。
 
-        Second line of defence for paths that bypass ``__init__``.
-
         Args:
-            system_prompt: 系統提示。The system prompt.
-            user_prompt: 使用者輸入。The user input.
-            response_schema: JSON Schema 定義字典。JSON Schema dict.
+            system_prompt: the system prompt
+                系統提示
+            user_prompt: the user input
+                使用者輸入
+            response_schema: the JSON Schema definition dict
+                JSON Schema 定義字典
 
         Raises:
-            LLMServiceError: 一律拋出。Always.
+            LLMServiceError: always
+                一律拋出
         """
         raise LLMServiceError(_NOT_IMPLEMENTED_MESSAGE)

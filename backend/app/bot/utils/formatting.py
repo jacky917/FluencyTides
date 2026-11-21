@@ -1,36 +1,33 @@
-"""
+"""Text-safety helpers for Telegram messages.
+
 Telegram 訊息文字安全化工具。
 
-Text-safety helpers for Telegram messages.
+Background: Anki fields are themselves HTML (``<div>``, ``<br>``, furigana ``<ruby>``, styling ``<span>``,
+and so on), while Telegram's HTML parse mode only accepts a small whitelist of tags such as
+``<b>/<i>/<s>/<u>/<code>/<pre>/<a>``. Embedding a raw field in a message raises ``TelegramBadRequest`` and
+the message is never delivered.
 
-背景：Anki 欄位本身就是 HTML（`<div>`、`<br>`、furigana 的 `<ruby>`、樣式
-`<span>` 等），而 Telegram 的 HTML parse mode 只接受
-`<b>/<i>/<s>/<u>/<code>/<pre>/<a>` 等少數白名單標籤。把欄位原文直接插入訊息
-會導致 `TelegramBadRequest`，訊息完全發不出去。
-
-Background: Anki fields are themselves HTML (`<div>`, `<br>`, furigana
-`<ruby>`, styling `<span>`, ...), while Telegram's HTML parse mode only
-accepts a small whitelist (`<b>/<i>/<s>/<u>/<code>/<pre>/<a>`). Embedding a
-raw field in a message raises `TelegramBadRequest` and the message is never
-delivered.
-
-設計決策：
-- 處理順序固定為「去標籤 → 還原實體 → 截斷 → 轉義」。先截斷再轉義，可避免
-  截斷點落在 `&amp;` 這類實體中間而產生半截實體；最後才轉義則保證輸出中不再
-  存在任何未轉義的 `<`、`&`。
-- 只做純文字化，不嘗試把 Anki HTML 對映到 Telegram 標籤——對映規則脆弱且
-  容易再次產生非法標記。
+背景：Anki 欄位本身就是 HTML（``<div>``、``<br>``、furigana 的 ``<ruby>``、樣式 ``<span>`` 等），
+而 Telegram 的 HTML parse mode 只接受 ``<b>/<i>/<s>/<u>/<code>/<pre>/<a>`` 等少數白名單標籤。
+把欄位原文直接插入訊息會導致 ``TelegramBadRequest``，訊息完全發不出去。
 
 Design decisions:
-- The fixed order is strip tags → unescape entities → truncate → escape.
-  Truncating before escaping avoids cutting through an entity such as
-  `&amp;`; escaping last guarantees no unescaped `<` or `&` survives.
-- It only produces plain text and never maps Anki HTML onto Telegram tags:
-  such mappings are brittle and tend to reintroduce invalid markup.
+
+- The order is fixed as strip tags → unescape entities → truncate → escape. Truncating before escaping
+  avoids cutting through an entity such as ``&amp;`` and leaving half an entity; escaping last guarantees
+  that no unescaped ``<`` or ``&`` survives in the output.
+- It only produces plain text and never tries to map Anki HTML onto Telegram tags: such mapping rules
+  are brittle and tend to reintroduce invalid markup.
+
+設計決策：
+
+- 處理順序固定為「去標籤 → 還原實體 → 截斷 → 轉義」。先截斷再轉義，可避免截斷點落在 ``&amp;``
+  這類實體中間而產生半截實體；最後才轉義則保證輸出中不再存在任何未轉義的 ``<``、``&``。
+- 只做純文字化，不嘗試把 Anki HTML 對映到 Telegram 標籤——對映規則脆弱且容易再次產生非法標記。
+
+Addresses finding S010 in docs/15_Bug_Scan_Report.md (the related S014 family can also use this helper).
 
 對應修復：docs/15_Bug_Scan_Report.md 的 S010（同族問題 S014 亦適用本工具）。
-Addresses finding S010 in docs/15_Bug_Scan_Report.md (the related S014 family
-can reuse the same helper).
 """
 
 import html
@@ -47,20 +44,25 @@ _BREAK_RE = re.compile(r"<\s*(br|/div|/p)\s*/?\s*>", re.IGNORECASE)
 
 
 def anki_field_to_tg_text(raw: str, limit: int = 300) -> str:
-    """把 Anki 欄位內容轉為可安全嵌入 Telegram HTML 訊息的純文字。
+    """Convert an Anki field value into plain text safe to embed in a Telegram HTML message.
 
-    Convert an Anki field value into plain text safe to embed in a
-    Telegram HTML message.
+    把 Anki 欄位內容轉為可安全嵌入 Telegram HTML 訊息的純文字。
+
+    Line-break tags become spaces, other tags are removed, entities are unescaped and whitespace is
+    collapsed before truncating and escaping.
+
+    換行類標籤轉為空白、其餘標籤移除、還原實體並壓縮空白，之後才截斷與轉義。
 
     Args:
-        raw: Anki 欄位的原始值（可能含任意 HTML）。The raw Anki field
-            value, possibly containing arbitrary HTML.
-        limit: 截斷長度上限，超過則附加省略號。Maximum length before
-            truncation; an ellipsis is appended when exceeded.
+        raw: the raw Anki field value, possibly containing arbitrary HTML
+            Anki 欄位的原始值（可能含任意 HTML）
+        limit: the maximum length of the plain text before truncation; when exceeded, ``...`` is
+            appended
+            截斷前純文字的長度上限，超過則附加 ``...``
 
     Returns:
-        已去除標籤並完成 HTML 轉義的純文字。Plain text with tags removed
-        and HTML escaped.
+        plain text with tags removed and HTML escaped; an empty string if ``raw`` is empty
+        已去除標籤並完成 HTML 轉義的純文字；``raw`` 為空時為空字串
     """
     if not raw:
         return ""
@@ -82,23 +84,25 @@ def anki_field_to_tg_text(raw: str, limit: int = 300) -> str:
 
 
 def escape_tg(text: str, limit: int | None = None) -> str:
-    """轉義任意純文字，使其可安全嵌入 Telegram HTML 訊息。
+    """Escape arbitrary plain text so it is safe inside a Telegram HTML message.
 
-    Escape arbitrary plain text so it is safe inside a Telegram HTML
-    message.
+    轉義任意純文字，使其可安全嵌入 Telegram HTML 訊息。
 
-    適用於使用者輸入、card_id、單字等本來就不含 HTML 的字串。
+    Suitable for user input, ``card_id`` values, vocabulary words and other strings that do not contain
+    HTML in the first place.
 
-    Suitable for user input, card IDs, vocabulary words and other strings
-    that are not expected to contain HTML.
+    適用於使用者輸入、``card_id``、單字等本來就不含 HTML 的字串。
 
     Args:
-        text: 待轉義的純文字。The plain text to escape.
-        limit: 可選的截斷長度上限（先截斷再轉義）。Optional maximum
-            length; truncation happens before escaping.
+        text: the plain text to escape
+            待轉義的純文字
+        limit: an optional maximum length; truncation (appending ``...``) happens before escaping;
+            ``None`` means no truncation
+            可選的截斷長度上限（附加 ``...``，先截斷再轉義）；``None`` 表示不截斷
 
     Returns:
-        轉義後的字串。The escaped string.
+        the escaped string; an empty string if ``text`` is empty
+        轉義後的字串；``text`` 為空時為空字串
     """
     if not text:
         return ""

@@ -1,39 +1,44 @@
-"""
+"""Telegram Bot voice message handler module (Workflow B).
+
 Telegram Bot 語音訊息處理模組 (Workflow B)。
 
-負責接收使用者的語音訊息，根據 UserStateManager 中的狀態判斷
-是否為 Recording 流程，並執行以下完整管線：
+Receives user voice messages and checks the state in UserStateManager to decide whether this is the Recording flow,
+then runs the full pipeline:
+
+1. Download the .ogg voice file
+2. Let AudioEvaluator transcribe and score the audio
+3. Write back to Anki through the service layer's ``add_recording`` action (which finds the speaking-coach or
+   trilingual card handler by note type)
+4. Show progress and results
+5. Clear the user state
+
+負責接收使用者的語音訊息，根據 UserStateManager 中的狀態判斷是否為 Recording 流程，並執行以下完整管線：
+
 1. 下載 .ogg 語音檔
 2. 交由 AudioEvaluator 進行語音辨識與評分
 3. 透過服務層的 ``add_recording`` 動作寫回 Anki（依筆記類型找對話卡或三語卡的 handler）
 4. 顯示進度與結果
 5. 清除使用者狀態
 
-Phase 9 更新：
-- 不再呼叫已移除的 card_service.process_voice_evaluation()。
-- 改為直接使用 AudioEvaluator + HandlerRegistry 的 speaking_coach handler。
+In the ``add_audio`` state (uploading an existing recording) the voice file is only stored in Anki Media, and the flow
+moves on to avatar selection without scoring.
+
+``add_audio`` 狀態（上傳現成錄音）只把音檔存進 Anki Media，不評分，接著進入選頭像流程。
+
+Phase 9 update: the removed ``card_service.process_voice_evaluation()`` is no longer called. The write-back now goes
+through ``NoteService.run_action`` instead of calling a HandlerRegistry handler directly.
+
+Phase 9 更新：不再呼叫已移除的 ``card_service.process_voice_evaluation()``。寫回現在經由
+``NoteService.run_action``，不再直接呼叫 HandlerRegistry 的 handler。
+
+Capability routing R2: the evaluator is obtained for every message from the capability routes of the card's handler
+(``recording_eval`` or ``recording_eval.<handler>``, see :mod:`app.services.recording_eval`) instead of an injected
+global ``audio_evaluator``; a settings change (TG ``/setconfig`` or the web tool settings) takes effect on the next
+voice message.
 
 能力路由 R2：評分器每次依卡片的 handler 從能力路由取得（``recording_eval`` 或
-``recording_eval.<handler>``，見 :mod:`app.services.recording_eval`），不再注入全域的
+``recording_eval.<handler>``，見 ``app.services.recording_eval``），不再注入全域的
 ``audio_evaluator``；改設定（TG ``/setconfig``、網頁工具設定）後下一則語音即生效。
-
-Telegram Bot voice message handler module (Workflow B).
-
-Receives user voice messages, checks the UserStateManager state to decide
-whether this is the Recording flow, and runs the full pipeline:
-1. Download the .ogg voice file
-2. Let AudioEvaluator transcribe and score the audio
-3. Write back to Anki through the service layer's ``add_recording`` action
-4. Show progress and results
-5. Clear the user state
-
-Phase 9 update:
-- No longer calls the removed card_service.process_voice_evaluation().
-- Uses AudioEvaluator plus the speaking_coach handler from HandlerRegistry
-  directly instead.
-
-Capability routing R2: the evaluator is obtained per message from the
-capability routes of the card's handler instead of a global singleton.
 """
 
 import base64
@@ -75,23 +80,31 @@ async def process_voice_handler(
     note_service: NoteService,
     user_state_manager: UserStateManager,
 ) -> None:
-    """處理使用者發送的語音訊息。
+    """Handle voice messages sent by the user.
 
-    Handle voice messages sent by the user.
+    處理使用者發送的語音訊息。
 
-    僅在使用者處於 'recording' 狀態時執行完整的評分管線。
-    若使用者不在任何狀態中，則提示使用者先透過 Anki 的 Deep Link 啟動錄音。
+    Runs the full evaluation pipeline only when the user is in the ``recording`` state. In the ``add_audio`` state
+    the voice file is uploaded to Anki Media and the user moves on to avatar selection. In any other state (or with
+    no state), it prompts the user to start again from the button on the Anki card.
 
-    Runs the full evaluation pipeline only when the user is in the
-    'recording' state. If the user has no active state, prompts them to
-    start recording via the Anki deep link first.
+    僅在使用者處於 ``recording`` 狀態時執行完整的評分管線。``add_audio`` 狀態只把音檔上傳到 Anki Media，
+    接著進入選頭像。其他狀態（或沒有狀態）時，提示使用者回 Anki 卡片重新點按鈕。
+
+    A download failure or an unusable evaluator keeps the state, so the user can resend within the time limit; the
+    other failures clear the state and point back to the Anki card.
+
+    下載失敗或評分器無法使用時保留狀態，使用者可在時限內直接重傳；其他失敗會清除狀態，並請使用者回 Anki 卡片重新進入。
 
     Args:
-        message: Telegram 語音訊息物件。The Telegram voice message object.
-        anki_client: 注入的 AnkiClient 實例。Injected AnkiClient instance.
-        note_service: 注入的筆記服務；錄音紀錄經它寫回並同步。Injected NoteService.
-        user_state_manager: 注入的 UserStateManager 實例。
-            Injected UserStateManager instance.
+        message: the Telegram voice message
+            Telegram 語音訊息物件
+        anki_client: the injected AnkiConnect client
+            注入的 AnkiClient 實例
+        note_service: the injected note service; the recording entry is written back and synced through it
+            注入的筆記服務；錄音紀錄經它寫回並同步
+        user_state_manager: the injected user state manager
+            注入的 UserStateManager 實例
     """
     chat_id = message.chat.id
     state = user_state_manager.get_state(chat_id)

@@ -1,28 +1,26 @@
-"""
+"""Google native SDK (google-genai) speech evaluator implementation.
+
 Google 原生 SDK (google-genai) 語音評分器實作。
 
-Google native SDK (google-genai) speech evaluator implementation.
+Uploads audio directly to Gemini for analysis via the official Google Generative AI SDK.
+Compared with the OpenAI-compatible layer, the native SDK has the most complete support for
+Gemini's multimodal features, including the native File Upload API and audio-format handling.
 
 使用 Google 官方 Generative AI SDK 直接上傳音檔給 Gemini 進行分析。
 相比 OpenAI 相容層，原生 SDK 對 Gemini 的多模態功能支援最完整，
 包括原生的 File Upload API 和音訊格式處理。
 
-Uploads audio directly to Gemini via the official Google Generative AI SDK.
-Compared with the OpenAI-compatible layer, the native SDK has the most
-complete multimodal support, including the File Upload API and audio-format
-handling.
+Design decisions:
+- Uses google-genai (the new SDK) instead of google-generativeai (the legacy one), because the new
+  SDK offers better async support and type hints.
+- Sends inline_data directly instead of uploading through the File API, avoiding the extra
+  complexity of file management. Voice files are usually small (<5MB), so inline_data is enough.
 
 設計決策：
 - 使用 google-genai（新版 SDK）而非 google-generativeai（舊版），
   因為新版 SDK 提供更好的非同步支援和型別提示。
 - 直接使用 inline_data 而非 File API 上傳，避免檔案管理的額外複雜度。
   語音檔案通常很小（<5MB），inline_data 完全足夠。
-
-Design decisions:
-- Uses google-genai (new SDK) instead of google-generativeai (legacy) for
-  better async support and type hints.
-- Sends inline_data instead of File API uploads to avoid file-management
-  overhead; voice files are small (<5MB), so inline_data suffices.
 """
 
 import json
@@ -42,34 +40,39 @@ from app.core.dependencies import get_template_engine
 
 
 class GeminiNativeAudioEvaluator(BaseAudioEvaluator):
-    """使用 Google 原生 SDK 的語音評分器。
+    """A speech evaluator using the Google native SDK.
 
-    Speech evaluator using the Google native SDK.
+    使用 Google 原生 SDK 的語音評分器。
+
+    Sends audio directly to Gemini through the google-genai SDK, using its native multimodal
+    inference for speech analysis and scoring.
 
     透過 google-genai SDK 直接傳送音檔給 Gemini，
     利用原生的多模態推論能力進行語音分析與評分。
 
-    Sends audio directly to Gemini through the google-genai SDK, using its
-    native multimodal inference for speech analysis and scoring.
-
     Attributes:
-        _client: google-genai Client 實例。The google-genai client instance.
-        _model_name: 使用的 Gemini 模型名稱。The Gemini model name in use.
+        _client: the google-genai Client instance
+            google-genai Client 實例
+        _model_name: the Gemini model name in use
+            使用的 Gemini 模型名稱
     """
 
     def __init__(self, *, api_key: str, model: str, api_key_setting: str = "AUDIO_API_KEY") -> None:
-        """初始化 Gemini 原生語音評分器。
+        """Initialize the Gemini native speech evaluator.
 
-        Initialize the Gemini native speech evaluator.
+        初始化 Gemini 原生語音評分器。
 
         Args:
-            api_key: Google API 金鑰。The Google API key.
-            model: 聽音檔的模型（能力路由的 ``audio_llm``）。The audio model.
-            api_key_setting: 金鑰的設定名（錯誤訊息用）。Setting name of the key.
+            api_key: the Google API key
+                Google API 金鑰
+            model: the model that listens to the audio (the ``audio_llm`` capability)
+                聽音檔的模型（能力路由的 ``audio_llm``）
+            api_key_setting: the setting name of the key, used in error messages
+                金鑰的設定名（錯誤訊息用）
 
         Raises:
-            LLMServiceError: 金鑰或模型未設定時。Raised when the key or model
-                is missing.
+            LLMServiceError: if the key or the model is not set
+                若金鑰或模型未設定
         """
         if not api_key:
             raise LLMServiceError(
@@ -96,30 +99,42 @@ class GeminiNativeAudioEvaluator(BaseAudioEvaluator):
         template_name: str = "prompts/audio_evaluator.j2",
         reference_familiarity: list[int | None] | None = None,
     ) -> AudioEvaluationResult:
-        """評估使用者語音，產出結構化評分結果。
+        """Evaluate the user's speech and produce a structured scoring result.
 
-        Evaluate the user's speech and produce a structured scoring result.
+        評估使用者語音，產出結構化評分結果。
+
+        The MIME type comes from the file name: ``.wav`` and ``.mp3`` are recognized, anything else
+        is sent as ``audio/ogg``. Transient API errors (503, 429, overload) and timeouts are retried
+        up to 3 attempts in total with exponential backoff; each attempt times out after 90 seconds.
+
+        MIME 類型依檔名決定：可辨識 ``.wav`` 與 ``.mp3``，其餘一律以 ``audio/ogg`` 送出。暫時性的 API
+        錯誤（503、429、負載過高）與逾時會以指數退避重試，總共最多 3 次；每次 90 秒逾時。
 
         Args:
-            audio_data: 音檔原始二進位資料（.ogg 格式）。Raw audio bytes
-                (.ogg format).
-            audio_filename: 音檔檔名。Audio file name.
-            prompt_text: 卡片 Prompt。The card prompt.
-            context_text: 卡片正面的 Context（文脈）。The card-front context.
-            reference_answers: 參考範本列表。Reference answer list.
-            reference_familiarity: 每句參考答案的熟識度（同 base）。Familiarity of each
-                reference (see the base class).
-            target_language: 目標語言。Target language.
-            template_name: 評分提示詞 j2 樣板。Jinja2 template for the
-                evaluation prompt.
+            audio_data: the raw audio bytes (.ogg format)
+                音檔原始二進位資料（.ogg 格式）
+            audio_filename: the audio file name
+                音檔檔名
+            prompt_text: the card Prompt
+                卡片 Prompt
+            context_text: the card-front Context
+                卡片正面的 Context（文脈）
+            reference_answers: the reference answers
+                參考範本列表
+            target_language: the target language
+                目標語言
+            template_name: the Jinja2 template for the evaluation prompt
+                評分提示詞 j2 樣板
+            reference_familiarity: the familiarity of each reference answer (as in the base class)
+                每句參考答案的熟識度（同 base）
 
         Returns:
-            AudioEvaluationResult 結構化評分結果。The structured evaluation
-            result.
+            the structured evaluation result, with ``evaluator_label`` set to the model name
+            結構化評分結果，``evaluator_label`` 設為模型名稱
 
         Raises:
-            LLMServiceError: API 呼叫失敗或輸出格式不符時。Raised when the
-                API call fails or the output format is invalid.
+            LLMServiceError: if the API call fails or the output format is invalid
+                若 API 呼叫失敗或輸出格式不符
         """
         engine = get_template_engine()
         evaluation_prompt = engine.render(

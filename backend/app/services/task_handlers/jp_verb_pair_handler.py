@@ -1,14 +1,12 @@
-"""日文自動詞/他動詞對（JP_VerbPair）卡片專屬 Handler 模組。
+"""Dedicated handler module for Japanese intransitive/transitive verb pair (JP_VerbPair) cards.
+
+日文自動詞/他動詞對（JP_VerbPair）卡片專屬 Handler 模組。
+
+Generates Context and Cloze child cards from game or novel dialog, writes example items back into the master
+card's JSON, and creates graph relations.
 
 負責由遊戲/小說台詞生成 Context 與 Cloze 子卡片、
 回寫母卡片 JSON 範例，並建立圖譜關聯。
-
-Dedicated handler module for Japanese intransitive/transitive verb pair
-(JP_VerbPair) cards.
-
-Generates Context and Cloze child cards from game/novel dialog, writes
-example items back into the master card's JSON, and creates graph
-relations.
 """
 
 import json
@@ -50,9 +48,9 @@ CHILD_CARD_LLM = route("jp_verb_pair", "自他動詞子卡生成", capabilities=
 
 @register_handler
 class JPVerbPairHandler(BaseHandler):
-    """日文自動詞他動詞對專屬處理器。
+    """Dedicated handler for Japanese intransitive/transitive verb pairs.
 
-    Dedicated handler for Japanese intransitive/transitive verb pairs.
+    日文自動詞他動詞對專屬處理器。
     """
 
     # 子卡由本機批次腳本產生（D7）；母卡 JSON 與查重紀錄互相參照，網頁只能檢視（D4）
@@ -69,53 +67,63 @@ class JPVerbPairHandler(BaseHandler):
     @property
     @override
     def handler_name(self) -> str:
-        """處理器名稱。
+        """The handler name used in URLs.
 
-        Handler name.
+        處理器名稱，出現在網址裡。
         """
         return "jp_verb_pair"
 
     @property
     @override
     def title(self) -> str:
-        """中文名稱。Display title."""
+        """The Chinese display title.
+
+        中文名稱。
+        """
         return "自他動詞"
 
     @property
     @override
     def supported_models(self) -> list[str]:
-        """支援的 Anki 模型名稱清單。
+        """The Anki note types this handler owns.
 
-        Supported Anki model names.
+        這個處理器負責的 Anki 筆記類型。
         """
         return ["JP_VerbPair_Master_Dark", "JP_Context_Dark", "JP_VerbPair_Cloze_Dark"]
 
     @override
     async def execute_generate(self, card_service: "CardService", relation_service: "RelationService", parameters: dict) -> dict:
-        """根據文本生成 Context 和 Cloze 子卡片，並將結果追加至母卡片 JSON 中。
+        """Generate Context and Cloze child cards from text and append the result to the master card's JSON.
 
-        Generate Context and Cloze child cards from text and append the
-        result into the master card's JSON.
+        根據文本生成 Context 和 Cloze 子卡片，並將結果追加至母卡片 JSON 中。
+
+        The two child cards and the master JSON write-back are rolled back together if any of them fails. A
+        failure to create the graph relations afterwards does not raise; it is reported as
+        ``relation_failed``.
+
+        兩張子卡與母卡 JSON 回寫任一步失敗時一起回滾。之後建立圖譜關聯失敗不會拋錯，改以
+        ``relation_failed`` 回報。
 
         Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            parameters: 生成參數，需包含 master_note_id / deck_name /
-                target_verb / source_game / context_dialogue。Generation
-                params; requires master_note_id / deck_name / target_verb
-                / source_game / context_dialogue.
+            card_service: the card service
+                卡片服務
+            relation_service: the relation service
+                關聯服務
+            parameters: the generation parameters; master_note_id, deck_name, target_verb, and
+                context_dialogue are required, source_game is optional (added as a ``Game::`` tag when given)
+                生成參數，需包含 master_note_id / deck_name / target_verb / context_dialogue；source_game 選填
+                （有值時加上 ``Game::`` 標籤）
 
         Returns:
-            dict: 包含 context_note_id、cloze_note_id、kept_dialog、
-                llm_model。Dict with context_note_id, cloze_note_id,
-                kept_dialog, llm_model.
+            a dict with context_note_id, cloze_note_id, kept_dialog, llm_model, and relation_failed
+            包含 context_note_id、cloze_note_id、kept_dialog、llm_model、relation_failed 的字典
 
         Raises:
-            ValueError: 參數缺漏、牌組不存在、母卡不存在或 LLM 產出失敗時。
-                On missing params, missing deck/master card, or LLM
-                failure.
-            ClozePositioningError: 挖空定位失敗時。On cloze positioning
-                failure.
+            ClozePositioningError: if cloze positioning fails
+                若挖空定位失敗
+            ValueError: if a required parameter is missing, no sentence is marked as the target, the deck or
+                the master card does not exist, or the LLM output fails
+                若參數缺漏、沒有標記目標句、牌組不存在、母卡不存在或 LLM 產出失敗
         """
         master_note_id = parameters.get("master_note_id")
         deck_name = parameters.get("deck_name")
@@ -275,17 +283,17 @@ class JPVerbPairHandler(BaseHandler):
             # 則將面板文字退化為純平假名，避免造成學習者尋找漢字的困惑
             if mismatch:
                 def to_pure_kana(text: str) -> str:
-                    """把 furigana 標音格式的 Base[Ruby] 退化為純假名 Ruby。
+                    """Degrade furigana ``Base[Ruby]`` notation into the pure kana ``Ruby``.
 
-                    Degrade furigana Base[Ruby] notation into pure kana.
+                    把 furigana 標音格式的 Base[Ruby] 退化為純假名 Ruby。
 
                     Args:
-                        text: furigana 標音字串，例如 "澄[す]む, 清[す]む"。
-                            Furigana string, e.g. "澄[す]む, 清[す]む".
+                        text: the furigana string, for example ``"澄[す]む, 清[す]む"``
+                            furigana 標音字串，例如 ``"澄[す]む, 清[す]む"``
 
                     Returns:
-                        str: 純假名字串，例如 "すむ, すむ"。Pure kana string,
-                            e.g. "すむ, すむ".
+                        the pure kana string, for example ``"すむ, すむ"``
+                        純假名字串，例如 ``"すむ, すむ"``
                     """
                     # 把 Base[Ruby] 替換為 Ruby
                     # 例如 "澄[す]む, 清[す]む" -> "すむ, すむ"

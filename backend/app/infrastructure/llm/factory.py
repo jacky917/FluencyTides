@@ -1,5 +1,29 @@
-"""
+"""LLM client factory module (plan D9: registry + unified argument passing).
+
 LLM 客戶端工廠模組（計畫 D9：註冊表 + 統一參數傳遞）。
+
+Takes the client class from the registry according to ``settings.LLM_PROVIDER`` (or the type of the given
+endpoint) and creates an instance. Registry values are ``_ProviderEntry``: a module name, a class name, plus two
+**static** capability flags (``is_cli`` / ``supports_effort``). The flags are declared statically so queries
+such as "is this provider a CLI" or "does it support effort" need not import any provider module; the
+diagnostics endpoint and the error messages must keep working when the environment is broken (missing
+dependencies). The flags are **checked against the class's own declarations at load time** and raise on
+mismatch, so they cannot drift.
+
+A module is loaded with ``importlib`` only when selected, so third-party dependencies (jsonschema / anthropic /
+google-genai) do not become startup prerequisites of other providers. Unregistered provider values (google /
+openai / relay names / empty) always return the default :class:`~app.infrastructure.llm.client.LLMClient`.
+
+Every client takes the same three arguments ``model`` / ``effort`` / ``endpoint``; providers that do not support
+effort are rejected by :class:`~app.infrastructure.llm.base.BaseLLMClient` according to ``SUPPORTS_EFFORT``.
+
+When an endpoint is given (model-routing plan llm_model_routing_FEAT_2026-10-15.md D5), the class is chosen by
+the endpoint type and the endpoint is passed to the constructor; the URL, key, and label prefix all come from the
+endpoint. When no endpoint is given: if ``LLM_PROVIDER`` names an endpoint defined in ``LLM_ENDPOINTS``, that
+endpoint is used; otherwise the path is exactly the same as before endpoints were introduced (no ``endpoint`` is
+passed, and the client reads the legacy single-set settings).
+
+To add a provider, add one row to ``_REGISTRY``; wrong flags are caught at the first resolution.
 
 依 ``settings.LLM_PROVIDER``（或指定端點的類型）從註冊表取得客戶端類別並建立實例。註冊表的值是
 ``_ProviderEntry``：模組名、類別名，加上兩個**靜態**能力旗標（``is_cli`` /
@@ -10,10 +34,10 @@ effort」這類查詢不必 import 任何 provider 模組——診斷端點與�
 
 模組在被選中時才 ``importlib`` 載入——第三方依賴（jsonschema / anthropic /
 google-genai）不成為其他 provider 的啟動前提。未註冊的 provider 值（google /
-openai / 各中轉站名 / 空）一律回傳預設的 :class:`~app.infrastructure.llm.client.LLMClient`。
+openai / 各中轉站名 / 空）一律回傳預設的 ``LLMClient``。
 
 所有客戶端一律收 ``model`` / ``effort`` / ``endpoint`` 三個參數；不支援 effort 的
-provider 由 :class:`~app.infrastructure.llm.base.BaseLLMClient` 依 ``SUPPORTS_EFFORT`` 拒絕。
+provider 由 ``BaseLLMClient`` 依 ``SUPPORTS_EFFORT`` 拒絕。
 
 指定端點（模型路由計畫 llm_model_routing_FEAT_2026-10-15.md D5）時改依端點類型選
 類別，並把端點傳給建構子——網址、金鑰與標籤前綴都取自端點。未指定端點時：
@@ -21,14 +45,6 @@ provider 由 :class:`~app.infrastructure.llm.base.BaseLLMClient` 依 ``SUPPORTS_
 完全相同（不傳 ``endpoint``，客戶端讀舊式單組設定）。
 
 新增 provider 的作法：在 ``_REGISTRY`` 加一列即可；旗標填錯會在第一次解析時被抓到。
-
-English summary:
-    Registry-based LLM client factory routing on ``LLM_PROVIDER``, or on
-    the endpoint's type when an endpoint ID is given. Entries
-    carry static ``is_cli`` / ``supports_effort`` flags so capability
-    queries never import provider modules; the flags are verified against
-    the class on first load so they cannot drift. Unknown providers fall
-    back to the OpenAI-compatible ``LLMClient``.
 """
 
 import importlib
@@ -57,14 +73,19 @@ GEMINI_NATIVE_PROVIDER = "gemini-native"
 
 @dataclass(frozen=True)
 class _ProviderEntry:
-    """註冊表的一列。One registry row.
+    """One row of the registry.
+
+    註冊表的一列。
 
     Attributes:
-        module: ``app.infrastructure.llm`` 下的模組名。Module name.
-        class_name: 該模組內的客戶端類別名。Client class name.
-        is_cli: 是否為 headless CLI 型（subprocess 驅動）。Whether the
-            provider is a subprocess-driven CLI.
-        supports_effort: 是否接受 ``effort`` 覆寫。Whether effort is accepted.
+        module: the module name under ``app.infrastructure.llm``
+            ``app.infrastructure.llm`` 下的模組名
+        class_name: the client class name inside that module
+            該模組內的客戶端類別名
+        is_cli: whether it is a headless CLI type (driven by subprocess)
+            是否為 headless CLI 型（subprocess 驅動）
+        supports_effort: whether an ``effort`` override is accepted
+            是否接受 ``effort`` 覆寫
     """
 
     module: str
@@ -92,11 +113,17 @@ _REGISTRY: dict[str, _ProviderEntry] = {
 
 
 def _verify_entry(key: str, entry: _ProviderEntry, client_cls: object) -> None:
-    """載入時核對註冊列的靜態宣告與類別本身一致，防止兩處漂移。
+    """Verify at load time that the registry row's static declarations match the class, preventing drift.
 
-    Verify the registry row's static declarations against the loaded class.
+    載入時核對註冊列的靜態宣告與類別本身一致，防止兩處漂移。
+
+    Tests often replace the class with ``MagicMock``; the check is skipped when it is not a real class.
 
     測試常以 ``MagicMock`` 替換類別；非真實類別時跳過核對。
+
+    Raises:
+        RuntimeError: if ``PROVIDER_NAME``, ``is_cli``, or ``supports_effort`` disagrees with the class
+            若 ``PROVIDER_NAME``、``is_cli`` 或 ``supports_effort`` 與類別不一致
     """
     if not isinstance(client_cls, type):
         return
@@ -119,20 +146,21 @@ def _verify_entry(key: str, entry: _ProviderEntry, client_cls: object) -> None:
 
 
 def resolve_client_class(provider: str | None = None) -> type[BaseLLMClient]:
-    """依 provider 值取得客戶端類別（不實例化）。
+    """Resolve the client class for a provider value without instantiating it.
 
-    Resolve the client class for a provider without instantiating it.
+    依 provider 值取得客戶端類別（不實例化）。
 
     Args:
-        provider: provider 值；None 讀 ``settings.LLM_PROVIDER``。Provider
-            value, or None to read settings.
+        provider: the provider value; ``None`` reads ``settings.LLM_PROVIDER``
+            provider 值；None 讀 ``settings.LLM_PROVIDER``
 
     Returns:
-        對應的客戶端類別；未註冊時為 ``LLMClient``。The client class, or
-        ``LLMClient`` for unregistered providers.
+        the matching client class; ``LLMClient`` when unregistered
+        對應的客戶端類別；未註冊時為 ``LLMClient``
 
     Raises:
-        RuntimeError: 註冊列的靜態旗標與類別宣告不一致（開發期錯誤）。
+        RuntimeError: if the row's static flags disagree with the class declarations (a development-time error)
+            若註冊列的靜態旗標與類別宣告不一致（開發期錯誤）
     """
     key = normalize_provider(settings.LLM_PROVIDER if provider is None else provider)
     entry = _REGISTRY.get(key)
@@ -146,20 +174,35 @@ def resolve_client_class(provider: str | None = None) -> type[BaseLLMClient]:
 
 
 def is_cli_provider(provider: str | None) -> bool:
-    """該 provider 是否為 headless CLI 型；純查表，不 import 任何 provider 模組。
+    """Return whether the provider is a headless CLI type.
 
-    Whether the provider is a subprocess-driven CLI. A pure lookup: never
-    imports provider modules, so it works even when their dependencies are
-    missing (the diagnostics endpoint relies on this).
+    回傳該 provider 是否為 headless CLI 型。
+
+    A pure lookup that never imports provider modules, so it works even when their dependencies are missing (the
+    diagnostics endpoint relies on this).
+
+    純查表，不 import 任何 provider 模組，因此依賴缺失時仍可運作（診斷端點依賴這點）。
+
+    Args:
+        provider: the provider value; case and surrounding whitespace are ignored
+            provider 值；忽略大小寫與前後空白
+
+    Returns:
+        ``True`` if the provider is registered as a CLI
+        provider 註冊為 CLI 型時為 ``True``
     """
     entry = _REGISTRY.get(normalize_provider(provider))
     return bool(entry and entry.is_cli)
 
 
 def providers_supporting_effort() -> list[str]:
-    """支援 ``effort`` 覆寫的 provider 值清單（純查表，供錯誤訊息用）。
+    """Return the provider values that support an ``effort`` override (a pure lookup, for error messages).
 
-    Providers registered as supporting effort; a pure lookup for messages.
+    回傳支援 ``effort`` 覆寫的 provider 值清單（純查表，供錯誤訊息用）。
+
+    Returns:
+        the provider values in registration order
+        依註冊順序排列的 provider 值
     """
     return [key for key, entry in _REGISTRY.items() if entry.supports_effort]
 
@@ -170,29 +213,42 @@ def create_llm_client(
     model: str | None = None,
     effort: EffortArg = None,
 ) -> BaseLLMClient:
-    """依設定建立對應的 LLM 客戶端（可指定端點、覆寫模型 / 思考深度）。
+    """Create the matching LLM client from settings (optionally naming an endpoint or overriding model / effort).
 
-    Create the LLM client for an endpoint (or the configured provider),
-    optionally overriding the model and effort for this instance only.
+    依設定建立對應的 LLM 客戶端（可指定端點、覆寫模型 / 思考深度）。
+
+    Overrides apply only to the returned instance (request scope); settings and ``app.state.llm_client`` are not
+    changed.
 
     覆寫只作用在回傳的這個實例（請求範圍），不改 settings、不動
     ``app.state.llm_client``。
 
     Args:
-        endpoint: 端點 ID（見 :mod:`~app.infrastructure.llm.endpoints`）；None
+        endpoint: the endpoint ID (see :mod:`~app.infrastructure.llm.endpoints`); ``None`` uses ``LLM_PROVIDER``
+            (when it names an endpoint defined in ``LLM_ENDPOINTS``, that endpoint is used; otherwise the legacy
+            single-set settings are read)
+            端點 ID（見 ``app.infrastructure.llm.endpoints``）；None
             用 ``LLM_PROVIDER``（它指向 ``LLM_ENDPOINTS`` 定義的端點時走該端點，
-            否則讀舊式單組設定）。Endpoint ID, or None for ``LLM_PROVIDER``.
-        model: 覆寫模型名；None 沿用 ``LLM_MODEL_NAME``（指定端點時通常應一併
-            指定，None 不看端點的白名單）。Model override.
-        effort: 覆寫思考深度；None 沿用該 provider 的設定，``OMIT_EFFORT``
-            表示不傳。不支援的 provider 給值即拋錯。Effort override.
+            否則讀舊式單組設定）
+        model: the model-name override; ``None`` keeps ``LLM_MODEL_NAME`` (usually give it together with an
+            endpoint, because ``None`` ignores the endpoint's allowlist)
+            覆寫模型名；None 沿用 ``LLM_MODEL_NAME``（指定端點時通常應一併
+            指定，None 不看端點的白名單）
+        effort: the thinking-depth override; ``None`` keeps the provider's setting, ``OMIT_EFFORT`` means not
+            sending one. Giving a value to an unsupported provider raises.
+            覆寫思考深度；None 沿用該 provider 的設定，``OMIT_EFFORT``
+            表示不傳。不支援的 provider 給值即拋錯。
 
     Returns:
-        對應的客戶端。The client for the endpoint or provider.
+        the matching client
+        對應的客戶端
 
     Raises:
-        LLMServiceError: 端點不存在、所選客戶端初始化失敗時（如 API 金鑰未設、
-            effort 值非法或不受支援、找不到 CLI 執行檔），或選到尚未實作的 provider。
+        LLMServiceError: if the endpoint does not exist, the chosen client fails to initialize (for example the
+            API key is unset, the effort value is invalid or unsupported, the CLI executable is not found), or a
+            not-yet-implemented provider is selected
+            若端點不存在、所選客戶端初始化失敗（如 API 金鑰未設、
+            effort 值非法或不受支援、找不到 CLI 執行檔），或選到尚未實作的 provider
     """
     if endpoint is not None:
         return _create_for_endpoint(endpoint, model=model, effort=effort)
@@ -220,12 +276,14 @@ def create_llm_client(
 def _create_for_endpoint(
     endpoint_id: str, *, model: str | None, effort: EffortArg
 ) -> BaseLLMClient:
-    """依端點類型建立客戶端，並把端點交給建構子。
+    """Create the client matching the endpoint's type and hand the endpoint to its constructor.
 
-    Create the client matching the endpoint's type, handing it the endpoint.
+    依端點類型建立客戶端，並把端點交給建構子。
 
     Raises:
-        LLMServiceError: 端點不存在（未定義，或設定有誤已被跳過）或客戶端初始化失敗。
+        LLMServiceError: if the endpoint does not exist (undefined, or skipped because of a wrong setting) or the
+            client fails to initialize
+            若端點不存在（未定義，或設定有誤已被跳過）或客戶端初始化失敗
     """
     endpoint = get_endpoint(endpoint_id)
     if endpoint is None:

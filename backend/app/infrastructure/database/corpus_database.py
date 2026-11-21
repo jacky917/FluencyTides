@@ -1,11 +1,6 @@
-"""
+"""Async MySQL engine and session management dedicated to the corpus database.
+
 語料庫專用非同步 MySQL 資料庫引擎與 Session 管理模組。
-
-Async MySQL engine and session management dedicated to the corpus database.
-
-提供專門連接語料庫 (MySQL ``fluencytides_corpus``) 的 SQLAlchemy 2.0 AsyncEngine 與
-AsyncSession 工廠，用於 NLP 檢索、例句擷取，以及網站的卡片關聯（``rel_links`` / ``rel_types``，
-``RelationService``）與劇情流程圖。因為卡片關聯存在這裡，網站本身也需要這個連線，不只是建卡腳本。
 
 Provides a SQLAlchemy 2.0 AsyncEngine and AsyncSession factory that connect
 to the corpus database (MySQL ``fluencytides_corpus``) for NLP retrieval,
@@ -14,10 +9,19 @@ example-sentence extraction, and the website's card relations
 flowchart. Because card relations live here, the website itself requires
 this connection, not just the card scripts.
 
-與主應用程式的 database.py (SQLite) 分開，確保兩者的連線池與資源互不干擾。
+提供專門連接語料庫 (MySQL ``fluencytides_corpus``) 的 SQLAlchemy 2.0 AsyncEngine 與
+AsyncSession 工廠，用於 NLP 檢索、例句擷取，以及網站的卡片關聯（``rel_links`` / ``rel_types``，
+``RelationService``）與劇情流程圖。因為卡片關聯存在這裡，網站本身也需要這個連線，不只是建卡腳本。
+
+If creating the engine fails at import time, the error is logged and both ``corpus_engine`` and
+``corpus_async_session_factory`` are ``None``.
+
+若匯入時建立引擎失敗，會記錄錯誤，且 ``corpus_engine`` 與 ``corpus_async_session_factory`` 皆為 ``None``。
 
 Kept separate from the main application's database.py (SQLite) so the two
 connection pools and resources never interfere with each other.
+
+與主應用程式的 database.py (SQLite) 分開，確保兩者的連線池與資源互不干擾。
 """
 
 import logging
@@ -62,13 +66,13 @@ else:
 
 
 async def dispose_corpus_engine() -> None:
-    """釋放語料庫資料庫引擎的所有連線池資源。
+    """Dispose all connection-pool resources held by the corpus database engine.
 
-    Dispose all connection-pool resources held by the corpus database engine.
+    釋放語料庫資料庫引擎的所有連線池資源。
 
-    應在應用程式關閉時呼叫（lifespan shutdown）。
+    Should be called at application shutdown (lifespan shutdown). Does nothing if the engine was never created.
 
-    Should be called at application shutdown (lifespan shutdown).
+    應在應用程式關閉時呼叫（lifespan shutdown）。引擎未建立時不做任何事。
     """
     if corpus_engine:
         await corpus_engine.dispose()
@@ -76,22 +80,23 @@ async def dispose_corpus_engine() -> None:
 
 
 async def get_corpus_async_session() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI 依賴注入用的 AsyncSession 生成器 (針對語料庫)。
+    """Yield an AsyncSession of the corpus database for FastAPI dependency injection.
 
-    AsyncSession generator for FastAPI dependency injection (corpus database).
-
-    每個 HTTP 請求取得一個獨立的 Session，
-    請求結束後自動關閉，確保不會洩漏連線。
+    FastAPI 依賴注入用的 AsyncSession 生成器 (針對語料庫)。
 
     Each HTTP request gets its own session, which is closed automatically
     when the request ends, preventing connection leaks.
 
+    每個 HTTP 請求取得一個獨立的 Session，
+    請求結束後自動關閉，確保不會洩漏連線。
+
     Yields:
-        AsyncSession: 非同步資料庫 Session。The async database session.
+        the async database session
+        非同步資料庫 Session
 
     Raises:
-        RuntimeError: 語料庫連線尚未設定或初始化失敗時。Raised when the
-            corpus connection is not configured or failed to initialize.
+        RuntimeError: if the corpus connection is not configured or failed to initialize
+            若語料庫連線尚未設定或初始化失敗
     """
     if not corpus_async_session_factory:
         raise RuntimeError("MySQL 語料庫連線尚未設定或初始化失敗。請檢查 .env 中的 MYSQL_* 設定。")

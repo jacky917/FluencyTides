@@ -1,8 +1,6 @@
-"""
-Anki JSON 欄位安全讀寫工具模組。
+"""Utilities for safely reading and writing JSON array/object fields stored inside Anki note fields.
 
-Utilities for safely reading and writing JSON array/object fields stored
-inside Anki note fields.
+Anki JSON 欄位安全讀寫工具模組。
 """
 
 import json
@@ -19,38 +17,40 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 class AnkiJsonFieldManager:
-    """提供針對 Anki 卡片中 JSON 陣列/物件欄位的安全讀寫工具類。
+    """Utility class for safe read/write access to JSON array/object fields in Anki cards.
 
-    Utility class for safe read/write access to JSON array/object fields in
-    Anki cards.
+    提供針對 Anki 卡片中 JSON 陣列/物件欄位的安全讀寫工具類。
+
+    Because Anki sometimes wraps field content in HTML tags automatically (for example, after
+    editing), this class strips that noise before JSON parsing and offers
+    convenient list-manipulation helpers.
 
     由於 Anki 有時會自動在欄位內容外層加上 HTML 標籤（例如編輯過後），
     此工具類負責在解析 JSON 前濾除這些雜訊，並提供快捷的陣列操作方法。
-
-    Because Anki sometimes wraps field content in HTML tags (e.g. after
-    editing), this class strips that noise before JSON parsing and offers
-    convenient list-manipulation helpers.
     """
 
     @staticmethod
     def parse_field_string(field_str: str) -> list[Any]:
-        """安全解析給定的字串為 JSON 陣列，過濾 HTML 標籤。
+        """Safely parse the given string into a JSON array, filtering out HTML tags.
 
-        Safely parse the given string into a JSON array, filtering out HTML
-        tags; returns an empty list on failure.
+        安全解析給定的字串為 JSON 陣列，過濾 HTML 標籤。
+
+        Also repairs JSON broken by unescaped ``class="..."`` attributes in old data, then unescapes HTML entities.
+
+        也會修復舊資料中未跳脫的 ``class="..."`` 屬性造成的 JSON 損毀，再把 HTML Entity 還原成一般字元。
 
         Args:
-            field_str: Anki 欄位的原始字串內容。Raw Anki field string.
+            field_str: the raw string content of the Anki field
+                Anki 欄位的原始字串內容
 
         Returns:
-            解析出的 JSON 陣列；空欄位回傳空陣列。The parsed JSON list, or
-            an empty list for an empty field.
+            the parsed JSON list; an empty list for an empty field
+            解析出的 JSON 陣列；空欄位回傳空陣列
 
         Raises:
-            AnkiFieldCorruptedError: 欄位含內容但無法解析為 JSON 陣列時拋出，
-                以避免後續寫入靜默清空既有資料（S001）。Raised when the field
-                has content that cannot be parsed as a JSON list, preventing
-                follow-up writes from silently wiping existing data (S001).
+            AnkiFieldCorruptedError: if the field has content that cannot be parsed as a JSON array, so that
+                follow-up writes never silently wipe existing data (S001)
+                若欄位含內容但無法解析為 JSON 陣列，以避免後續寫入靜默清空既有資料（S001）
         """
         if not field_str:
             return []
@@ -83,18 +83,25 @@ class AnkiJsonFieldManager:
 
     @classmethod
     async def safe_read_list(cls, card_service: "CardService", note_id: int, field_name: str) -> list[Any]:
-        """從 Anki 讀取特定筆記的特定欄位並安全解析為 JSON 陣列。
+        """Read a specific field of a note from Anki and safely parse it as a JSON array.
 
-        Read a specific field of a note from Anki and safely parse it as a
-        JSON array.
+        從 Anki 讀取特定筆記的特定欄位並安全解析為 JSON 陣列。
 
         Args:
-            card_service: 卡片服務實例。The CardService instance.
-            note_id: 目標筆記 ID。Target note ID.
-            field_name: 目標欄位名稱。Target field name.
+            card_service: the card service instance
+                卡片服務實例
+            note_id: the target note ID
+                目標筆記 ID
+            field_name: the target field name
+                目標欄位名稱
 
         Returns:
-            解析出的 JSON 陣列。The parsed JSON list.
+            the parsed JSON list; an empty list if the field is missing or empty
+            解析出的 JSON 陣列；欄位不存在或為空時回傳空陣列
+
+        Raises:
+            AnkiFieldCorruptedError: if the field content cannot be parsed as a JSON array
+                若欄位內容無法解析為 JSON 陣列
         """
         note = await card_service.get_note(note_id)
         field_str = note["fields"].get(field_name, {}).get("value", "[]")
@@ -102,25 +109,45 @@ class AnkiJsonFieldManager:
 
     @staticmethod
     def serialize(data: Any) -> str:
-        """資料轉成要寫進 Anki 欄位的字串（JSON 再做 HTML 轉義）。The field string for the data.
+        """Convert data into the string to write into an Anki field (JSON, then HTML-escaped).
+
+        資料轉成要寫進 Anki 欄位的字串（JSON 再做 HTML 轉義）。
+
+        HTML escaping keeps Anki's rich-text editor from misparsing embedded HTML (such as ``<u>``) and corrupting
+        the JSON. Use it to build the field value yourself when writing it together with other fields in one call.
 
         HTML 轉義避免 Anki 的富文本編輯器將內含的 HTML（如 ``<u>``）錯誤解析並損毀 JSON。
         要和其他欄位在同一次寫入時用它自己組欄位值。
+
+        Args:
+            data: the JSON-serializable data
+                可序列化為 JSON 的資料
+
+        Returns:
+            the HTML-escaped JSON string
+            經 HTML 轉義的 JSON 字串
         """
         return html.escape(json.dumps(data, ensure_ascii=False))
 
     @staticmethod
     async def update_field(card_service: "CardService", note_id: int, field_name: str, data: Any) -> None:
-        """將資料序列化為 JSON 字串並寫回 Anki 欄位。
+        """Serialize the data to a JSON string and write it back to the Anki field.
 
-        Serialize the data to a JSON string and write it back to the Anki
-        field.
+        將資料序列化為 JSON 字串並寫回 Anki 欄位。
+
+        The value is built with ``serialize``, so it is HTML-escaped.
+
+        欄位值以 ``serialize`` 產生，因此會經過 HTML 轉義。
 
         Args:
-            card_service: 卡片服務實例。The CardService instance.
-            note_id: 目標筆記 ID。Target note ID.
-            field_name: 目標欄位名稱。Target field name.
-            data: 欲序列化寫入的資料。Data to serialize and store.
+            card_service: the card service instance
+                卡片服務實例
+            note_id: the target note ID
+                目標筆記 ID
+            field_name: the target field name
+                目標欄位名稱
+            data: the data to serialize and write
+                欲序列化寫入的資料
         """
         new_field_str = AnkiJsonFieldManager.serialize(data)
         await card_service.update_note_fields(note_id, {field_name: new_field_str})
@@ -128,15 +155,24 @@ class AnkiJsonFieldManager:
 
     @classmethod
     async def append_to_list(cls, card_service: "CardService", note_id: int, field_name: str, item: Any) -> None:
-        """附加元素至目標 JSON 陣列欄位尾端。
+        """Append an item to the end of the target JSON array field.
 
-        Append an item to the end of the target JSON array field.
+        附加元素至目標 JSON 陣列欄位尾端。
 
         Args:
-            card_service: 卡片服務實例。The CardService instance.
-            note_id: 目標筆記 ID。Target note ID.
-            field_name: 目標欄位名稱。Target field name.
-            item: 欲附加的元素。Item to append.
+            card_service: the card service instance
+                卡片服務實例
+            note_id: the target note ID
+                目標筆記 ID
+            field_name: the target field name
+                目標欄位名稱
+            item: the item to append
+                欲附加的元素
+
+        Raises:
+            AnkiFieldCorruptedError: if the existing field content cannot be parsed as a JSON array; nothing is
+                written
+                若既有欄位內容無法解析為 JSON 陣列；此時不會寫入
         """
         items = await cls.safe_read_list(card_service, note_id, field_name)
         items.append(item)
@@ -144,17 +180,30 @@ class AnkiJsonFieldManager:
 
     @classmethod
     async def insert_to_list(cls, card_service: "CardService", note_id: int, field_name: str, index: int, item: Any) -> None:
-        """在特定索引位置插入元素至目標 JSON 陣列欄位。
+        """Insert an item at the given index of the target JSON array field.
 
-        Insert an item at the given index of the target JSON array field;
-        appends when the index is out of range.
+        在特定索引位置插入元素至目標 JSON 陣列欄位。
+
+        Appends the item when the index is out of range (negative or greater than the list length).
+
+        索引超出範圍（負數或大於陣列長度）時改為附加到尾端。
 
         Args:
-            card_service: 卡片服務實例。The CardService instance.
-            note_id: 目標筆記 ID。Target note ID.
-            field_name: 目標欄位名稱。Target field name.
-            index: 插入位置索引。Insertion index.
-            item: 欲插入的元素。Item to insert.
+            card_service: the card service instance
+                卡片服務實例
+            note_id: the target note ID
+                目標筆記 ID
+            field_name: the target field name
+                目標欄位名稱
+            index: the insertion index
+                插入位置索引
+            item: the item to insert
+                欲插入的元素
+
+        Raises:
+            AnkiFieldCorruptedError: if the existing field content cannot be parsed as a JSON array; nothing is
+                written
+                若既有欄位內容無法解析為 JSON 陣列；此時不會寫入
         """
         items = await cls.safe_read_list(card_service, note_id, field_name)
         if 0 <= index <= len(items):
@@ -165,19 +214,27 @@ class AnkiJsonFieldManager:
 
     @classmethod
     async def remove_from_list(cls, card_service: "CardService", note_id: int, field_name: str, index: int) -> bool:
-        """移除目標 JSON 陣列欄位中特定索引的元素。
+        """Remove the item at the given index from the target JSON array field.
 
-        Remove the item at the given index from the target JSON array field.
+        移除目標 JSON 陣列欄位中特定索引的元素。
 
         Args:
-            card_service: 卡片服務實例。The CardService instance.
-            note_id: 目標筆記 ID。Target note ID.
-            field_name: 目標欄位名稱。Target field name.
-            index: 欲移除的索引。Index to remove.
+            card_service: the card service instance
+                卡片服務實例
+            note_id: the target note ID
+                目標筆記 ID
+            field_name: the target field name
+                目標欄位名稱
+            index: the index to remove; negative indexes count as out of range
+                欲移除的索引；負數視為超出範圍
 
         Returns:
-            bool: 成功移除回傳 True；索引超出範圍回傳 False。True if
-                removed; False when the index is out of range.
+            ``True`` if removed; ``False`` when the index is out of range (nothing is written)
+            成功移除回傳 ``True``；索引超出範圍回傳 ``False``（不會寫入）
+
+        Raises:
+            AnkiFieldCorruptedError: if the existing field content cannot be parsed as a JSON array
+                若既有欄位內容無法解析為 JSON 陣列
         """
         items = await cls.safe_read_list(card_service, note_id, field_name)
         if 0 <= index < len(items):

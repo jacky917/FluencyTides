@@ -1,11 +1,10 @@
-"""
+"""Exceptions package.
+
 例外處理模組 (Exceptions)。
 
-Exceptions package.
+Re-exports all custom exceptions in one place for convenient imports.
 
 統一匯出所有自定義例外，方便其他模組使用。
-
-Re-exports all custom exceptions in one place for convenient imports.
 """
 
 from .base import FluencyTidesError

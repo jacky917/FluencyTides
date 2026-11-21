@@ -1,4 +1,17 @@
-"""三語口說練習卡片處理器（Speaking_Trilingual_Dark）。
+"""Trilingual speaking practice card handler (Speaking_Trilingual_Dark).
+
+三語口說練習卡片處理器（Speaking_Trilingual_Dark）。
+
+The architecture mirrors ``speaking_coach_handler.py``; the differences:
+
+- One card covers ZH, JA, and EN practice; Prompt and Context are shared, while Recordings and References
+  have one field per language.
+- There is no Target_Language field: the language comes from the field suffix or a language code
+  (``shared/trilingual_lang.py``).
+- ``Prompt_Audios`` is a single JSON field whose items carry a ``lang`` key, with **at most one per
+  language** (the same lang overwrites).
+
+All field reads and writes go through ``CardService`` and ``AnkiJsonFieldManager``.
 
 架構對齊 ``speaking_coach_handler.py``；差異：
 
@@ -10,17 +23,6 @@
   **每語言最多一條**（同 lang 覆蓋）。
 
 欄位讀寫一律走 ``CardService`` / ``AnkiJsonFieldManager``。
-
-Trilingual speaking practice card handler (Speaking_Trilingual_Dark).
-
-Architecture mirrors ``speaking_coach_handler.py``; differences: one card
-covers ZH/JA/EN practice with shared Prompt/Context and per-language
-Recordings/References fields; no Target_Language field (language comes
-from the field suffix or a language code, see
-``shared/trilingual_lang.py``); ``Prompt_Audios`` is a single JSON field
-whose items carry a ``lang`` key, at most one per language (same lang
-overwrites). All field I/O goes through ``CardService`` /
-``AnkiJsonFieldManager``.
 """
 
 import json
@@ -64,9 +66,9 @@ MAX_TEXT_LENGTH = 2000
 
 
 class ReferenceDraft(BaseModel):
-    """建卡時的一句參考答案；``date``、``status``、``audios`` 由建卡補上。
+    """One reference answer given at creation; the create fills in ``date``, ``status``, and ``audios``.
 
-    One reference answer given at creation.
+    建卡時的一句參考答案；``date``、``status``、``audios`` 由建卡補上。
     """
 
     content: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH, description="句子")
@@ -90,9 +92,15 @@ class ReferenceDraft(BaseModel):
 
 
 class SpeakingTrilingualCreateParams(BaseModel):
-    """三語對話卡的建立參數（D3）。語言由欄位決定，所以沒有語言參數；``tg_bot`` 由服務層傳入。
+    """The create parameters of a trilingual speaking card (D3).
 
-    Create parameters of a trilingual speaking card. 網頁的預覽流程由草稿（:meth:`execute_draft`）
+    三語對話卡的建立參數（D3）。
+
+    The language is decided by the field, so there is no language parameter; ``tg_bot`` is passed by the
+    service layer. In the web preview flow the draft (``execute_draft``) prefills these, and the user sends
+    them back after ticking.
+
+    語言由欄位決定，所以沒有語言參數；``tg_bot`` 由服務層傳入。網頁的預覽流程由草稿（``execute_draft``）
     預先填好，使用者勾選後送回。
     """
 
@@ -122,7 +130,10 @@ class SpeakingTrilingualCreateParams(BaseModel):
 
 
 class SpeakingTrilingualDraftParams(BaseModel):
-    """網頁預覽流程的草稿輸入：場景、想怎麼答、對象。Draft input of the web preview flow."""
+    """The draft input of the web preview flow: the scene, how to answer, and the audience.
+
+    網頁預覽流程的草稿輸入：場景、想怎麼答、對象。
+    """
 
     background: str = Field(
         min_length=1,
@@ -144,17 +155,16 @@ class SpeakingTrilingualDraftParams(BaseModel):
 
 @register_handler
 class SpeakingTrilingualHandler(BaseHandler):
-    """三語口說練習任務處理器。
+    """Trilingual speaking practice task handler.
 
-    Trilingual speaking practice task handler.
+    三語口說練習任務處理器。
+
+    Supports Speaking_Trilingual_Dark: manages shared-scenario creation and updates of the per-language JSON
+    fields (Recordings ×3, References ×3) and Prompt_Audios (with ``lang`` keys).
 
     支援 Speaking_Trilingual_Dark：管理共通情境的建立，以及
     per-language JSON 欄位（Recordings_×3 / References_×3）與
     Prompt_Audios（帶 lang 鍵）的更新。
-
-    Supports Speaking_Trilingual_Dark: manages shared-scenario creation
-    and updates of per-language JSON fields (Recordings x3 /
-    References x3) plus Prompt_Audios (with lang keys).
     """
 
     CAPABILITIES = HandlerCapabilities(
@@ -174,8 +184,9 @@ class SpeakingTrilingualHandler(BaseHandler):
     CREATE_PARAMS = SpeakingTrilingualCreateParams
     DRAFT_PARAMS = SpeakingTrilingualDraftParams
     CREATE_TAGS = ("Speaking_Trilingual", "HandlerGenerated")
+    #: The web field-search buttons. References are JSON holding both sentences and notes, so a "contains"
+    #: match finds both.
     #: 網頁欄位搜尋的按鈕。參考答案是 JSON，句子與說明都在裡面，「包含」比對會一起找到。
-    #: The field-search buttons; references hold both sentences and notes.
     SEARCH_FIELDS = (
         SearchField("prompt", "情境", ("Prompt",)),
         SearchField("context", "補充", ("Context",)),
@@ -188,39 +199,49 @@ class SpeakingTrilingualHandler(BaseHandler):
     @property
     @override
     def handler_name(self) -> str:
-        """處理器名稱。
+        """The handler name used in URLs.
 
-        Handler name.
+        處理器名稱，出現在網址裡。
         """
         return "speaking_trilingual"
 
     @property
     @override
     def title(self) -> str:
-        """中文名稱。Display title."""
+        """The Chinese display title.
+
+        中文名稱。
+        """
         return "三語對話卡"
 
     @property
     @override
     def supported_models(self) -> list[str]:
-        """支援的 Anki 模型名稱清單。
+        """The Anki note types this handler owns.
 
-        Supported Anki model names.
+        這個處理器負責的 Anki 筆記類型。
         """
         return ["Speaking_Trilingual_Dark"]
 
     @override
     async def execute_draft(self, parameters: dict[str, object], existing_tags: list[str]) -> dict[str, object]:
-        """請 LLM 為場景生成三語說法與建議標籤，整理成建立參數的草稿（不寫入）。
+        """Ask the LLM for trilingual sayings and suggested tags for the scene, shaped as a draft (nothing written).
 
-        Ask the LLM for sayings and tags, shaped as draft create parameters.
+        請 LLM 為場景生成三語說法與建議標籤，整理成建立參數的草稿（不寫入）。
+
+        Sayings whose content is blank are dropped.
+
+        內容為空白的說法會被略過。
 
         Args:
-            parameters: ``SpeakingTrilingualDraftParams`` 驗證後的輸入。The validated input.
-            existing_tags: 三語卡用過的標籤，讓 LLM 優先沿用。Existing tags.
+            parameters: the input validated by ``SpeakingTrilingualDraftParams``
+                ``SpeakingTrilingualDraftParams`` 驗證後的輸入
+            existing_tags: tags trilingual cards have used, for the LLM to prefer reusing
+                三語卡用過的標籤，讓 LLM 優先沿用
 
         Returns:
-            ``SpeakingTrilingualCreateParams`` 形狀的草稿，另帶 ``tags``（建議的標籤）。The draft plus tags.
+            a draft shaped like ``SpeakingTrilingualCreateParams``, plus ``tags`` (the suggested tags)
+            ``SpeakingTrilingualCreateParams`` 形狀的草稿，另帶 ``tags``（建議的標籤）
         """
         audience = generate_service.target_audience(str(parameters["audience"]), str(parameters["audience_note"]))
         draft = await generate_service.generate(
@@ -246,21 +267,30 @@ class SpeakingTrilingualHandler(BaseHandler):
         model_name: str,
         parameters: dict
     ) -> list[int]:
-        """建立一張三語口說卡片：參考答案依參數寫入（補上今天、啟用、沒有音檔），其餘 JSON 欄位為空陣列。
+        """Create one trilingual speaking card with the given reference answers.
 
-        Create a trilingual speaking card with the given reference answers;
-        the other JSON fields start as empty arrays.
+        建立一張三語口說卡片。
+
+        Reference answers are written from the parameters (with today's date, enabled, and no audio); the other
+        JSON fields start as empty lists.
+
+        參考答案依參數寫入（補上今天、啟用、沒有音檔），其餘 JSON 欄位為空陣列。
 
         Args:
-            card_service: 卡片服務。Card service.
-            relation_service: 關聯服務。Relation service.
-            deck_name: 目標牌組。Target deck.
-            model_name: 目標模型。Target model.
-            parameters: ``SpeakingTrilingualCreateParams`` 驗證後的參數與 tg_bot。The
-                validated parameters plus 'tg_bot'.
+            card_service: the card service
+                卡片服務
+            relation_service: the relation service (unused)
+                關聯服務（不使用）
+            deck_name: the target deck
+                目標牌組
+            model_name: the target note type
+                目標模型
+            parameters: the parameters validated by ``SpeakingTrilingualCreateParams``, plus ``tg_bot``
+                ``SpeakingTrilingualCreateParams`` 驗證後的參數與 ``tg_bot``
 
         Returns:
-            建立成功的 Note ID（單元素陣列）。The created note ID, as a list.
+            the created note ID, as a one-element list
+            建立成功的 Note ID（單元素陣列）
         """
         prompt_text = parameters.get("prompt", "")
         context_text = parameters.get("context", "")
@@ -303,20 +333,44 @@ class SpeakingTrilingualHandler(BaseHandler):
         note_id: int,
         parameters: dict
     ) -> None:
-        """客製化更新（皆以 AnkiJsonFieldManager 讀寫）。
+        """Apply a task-specific update; JSON fields are read and written through ``AnkiJsonFieldManager``.
 
-        Task-specific update (all I/O via AnkiJsonFieldManager).
-        Supported actions: add_recording, delete_recording, add_audio,
-        update_fields (see the examples below). Raises ValueError on
-        missing params or an unsupported action.
+        客製化更新（皆以 AnkiJsonFieldManager 讀寫）。
 
-        parameters 支援:
-        - {"action": "add_recording", "lang": "JA", "recording": {...}}
-        - {"action": "delete_recording", "lang": "JA", "index": 1}
-        - {"action": "add_audio", "field_name": "References_JA"|"Prompt_Audios",
-           "index": "0"|"last"|"ZH"|"JA"|"EN", "audio": "...",
-           "speaker": "...", "avatar": "..."}
-        - {"action": "update_fields", "fields": {"Context": "..."}}
+        Supported ``parameters``:
+
+        - ``{"action": "add_recording", "lang": "JA", "recording": {...}}``
+        - ``{"action": "delete_recording", "lang": "JA", "index": 1}`` (an out-of-range index is ignored)
+        - ``{"action": "add_audio", "field_name": "References_JA" | "Prompt_Audios",
+          "index": "0" | "last" | "ZH" | "JA" | "EN", "audio": "...", "speaker": "...", "avatar": "..."}``
+          (for ``Prompt_Audios`` the index must be a language code, and the same lang overwrites)
+        - ``{"action": "update_fields", "fields": {"Context": "..."}}``
+
+        parameters 支援：
+
+        - ``{"action": "add_recording", "lang": "JA", "recording": {...}}``
+        - ``{"action": "delete_recording", "lang": "JA", "index": 1}``（超出範圍的 index 忽略）
+        - ``{"action": "add_audio", "field_name": "References_JA" | "Prompt_Audios",
+          "index": "0" | "last" | "ZH" | "JA" | "EN", "audio": "...", "speaker": "...", "avatar": "..."}``
+          （``Prompt_Audios`` 的 index 須為語言碼，同 lang 覆蓋）
+        - ``{"action": "update_fields", "fields": {"Context": "..."}}``
+
+        Args:
+            card_service: the card service
+                卡片服務
+            relation_service: the relation service (unused)
+                關聯服務（不使用）
+            note_id: the target note ID
+                目標 Note ID
+            parameters: the update parameters (must contain ``action``)
+                更新參數（需含 ``action``）
+
+        Raises:
+            ValueError: if a recording action lacks a valid ``lang``, ``add_audio`` lacks ``field_name``,
+                ``index`` or ``audio`` (or its ``Prompt_Audios`` index is not a language code), or the action is
+                not supported
+                若錄音動作缺少合法的 ``lang``、``add_audio`` 缺少 ``field_name``、``index`` 或 ``audio``
+                （或 ``Prompt_Audios`` 的 index 不是語言碼），或 action 不支援
         """
         action = parameters.get("action")
 
@@ -416,5 +470,13 @@ class SpeakingTrilingualHandler(BaseHandler):
 
 
 def _without_blank_note(reference: dict[str, object]) -> dict[str, object]:
-    """參考答案省略空的說明與未標的熟識度（與匯入的資料一致）。Drop an empty note and unset familiarity."""
+    """Return a reference answer without its empty or ``None`` values, consistent with imported data.
+
+    參考答案省略空的說明與未標的熟識度（與匯入的資料一致）。
+
+    In practice this drops an empty ``note`` and an unrated ``familiarity``; any other key whose value is
+    ``""`` or ``None`` is dropped too.
+
+    實際上就是省略空的 ``note`` 與未標的 ``familiarity``；其他值為 ``""`` 或 ``None`` 的鍵也一併省略。
+    """
     return {key: value for key, value in reference.items() if value not in ("", None)}

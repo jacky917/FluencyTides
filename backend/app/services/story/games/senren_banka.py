@@ -1,11 +1,13 @@
-"""《千恋＊万花》的遊戲適配器：只放和預設不同的部分。
+"""Game adapter for 《千恋＊万花》 (Senren*Banka): only the differences from the default.
 
-Adapter for Senren*Banka; only the differences from the default.
+《千恋＊万花》的遊戲適配器：只放和預設不同的部分。
+
+- Route presets may only set the in-game flowchart's branch flags (``s<file number>*<label>_sel``), and the values
+  are integers (the option number, starting at 1); the route counters (Yoshino, Mako, and so on) are recomputed by
+  the game in file 015 from these flags, so they are not put in the presets.
 
 - 路線預設只能用遊戲內流程圖的分歧旗標（``s<檔號>*<標籤>_sel``），值是整數（選項序號，1 起）；
   路線計數（芳乃、茉子等）由遊戲在 015 依這些旗標重算，不放進預設。
-- Route presets may only set the flowchart branch flags (``s…_sel``) to
-  integers; the game recomputes the route counters from them in file 015.
 """
 
 from __future__ import annotations
@@ -22,7 +24,10 @@ _BRANCH_FLAG = re.compile(r"^s\d+[ab]?\*\S+_sel$")
 
 
 class SenrenBankaConfig(StoryConfig):
-    """千戀＊萬花的設定：路線旗標只能是分歧旗標、值為整數。Config with integer branch flags."""
+    """The config of 《千恋＊万花》: route flags must be branch flags with integer values.
+
+    千戀＊萬花的設定：路線旗標只能是分歧旗標、值為整數。
+    """
 
     @field_validator("route_presets")
     @classmethod
@@ -38,6 +43,9 @@ class SenrenBankaConfig(StoryConfig):
 
 @register_story_game("SenrenBanka")
 class SenrenBanka(StoryGame):
-    """千戀＊萬花。Senren*Banka."""
+    """The adapter for 《千恋＊万花》 (Senren*Banka).
+
+    千戀＊萬花。
+    """
 
     config_model = SenrenBankaConfig

@@ -1,10 +1,27 @@
-"""吉里吉里 PackinOne「saveDataPack」存檔（TJS/4s0）的編解碼。
+"""Codec for KiriKiri PackinOne ``saveDataPack`` saves (TJS/4s0).
 
-KiriKiri PackinOne ``saveDataPack`` (TJS/4s0) codec, ported from the
-offline tool ``krkr_savepack.py`` (docs/wip/story_flowchart_FEAT_2026-10-31.md D13).
+吉里吉里 PackinOne「saveDataPack」存檔（TJS/4s0）的編解碼。
+
+Ported from the offline tool ``krkr_savepack.py`` (docs/wip/story_flowchart_FEAT_2026-10-31.md D13).
+
+移植自離線工具 ``krkr_savepack.py``（docs/wip/story_flowchart_FEAT_2026-10-31.md D13）。
+
+For games that use PackinOne.dll, such as YUZUSOFT's Sabbat of the Witch: a slot save
+``data_*.jpg`` is a thumbnail, and the pack is hidden after the image data in an ``FF EB``
+segment (0xFF is stuffed as ``FF 00``), followed finally by ``FF D9``.
 
 適用於 ゆずソフト《魔女的夜宴》等使用 PackinOne.dll 的遊戲：欄位存檔 ``data_*.jpg`` 是一張縮圖，
 封包藏在影像資料之後的 ``FF EB`` 區段（0xFF 以 ``FF 00`` 填充），最後是 ``FF D9``。
+
+Pack format:
+    header       ``TJS/`` + compression (``n`` none / ``4`` LZ4) + ``s0\\0`` + seed(u32) + cryptmode(u16)
+                 + ivlen(u16) + iv
+    encryption   key = BLAKE2s-256(key=seed, data=iv); nonce = XXH32(iv, seed), seed;
+                 each key-stream segment = one ChaCha block (64 bytes), extended by xorshift32 to
+                 "block count × 64" bytes; the segment size depends on cryptmode: 1 → 1024, 2 → 512,
+                 3 → 256, 4–6 → 64 (plain ChaCha, not extended)
+    compression  repeated [u16 length][LZ4 block], each block 4096 bytes after decompression
+    content      a tree serialization of [type][check byte][data], with a 4-byte checksum at the end
 
 封包格式：
     檔頭  ``TJS/`` + 壓縮（``n`` 無／``4`` LZ4）+ ``s0\\0`` + seed(u32) + cryptmode(u16) + ivlen(u16) + iv
@@ -14,9 +31,9 @@ offline tool ``krkr_savepack.py`` (docs/wip/story_flowchart_FEAT_2026-10-31.md D
     壓縮  反覆的 [u16 長度][LZ4 區塊]，每塊解壓後 4096 位元組
     內容  [型別][檢查位元組][資料] 的樹狀序列化，最後 4 位元組為校驗碼
 
-Save slots are JPEG thumbnails with the pack embedded after the image data
-in an ``FF EB`` segment. Integers and floats are distinct TJS types (25 vs
-25.0); ``None`` maps to void.
+Integers and floats are distinct TJS types (25 vs 25.0); ``None`` maps to void.
+
+整數與小數是不同的 TJS 型別（25 與 25.0）；``None`` 對應 void。
 """
 
 from __future__ import annotations
@@ -28,14 +45,18 @@ from typing import Any, Callable
 
 M32 = 0xFFFFFFFF
 CHUNK = 4096
+#: cryptmode → (ChaCha rounds, 64-byte blocks per segment); when there is more than one block, the blocks
+#: from the second on are extended by xorshift32.
 #: cryptmode → (ChaCha 輪數, 每段的 64 位元組區塊數)；區塊數 > 1 時第 2 塊起以 xorshift32 延伸。
-#: cryptmode → (ChaCha rounds, 64-byte blocks per segment); blocks after the first come from xorshift32.
 CRYPT_MODES = {1: (8, 16), 2: (12, 8), 3: (20, 4), 4: (8, 1), 5: (12, 1), 6: (20, 1)}
 T_VOID, T_STRING, T_INT, T_REAL, T_ARRAY, T_DICT = 0x00, 0x02, 0x04, 0x05, 0x81, 0xC1
 
 
 class PackError(ValueError):
-    """存檔格式錯誤。Malformed save data."""
+    """An error for malformed save data.
+
+    存檔格式錯誤。
+    """
 
 
 def _rotl(x: int, r: int) -> int:
@@ -46,7 +67,20 @@ def _rotl(x: int, r: int) -> int:
 
 
 def xxh32(data: bytes, seed: int) -> int:
-    """XXH32。The XXH32 hash."""
+    """Return the XXH32 hash of ``data``.
+
+    回傳 ``data`` 的 XXH32 雜湊。
+
+    Args:
+        data: the bytes to hash
+            要雜湊的位元組
+        seed: the 32-bit seed
+            32 位元的種子
+
+    Returns:
+        the 32-bit hash
+        32 位元雜湊值
+    """
     p1, p2, p3, p4, p5 = 0x9E3779B1, 0x85EBCA77, 0xC2B2AE3D, 0x27D4EB2F, 0x165667B1
     n, i = len(data), 0
     if n >= 16:
@@ -99,7 +133,28 @@ def _chacha_block(state: list[int], rounds: int) -> list[int]:
 
 
 def crypt(data: bytes, seed: int, iv: bytes, cryptmode: int) -> bytes:
-    """加密與解密相同（XOR 金鑰串流）。Encrypt/decrypt (XOR key stream)."""
+    """Encrypt or decrypt ``data``; both are the same operation (XOR with the key stream).
+
+    加密或解密 ``data``；兩者相同（XOR 金鑰串流）。
+
+    Args:
+        data: the bytes to encrypt or decrypt
+            要加密或解密的位元組
+        seed: the pack header's seed
+            封包檔頭的 seed
+        iv: the pack header's iv
+            封包檔頭的 iv
+        cryptmode: the pack header's cryptmode (1–6)
+            封包檔頭的 cryptmode（1–6）
+
+    Returns:
+        the result, the same length as ``data``
+        結果，與 ``data`` 等長
+
+    Raises:
+        PackError: if ``cryptmode`` is unknown
+            若 ``cryptmode`` 未知
+    """
     if cryptmode not in CRYPT_MODES:
         raise PackError(f"未知的加密模式 {cryptmode}")
     rounds, blocks = CRYPT_MODES[cryptmode]
@@ -171,7 +226,18 @@ def _lz4_len(out: bytearray, v: int) -> None:
 
 
 def lz4_compress_block(src: bytes) -> bytes:
-    """簡單的貪婪 LZ4 壓縮（獨立區塊）。Greedy LZ4 block compression."""
+    """Compress ``src`` into one independent LZ4 block with a simple greedy matcher.
+
+    簡單的貪婪 LZ4 壓縮（獨立區塊）。
+
+    Args:
+        src: the data to compress
+            要壓縮的資料
+
+    Returns:
+        the LZ4 block
+        LZ4 區塊
+    """
     n = len(src)
     out = bytearray()
     table: dict[bytes, int] = {}
@@ -207,6 +273,22 @@ def lz4_compress_block(src: bytes) -> bytes:
 
 
 def lz4_stream_decode(body: bytes) -> bytes:
+    """Decompress a pack body made of repeated [u16 length][LZ4 block] records.
+
+    解壓由反覆的 [u16 長度][LZ4 區塊] 組成的封包本體。
+
+    Args:
+        body: the compressed body
+            壓縮後的本體
+
+    Returns:
+        the decompressed bytes
+        解壓後的位元組
+
+    Raises:
+        PackError: if an LZ4 block is corrupt (offset out of range)
+            若 LZ4 區塊損毀（offset 超出範圍）
+    """
     out = bytearray()
     i = 0
     while i < len(body):
@@ -217,6 +299,18 @@ def lz4_stream_decode(body: bytes) -> bytes:
 
 
 def lz4_stream_encode(raw: bytes) -> bytes:
+    """Compress ``raw`` in 4096-byte chunks into repeated [u16 length][LZ4 block] records.
+
+    把 ``raw`` 每 4096 位元組壓成一塊，組成反覆的 [u16 長度][LZ4 區塊]。
+
+    Args:
+        raw: the uncompressed bytes
+            未壓縮的位元組
+
+    Returns:
+        the compressed body
+        壓縮後的本體
+    """
     out = bytearray()
     for i in range(0, len(raw), CHUNK):
         block = lz4_compress_block(raw[i:i + CHUNK])
@@ -228,7 +322,10 @@ def lz4_stream_encode(raw: bytes) -> bytes:
 
 
 class _Checker:
-    """檢查位元組與結尾校驗碼的產生器（3 位元組 xorshift）。"""
+    """A generator of the check bytes and the trailing checksum (a 3-byte xorshift).
+
+    檢查位元組與結尾校驗碼的產生器（3 位元組 xorshift）。
+    """
 
     def __init__(self, seed: int) -> None:
         self.s = [((seed >> 24) ^ seed) & 0xFF, (seed >> 8) & 0xFF, (seed >> 16) & 0xFF]
@@ -249,7 +346,25 @@ class _Checker:
 
 
 def deserialize(raw: bytes, seed: int) -> Any:
-    """封包內容 → Python 值。Decode the serialized tree."""
+    """Decode the serialized tree of a pack's content into a Python value.
+
+    封包內容 → Python 值。
+
+    Args:
+        raw: the decrypted and decompressed content
+            已解密、解壓的封包內容
+        seed: the pack header's seed, which drives the check bytes
+            封包檔頭的 seed，決定檢查位元組
+
+    Returns:
+        the root value: a dict, list, str, int, float or ``None`` (void)
+        根值：字典、串列、字串、整數、小數或 ``None``（void）
+
+    Raises:
+        PackError: if a check byte or the checksum does not match, a type is unsupported, or the
+            content is truncated
+            若檢查位元組或校驗碼不符、型別不支援，或內容被截斷
+    """
     checker = _Checker(seed)
 
     def read_str(i: int) -> tuple[str, int]:
@@ -297,7 +412,28 @@ def deserialize(raw: bytes, seed: int) -> Any:
 
 
 def serialize(root: Any, seed: int) -> bytes:
-    """Python 值 → 封包內容。Encode the tree."""
+    """Encode a Python value into a pack's serialized tree.
+
+    Python 值 → 封包內容。
+
+    ``bool`` is written as an integer.
+
+    ``bool`` 寫成整數。
+
+    Args:
+        root: the root value: a dict, list, str, int, bool, float or ``None``
+            根值：字典、串列、字串、整數、布林、小數或 ``None``
+        seed: the pack header's seed, which drives the check bytes
+            封包檔頭的 seed，決定檢查位元組
+
+    Returns:
+        the serialized content, ending with the 4-byte checksum
+        序列化後的內容，結尾為 4 位元組校驗碼
+
+    Raises:
+        TypeError: if a value has a type that cannot be serialized
+            若有無法序列化的型別
+    """
     checker = _Checker(seed)
     out = bytearray()
 
@@ -347,7 +483,22 @@ def serialize(root: Any, seed: int) -> bytes:
 
 @dataclass(frozen=True)
 class PackHeader:
-    """封包檔頭。The pack header."""
+    """The pack header.
+
+    封包檔頭。
+
+    Attributes:
+        compress: the compression byte, ``b"n"`` for none or ``b"4"`` for LZ4
+            壓縮方式位元組，``b"n"`` 為無、``b"4"`` 為 LZ4
+        seed: the seed used by encryption and the check bytes
+            加密與檢查位元組使用的 seed
+        cryptmode: the encryption mode; 0 means not encrypted
+            加密模式；0 表示未加密
+        iv: the initialization vector
+            初始化向量
+        raw: the raw header bytes, including the iv
+            檔頭原始位元組（含 iv）
+    """
 
     compress: bytes
     seed: int
@@ -357,6 +508,22 @@ class PackHeader:
 
 
 def parse_header(pack: bytes) -> PackHeader:
+    """Parse the header of a TJS/4s0 pack.
+
+    解析 TJS/4s0 封包的檔頭。
+
+    Args:
+        pack: the pack bytes
+            封包位元組
+
+    Returns:
+        the parsed header
+        解析後的檔頭
+
+    Raises:
+        PackError: if ``pack`` is not a TJS/4s0 pack
+            若 ``pack`` 不是 TJS/4s0 封包
+    """
     if pack[:4] != b"TJS/" or pack[5:8] != b"s0\x00":
         raise PackError("不是 TJS/4s0 封包")
     seed, cryptmode, ivlen = struct.unpack_from("<IHH", pack, 8)
@@ -365,7 +532,22 @@ def parse_header(pack: bytes) -> PackHeader:
 
 
 def unpack(pack: bytes) -> tuple[Any, PackHeader]:
-    """封包 → (內容, 檔頭)。Decode a pack."""
+    """Decode a pack into (content, header).
+
+    封包 → (內容, 檔頭)。
+
+    Args:
+        pack: the pack bytes
+            封包位元組
+
+    Returns:
+        the decoded root value and the pack header
+        解碼後的根值與封包檔頭
+
+    Raises:
+        PackError: if the pack is malformed, or its encryption or compression is unknown
+            若封包格式錯誤，或加密、壓縮方式未知
+    """
     h = parse_header(pack)
     body = pack[len(h.raw):]
     if h.cryptmode:
@@ -378,7 +560,24 @@ def unpack(pack: bytes) -> tuple[Any, PackHeader]:
 
 
 def pack_data(root: Any, h: PackHeader) -> bytes:
-    """以同一個檔頭（seed、iv）重新編碼。Re-encode with the same header."""
+    """Re-encode a value into a pack with the same header (seed, iv).
+
+    以同一個檔頭（seed、iv）重新編碼。
+
+    Args:
+        root: the root value to encode
+            要編碼的根值
+        h: the header to reuse
+            沿用的檔頭
+
+    Returns:
+        the pack bytes
+        封包位元組
+
+    Raises:
+        TypeError: if a value has a type that cannot be serialized
+            若有無法序列化的型別
+    """
     body = serialize(root, h.seed)
     if h.compress == b"4":
         body = lz4_stream_encode(body)
@@ -388,6 +587,14 @@ def pack_data(root: Any, h: PackHeader) -> bytes:
 
 
 def _jpeg_pack_offset(b: bytes) -> int:
+    """Return the offset of the ``FF EB`` segment that holds the pack, searched after the JPEG headers.
+
+    回傳裝有封包的 ``FF EB`` 區段位置（略過 JPEG 檔頭各區段之後才找）。
+
+    Raises:
+        PackError: if the JPEG has no embedded save data
+            若這張 JPEG 沒有嵌入存檔資料
+    """
     i = 2
     while b[i] == 0xFF and b[i + 1] != 0xDA:
         i += 2 + struct.unpack_from(">H", b, i + 2)[0]
@@ -398,10 +605,27 @@ def _jpeg_pack_offset(b: bytes) -> int:
 
 
 def embed_in_jpeg(image: bytes, pack: bytes) -> bytes:
-    """把封包接在 JPEG 影像資料之後（去掉原本的 EOI，接 FF EB 區段，再補 EOI）。
+    """Append the pack after the JPEG image data (drop the original EOI, add an FF EB segment, re-add EOI).
 
-    Append the pack after the JPEG image data as an ``FF EB`` segment.
+    把封包接在 JPEG 影像資料之後（去掉原本的 EOI，接 FF EB 區段，再補 EOI）。
+
+    ``image`` must be a complete JPEG (ending with ``FF D9``) that has no pack embedded itself.
+
     ``image`` 必須是完整 JPEG（結尾 ``FF D9``）且本身沒有嵌入封包。
+
+    Args:
+        image: the bare JPEG image
+            單純的 JPEG 影像
+        pack: the pack bytes
+            封包位元組
+
+    Returns:
+        the JPEG with the pack embedded
+        嵌入封包後的 JPEG
+
+    Raises:
+        PackError: if ``image`` is not a complete JPEG (no EOI at the end)
+            若 ``image`` 不是完整的 JPEG（結尾沒有 EOI）
     """
     if not image.endswith(b"\xff\xd9"):
         raise PackError("縮圖不是完整的 JPEG（結尾沒有 EOI）")
@@ -411,10 +635,23 @@ def embed_in_jpeg(image: bytes, pack: bytes) -> bytes:
 
 
 def read_container(data: bytes) -> tuple[bytes, Callable[[bytes], bytes], bytes | None]:
-    """回傳 (封包, 以原影像重建容器的函式, 原影像 JPEG 或 None)。
+    """Split a save file into its pack, a container rebuild function and the original image.
 
-    Return the pack, a rebuild function, and the bare JPEG image (or None
-    for a raw ``.ksd`` pack).
+    拆出存檔的封包、重建容器的函式與原影像。
+
+    Args:
+        data: the save file bytes, either a raw ``TJS/`` pack (``.ksd``) or a JPEG with an
+            embedded pack
+            存檔位元組：單純的 ``TJS/`` 封包（``.ksd``），或嵌有封包的 JPEG
+
+    Returns:
+        (pack, function that rebuilds the container from a new pack using the original image,
+        original JPEG image or ``None`` for a raw pack)
+        (封包, 以原影像重建容器的函式, 原影像 JPEG；單純封包時為 ``None``)
+
+    Raises:
+        PackError: if the file is neither a TJS/ pack nor a JPEG, or the JPEG has no embedded save
+            若檔案不是 TJS/ 封包也不是 JPEG，或 JPEG 沒有嵌入存檔
     """
     if data[:4] == b"TJS/":
         return data, lambda pack: pack, None
@@ -428,7 +665,22 @@ def read_container(data: bytes) -> tuple[bytes, Callable[[bytes], bytes], bytes 
 
 
 def load(data: bytes) -> tuple[Any, PackHeader]:
-    """存檔位元組 → (內容, 檔頭)。Decode a save file."""
+    """Decode save file bytes into (content, header).
+
+    存檔位元組 → (內容, 檔頭)。
+
+    Args:
+        data: the save file bytes (``.ksd`` pack or JPEG slot save)
+            存檔位元組（``.ksd`` 封包或 JPEG 欄位存檔）
+
+    Returns:
+        the decoded root value and the pack header
+        解碼後的根值與封包檔頭
+
+    Raises:
+        PackError: if the file is not a recognizable or valid save
+            若檔案無法辨識或格式錯誤
+    """
     pack, _, _ = read_container(data)
     return unpack(pack)
 
@@ -438,12 +690,20 @@ def load(data: bytes) -> tuple[Any, PackHeader]:
 
 @dataclass(frozen=True)
 class SaveMeta:
-    """寫進存檔的附帶資訊。Extra data written into a save.
+    """Extra information written into a save.
+
+    寫進存檔的附帶資訊。
 
     Attributes:
-        last_text: 存檔清單顯示的台詞（``core.bookMarkInfo.lastText``）。The shown line.
-        thumb: 該句的縮圖 JPEG；None 時沿用樣板的縮圖。The line's thumbnail, or None.
-        store_time_ms: 存檔時間（epoch 毫秒，``core.storeTime``）；None 時不改。Save time.
+        last_text: the line shown in the save list (``core.bookMarkInfo.lastText``); ``None``
+            leaves it unchanged
+            存檔清單顯示的台詞（``core.bookMarkInfo.lastText``）；``None`` 時不改
+        thumb: the thumbnail of that line, in the writer's ``thumb_format``; ``None`` keeps the
+            template's thumbnail
+            該句的縮圖（寫入器 ``thumb_format`` 的格式）；``None`` 時沿用樣板的縮圖
+        store_time_ms: the save time (epoch milliseconds, ``core.storeTime``); ``None`` leaves it
+            unchanged
+            存檔時間（epoch 毫秒，``core.storeTime``）；``None`` 時不改
     """
 
     last_text: str | None = None
@@ -452,29 +712,51 @@ class SaveMeta:
 
 
 class PackinOneSaveWriter:
-    """``kirikiri_packinone`` 引擎的存檔寫入器。Save writer for the PackinOne engine."""
+    """The save writer for the ``kirikiri_packinone`` engine.
+
+    ``kirikiri_packinone`` 引擎的存檔寫入器。
+    """
 
     engine = "kirikiri_packinone"
-    #: 能嵌入存檔的縮圖格式。The thumbnail format it embeds.
+    #: The thumbnail format that can be embedded in a save.
+    #: 能嵌入存檔的縮圖格式。
     thumb_format = "jpeg"
 
     def write(self, template: bytes, position: dict[str, Any], variables: dict[str, Any], meta: SaveMeta) -> bytes:
-        """以樣板產生一個欄位存檔。Write a slot save from the template.
+        """Write a slot save from the template.
+
+        以樣板產生一個欄位存檔。
+
+        ``root["user"]`` (the game's ``f.*``) is replaced wholesale by ``variables`` and the
+        template's own variables are not kept: a save's variables come only from the selected path
+        and the route defaults, never mixed with flags from the play-through used to make the
+        template. In ``core`` only the position, the line text and the time change; the time is set
+        only when the template already has ``storeTime``. ``meta.thumb`` replaces the thumbnail only
+        when the template is a JPEG; ``bool`` variables are stored as integers.
 
         ``root["user"]``（遊戲的 ``f.*``）整個換成 ``variables``，樣板原本的變數不保留：存檔的變數
-        只來自選取路徑與路線預設，不會混到做樣板時那次遊玩的旗標。``core`` 只改位置、台詞與時間。
-        ``root["user"]`` is replaced wholesale by ``variables`` (the template's
-        own variables are dropped); only position, text and time change in
-        ``core``.
+        只來自選取路徑與路線預設，不會混到做樣板時那次遊玩的旗標。``core`` 只改位置、台詞與時間；
+        樣板本來就有 ``storeTime`` 時才改時間。樣板是 JPEG 時 ``meta.thumb`` 才會換掉縮圖；``bool``
+        變數存成整數。
 
         Args:
-            template: 樣板存檔（``data_quick_01.jpg`` 等）。The template save.
-            position: ``{"scene": "<檔名>.ks*<標籤>", "point": N}``。The story position.
-            variables: 遊戲變數（存進 ``user``，即 ``f.*``）。Game variables.
-            meta: 台詞、縮圖、時間。Line text, thumbnail and time.
+            template: the template save (``data_quick_01.jpg`` and so on)
+                樣板存檔（``data_quick_01.jpg`` 等）
+            position: the story position, ``{"scene": "<file name>.ks*<label>", "point": N}``
+                故事位置，``{"scene": "<檔名>.ks*<標籤>", "point": N}``
+            variables: the game variables (stored in ``user``, that is ``f.*``)
+                遊戲變數（存進 ``user``，即 ``f.*``）
+            meta: the line text, thumbnail and time
+                台詞、縮圖、時間
 
         Returns:
-            新的存檔位元組。The new save bytes.
+            the new save bytes
+            新的存檔位元組
+
+        Raises:
+            PackError: if the template is malformed, the thumbnail is not a complete JPEG, or the
+                written save does not decode back to the same content
+                若樣板格式錯誤、縮圖不是完整的 JPEG，或寫出的存檔解不回相同內容
         """
         pack, rebuild, _ = read_container(template)
         root, header = unpack(pack)

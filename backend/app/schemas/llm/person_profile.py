@@ -1,6 +1,10 @@
-"""人脈卡「用一段話記錄」的 LLM 輸出格式（人脈卡計畫書 §3.13 P5）。
+"""LLM output schema of the person profile "record in one paragraph" flow.
 
-LLM output schema of the person profile "record in one paragraph" flow.
+人脈卡「用一段話記錄」的 LLM 輸出格式（人脈卡計畫書 §3.13 P5）。
+
+See the person profile card plan §3.13 P5. The LLM only makes suggestions;
+nothing is written until the user ticks each item in Telegram, and at write
+time the handler's models validate it once more.
 
 LLM 只提建議；使用者在 TG 上逐項勾選後才寫入，寫入時再經 handler 的模型驗證一次。
 """

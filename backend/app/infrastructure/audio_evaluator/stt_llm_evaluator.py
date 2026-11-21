@@ -1,17 +1,30 @@
-"""
+"""STT + text-only LLM low-cost audio evaluator (stt_llm).
+
 STT + 純文字 LLM 低成本語音評分器 (stt_llm)。
 
-STT + text-only LLM low-cost audio evaluator (stt_llm).
+Pipeline: local Whisper transcription → the transcript is sent as plain
+text (no audio bytes at all) to a lightweight LLM, reusing the card's own
+Jinja2 evaluation template (including the trilingual cards' own
+templates), and the semantic scoring is done by the cheap text-only model
+chosen by the ``llm`` capability route.
 
 流程：本地 Whisper 轉錄 → 逐字稿以純文字（不含任何 audio bytes）
 送交輕量 LLM，沿用卡片對應的 Jinja2 評分樣板（含三語卡專屬樣板），
 以能力路由 ``llm`` 指定的便宜純文字模型完成語意評分。
 
-Pipeline: local Whisper transcription → the transcript is sent as plain
-text (no audio bytes whatsoever) to a lightweight LLM, reusing the
-card's own Jinja2 evaluation template (including per-language
-trilingual templates), scored by the cheap text-only model chosen by
-the ``llm`` capability route.
+Design decisions:
+- The text LLM used for scoring comes from the ``llm`` capability (of the
+  same route key, for example ``recording_eval``) and Whisper from
+  ``stt``; both are built and passed in by ``audio_evaluator/factory.py``.
+  On the ``.env`` layer the ``llm`` default is the ``audio`` endpoint
+  synthesized from ``AUDIO_*`` plus ``STT_LLM_MODEL_NAME``, the same
+  behavior as before capability routing.
+- An empty transcript is intercepted in this layer and returns score 0,
+  without wasting an LLM call.
+- Structured output, retries and JSON cleanup are left to the LLM client
+  (the same as card creation).
+- The transcript field is always overwritten with the STT result (the LLM
+  would only echo its input).
 
 設計決策：
 - 評分用的文字 LLM 來自能力路由的 ``llm``（同一個用途鍵，例如 ``recording_eval``），
@@ -21,16 +34,6 @@ the ``llm`` capability route.
 - 空逐字稿在本層直接攔截回 0 分，不浪費 LLM 呼叫。
 - 結構化輸出、重試與 JSON 清理交給 LLM 客戶端（與建卡相同）。
 - transcript 欄位一律以 STT 結果覆寫（LLM 只會複讀輸入）。
-
-Design decisions:
-- The text LLM comes from the ``llm`` capability of the same route key
-  (e.g. ``recording_eval``) and Whisper from ``stt``; the factory builds
-  both. The ``.env`` default for ``llm`` is the ``audio`` endpoint
-  synthesized from ``AUDIO_*`` with ``STT_LLM_MODEL_NAME``, as before.
-- An empty transcript short-circuits to score 0 without an LLM call.
-- Structured output, retries and JSON cleanup are the LLM client's job.
-- The transcript field is always overwritten with the STT result (the
-  LLM would merely echo its input).
 """
 
 import logging
@@ -61,25 +64,27 @@ _EVALUATION_SCHEMA: dict[str, object] = {
 
 
 class STTLLMEvaluator(BaseAudioEvaluator):
-    """本地 Whisper + 純文字 LLM 的低成本語音評分器。
+    """A low-cost audio evaluator using local Whisper plus a text-only LLM.
 
-    Low-cost audio evaluator using local Whisper plus a text-only LLM.
+    本地 Whisper + 純文字 LLM 的低成本語音評分器。
 
     Attributes:
-        _whisper: Whisper 轉錄客戶端（能力路由的 ``stt``）。The Whisper
-            client from the ``stt`` capability.
-        _llm: 評分用的文字 LLM 客戶端（能力路由的 ``llm``）。The text LLM
-            client from the ``llm`` capability.
+        _whisper: the Whisper transcription client (the ``stt`` capability)
+            Whisper 轉錄客戶端（能力路由的 ``stt``）
+        _llm: the text LLM client used for scoring (the ``llm`` capability)
+            評分用的文字 LLM 客戶端（能力路由的 ``llm``）
     """
 
     def __init__(self, whisper: WhisperClient, llm: BaseLLMClient) -> None:
-        """初始化 STTLLMEvaluator。
+        """Initialize the STTLLMEvaluator.
 
-        Initialize the STTLLMEvaluator.
+        初始化 STTLLMEvaluator。
 
         Args:
-            whisper: 轉錄用的 Whisper 客戶端。The Whisper client.
-            llm: 評分用的文字 LLM 客戶端。The text LLM client.
+            whisper: the Whisper client used for transcription
+                轉錄用的 Whisper 客戶端
+            llm: the text LLM client used for scoring
+                評分用的文字 LLM 客戶端
         """
         self._whisper = whisper
         self._llm = llm
@@ -87,7 +92,10 @@ class STTLLMEvaluator(BaseAudioEvaluator):
 
     @property
     def _label(self) -> str:
-        """評分模式標籤：``stt+<模型名>``。The mode label."""
+        """The evaluation mode label, ``stt+<model name>``.
+
+        評分模式標籤：``stt+<模型名>``。
+        """
         return f"stt+{self._llm.model_name}"
 
     async def evaluate_audio(
@@ -101,33 +109,38 @@ class STTLLMEvaluator(BaseAudioEvaluator):
         template_name: str = "prompts/audio_evaluator.j2",
         reference_familiarity: list[int | None] | None = None,
     ) -> AudioEvaluationResult:
-        """轉錄後以純文字 LLM 依卡片樣板評分。
+        """Transcribe, then score the transcript with a text-only LLM using the card's template.
 
-        Transcribe, then score the transcript with a text-only LLM using
-        the card's template.
+        轉錄後以純文字 LLM 依卡片樣板評分。
 
         Args:
-            audio_data: 音檔原始二進位資料。Raw audio bytes.
-            audio_filename: 音檔檔名。Audio filename.
-            prompt_text: 卡片 Prompt。Card prompt.
-            context_text: 卡片 Context。Card context.
-            reference_answers: 參考答案列表。Reference answers.
-            reference_familiarity: 每句參考答案的熟識度（同 base）。Familiarity of each
-                reference (see the base class).
-            target_language: 目標語言 locale。Target-language locale.
-            template_name: 評分樣板路徑（三語卡自動沿用專屬樣板）。
-                Evaluation template path (trilingual cards keep their
-                per-language templates).
+            audio_data: the raw audio bytes
+                音檔原始二進位資料
+            audio_filename: the audio file name
+                音檔檔名
+            prompt_text: the card Prompt
+                卡片 Prompt
+            context_text: the card Context
+                卡片 Context
+            reference_answers: the reference answers
+                參考答案列表
+            target_language: the target-language locale
+                目標語言 locale
+            template_name: the evaluation template path (trilingual cards keep their own templates)
+                評分樣板路徑（三語卡自動沿用專屬樣板）
+            reference_familiarity: the familiarity of each reference answer (as in the base class)
+                每句參考答案的熟識度（同 base）
 
         Returns:
-            結構化評分結果，transcript 以 STT 結果覆寫。The structured
-            evaluation result with transcript overwritten by STT output.
+            the structured evaluation result, with the transcript overwritten by the STT result;
+            score 0 without an LLM call when no speech is detected
+            結構化評分結果，transcript 以 STT 結果覆寫；沒偵測到語音時不呼叫 LLM、回傳 0 分
 
         Raises:
-            STTServiceError: STT 服務呼叫失敗時拋出。Raised when the
-                STT call fails.
-            LLMServiceError: LLM 呼叫失敗或輸出格式不符時拋出。Raised
-                when the LLM call fails or the output is malformed.
+            LLMServiceError: if the LLM call fails or the output format is invalid
+                若 LLM 呼叫失敗或輸出格式不符
+            STTServiceError: if the STT service call fails
+                若 STT 服務呼叫失敗
         """
         user_transcript = await self._whisper.transcribe(
             audio_data=audio_data,

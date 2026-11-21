@@ -1,7 +1,10 @@
-"""
+"""Request and response models of the handler and note API.
+
 Handler 與筆記 API 的請求、回應模型（handlers 計畫書 §4）。
 
-Request and response models of the handler and note API.
+See §4 of the handlers plan.
+
+詳見 handlers 計畫書 §4。
 """
 
 from typing import Any, Literal
@@ -14,14 +17,24 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class OperationOut(BaseModel):
-    """一項操作是否開放；不開放時 ``reason`` 必有值。Whether an operation is offered."""
+    """Whether an operation is offered.
+
+    一項操作是否開放。
+
+    When it is not offered, ``reason`` always has a value.
+
+    不開放時 ``reason`` 必有值。
+    """
 
     supported: bool
     reason: str | None = None
 
 
 class CreateCapabilityOut(OperationOut):
-    """建卡能力（D2）。The create capability."""
+    """The create capability (D2).
+
+    建卡能力（D2）。
+    """
 
     channels: list[Literal["web", "tg", "script"]] = Field(
         description="實際能從哪些管道建立：含 web 可選；非空但不含 web 反灰並顯示 reason；空陣列不顯示"
@@ -33,13 +46,23 @@ class CreateCapabilityOut(OperationOut):
 
 
 class GraphCapabilityOut(OperationOut):
-    """圖譜能力；``links`` 表示有關聯連線。The graph capability."""
+    """The graph capability.
+
+    圖譜能力。
+
+    ``links`` means the graph has relation links.
+
+    ``links`` 表示有關聯連線。
+    """
 
     links: bool = False
 
 
 class CapabilitiesOut(BaseModel):
-    """一個 handler 的全部能力。All capabilities of a handler."""
+    """All capabilities of a handler.
+
+    一個 handler 的全部能力。
+    """
 
     create: CreateCapabilityOut
     read: OperationOut
@@ -52,7 +75,10 @@ class CapabilitiesOut(BaseModel):
 
 
 class HandlerInfo(BaseModel):
-    """``GET /handlers`` 的一項（§4.1）。One handler."""
+    """One item of ``GET /handlers`` (§4.1).
+
+    ``GET /handlers`` 的一項（§4.1）。
+    """
 
     name: str
     title: str
@@ -81,14 +107,20 @@ class HandlerInfo(BaseModel):
 
 
 class SearchFieldOut(BaseModel):
-    """欄位搜尋的一個欄位按鈕。One field-search button."""
+    """One field button for field search.
+
+    欄位搜尋的一個欄位按鈕。
+    """
 
     key: str
     title: str
 
 
 class JsonFieldSpecOut(BaseModel):
-    """一個能以表單編輯的 JSON 欄位（json_field_editor 計畫 D2）。An editable JSON field."""
+    """A JSON field that can be edited with a form (json_field_editor plan D2).
+
+    一個能以表單編輯的 JSON 欄位（json_field_editor 計畫 D2）。
+    """
 
     title: str
     item_schema: dict[str, Any] = Field(description="每一筆的 JSON Schema，前端依它產生表單")
@@ -100,16 +132,24 @@ class JsonFieldSpecOut(BaseModel):
 
 
 class NoteField(BaseModel):
-    """一個欄位（依筆記類型的順序）。A field, in note-type order."""
+    """A field, in note-type order.
+
+    一個欄位（依筆記類型的順序）。
+    """
 
     name: str
     value: str
 
 
 class NoteDetail(BaseModel):
-    """單一筆記（§4.3）。成組卡片的 handler 讀取之後會多附相關資料，所以允許額外的鍵。
+    """A single note (§4.3).
 
-    A single note; handler reads of grouped cards may add more keys.
+    單一筆記（§4.3）。
+
+    Handlers of grouped cards attach related data after reading, so extra keys
+    are allowed.
+
+    成組卡片的 handler 讀取之後會多附相關資料，所以允許額外的鍵。
     """
 
     model_config = ConfigDict(extra="allow")
@@ -122,14 +162,24 @@ class NoteDetail(BaseModel):
 
 
 class Permission(BaseModel):
-    """對這張筆記能不能做某件事；不允許時 ``reason`` 必有值。Whether an action is allowed."""
+    """Whether an action is allowed on this note.
+
+    對這張筆記能不能做某件事。
+
+    When it is not allowed, ``reason`` always has a value.
+
+    不允許時 ``reason`` 必有值。
+    """
 
     allowed: bool
     reason: str | None = None
 
 
 class NotePermissions(BaseModel):
-    """通用讀取附上的權限（D4）。Permissions in the generic read."""
+    """The permissions attached to the generic read (D4).
+
+    通用讀取附上的權限（D4）。
+    """
 
     update_fields: Permission
     update_json: Permission
@@ -137,7 +187,10 @@ class NotePermissions(BaseModel):
 
 
 class JsonFieldState(BaseModel):
-    """一個 JSON 欄位目前的內容（json_field_editor 計畫 D3）。A JSON field's current content."""
+    """The current content of a JSON field (json_field_editor plan D3).
+
+    一個 JSON 欄位目前的內容（json_field_editor 計畫 D3）。
+    """
 
     items: list[Any] = Field(description="解析好的清單；欄位壞掉時為空")
     version: str = Field(description="欄位原始字串的雜湊；寫入時送回，用來偵測別處的修改")
@@ -145,7 +198,10 @@ class JsonFieldState(BaseModel):
 
 
 class GenericNoteDetail(NoteDetail):
-    """``GET /notes/{note_id}``：附上負責的 handler 與權限。The generic read."""
+    """The generic read, ``GET /notes/{note_id}``, with the responsible handler and the permissions.
+
+    ``GET /notes/{note_id}``：附上負責的 handler 與權限。
+    """
 
     handler: str | None = Field(description="負責的 handler；沒有 handler 負責這種筆記類型時為 null")
     permissions: NotePermissions
@@ -155,14 +211,24 @@ class GenericNoteDetail(NoteDetail):
 
 
 class DraftRef(BaseModel):
-    """從草稿建卡時指出是哪一份草稿；ID 與版本一定成對（版本不符回 409）。A draft and the version read."""
+    """The draft a note is created from, with the version that was read.
+
+    從草稿建卡時指出是哪一份草稿。
+
+    The ID and the version always come as a pair; a version mismatch returns 409.
+
+    ID 與版本一定成對（版本不符回 409）。
+    """
 
     id: str = Field(description="草稿 ID")
     version: int = Field(description="讀到的草稿版本")
 
 
 class CreateNoteRequest(BaseModel):
-    """``POST /handlers/{name}/notes``（§4.2）。"""
+    """The body of ``POST /handlers/{name}/notes`` (§4.2).
+
+    ``POST /handlers/{name}/notes``（§4.2）。
+    """
 
     deck: str = Field(min_length=1, description="牌組；handler 的建卡牌組為 fixed 時忽略，不存在時自動建立")
     note_type: str = Field(description="必須是該 handler 的 create.note_type")
@@ -181,21 +247,30 @@ class CreateNoteRequest(BaseModel):
 
 
 class TagCount(BaseModel):
-    """一個標籤與使用次數。A tag and how many notes use it."""
+    """A tag and how many notes use it.
+
+    一個標籤與使用次數。
+    """
 
     tag: str
     count: int
 
 
 class SuggestedTag(BaseModel):
-    """草稿建議的標籤。A tag suggested with a draft."""
+    """A tag suggested with a draft.
+
+    草稿建議的標籤。
+    """
 
     tag: str
     existing: bool = Field(description="這種卡片是否用過這個標籤（false 表示建卡時會新增一個標籤）")
 
 
 class CreateNoteResponse(BaseModel):
-    """建卡結果。The created notes."""
+    """The result of creating notes.
+
+    建卡結果。
+    """
 
     note_ids: list[int] = Field(description="一律是陣列（外語糾錯一次建母卡與多張子卡）")
     deck: str = Field(description="實際建立的牌組")
@@ -206,27 +281,41 @@ class CreateNoteResponse(BaseModel):
 
 
 class UpdateNoteRequest(BaseModel):
-    """``PATCH /handlers/{name}/notes/{note_id}``（§4.4）：只送有變的欄位。"""
+    """The body of ``PATCH /handlers/{name}/notes/{note_id}`` (§4.4); send only the changed fields.
+
+    ``PATCH /handlers/{name}/notes/{note_id}``（§4.4）：只送有變的欄位。
+    """
 
     fields: dict[str, str]
 
 
 class UpdateNoteResponse(NoteDetail):
-    """修改後的完整筆記與同步提醒。The updated note and the sync warning."""
+    """The full note after the update, with the sync warning.
+
+    修改後的完整筆記與同步提醒。
+    """
 
     sync_warning: str | None
 
 
 class DeleteNoteResponse(BaseModel):
-    """刪除結果（§4.5）。"""
+    """The result of a delete (§4.5).
+
+    刪除結果（§4.5）。
+    """
 
     sync_warning: str | None
 
 
 class GraphResponse(BaseModel):
-    """``GET /handlers/{name}/graph``（§4.6）。節點與連線的形狀依 handler 而定（標準單點或關聯圖譜）。
+    """The response of ``GET /handlers/{name}/graph`` (§4.6).
 
-    The graph; node and link shapes depend on the handler.
+    ``GET /handlers/{name}/graph``（§4.6）。
+
+    The shapes of nodes and links depend on the handler (standard single nodes
+    or a relation graph).
+
+    節點與連線的形狀依 handler 而定（標準單點或關聯圖譜）。
     """
 
     nodes: list[dict[str, Any]]
@@ -236,20 +325,29 @@ class GraphResponse(BaseModel):
 
 
 class DeckInfo(BaseModel):
-    """``GET /decks`` 的一項（與原本的 ``/handlers/decks`` 相同）。"""
+    """One item of ``GET /decks`` (the same as the former ``/handlers/decks``).
+
+    ``GET /decks`` 的一項（與原本的 ``/handlers/decks`` 相同）。
+    """
 
     deck_name: str
     deck_id: int
 
 
 class CreateDeckRequest(BaseModel):
-    """``POST /decks``：新增牌組（deck_create 計畫書 §5.3）。The create-deck request."""
+    """The create-deck request, ``POST /decks`` (deck_create plan §5.3).
+
+    ``POST /decks``：新增牌組（deck_create 計畫書 §5.3）。
+    """
 
     name: str = Field(description="牌組全名；以 :: 分層，可一次建多層。每一層前後的空白會去掉")
 
 
 class CreateDeckResponse(BaseModel):
-    """``POST /decks`` 的回應。The create-deck response."""
+    """The response of ``POST /decks``.
+
+    ``POST /decks`` 的回應。
+    """
 
     deck_name: str = Field(description="Anki 裡實際的牌組名稱（整理後），前端用它選取新牌組")
     deck_id: int
@@ -257,7 +355,10 @@ class CreateDeckResponse(BaseModel):
 
 
 class MediaUploadResponse(BaseModel):
-    """``POST /media`` 的回應（media_upload 計畫書 D2）。The upload response."""
+    """The response of ``POST /media`` (media_upload plan D2).
+
+    ``POST /media`` 的回應（media_upload 計畫書 D2）。
+    """
 
     filename: str = Field(
         description="後端產生的檔名：填進媒體欄位，建卡或修改成功時以這個名字存進 Anki（在那之前只在後端暫存區）"
@@ -267,33 +368,52 @@ class MediaUploadResponse(BaseModel):
 
 
 class UpdateJsonRequest(BaseModel):
-    """``PUT /handlers/{name}/notes/{note_id}/json/{field}``：整欄送出（json_field_editor 計畫 D4）。"""
+    """The body of ``PUT /handlers/{name}/notes/{note_id}/json/{field}``, which sends the whole field.
+
+    ``PUT /handlers/{name}/notes/{note_id}/json/{field}``：整欄送出（json_field_editor 計畫 D4）。
+
+    See json_field_editor plan D4.
+
+    詳見 json_field_editor 計畫 D4。
+    """
 
     items: list[dict[str, Any]] = Field(description="整個清單，依顯示順序")
     version: str = Field(description="讀取時拿到的版本")
 
 
 class UpdateJsonResponse(JsonFieldState):
-    """寫入後的這一欄與同步提醒。The field after writing and the sync warning."""
+    """This field after writing, with the sync warning.
+
+    寫入後的這一欄與同步提醒。
+    """
 
     sync_warning: str | None = Field(description="寫入後同步 AnkiWeb 失敗時的提醒；資料仍已寫入")
 
 
 class SearchCondition(BaseModel):
-    """一個搜尋條件：欄位按鈕的鍵與關鍵字。One condition."""
+    """One search condition: a field-button key and a keyword.
+
+    一個搜尋條件：欄位按鈕的鍵與關鍵字。
+    """
 
     field: str = Field(max_length=64, description="欄位按鈕的鍵；* 表示任何欄位")
     value: str = Field(max_length=200, description="關鍵字（照字面比對、部分符合）")
 
 
 class SearchQueryRequest(BaseModel):
-    """欄位搜尋的條件（條件之間是「且」）。The conditions, ANDed."""
+    """The field-search conditions, combined with AND.
+
+    欄位搜尋的條件（條件之間是「且」）。
+    """
 
     conditions: list[SearchCondition] = Field(default_factory=list, max_length=20)
 
 
 class SearchQueryResponse(BaseModel):
-    """組好的 Anki 查詢。The Anki query."""
+    """The assembled Anki query.
+
+    組好的 Anki 查詢。
+    """
 
     query: str = Field(description="交給卡片清單搜尋的 Anki 查詢")
 

@@ -1,24 +1,26 @@
-"""目標語言相關的枚舉定義。
+"""Enum definitions for target languages.
 
-Enum definitions for target languages.
+目標語言相關的枚舉定義。
 """
 
 import re
 from enum import Enum
 
+#: The basic BCP-47 form: a 2-3 letter language code, optionally with a 2-letter region code
+#: (for example en, ja-JP, zh-TW).
 #: BCP-47 基本形式：2-3 字母語言碼，可帶 2 字母地區碼（如 en、ja-JP、zh-TW）。
 LANG_CODE_PATTERN = r"^[A-Za-z]{2,3}(-[A-Za-z]{2})?$"
 _LANG_CODE_RE = re.compile(LANG_CODE_PATTERN)
 
 
 class TargetLanguage(str, Enum):
-    """目標語言的枚舉。
+    """The target-language enumeration.
 
-    Target-language enumeration.
-
-    用於指定 FSM 或 LLM 應該使用的目標語言。
+    目標語言的枚舉。
 
     Specifies the target language the FSM or LLM should use.
+
+    用於指定 FSM 或 LLM 應該使用的目標語言。
     """
     EN_US = "en-US"
     JA_JP = "ja-JP"
@@ -27,28 +29,31 @@ class TargetLanguage(str, Enum):
 
 
 def normalize_language_code(raw: str) -> str | None:
-    """驗證並正規化語言代碼（TG 的對話卡流程與對話卡的建立參數共用）。
+    """Validate and normalize a language code.
 
-    Validate and normalize a language code.
+    驗證並正規化語言代碼（TG 的對話卡流程與對話卡的建立參數共用）。
 
-    優先比對 :class:`TargetLanguage` 列舉的已知值（不分大小寫）；
+    Shared by the Telegram dialog-card flow and the dialog card's create
+    parameters. Surrounding whitespace is stripped first. Known
+    :class:`TargetLanguage` enum values are matched first (case-insensitively),
+    except ``other``, which is never accepted as input; other inputs are
+    validated against the basic BCP-47 form and case-normalized (lowercase
+    language code, uppercase region code, for example ``ja-jp`` → ``ja-JP``).
+
+    TG 的對話卡流程與對話卡的建立參數共用。先去掉前後空白。
+    優先比對 ``TargetLanguage`` 列舉的已知值（不分大小寫），但 ``other`` 不接受為輸入；
     其餘輸入以 BCP-47 基本形式驗證後正規化大小寫
     （語言碼小寫、地區碼大寫，如 ``ja-jp`` → ``ja-JP``）。
 
-    Known :class:`TargetLanguage` enum values are matched first
-    (case-insensitively); other inputs are validated against the basic
-    BCP-47 form and case-normalized (lowercase language, uppercase region,
-    e.g. ``ja-jp`` → ``ja-JP``).
-
     Args:
-        raw: 原始字串。The raw string.
+        raw: the raw string
+            原始字串
 
     Returns:
-        正規化後的語言代碼；輸入不合法時回傳 ``None``
-        （呼叫端應提示重新輸入，而非把任意文字寫進卡片）。
-        The normalized language code, or ``None`` for invalid input
-        (callers should re-prompt instead of writing arbitrary text
-        into the card).
+        the normalized language code, or ``None`` for empty or invalid input
+        (callers should re-prompt instead of writing arbitrary text into the card)
+        正規化後的語言代碼；輸入為空或不合法時回傳 ``None``
+        （呼叫端應提示重新輸入，而非把任意文字寫進卡片）
     """
     candidate = raw.strip()
     if not candidate:

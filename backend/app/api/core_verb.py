@@ -1,15 +1,15 @@
-"""JP_CoreVerb（核心動詞）卡片 API 路由。
+"""JP_CoreVerb (core verb) card API router.
 
-JP_CoreVerb (core verb) card API router.
-
-比照 ``verb_pair.py`` 的慣例：直接實例化 Handler 執行任務。
-生成約束（配額、章節上限、多樣性選句）全部在腳本側消化，
-本 API 僅負責單句的子卡片生成。
+JP_CoreVerb（核心動詞）卡片 API 路由。
 
 Follows the same convention as ``verb_pair.py``: the handler is instantiated
 directly to execute the task. Generation constraints (quotas, per-chapter
 limits, diversity-based sentence selection) are all handled on the script
 side; this API only generates child cards for a single sentence.
+
+比照 ``verb_pair.py`` 的慣例：直接實例化 Handler 執行任務。
+生成約束（配額、章節上限、多樣性選句）全部在腳本側消化，
+本 API 僅負責單句的子卡片生成。
 """
 
 import logging
@@ -29,26 +29,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/core-verb", tags=["Core Verb"])
 
 class GenerateChildCardsRequest(BaseModel):
-    """生成核心動詞子卡片的請求結構。
+    """The request body for generating core verb child cards.
 
-    Request schema for generating core-verb child cards.
+    生成核心動詞子卡片的請求結構。
 
     Attributes:
-        master_note_id: 母卡片的 Anki note id。Anki note id of the master card.
-        deck_name: 子卡片目標牌組名稱（會再細分 ::Context / ::Cloze）。
-            Target deck name for child cards (subdivided into
-            ::Context / ::Cloze).
-        target_verb: 目標核心動詞（furigana 標音格式，如 見[み]る）。
-            Target core verb in furigana notation, e.g. 見[み]る.
-        source_game: 遊戲來源前綴（用於標籤與世界觀提示詞）。
-            Source-game prefix used for tags and world-setting prompts.
-        context_dialogue: 上下文對話陣列（含 is_target 標記）。
-            Context dialogue array (with is_target markers).
-        target_verb_span: 可選。腳本側形態素驗證過的目標動詞
-            在目標句中的字元 span [start, end]，供挖空交叉驗證。
-            Optional. Character span [start, end] of the
-            morphologically-verified target verb within the target sentence,
-            used for cloze cross-validation.
+        master_note_id: the Anki note ID of the master card
+            母卡片的 Anki note id
+        deck_name: the target deck name for child cards (subdivided into ``::Context`` / ``::Cloze``)
+            子卡片目標牌組名稱（會再細分 ``::Context`` / ``::Cloze``）
+        target_verb: the target core verb in furigana notation, for example 見[み]る
+            目標核心動詞（furigana 標音格式，如 見[み]る）
+        source_game: the source game prefix, used for tags and world-setting prompts
+            遊戲來源前綴（用於標籤與世界觀提示詞）
+        context_dialogue: the context dialogue lines (with ``is_target`` markers)
+            上下文對話陣列（含 ``is_target`` 標記）
+        target_verb_span: optional. The character span ``[start, end]`` of the target verb in the
+            target sentence, morphologically verified on the script side, used to cross-check the
+            cloze
+            可選。腳本側形態素驗證過的目標動詞在目標句中的字元 span ``[start, end]``，供挖空交叉驗證
     """
     master_note_id: int
     deck_name: str
@@ -63,25 +62,28 @@ async def generate_child_cards(
     card_service: CardService = Depends(get_card_service),
     relation_service: RelationService = Depends(get_relation_service)
 ):
-    """根據傳入的文本生成 Context 和 Cloze 子卡片並追加至母卡片。
+    """Generate Context and Cloze child cards from the given text and attach them to the master card.
 
-    Generate Context and Cloze child cards from the given text and attach
-    them to the master card.
+    根據傳入的文本生成 Context 和 Cloze 子卡片並追加至母卡片。
 
     Args:
-        request: 生成請求（含可選的 target_verb_span 交叉驗證資訊）。
-            The generation request (with optional target_verb_span
-            cross-validation info).
-        card_service: 卡片服務（依賴注入）。Injected CardService.
-        relation_service: 關聯服務（依賴注入）。Injected RelationService.
+        request: the generation request (with optional ``target_verb_span`` cross-check info)
+            生成請求（含可選的 ``target_verb_span`` 交叉驗證資訊）
+        card_service: the injected card service
+            卡片服務（依賴注入）
+        relation_service: the injected relation service
+            關聯服務（依賴注入）
 
     Returns:
-        dict: 包含 status、message 與生成結果 data。
-            Dict containing status, message, and generation result data.
+        a dict with ``status``, ``message``, and the generation result ``data``
+        包含 ``status``、``message`` 與生成結果 ``data`` 的字典
 
     Raises:
-        HTTPException: 發生未預期錯誤時回傳 500。
-            Returns 500 on unexpected errors.
+        FluencyTidesError: if the handler reports a business error; passed through to the global
+            handler
+            若 handler 回報業務錯誤；原樣交給全域 handler
+        HTTPException: if an unexpected error occurs (500)
+            若發生未預期錯誤（500）
     """
     handler = JPCoreVerbHandler()
     parameters = request.model_dump()
