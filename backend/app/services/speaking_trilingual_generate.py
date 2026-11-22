@@ -15,6 +15,7 @@ really say, and its familiarity level is then rated from that sentence itself. T
 """
 
 import logging
+from dataclasses import dataclass, field
 
 from pydantic import ValidationError
 
@@ -31,6 +32,48 @@ GENERATE_ROUTE = route("speaking_trilingual", "三語對話卡：生成說法", 
 #: 對象下拉選單的選項；第一個表示不指定（生成各種對象的說法）。
 AUDIENCES: tuple[str, ...] = ("不指定", "長官或重要客戶", "初次見面或店員與客人", "同事", "朋友", "家人或伴侶")
 ANY_AUDIENCE = AUDIENCES[0]
+
+
+@dataclass(frozen=True)
+class DraftPlacement:
+    """Where the new card will sit in the topic tree, given to the LLM as context.
+
+    新卡在主題樹裡的位置，給 LLM 當作情境。
+
+    The deck path says what the scene belongs to (for example which company's interview, at which stage); the
+    parent card is the scene this one continues; the sibling titles are the scenes already in the same deck, so
+    the LLM neither repeats them nor names the new title in another style
+    (``docs/wip/trilingual_topic_tree_FEAT_2026-11-22.md`` D7).
+
+    牌組路徑說明場景屬於什麼（例如哪家公司的哪個面試階段）；上層卡是這張卡接續的情境；同一層的標題是同一個
+    牌組裡已有的情境，讓 LLM 不重做、新標題的寫法也一致（``docs/wip/trilingual_topic_tree_FEAT_2026-11-22.md`` D7）。
+
+    Attributes:
+        deck_path: the full deck the card will go into; ``None`` when unknown
+            卡片會放進的完整牌組；不知道時為 ``None``
+        parent_title: the parent card's title; ``None`` without a parent
+            上層卡的標題；沒有上層卡時為 ``None``
+        parent_prompt: the parent card's prompt
+            上層卡的情境
+        sibling_titles: the titles of the cards already directly in that deck
+            那個牌組裡已直接放著的卡的標題
+        sibling_decks: the names of the child decks already in that deck that no card owns
+            那個牌組裡沒有對應卡的子牌組名稱
+    """
+
+    deck_path: str | None = None
+    parent_title: str | None = None
+    parent_prompt: str = ""
+    sibling_titles: list[str] = field(default_factory=list)
+    sibling_decks: list[str] = field(default_factory=list)
+
+    @property
+    def empty(self) -> bool:
+        """Return whether there is nothing to tell the LLM.
+
+        回傳是否沒有任何可以告訴 LLM 的位置資訊。
+        """
+        return not (self.deck_path or self.parent_title or self.sibling_titles or self.sibling_decks)
 
 
 def target_audience(audience: str, audience_note: str) -> str | None:
@@ -55,7 +98,13 @@ def target_audience(audience: str, audience_note: str) -> str | None:
     return f"{audience}（{note}）" if note else audience
 
 
-def build_prompt(background: str, intent: str, audience: str | None, existing_tags: list[str] | None = None) -> str:
+def build_prompt(
+    background: str,
+    intent: str,
+    audience: str | None,
+    existing_tags: list[str] | None = None,
+    placement: DraftPlacement | None = None,
+) -> str:
     """Render the generation prompt.
 
     組出提示詞。
@@ -70,6 +119,9 @@ def build_prompt(background: str, intent: str, audience: str | None, existing_ta
         existing_tags: topic tags already used on trilingual cards (sorted by count), so the LLM prefers reusing them
             when suggesting tags; ``None`` means none
             三語卡用過的主題標籤（依次數排序），讓 LLM 建議標籤時優先沿用；``None`` 表示沒有
+        placement: where the card will sit (deck path, parent card, sibling titles); ``None`` or empty leaves the
+            section out
+            卡片會放在哪裡（牌組路徑、上層卡、同一層的標題）；``None`` 或沒有內容時不放這一段
 
     Returns:
         the rendered prompt
@@ -81,11 +133,16 @@ def build_prompt(background: str, intent: str, audience: str | None, existing_ta
         intent=intent.strip(),
         audience=audience,
         existing_tags=existing_tags or [],
+        placement=placement if placement and not placement.empty else None,
     )
 
 
 async def generate(
-    background: str, intent: str, audience: str | None, existing_tags: list[str] | None = None
+    background: str,
+    intent: str,
+    audience: str | None,
+    existing_tags: list[str] | None = None,
+    placement: DraftPlacement | None = None,
 ) -> LLMTrilingualDraft:
     """Ask the LLM for a draft of trilingual sayings.
 
@@ -100,6 +157,8 @@ async def generate(
             對象；``None`` 表示各種對象
         existing_tags: topic tags already used on trilingual cards, sorted by count; ``None`` means none
             三語卡用過的主題標籤，依次數排序；``None`` 表示沒有
+        placement: where the card will sit; ``None`` means unknown
+            卡片會放在哪裡；``None`` 表示不知道
 
     Returns:
         the validated draft
@@ -119,7 +178,7 @@ async def generate(
             "You are a native-level conversation coach in Taiwanese Mandarin, Japanese and English. "
             "You only write what native speakers really say. Output strict JSON."
         ),
-        user_prompt=build_prompt(background, intent, audience, existing_tags),
+        user_prompt=build_prompt(background, intent, audience, existing_tags, placement),
         response_schema=LLMTrilingualDraft.model_json_schema(),
     )
     try:

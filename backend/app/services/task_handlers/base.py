@@ -290,7 +290,37 @@ class BaseHandler(ABC):
         )
         return [note_id]
 
-    async def execute_draft(self, parameters: dict[str, object], existing_tags: list[str]) -> dict[str, object]:
+    async def draft_context(self, card_service: CardService, parameters: Mapping[str, object]) -> dict[str, object]:
+        """Read from Anki what the LLM should know besides the user's input, before generating a draft.
+
+        生成草稿之前，從 Anki 讀出使用者輸入以外、LLM 應該知道的資訊。
+
+        Runs in the background together with ``execute_draft`` (only Anki reads, no DB session). The trilingual
+        card uses it for where the new card will sit: the full deck path, the parent card, the titles already in
+        that deck. The base implementation returns nothing. The service layer treats an Anki failure here like a
+        missing context and still generates.
+
+        和 ``execute_draft`` 一起在背景執行（只讀 Anki，不用 DB session）。三語卡用它讀出新卡會放在哪裡：完整
+        牌組路徑、上層卡、那個牌組已有的標題。預設不回傳任何東西。這裡 Anki 失敗時，服務層當成沒有情境，照常生成。
+
+        Args:
+            card_service: the card service
+                卡片服務
+            parameters: the input validated by ``DRAFT_PARAMS``
+                ``DRAFT_PARAMS`` 驗證後的輸入
+
+        Returns:
+            the context passed to ``execute_draft`` as ``context``
+            以 ``context`` 傳給 ``execute_draft`` 的情境
+        """
+        return {}
+
+    async def execute_draft(
+        self,
+        parameters: dict[str, object],
+        existing_tags: list[str],
+        context: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         """Generate a draft for the web preview flow with the LLM, without writing to Anki.
 
         網頁預覽流程的草稿：依使用者的輸入（已經 ``DRAFT_PARAMS`` 驗證）請 LLM 生成，不寫入 Anki。
@@ -310,6 +340,8 @@ class BaseHandler(ABC):
             existing_tags: tags this kind of card has used (sorted by count, system tags excluded), for the LLM
                 to prefer reusing
                 這種卡片用過的標籤（依次數排序、不含系統標籤），給 LLM 優先沿用
+            context: what ``draft_context`` read; ``None`` or empty when there is none
+                ``draft_context`` 讀到的情境；沒有時為 ``None`` 或空的
 
         Returns:
             the draft create parameters, optionally with ``tags``
@@ -345,6 +377,34 @@ class BaseHandler(ABC):
                 若查詢失敗（呼叫端決定要不要略過）
         """
         return None
+
+    async def resolve_create_deck(
+        self, card_service: CardService, deck: str, parameters: Mapping[str, object]
+    ) -> str:
+        """Return the deck the new card goes into; runs after parameter validation and before ``execute_create``.
+
+        回傳新卡要放的牌組；在參數驗證之後、``execute_create`` 之前執行。
+
+        The base implementation keeps the chosen deck. A handler can derive another one from the parameters (the
+        trilingual card puts a child card into ``<parent deck>::<parent title>``) and create it here; the create
+        response reports the deck returned.
+
+        預設沿用選的牌組。handler 可以依參數改成別的牌組（三語卡的子卡放進 ``<上層卡的牌組>::<上層卡的標題>``），
+        需要時在這裡建好牌組；建卡回應回報的就是這裡回傳的牌組。
+
+        Args:
+            card_service: the card service
+                卡片服務
+            deck: the chosen deck (the fixed deck already applied)
+                選的牌組（已套用固定牌組）
+            parameters: the create parameters (validated by ``CREATE_PARAMS``)
+                建立參數（``CREATE_PARAMS`` 驗證後）
+
+        Returns:
+            the deck to create the card in
+            要建卡的牌組
+        """
+        return deck
 
     async def after_create(
         self, card_service: CardService, parameters: Mapping[str, object], note_ids: list[int]
@@ -544,6 +604,7 @@ class BaseHandler(ABC):
         *,
         note_type: str | None = None,
         label_field: str | None = None,
+        depth: int = 1,
     ) -> dict[str, object]:
         """Return the standard graph: one node per note, with no links (D12).
 
@@ -567,6 +628,8 @@ class BaseHandler(ABC):
                 只看其中一種筆記類型；``None`` 表示全部
             label_field: the field used for node labels
                 節點名稱用的欄位
+            depth: how many levels a tree graph expands (``layout="tree"``); unused by the standard graph
+                樹狀圖譜展開的層數（``layout="tree"``）；標準圖譜不用
 
         Returns:
             ``{"nodes", "links", "label_fields", "label_field"}``, where ``label_fields`` are the selectable

@@ -2,6 +2,7 @@
   "modelName": "Speaking_Trilingual_Dark",
   "inOrderFields": [
     "Prompt",
+    "Title",
     "Prompt_Audios",
     "Context",
     "Recordings_ZH",

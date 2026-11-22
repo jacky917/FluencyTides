@@ -34,6 +34,11 @@ export interface CreateCapability extends Operation {
 /** 圖譜能力；`links` 表示有關聯連線。The graph capability. */
 export interface GraphCapability extends Operation {
   links: boolean;
+  /**
+   * 排版：`force` 力導向網路；`tree` 卡片＋同名子牌組的主題樹（可設層數，三語對話卡）。舊後端沒有這個鍵，視為 `force`。
+   * How the graph is laid out; missing on older backends, meaning `force`.
+   */
+  layout?: 'force' | 'tree';
 }
 
 /** 一個 handler 的全部能力。All capabilities of a handler. */
@@ -237,6 +242,8 @@ export interface TrilingualReference {
 
 /** 三語對話卡的建立參數（草稿就是這個形狀）。Trilingual create parameters. */
 export interface TrilingualCreateParams {
+  /** 短標題，也是子牌組名（後端 `trilingual_title.py`）。The short title, also the child deck name. */
+  title: string;
   prompt: string;
   context: string;
   references_zh: TrilingualReference[];
@@ -486,6 +493,22 @@ export interface GraphNode {
   translation?: string;
   pos?: string;
   status?: string;
+  /** 主題樹：`root` 根、`card` 卡片、`deck` 沒有對應卡的子牌組。Topic tree node kind. */
+  kind?: 'root' | 'card' | 'deck';
+  /** 主題樹：卡片所在的牌組，或牌組節點本身。The deck of the card, or the deck itself. */
+  deck?: string | null;
+  /** 主題樹：點了要進入的子牌組；沒有子節點時為 null。The deck to enter, or null. */
+  child_deck?: string | null;
+  /** 主題樹：直接在它底下的節點數（收起時也有）。Direct children, also when folded. */
+  child_count?: number;
+  /** 主題樹：第幾層（根為 0）。The level, root being 0. */
+  depth?: number;
+  /** 主題樹：卡片可用的標題（不能當子牌組名時為 null）。The card's usable title. */
+  title?: string | null
+  /** 主題樹：卡片的情境提示（提示文字用）。The card's prompt. */
+  prompt?: string;
+  /** 主題樹：同一層有標題相同的卡，這張不擁有子牌組。Shares its title with an earlier card. */
+  duplicate_title?: boolean;
 }
 
 /** 知識圖譜連線。Knowledge graph link. */

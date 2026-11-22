@@ -50,12 +50,14 @@ class GraphCapabilityOut(OperationOut):
 
     圖譜能力。
 
-    ``links`` means the graph has relation links.
+    ``links`` means the graph has relation links; ``layout`` is how the frontend lays it out (``"tree"`` is the
+    topic tree of cards and child decks).
 
-    ``links`` 表示有關聯連線。
+    ``links`` 表示有關聯連線；``layout`` 是前端的排版方式（``"tree"`` 是卡片與子牌組的主題樹）。
     """
 
     links: bool = False
+    layout: Literal["force", "tree"] = "force"
 
 
 class CapabilitiesOut(BaseModel):

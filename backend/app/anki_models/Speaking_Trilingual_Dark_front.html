@@ -1,7 +1,8 @@
 <div class="card front-card">
-    <!-- 共通提示 (Prompt)：三語共用，標題固定不需動態國旗 -->
+    <!-- 共通提示 (Prompt)：三語共用，標題固定不需動態國旗。
+         有短標題 (Title，主題樹的卡片名＝同名子牌組名) 時，小字標籤改顯示標題 -->
     <div class="expression-box">
-        <div class="topic-tag">🗣️ 提示 (Prompt)</div>
+        <div class="topic-tag">🗣️ {{#Title}}{{Title}}{{/Title}}{{^Title}}提示 (Prompt){{/Title}}</div>
         <div class="prompt-content">{{Prompt}}</div>
         <!-- 提示語音頭像列 (按 lang 鍵疊加國旗徽章，由 JS 渲染) -->
         <div id="prompt-avatars" class="avatar-row"></div>

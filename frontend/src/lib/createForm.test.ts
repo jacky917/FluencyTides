@@ -12,6 +12,7 @@ import {
   missingRequired,
   normalizeRows,
   schemaFields,
+  withDeck,
 } from './createForm'
 
 /** 後端標準建立產生的 schema（向 Anki 查欄位，第一個欄位必填）。 */
@@ -330,5 +331,37 @@ describe('rows fields', () => {
       },
     }
     expect(formErrorsFrom(error, ['Company'])?.fields.Company).toBe('第 1 筆：公司與職稱至少要填一個')
+  })
+})
+
+describe('牌組與上層卡（x-ui: deck、parent-card）', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      background: { type: 'string', title: '背景' },
+      deck: { type: 'string', title: '牌組', default: '', 'x-ui': 'deck' },
+      parent_note_id: { type: 'string', title: '放在哪張卡底下', default: '', 'x-ui': 'parent-card' },
+    },
+    required: ['background'],
+  }
+
+  it('marks the special widgets and leaves ordinary fields alone', () => {
+    const { fields } = schemaFields(schema)
+    expect(fields.map((field) => [field.name, field.widget])).toEqual([
+      ['background', null],
+      ['deck', 'deck'],
+      ['parent_note_id', 'parent-card'],
+    ])
+  })
+
+  it('fills the deck fields with the deck the card will be created in', () => {
+    const { fields } = schemaFields(schema)
+    const values = { background: 'b', deck: '舊的', parent_note_id: '12' }
+    expect(withDeck(fields, values, '日常會話::入社')).toEqual({
+      background: 'b',
+      deck: '日常會話::入社',
+      parent_note_id: '12',
+    })
+    expect(withDeck(fields, values, null).deck).toBe('')
   })
 })

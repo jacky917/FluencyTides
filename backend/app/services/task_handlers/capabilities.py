@@ -150,12 +150,18 @@ class GraphCapability:
         links: whether the graph has relation links (only then does the frontend show operations such as
             creating links)
             是否有關聯連線（前端才顯示建立連線等操作）
+        layout: how the frontend lays the graph out: ``"force"`` (a force-directed network) or ``"tree"`` (a
+            left-to-right tree of cards and child decks, with a depth setting; the handler must override
+            ``execute_read_graph``)
+            前端怎麼排版：``"force"``（力導向網路）或 ``"tree"``（由左往右的卡片與子牌組樹，可設層數；handler 必須
+            覆寫 ``execute_read_graph``）
         reason: why it is not offered
             不開放的原因
     """
 
     supported: bool = False
     links: bool = False
+    layout: Literal["force", "tree"] = "force"
     reason: str | None = None
 
     def __post_init__(self) -> None:
@@ -170,6 +176,8 @@ class GraphCapability:
         _default_reason(self, self.supported, self.reason)
         if self.links and not self.supported:
             raise ValueError("links 只能在開放圖譜時宣告")
+        if self.layout == "tree" and self.links:
+            raise ValueError("樹狀圖譜（layout='tree'）的連線是上下層，不能同時宣告 links")
 
 
 @dataclass(frozen=True)

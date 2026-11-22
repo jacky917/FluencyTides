@@ -28,6 +28,25 @@ export const FAMILIARITY_COLORS = [
   '#4a90c2', '#5dade2', '#6cb8e6', '#82c4ea', '#9b87f5', '#a78bfa', '#c084fc', '#ff6b9d', '#ff3d6e', '#ff1f3d',
 ] as const
 
+/** 標題的字數上限，與後端 `TITLE_MAX_LENGTH` 相同。The title length limit, as on the backend. */
+export const TITLE_MAX_LENGTH = 40
+
+/**
+ * 標題能不能當子牌組名，規則與後端 `trilingual_title.normalize_title` 相同（後端仍會再檢查一次）。
+ * Why a title cannot name a deck, using the backend's rules; null when it can.
+ * @param title - 標題（尚未去掉前後空白）。The title, untrimmed.
+ * @returns 問題說明；沒有問題時為 null。The problem, or null.
+ */
+export function titleProblem(title: string): string | null {
+  const trimmed = title.trim()
+  if (!trimmed) return '標題不能空白（在上方填寫）。'
+  if (trimmed.length > TITLE_MAX_LENGTH) return `標題最多 ${TITLE_MAX_LENGTH} 字（現在 ${trimmed.length} 字）。`
+  if (trimmed.includes('::')) return '標題不能含 ::（標題也是子牌組的名稱）。'
+  if (trimmed.includes('"')) return '標題不能含 "（標題也是子牌組的名稱）。'
+  if (/[\r\n]/.test(trimmed)) return '標題不能換行。'
+  return null
+}
+
 /** 一句草稿；格式不對的項目丟掉。One saying, or null when malformed. */
 function readReference(value: unknown): TrilingualReference | null {
   if (typeof value !== 'object' || value === null) return null
@@ -56,6 +75,7 @@ export function readDraft(params: Record<string, unknown>): TrilingualCreatePara
       .map(readReference)
       .filter((item): item is TrilingualReference => item !== null)
   return {
+    title: typeof params.title === 'string' ? params.title : '',
     prompt: typeof params.prompt === 'string' ? params.prompt : '',
     context: typeof params.context === 'string' ? params.context : '',
     references_zh: list('references_zh'),
@@ -98,10 +118,11 @@ export function familiarityOrder(references: TrilingualReference[]): number[] {
 }
 
 /**
- * 建卡參數：卡面的情境與補充（可能被使用者改過）加上勾選的句子。
- * The create params: the (possibly edited) prompt and context plus the selected sayings.
+ * 建卡參數：卡面的標題、情境與補充（可能被使用者改過）加上勾選的句子。
+ * The create params: the (possibly edited) title, prompt and context plus the selected sayings.
  * @param draft - 草稿。The draft.
  * @param selection - 勾選狀態。The selection.
+ * @param title - 短標題。The title.
  * @param prompt - 卡面情境。The prompt.
  * @param context - 補充。The context.
  * @returns 建立參數。The create params.
@@ -109,11 +130,13 @@ export function familiarityOrder(references: TrilingualReference[]): number[] {
 export function selectedParams(
   draft: TrilingualCreateParams,
   selection: DraftSelection,
+  title: string,
   prompt: string,
   context: string,
 ): TrilingualCreateParams {
   const pick = (key: ReferenceKey) => draft[key].filter((_, index) => selection[key][index])
   return {
+    title,
     prompt,
     context,
     references_zh: pick('references_zh'),
@@ -129,6 +152,16 @@ export function selectedParams(
 export type TrilingualDraftState = {
   draft: TrilingualCreateParams
   selection: DraftSelection
+  /**
+   * 短標題（可修改）。加這個欄位之前存下的草稿沒有它，所以是選填，讀的時候當成空字串。
+   * The title; missing in drafts saved before it existed.
+   */
+  title?: string
+  /**
+   * 建成哪張三語卡的子卡（Note ID）；null 或沒有時直接放在選的牌組。之前存下的草稿沒有它。
+   * The parent card's note ID, or null to create in the chosen deck.
+   */
+  parentNoteId?: number | null
   /** 卡面情境（可修改）。The prompt. */
   prompt: string
   /** 補充（可修改）。The context. */

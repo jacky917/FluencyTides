@@ -29,6 +29,7 @@ import {
   initialValues,
   missingRequired,
   schemaFields,
+  withDeck,
   type FormErrors,
 } from '../../lib/createForm'
 import {
@@ -41,6 +42,7 @@ import {
 import { draftBackupKey, draftFromError, duplicateFromError, inputAsValues, timeLabel } from '../../lib/serverDraft'
 import {
   readDraft,
+  titleProblem,
   selectAll,
   selectedCount,
   selectedParams,
@@ -59,6 +61,7 @@ import { Button } from '../ui/button'
 import { Skeleton } from '../ui/skeleton'
 import { ExpressionPreviewBody } from './ExpressionDraftPreview'
 import { CreatedNotice, DeckRequiredNotice, DeckSummary, SchemaFieldInput } from './formParts'
+import { ParentCardSelect } from './ParentCardSelect'
 import type { DraftStateBase, PreviewKind } from './previewTypes'
 import { TagInput } from './TagInput'
 import { TrilingualPreviewBody } from './TrilingualDraftPreview'
@@ -77,22 +80,33 @@ const TRILINGUAL: PreviewKind<TrilingualDraftState> = {
     return {
       draft: parsed,
       selection: selectAll(parsed),
+      title: parsed.title,
+      // 生成前選的上層卡（後端帶回來）；預覽裡還可以改
+      parentNoteId: typeof draft.result!.params.parent_note_id === 'number' ? draft.result!.params.parent_note_id : null,
       prompt: parsed.prompt,
       context: parsed.context,
       tags: suggestedTags(draft),
     }
   },
   params: (state) =>
-    selectedParams(state.draft, state.selection, state.prompt.trim(), state.context.trim()) as unknown as Record<
+    ({
+      ...selectedParams(
+        state.draft,
+        state.selection,
+        (state.title ?? '').trim(),
+        state.prompt.trim(),
+        state.context.trim(),
+      ),
+      parent_note_id: state.parentNoteId ?? null,
+    }) as unknown as Record<
       string,
       unknown
     >,
   blockedReason: (state) =>
     selectedCount(state.selection) === 0
       ? '至少勾選一句才能建立。'
-      : !state.prompt.trim()
-        ? '卡面情境不能空白（在上方填寫）。'
-        : null,
+      : (titleProblem(state.title ?? '') ??
+        (!state.prompt.trim() ? '卡面情境不能空白（在上方填寫）。' : null)),
   createLabel: (state) => `建立（${selectedCount(state.selection)} 句）`,
   inputSummary: (input) => (input.background ? `背景：${input.background}` : null),
   Body: TrilingualPreviewBody,
@@ -336,6 +350,10 @@ function InputScreen({
   })
   const discardMutation = useDiscardDraft()
 
+  const fixedDeck = create.deck === 'fixed' ? create.fixed_deck : null
+  // 要建卡的牌組：生成時交給 LLM 當作卡片的位置（x-ui: deck），上層卡選單也列這個牌組裡的卡
+  const targetDeck = fixedDeck ?? (deckStatus === 'ok' ? selectedDeck : null)
+
   const sending = startMutation.isPending || retryMutation.isPending
   const busy = generating || sending || discardMutation.isPending
   const missing = missingRequired(fields, values)
@@ -345,8 +363,10 @@ function InputScreen({
     e.preventDefault()
     if (!canGenerate) return
     setDuplicate(null)
-    if (failed) retryMutation.mutate({ id: failed.id, version: failed.version, input: values })
-    else startMutation.mutate({ input: values })
+    // 牌組欄位（x-ui: deck）不在畫面上：送出時帶入要建卡的牌組，讓 LLM 知道卡片的位置
+    const input = withDeck(fields, values, targetDeck)
+    if (failed) retryMutation.mutate({ id: failed.id, version: failed.version, input })
+    else startMutation.mutate({ input })
   }
 
   /** 清除輸入（草稿不動）。Clears the inputs only. */
@@ -357,7 +377,6 @@ function InputScreen({
     setResult(null)
   }
   const hasInput = Object.values(storedValues).some((value) => value.trim() !== '')
-  const fixedDeck = create.deck === 'fixed' ? create.fixed_deck : null
 
   // 牌組不能用：一開始就不給生成（生成中、失敗的草稿照常顯示，不打斷）。輸入還在 localStorage
   if (!draft && !sending && deckBlocksForm(fixedDeck, selectedDeck, deckStatus)) {
@@ -381,21 +400,37 @@ function InputScreen({
           }}
         />
       )}
-      {fields.map((field) => (
-        <SchemaFieldInput
-          key={field.name}
-          id={`${formId}-${field.name}`}
-          field={field}
-          value={values[field.name] ?? ''}
-          error={inputErrors?.fields[field.name]}
-          disabled={busy}
-          onChange={(value) => {
-            // 改了輸入：先前的重複提示對應的是舊的輸入，收起來，重新按生成再查一次
-            setDuplicate(null)
-            setStoredValues((prev) => ({ ...prev, [field.name]: value }))
-          }}
-        />
-      ))}
+      {fields.map((field) => {
+        // 改了輸入：先前的重複提示對應的是舊的輸入，收起來，重新按生成再查一次
+        const onChange = (value: string) => {
+          setDuplicate(null)
+          setStoredValues((prev) => ({ ...prev, [field.name]: value }))
+        }
+        if (field.widget === 'deck') return null
+        if (field.widget === 'parent-card') {
+          const parent = Number(values[field.name] ?? '')
+          return (
+            <ParentCardSelect
+              key={field.name}
+              deck={targetDeck}
+              value={Number.isInteger(parent) && parent > 0 ? parent : null}
+              onChange={(noteId) => onChange(noteId === null ? '' : String(noteId))}
+              disabled={busy}
+            />
+          )
+        }
+        return (
+          <SchemaFieldInput
+            key={field.name}
+            id={`${formId}-${field.name}`}
+            field={field}
+            value={values[field.name] ?? ''}
+            error={inputErrors?.fields[field.name]}
+            disabled={busy}
+            onChange={onChange}
+          />
+        )
+      })}
       {inputErrors && inputErrors.other.length > 0 && (
         <ErrorNote title="無法生成" error={{ error_code: 'VALIDATION', message: inputErrors.other.join('；') }} />
       )}
@@ -629,7 +664,7 @@ function ReadyPreview<S extends DraftStateBase>({
       {summary && (
         <p className="break-words rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">{summary}</p>
       )}
-      <Body state={state} onChange={editor.setState} disabled={busy} />
+      <Body state={state} onChange={editor.setState} disabled={busy} deck={deck} />
       <TagInput
         handlerName={handler.name}
         tags={state.tags}

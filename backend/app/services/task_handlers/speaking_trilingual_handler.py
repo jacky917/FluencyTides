@@ -29,14 +29,17 @@ import json
 import logging
 import uuid
 from datetime import date
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Literal, override
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import settings
+from app.core.exceptions import InvalidNoteQueryError, NoteNotFoundError, ParentNoteInvalidError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
+from app.infrastructure.anki.search import note_types_query
 from app.services import speaking_trilingual_generate as generate_service
-from app.services.task_handlers.base import BaseHandler
+from app.services.task_handlers.base import BaseHandler, clean_html, field_value
 from app.services.task_handlers.capabilities import (
     CreateCapability,
     GraphCapability,
@@ -46,6 +49,12 @@ from app.services.task_handlers.capabilities import (
 )
 from app.services.task_handlers.registry import register_handler
 from app.services.task_handlers.shared.trilingual_familiarity import parse_familiarity
+from app.services.task_handlers.shared.trilingual_title import (
+    TITLE_FIELD,
+    TITLE_MAX_LENGTH,
+    normalize_title,
+    usable_title,
+)
 from app.services.task_handlers.shared.trilingual_lang import (
     LANG_CODES,
     recordings_field,
@@ -104,6 +113,12 @@ class SpeakingTrilingualCreateParams(BaseModel):
     預先填好，使用者勾選後送回。
     """
 
+    title: str = Field(
+        min_length=1,
+        max_length=TITLE_MAX_LENGTH,
+        title="標題",
+        description="短標題（日文），也是子牌組的名稱（例如「残業を断る」）；不能含 :: 或引號",
+    )
     prompt: str = Field(
         min_length=1,
         max_length=MAX_TEXT_LENGTH,
@@ -127,6 +142,17 @@ class SpeakingTrilingualCreateParams(BaseModel):
     references_en: list[ReferenceDraft] = Field(
         default_factory=list, max_length=MAX_REFERENCES_PER_LANG, title="英文說法"
     )
+    parent_note_id: int | None = Field(
+        default=None,
+        title="上層卡",
+        description="建成這張三語卡的子卡：新卡放進「上層卡的牌組::上層卡的標題」（不存在就建立）；省略就放在選的牌組",
+    )
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _title(cls, value: object) -> object:
+        # 標題也是子牌組名：去掉前後空白，不能含 :: 或引號（trilingual_title.py）
+        return normalize_title(value) if isinstance(value, str) else value
 
 
 class SpeakingTrilingualDraftParams(BaseModel):
@@ -151,6 +177,37 @@ class SpeakingTrilingualDraftParams(BaseModel):
         default=generate_service.ANY_AUDIENCE, title="對象", description="不指定時生成對各種對象的說法"
     )
     audience_note: str = Field(default="", title="對象補充", description="選填，例：房東，年紀比我大")
+    deck: str = Field(
+        default="",
+        title="牌組",
+        description="要建卡的牌組（網頁自動帶入左側選的牌組）；讓 LLM 知道卡片在主題樹的位置",
+        json_schema_extra={"x-ui": "deck"},
+    )
+    parent_note_id: str = Field(
+        default="",
+        pattern=r"^\d*$",
+        title="放在哪張卡底下",
+        description="選填；選了之後新卡成為那張卡的子卡，LLM 也會參考那張卡的情境",
+        json_schema_extra={"x-ui": "parent-card"},
+    )
+
+
+#: How many sibling titles and decks at most go into the prompt.
+#: 提示詞裡最多放幾個同一層的標題與分類。
+MAX_PLACEMENT_SIBLINGS = 40
+
+#: How many characters of the parent card's prompt go into the prompt.
+#: 提示詞裡放上層卡情境的前幾個字。
+MAX_PARENT_PROMPT_LENGTH = 300
+
+
+def _parent_id(value: object) -> int | None:
+    """Return the parent note ID from the draft input (a digit string; empty means none).
+
+    從草稿輸入取出上層卡的 Note ID（數字字串；空的表示沒有）。
+    """
+    text = str(value or "").strip()
+    return int(text) if text.isdigit() else None
 
 
 @register_handler
@@ -179,7 +236,7 @@ class SpeakingTrilingualHandler(BaseHandler):
         delete=Operation(reason="三語對話卡的刪除尚未開放"),
         actions=SPEAKING_ACTIONS,
         search=Operation(supported=True),
-        graph=GraphCapability(reason="口說卡沒有知識圖譜"),
+        graph=GraphCapability(supported=True, layout="tree"),
     )
     CREATE_PARAMS = SpeakingTrilingualCreateParams
     DRAFT_PARAMS = SpeakingTrilingualDraftParams
@@ -224,28 +281,43 @@ class SpeakingTrilingualHandler(BaseHandler):
         return ["Speaking_Trilingual_Dark"]
 
     @override
-    async def execute_draft(self, parameters: dict[str, object], existing_tags: list[str]) -> dict[str, object]:
+    async def execute_draft(
+        self,
+        parameters: dict[str, object],
+        existing_tags: list[str],
+        context: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         """Ask the LLM for trilingual sayings and suggested tags for the scene, shaped as a draft (nothing written).
 
         請 LLM 為場景生成三語說法與建議標籤，整理成建立參數的草稿（不寫入）。
 
-        Sayings whose content is blank are dropped.
+        Sayings whose content is blank are dropped. The suggested title is kept only if it can name a deck
+        (``trilingual_title.usable_title``); otherwise the draft's title is empty and the user fills it in before
+        creating, where it is required.
 
-        內容為空白的說法會被略過。
+        內容為空白的說法會被略過。建議的標題要能當牌組名才保留（``trilingual_title.usable_title``），否則草稿的
+        標題是空的，由使用者在建卡前補上（建卡時必填）。
 
         Args:
             parameters: the input validated by ``SpeakingTrilingualDraftParams``
                 ``SpeakingTrilingualDraftParams`` 驗證後的輸入
             existing_tags: tags trilingual cards have used, for the LLM to prefer reusing
                 三語卡用過的標籤，讓 LLM 優先沿用
+            context: where the card will sit, from :meth:`draft_context`; ``None`` or empty means unknown
+                卡片會放在哪裡（:meth:`draft_context` 讀到的）；``None`` 或空的表示不知道
 
         Returns:
-            a draft shaped like ``SpeakingTrilingualCreateParams``, plus ``tags`` (the suggested tags)
+            a draft shaped like ``SpeakingTrilingualCreateParams``, plus ``tags`` (the suggested tags); the chosen
+            parent card is carried over as ``parent_note_id``
             ``SpeakingTrilingualCreateParams`` 形狀的草稿，另帶 ``tags``（建議的標籤）
         """
         audience = generate_service.target_audience(str(parameters["audience"]), str(parameters["audience_note"]))
         draft = await generate_service.generate(
-            str(parameters["background"]), str(parameters["intent"]), audience, existing_tags
+            str(parameters["background"]),
+            str(parameters["intent"]),
+            audience,
+            existing_tags,
+            generate_service.DraftPlacement(**dict(context)) if context else None,
         )
         references = {
             f"references_{lang.lower()}": [
@@ -253,10 +325,214 @@ class SpeakingTrilingualHandler(BaseHandler):
             ]
             for lang in LANG_CODES
         }
+        # 草稿可以沒有標題：LLM 沒給或不合規則（含 :: 等）就留空，使用者送出前補上（建卡時才必填）
+        title = usable_title(draft.title) or ""
         params = SpeakingTrilingualCreateParams.model_validate(
-            {"prompt": draft.prompt, "context": draft.context, **references}
+            {"title": title or "未命名", "prompt": draft.prompt, "context": draft.context, **references}
         ).model_dump()
+        params["title"] = title
+        # 生成前選的上層卡帶到預覽，建卡時照樣放進它的同名子牌組
+        params["parent_note_id"] = _parent_id(parameters.get("parent_note_id"))
         return {**params, "tags": draft.tags}
+
+    @override
+    async def draft_context(self, card_service: "CardService", parameters: Mapping[str, object]) -> dict[str, object]:
+        """Read where the new card will sit: the full deck path, the parent card, the titles already there.
+
+        讀出新卡會放在哪裡：完整牌組路徑、上層卡、那裡已有的標題。
+
+        The deck is the parent's same-named child deck when a parent is chosen, otherwise the chosen deck. A parent
+        that cannot hold child cards (deleted, another note type, no title) is left out here; creating the card
+        reports it. Without a parent, the card that owns the chosen deck (the topic tree's root) counts as the
+        parent, since the new card becomes its child anyway.
+
+        選了上層卡時是它的同名子牌組，否則是選的牌組。不能放子卡的上層卡（已刪除、其他筆記類型、沒有標題）這裡
+        略過，建卡時才報錯。沒選上層卡時，擁有選的牌組的那張卡（主題樹的根）就算上層卡，因為新卡本來就會成為它的
+        子卡。
+
+        Args:
+            card_service: the card service
+                卡片服務
+            parameters: the input validated by ``SpeakingTrilingualDraftParams``
+                ``SpeakingTrilingualDraftParams`` 驗證後的輸入
+
+        Returns:
+            the keyword arguments of ``speaking_trilingual_generate.DraftPlacement``; empty without a deck
+            ``speaking_trilingual_generate.DraftPlacement`` 的參數；沒有牌組時為空的
+        """
+        target = str(parameters.get("deck") or "").strip() or None
+        parent_title: str | None = None
+        parent_prompt = ""
+        parent_id = _parent_id(parameters.get("parent_note_id"))
+        if parent_id is not None:
+            try:
+                target, parent_title, parent_prompt = await self._parent_placement(card_service, parent_id)
+            except (NoteNotFoundError, ParentNoteInvalidError) as exc:
+                logger.info("三語卡草稿：上層卡 %s 不能放子卡，不提供給 LLM：%s", parent_id, exc)
+        if target is None:
+            return {}
+        graph = await self.execute_read_graph(card_service, None, target, depth=1)
+        nodes = [node for node in graph.get("nodes") or [] if isinstance(node, dict)]
+        root = next((node for node in nodes if node.get("kind") == "root"), {})
+        if parent_title is None and root.get("note_id"):
+            parent_title = str(root.get("title") or root.get("label") or "") or None
+            parent_prompt = str(root.get("prompt") or "")
+        level = [node for node in nodes if node.get("depth") == 1]
+        titles = [str(node.get("title") or node.get("label")) for node in level if node.get("kind") == "card"]
+        decks = [str(node.get("label")) for node in level if node.get("kind") == "deck"]
+        return {
+            "deck_path": target,
+            "parent_title": parent_title,
+            "parent_prompt": parent_prompt[:MAX_PARENT_PROMPT_LENGTH],
+            "sibling_titles": titles[:MAX_PLACEMENT_SIBLINGS],
+            "sibling_decks": decks[:MAX_PLACEMENT_SIBLINGS],
+        }
+
+    async def _parent_placement(self, card_service: "CardService", parent_id: int) -> tuple[str, str, str]:
+        """Return the deck a child of this card goes into, with the card's title and prompt.
+
+        回傳這張卡的子卡要放的牌組，以及這張卡的標題與情境。
+
+        Args:
+            card_service: the card service
+                卡片服務
+            parent_id: the parent's note ID
+                上層卡的 Note ID
+
+        Returns:
+            ``(<the parent's deck>::<its title>, title, prompt)``
+            ``(<上層卡的牌組>::<它的標題>, 標題, 情境)``
+
+        Raises:
+            NoteNotFoundError: if the parent note or its deck cannot be found
+                若找不到上層卡或它所在的牌組
+            ParentNoteInvalidError: if the parent is not a trilingual card or has no usable title
+                若上層卡不是三語卡，或沒有可用的標題
+        """
+        notes = await card_service.anki_client.get_notes_info([parent_id])
+        if not notes:
+            raise NoteNotFoundError(f"找不到上層卡（Note {parent_id}），可能已被刪除")
+        parent = notes[0]
+        if parent.modelName not in self.supported_models:
+            raise ParentNoteInvalidError(f"上層卡必須是「{self.title}」，Note {parent_id} 是 {parent.modelName}")
+        title = usable_title(clean_html(field_value(parent.fields, TITLE_FIELD)))
+        if title is None:
+            raise ParentNoteInvalidError("上層卡沒有可用的標題，請先在 Anki 幫它填上標題（Title），才能在它底下建子卡")
+        cards_info = await card_service.anki_client.get_cards_info(parent.cards[:1]) if parent.cards else []
+        parent_deck = next((str(info["deckName"]) for info in cards_info if isinstance(info, dict)), None)
+        if parent_deck is None:
+            raise NoteNotFoundError(f"讀不到上層卡（Note {parent_id}）所在的牌組")
+        prompt = clean_html(field_value(parent.fields, "Prompt")).strip()
+        return f"{parent_deck}::{title}", title, prompt
+
+    @override
+    async def resolve_create_deck(
+        self, card_service: "CardService", deck: str, parameters: Mapping[str, object]
+    ) -> str:
+        """Put a child card into its parent's same-named child deck, creating that deck if needed.
+
+        子卡放進上層卡的同名子牌組，沒有就建立。
+
+        Without ``parent_note_id`` the chosen deck is kept. The parent must be a trilingual card with a usable
+        title; the target is ``<the parent's deck>::<the parent's title>`` (the topic tree, plan D2, D6).
+        ``createDeck`` returns the existing deck's ID when it already exists, so a second child card reuses it.
+
+        沒有 ``parent_note_id`` 時沿用選的牌組。上層卡必須是有可用標題的三語卡；目標是
+        ``<上層卡的牌組>::<上層卡的標題>``（主題樹，計畫書 D2、D6）。牌組已存在時 ``createDeck`` 回傳既有的 ID，
+        所以第二張子卡會沿用同一個牌組。
+
+        Args:
+            card_service: the card service
+                卡片服務
+            deck: the chosen deck (ignored when a parent is given)
+                選的牌組（有上層卡時忽略）
+            parameters: the validated create parameters
+                驗證後的建立參數
+
+        Returns:
+            the deck to create the card in
+            要建卡的牌組
+
+        Raises:
+            NoteNotFoundError: if the parent note does not exist
+                若上層卡不存在
+            ParentNoteInvalidError: if the parent is not a trilingual card or has no usable title
+                若上層卡不是三語卡，或沒有可用的標題
+        """
+        parent_id = parameters.get("parent_note_id")
+        if not isinstance(parent_id, int):
+            return deck
+        target, _, _ = await self._parent_placement(card_service, parent_id)
+        await card_service.anki_client.create_deck(target)
+        logger.info("三語卡建成 Note %s 的子卡，放進牌組 %s", parent_id, target)
+        return target
+
+    @override
+    async def execute_read_graph(
+        self,
+        card_service: "CardService",
+        relation_service: "RelationService",
+        deck_name: str | None = None,
+        *,
+        note_type: str | None = None,
+        label_field: str | None = None,
+        depth: int = 1,
+    ) -> dict[str, object]:
+        """Return the topic tree under the deck: cards, their child cards through same-named child decks.
+
+        回傳牌組以下的主題樹：卡片，以及透過同名子牌組掛在底下的子卡。
+
+        Reads every trilingual card under the parent of ``deck_name`` (the card that owns ``deck_name`` lives
+        there) with one search, then builds the tree in memory (``topic_tree.build_graph``). Node labels are always
+        the title, so ``label_field`` is not accepted.
+
+        以一次搜尋讀出 ``deck_name`` 上一層以下的所有三語卡（擁有 ``deck_name`` 的卡在上一層），再在記憶體裡組樹
+        （``topic_tree.build_graph``）。節點名稱固定是標題，所以不接受 ``label_field``。
+
+        Args:
+            card_service: the card service
+                卡片服務
+            relation_service: the relation service (unused)
+                關聯服務（不使用）
+            deck_name: the root deck; ``None`` means every deck
+                根牌組；``None`` 表示全部牌組
+            note_type: only one of the handler's note types; ``None`` means all
+                只看其中一種筆記類型；``None`` 表示全部
+            label_field: not applicable; rejected when given
+                不適用，帶了就拒絕
+            depth: how many levels to expand, ``0`` meaning all
+                展開幾層，``0`` 表示全部
+
+        Returns:
+            ``topic_tree.build_graph``'s result plus ``label_fields`` (empty) and ``label_field`` (``Title``)
+            ``topic_tree.build_graph`` 的結果，另帶 ``label_fields``（空的）與 ``label_field``（``Title``）
+
+        Raises:
+            InvalidNoteQueryError: if ``label_field`` is given, or ``note_type`` is not this handler's
+                若帶了 ``label_field``，或 ``note_type`` 不歸這個 handler
+        """
+        from app.services.task_handlers.topic_tree import TreeCard, build_graph
+
+        if label_field is not None:
+            raise InvalidNoteQueryError("主題樹的節點名稱固定是標題，不能另選欄位")
+        # 擁有根牌組的卡在上一層，所以從上一層讀起（最上層的牌組沒有上一層）
+        search_deck = (deck_name.rpartition("::")[0] or deck_name) if deck_name else None
+        note_ids = await card_service.find_notes(note_types_query(self.note_types_for(note_type), search_deck))
+        notes = await card_service.anki_client.get_notes_info(note_ids) if note_ids else []
+        first_cards = [note.cards[0] for note in notes if note.cards]
+        cards_info = await card_service.anki_client.get_cards_info(first_cards) if first_cards else []
+        deck_of = {info["note"]: info["deckName"] for info in cards_info if isinstance(info, dict)}
+        tree_cards = [
+            TreeCard(
+                note_id=note.noteId,
+                deck=str(deck_of[note.noteId]),
+                title=usable_title(clean_html(field_value(note.fields, TITLE_FIELD))),
+                prompt=clean_html(field_value(note.fields, "Prompt")).strip(),
+            )
+            for note in notes
+            if note.noteId in deck_of
+        ]
+        return build_graph(tree_cards, deck_name, depth) | {"label_fields": [], "label_field": TITLE_FIELD}
 
     @override
     async def execute_create(
@@ -300,6 +576,7 @@ class SpeakingTrilingualHandler(BaseHandler):
         empty_json_array = json.dumps([], ensure_ascii=False)
 
         fields = {
+            TITLE_FIELD: parameters.get("title", ""),
             "Prompt": prompt_text,
             "Prompt_Audios": empty_json_array,
             "Context": context_text,

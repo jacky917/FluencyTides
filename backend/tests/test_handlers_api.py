@@ -365,6 +365,10 @@ def test_graph(client):
         ("/api/v1/handlers/vocabulary_mining/graph", {"note_type": "Speaking_Coach_Dark"}, (422, "INVALID_NOTE_QUERY")),
         ("/api/v1/handlers/vocabulary_mining/graph", {"label_field": "Target_POS"}, (422, "INVALID_NOTE_QUERY")),
         ("/api/v1/handlers/nope/graph", {}, (404, "HANDLER_NOT_FOUND")),
+        # depth 超出範圍由 FastAPI 的參數驗證擋下，回應沒有 error_code
+        ("/api/v1/handlers/speaking_trilingual/graph", {"depth": 6}, (422, None)),
+        ("/api/v1/handlers/speaking_trilingual/graph", {"depth": -1}, (422, None)),
+        ("/api/v1/handlers/speaking_trilingual/graph", {"label_field": "Prompt"}, (422, "INVALID_NOTE_QUERY")),
     ],
 )
 def test_graph_errors(client, url, params, expected):

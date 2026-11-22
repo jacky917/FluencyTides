@@ -38,6 +38,7 @@ def _draft(**overrides) -> LLMTrilingualDraft:
     """LLM 回傳的草稿。An LLM draft."""
     values = {
         "prompt": "朋友約你週末爬山，但你已經有約了。",
+        "title": "婉拒週末爬山",
         "context": "",
         "zh": [GeneratedSaying(content="這週不行耶，下週好不好？", note="對朋友的直接婉拒。", familiarity=8)],
         "ja": [
@@ -189,7 +190,7 @@ class TestExecuteDraft:
                 {"background": "背景", "intent": "", "audience": "同事", "audience_note": "比我資深"},
                 ["Interview"],
             ))
-        assert generate.await_args.args == ("背景", "", "同事（比我資深）", ["Interview"])
+        assert generate.await_args.args == ("背景", "", "同事（比我資深）", ["Interview"], None)
         assert result.pop("tags") == []
         assert result["prompt"] == "朋友約你週末爬山，但你已經有約了。"
         assert result["references_ja"] == [{"content": "今週はちょっと無理かも。", "note": "對朋友。", "familiarity": 7}]
@@ -201,6 +202,7 @@ class TestExecuteDraft:
 class TestCreateParams:
     def test_familiarity_follows_the_shared_rule(self):
         params = SpeakingTrilingualCreateParams.model_validate({
+            "title": "t",
             "prompt": "p",
             "references_ja": [
                 {"content": " a ", "familiarity": "7"},
@@ -214,26 +216,30 @@ class TestCreateParams:
     def test_invalid_familiarity_rejected(self, bad):
         with pytest.raises(ValidationError, match="熟識度"):
             SpeakingTrilingualCreateParams.model_validate(
-                {"prompt": "p", "references_en": [{"content": "a", "familiarity": bad}]}
+                {"title": "t", "prompt": "p", "references_en": [{"content": "a", "familiarity": bad}]}
             )
 
     def test_generous_limits(self):
         """上限只擋異常的量：正常草稿（二十幾句、每句幾十字）遠遠碰不到。"""
         ok = {"content": "あ" * MAX_TEXT_LENGTH, "note": "說" * MAX_TEXT_LENGTH}
         SpeakingTrilingualCreateParams.model_validate(
-            {"prompt": "p", "references_ja": [ok] * MAX_REFERENCES_PER_LANG}
+            {"title": "t", "prompt": "p", "references_ja": [ok] * MAX_REFERENCES_PER_LANG}
         )
-        too_many = {"prompt": "p", "references_ja": [{"content": "a"}] * (MAX_REFERENCES_PER_LANG + 1)}
-        too_long = {"prompt": "p", "references_en": [{"content": "a" * (MAX_TEXT_LENGTH + 1)}]}
-        too_long_note = {"prompt": "p", "references_zh": [{"content": "a", "note": "n" * (MAX_TEXT_LENGTH + 1)}]}
-        long_prompt = {"prompt": "p" * (MAX_TEXT_LENGTH + 1)}
+        too_many = {"title": "t", "prompt": "p", "references_ja": [{"content": "a"}] * (MAX_REFERENCES_PER_LANG + 1)}
+        too_long = {"title": "t", "prompt": "p", "references_en": [{"content": "a" * (MAX_TEXT_LENGTH + 1)}]}
+        too_long_note = {
+            "title": "t", "prompt": "p", "references_zh": [{"content": "a", "note": "n" * (MAX_TEXT_LENGTH + 1)}],
+        }
+        long_prompt = {"title": "t", "prompt": "p" * (MAX_TEXT_LENGTH + 1)}
         for bad in (too_many, too_long, too_long_note, long_prompt):
             with pytest.raises(ValidationError):
                 SpeakingTrilingualCreateParams.model_validate(bad)
 
     def test_blank_content_rejected(self):
         with pytest.raises(ValidationError):
-            SpeakingTrilingualCreateParams.model_validate({"prompt": "p", "references_zh": [{"content": "  "}]})
+            SpeakingTrilingualCreateParams.model_validate(
+                {"title": "t", "prompt": "p", "references_zh": [{"content": "  "}]}
+            )
 
 
 def _created_fields(anki) -> dict[str, str]:
@@ -269,6 +275,7 @@ def test_create_writes_chosen_references(client, anki):
         "deck": "Default",
         "note_type": TRILINGUAL,
         "params": {
+            "title": "婉拒爬山",
             "prompt": "朋友約你爬山",
             "context": "",
             "references_ja": [
@@ -296,8 +303,109 @@ def test_create_rejects_invalid_familiarity(client, anki):
     response = client.post("/api/v1/handlers/speaking_trilingual/notes", json={
         "deck": "Default",
         "note_type": TRILINGUAL,
-        "params": {"prompt": "p", "references_zh": [{"content": "a", "familiarity": 12}]},
+        "params": {"title": "t", "prompt": "p", "references_zh": [{"content": "a", "familiarity": 12}]},
     })
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"][:3] == ["body", "params", "references_zh"]
     assert anki.added == []
+
+
+class TestTitle:
+    """短標題也是子牌組名（trilingual_title.py）。The title also names the child deck."""
+
+    def test_title_is_stripped_and_written(self, client, anki):
+        response = client.post("/api/v1/handlers/speaking_trilingual/notes", json={
+            "deck": "Default", "note_type": TRILINGUAL, "params": {"title": "  婉拒加班 ", "prompt": "p"},
+        })
+        assert response.status_code == 201, response.json()
+        assert _created_fields(anki)["Title"] == "婉拒加班"
+
+    @pytest.mark.parametrize(
+        "bad", ["", "   ", "工作::加班", '說"不"', "a" * 41, "兩\n行"],
+        ids=["empty", "blank", "deck-separator", "quote", "too-long", "newline"],
+    )
+    def test_title_that_cannot_name_a_deck_is_rejected(self, bad):
+        with pytest.raises(ValidationError):
+            SpeakingTrilingualCreateParams.model_validate({"title": bad, "prompt": "p"})
+
+    def test_title_is_required(self):
+        with pytest.raises(ValidationError):
+            SpeakingTrilingualCreateParams.model_validate({"prompt": "p"})
+
+    @pytest.mark.parametrize("suggested", ["", "工作::加班", "a" * 41])
+    def test_unusable_suggested_title_leaves_the_draft_title_empty(self, suggested):
+        """LLM 沒給或給了不能當牌組名的標題：草稿標題留空，其餘照常，使用者送出前再補。"""
+        generate = mock.AsyncMock(return_value=_draft(title=suggested))
+        with mock.patch.object(generate_service, "generate", generate):
+            result = asyncio.run(SpeakingTrilingualHandler().execute_draft(
+                {"background": "背景", "intent": "", "audience": "同事", "audience_note": ""}, [],
+            ))
+        assert result["title"] == ""
+        assert result["prompt"] == "朋友約你週末爬山，但你已經有約了。"
+        assert len(result["references_ja"]) == 1
+
+    def test_suggested_title_is_kept(self):
+        generate = mock.AsyncMock(return_value=_draft(title=" 婉拒週末爬山 "))
+        with mock.patch.object(generate_service, "generate", generate):
+            result = asyncio.run(SpeakingTrilingualHandler().execute_draft(
+                {"background": "背景", "intent": "", "audience": "同事", "audience_note": ""}, [],
+            ))
+        assert result["title"] == "婉拒週末爬山"
+
+
+class TestChildCard:
+    """建成某張三語卡的子卡：放進「上層卡的牌組::上層卡的標題」（主題樹計畫書 D6）。"""
+
+    @staticmethod
+    def _with_parent(anki, title="婉拒加班", model=TRILINGUAL, deck="口說三語"):
+        from tests.test_note_service import _model_note
+
+        values = {"Title": title, "Prompt": "p"} if model == TRILINGUAL else {"Prompt": "p"}
+        anki.notes[50] = _model_note(50, model, **values)
+        anki.get_cards_info = mock.AsyncMock(return_value=[{"cardId": 51, "note": 50, "deckName": deck}])
+
+    @staticmethod
+    def _create(client, **params):
+        return client.post("/api/v1/handlers/speaking_trilingual/notes", json={
+            "deck": "Default", "note_type": TRILINGUAL, "params": {"title": "婉拒主管", "prompt": "p", **params},
+        })
+
+    def test_child_goes_into_the_parents_title_deck(self, client, anki):
+        self._with_parent(anki)
+        response = self._create(client, parent_note_id=50)
+
+        assert response.status_code == 201, response.json()
+        assert response.json()["deck"] == "口說三語::婉拒加班"
+        assert "口說三語::婉拒加班" in anki.decks
+        added = anki.added[-1]
+        assert (added["deckName"] if isinstance(added, dict) else added.deckName) == "口說三語::婉拒加班"
+
+    def test_second_child_reuses_the_deck(self, client, anki):
+        self._with_parent(anki)
+        assert self._create(client, parent_note_id=50).status_code == 201
+        decks_after_first = set(anki.decks)
+        response = self._create(client, title="婉拒同事", parent_note_id=50)
+        assert response.status_code == 201 and response.json()["deck"] == "口說三語::婉拒加班"
+        assert set(anki.decks) == decks_after_first  # 沒有多出第二個牌組
+
+    def test_without_parent_the_chosen_deck_is_used(self, client, anki):
+        response = self._create(client)
+        assert response.status_code == 201 and response.json()["deck"] == "Default"
+
+    @pytest.mark.parametrize(
+        ("setup", "expected"),
+        [
+            ({"title": ""}, (422, "PARENT_NOTE_INVALID")),
+            ({"title": "壞::標題"}, (422, "PARENT_NOTE_INVALID")),
+            ({"model": "Speaking_Coach_Dark"}, (422, "PARENT_NOTE_INVALID")),
+        ],
+        ids=["no-title", "unusable-title", "not-trilingual"],
+    )
+    def test_invalid_parent_is_rejected_before_creating(self, client, anki, setup, expected):
+        self._with_parent(anki, **setup)
+        before = len(anki.added)
+        assert _error(self._create(client, parent_note_id=50)) == expected
+        assert len(anki.added) == before
+
+    def test_missing_parent_is_404(self, client, anki):
+        assert _error(self._create(client, parent_note_id=999)) == (404, "NOTE_NOT_FOUND")

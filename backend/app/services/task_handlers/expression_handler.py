@@ -348,7 +348,12 @@ class ExpressionCorrectionHandler(BaseHandler):
         return LLMExpressionCorrectionResult.model_validate(result.parsed_data)
 
     @override
-    async def execute_draft(self, parameters: dict[str, object], existing_tags: list[str]) -> dict[str, object]:
+    async def execute_draft(
+        self,
+        parameters: dict[str, object],
+        existing_tags: list[str],
+        context: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         """Ask the LLM for the correction, shaped as draft create parameters (all micro cards selected, unwritten).
 
         網頁預覽流程的草稿：請 LLM 糾錯，整理成建立參數（子卡預設全選；不寫入）。

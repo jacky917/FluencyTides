@@ -30,6 +30,12 @@ class LLMTrilingualDraft(BaseModel):
     """一張三語對話卡的草稿。The draft of one card."""
 
     prompt: str = Field(description="卡片正面的情境（繁體中文，對學習者說「你……」）")
+    title: str = Field(
+        default="",
+        description=(
+            "這個情境的短標題（日文，大約 2–15 字的名詞片語，例如「残業を断る」）；也是子牌組名，不能含 :: 或引號"
+        ),
+    )
     context: str = Field(description="其他值得記下的背景（繁體中文）；沒有就空字串")
     zh: list[GeneratedSaying] = Field(description="中文（台灣口語，繁體字）的說法")
     ja: list[GeneratedSaying] = Field(description="日文的說法")

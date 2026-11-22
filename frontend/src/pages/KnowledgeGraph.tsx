@@ -15,6 +15,8 @@ import { graphHandlers, graphViewScope, nodeTooltip, pickGraphHandler } from '..
 import { cn } from '../lib/utils'
 import type { GenericNoteDetail, GraphNode } from '../types/api'
 import { CardDetailModal } from '../components/CardDetailModal'
+import { TopicTreeGraph } from '../components/graph/TopicTreeGraph'
+import { deckCrumbs } from '../lib/topicTreeLayout'
 import { ConfirmDialog, type ConfirmDialogProps } from '../components/shared/ConfirmDialog'
 import { DeckTreePanel } from '../components/shared/DeckTreePanel'
 import { PageHeader } from '../components/shared/PageHeader'
@@ -57,6 +59,16 @@ const FONT_SIZES = [
  */
 const ALL_DECKS = 'All Decks'
 
+/**
+ * 主題樹可選的展開層數（0＝全部）。The selectable tree depths, 0 meaning all.
+ */
+const TREE_DEPTHS = [
+  { value: 1, label: '顯示 1 層' },
+  { value: 2, label: '顯示 2 層' },
+  { value: 3, label: '顯示 3 層' },
+  { value: 0, label: '全部展開' },
+]
+
 const SELECT_CLASS =
   'h-9 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
 
@@ -79,6 +91,8 @@ type PendingConfirm = Omit<ConfirmDialogProps, 'onCancel' | 'message'> & { messa
  *
  * - handler 選單只列開放圖譜的；負責多種筆記類型時可再選一種；標準圖譜（單點）可選節點名稱用的欄位。
  * - 關聯圖譜（`capabilities.graph.links`，例如單字卡）才有建立、刪除連線與清理失效關聯。
+ * - 樹狀圖譜（`capabilities.graph.layout === 'tree'`，三語對話卡）：卡片＋同名子牌組的主題樹，可設展開層數；
+ *   點有子節點的節點進入它的子牌組（牌組樹同步），上方麵包屑可退回。
  * - 點節點以該 handler 讀取筆記，打開卡片詳情（權限依 handler 的能力）；幽靈節點沒有筆記，不開。
  *
  * 全螢幕時只看得到被放大的區塊，所以這頁的提示用 toast（全螢幕時在區塊內另掛一個 Toaster）、確認用
@@ -98,6 +112,7 @@ export default function KnowledgeGraph() {
   const [storedHandler, setStoredHandler] = useLocalStorage<string | null>('kg_handler', null)
   const [noteTypeChoice, setNoteTypeChoice] = useState<string | null>(null)
   const [labelFieldChoices, setLabelFieldChoices] = useLocalStorage<Record<string, string>>('kg_label_fields', {})
+  const [treeDepth, setTreeDepth] = useLocalStorage('kg_tree_depth', 1)
 
   const [fontStyleId, setFontStyleId] = useLocalStorage('kg_fontStyleId', 'classic');
   const [fontSizeMultiplier, setFontSizeMultiplier] = useLocalStorage('kg_fontSizeMultiplier', 1.0);
@@ -172,10 +187,12 @@ export default function KnowledgeGraph() {
   const currentHandler = pickGraphHandler(available, storedHandler)
   const handlerName = currentHandler?.name ?? null
   const relationGraph = currentHandler?.capabilities.graph.links ?? false
+  const treeGraph = currentHandler?.capabilities.graph.layout === 'tree'
   // 換 handler 後之前選的筆記類型不一定還適用
   const noteType = noteTypeChoice !== null && currentHandler?.note_types.includes(noteTypeChoice) ? noteTypeChoice : null
-  // 關聯圖譜的節點名稱固定，不能選欄位
-  const labelField = handlerName && !relationGraph ? labelFieldChoices[handlerName] || null : null
+  // 關聯圖譜與樹狀圖譜的節點名稱固定，不能選欄位
+  const labelField = handlerName && !relationGraph && !treeGraph ? labelFieldChoices[handlerName] || null : null
+  const depth = treeGraph ? treeDepth : null
   const viewScope = graphViewScope(handlerName ?? '', selectedDeck, noteType)
 
   const {
@@ -183,8 +200,8 @@ export default function KnowledgeGraph() {
     isLoading,
     error: graphError,
   } = useQuery({
-    queryKey: ['graph', handlerName, selectedDeck, noteType, labelField],
-    queryFn: () => FluencyTidesAPI.getHandlerGraph(handlerName!, { deck: selectedDeck, noteType, labelField }),
+    queryKey: ['graph', handlerName, selectedDeck, noteType, labelField, depth],
+    queryFn: () => FluencyTidesAPI.getHandlerGraph(handlerName!, { deck: selectedDeck, noteType, labelField, depth }),
     enabled: handlerName !== null,
   })
 
@@ -414,7 +431,7 @@ export default function KnowledgeGraph() {
             ))}
           </select>
         )}
-        {handlerName && !relationGraph && graphData && (
+        {handlerName && !relationGraph && !treeGraph && graphData && (
           <select
             className={SELECT_CLASS}
             aria-label="節點名稱欄位"
@@ -430,10 +447,46 @@ export default function KnowledgeGraph() {
             ))}
           </select>
         )}
-        <span className="mr-auto truncate text-sm text-muted-foreground" title={selectedDeck}>
-          牌組：{selectedDeck === ALL_DECKS ? '全部牌組' : selectedDeck}
-          {deckMissing && <span className="text-destructive">（已不存在，請重新選擇）</span>}
-        </span>
+        {treeGraph && (
+          <select
+            className={SELECT_CLASS}
+            aria-label="展開層數"
+            value={treeDepth}
+            onChange={(e) => setTreeDepth(Number(e.target.value))}
+          >
+            {TREE_DEPTHS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        )}
+        {treeGraph ? (
+          <nav aria-label="牌組路徑" className="mr-auto flex min-w-0 flex-wrap items-center gap-1 text-sm">
+            {deckCrumbs(selectedDeck === ALL_DECKS ? null : selectedDeck).map((crumb, index, crumbs) => (
+              <span key={crumb.deck ?? ALL_DECKS} className="flex items-center gap-1">
+                {index > 0 && <span className="text-muted-foreground">›</span>}
+                {index === crumbs.length - 1 ? (
+                  <span className="font-medium" aria-current="page">{crumb.label}</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-foreground hover:underline"
+                    onClick={() => setSelectedDeck(crumb.deck ?? ALL_DECKS)}
+                  >
+                    {crumb.label}
+                  </button>
+                )}
+              </span>
+            ))}
+            {deckMissing && <span className="text-destructive">（已不存在，請重新選擇）</span>}
+          </nav>
+        ) : (
+          <span className="mr-auto truncate text-sm text-muted-foreground" title={selectedDeck}>
+            牌組：{selectedDeck === ALL_DECKS ? '全部牌組' : selectedDeck}
+            {deckMissing && <span className="text-destructive">（已不存在，請重新選擇）</span>}
+          </span>
+        )}
         {relationGraph && (
           <Button
             onClick={() => {
@@ -518,6 +571,27 @@ export default function KnowledgeGraph() {
           <div className="flex-1 flex items-center justify-center p-6 text-center text-muted-foreground">
             <p>目前沒有開放圖譜的卡片類型（可在「工具設定」的 Handler 能力查看）。</p>
           </div>
+        ) : treeGraph && graphData ? (
+          graphData.nodes.length <= 1 ? (
+            <div className="flex-1 flex items-center justify-center p-6 text-center text-muted-foreground">
+              <p>
+                {deckMissing
+                  ? `牌組「${selectedDeck}」已不存在，請在牌組樹重新選擇。`
+                  : `這個牌組沒有「${currentHandler.title}」。`}
+              </p>
+            </div>
+          ) : (
+            <div ref={graphAreaRef} className="flex-1 min-h-0 relative bg-slate-50/50 dark:bg-slate-900/50 rounded-xl overflow-hidden m-1">
+              <TopicTreeGraph
+                graph={graphData}
+                width={graphSize.width || undefined}
+                height={graphSize.height || undefined}
+                fontScale={fontSizeMultiplier}
+                onEnter={(deck) => setSelectedDeck(deck)}
+                onOpenNote={(noteId) => setSelectedNoteId(noteId)}
+              />
+            </div>
+          )
         ) : formattedGraphData.nodes.length === 0 ? (
           <div className="flex-1 flex items-center justify-center p-6 text-center text-muted-foreground">
             <p>

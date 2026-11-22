@@ -11,6 +11,8 @@
  * `x-ui: list` 是一列一筆的欄位（人脈卡會變的欄位）：值是字串清單，或物件清單（`items` 指到 `$defs`
  * 裡的物件時，每列一格一個屬性，例如職位的公司＋職稱）；`x-item: textarea` 每列多行，`x-item: tag` 畫成
  * 一個一個小標籤（語言、興趣這種短值），`x-quick` 是快速選項。
+ * `x-ui: deck` 不顯示，送出時自動帶入要建卡的牌組；`x-ui: parent-card` 畫成「放在哪張卡底下」的選單
+ * （三語卡的主題樹，值是上層卡的 Note ID 字串）。
  * `x-ui: audio`、`x-ui: image` 是媒體欄位：畫成上傳（音檔另有錄音）元件，值是 `POST /media` 回傳的檔名
  * （`docs/wip/media_upload_FEAT_2026-10-20.md` D3）。
  * 只畫上述欄位：其他型別的參數（例如外語糾錯預覽流程的 LLM 結果）不會出現在網頁表單。
@@ -59,7 +61,15 @@ export interface FormField {
   rows: RowsSpec | null
   /** 媒體欄位（`x-ui: audio`、`image`）的種類；其他欄位為 null。The media kind, or null. */
   media: MediaKind | null
+  /**
+   * 特殊的輸入方式：`deck` 不顯示、送出時帶入要建卡的牌組；`parent-card` 是上層卡的選單；一般欄位為 null。
+   * A special widget, or null.
+   */
+  widget: FormWidget | null
 }
+
+/** 特殊的輸入方式（`x-ui: deck`、`parent-card`）。Special widgets. */
+export type FormWidget = 'deck' | 'parent-card'
 
 /** schema 的一個屬性（只列用到的鍵）。A schema property. */
 interface SchemaProperty {
@@ -143,6 +153,7 @@ export function schemaFields(schema: Record<string, unknown> | null): { fields: 
       pattern: prop.pattern ?? null,
       rows: prop['x-ui'] === 'list' ? rowsSpec(prop, defs) : null,
       media: lines ? null : mediaKindOf(prop['x-ui']),
+      widget: prop['x-ui'] === 'deck' || prop['x-ui'] === 'parent-card' ? prop['x-ui'] : null,
     })
   }
   return { fields, skipped }
@@ -267,6 +278,23 @@ export function initialValues(fields: FormField[]): Record<string, string> {
  * @param values - 目前的值。Current values.
  * @returns 參數名。The names.
  */
+/**
+ * 送出前帶入要建卡的牌組（`x-ui: deck` 的欄位）；不知道牌組時留空。
+ * Fills the deck fields before sending.
+ * @param fields - 欄位。The fields.
+ * @param values - 表單的值。The form values.
+ * @param deck - 要建卡的牌組；null 表示還沒選。The deck, or null.
+ * @returns 帶入牌組後的值。The values with the deck filled in.
+ */
+export function withDeck(
+  fields: FormField[],
+  values: Record<string, string>,
+  deck: string | null,
+): Record<string, string> {
+  const deckFields = fields.filter((field) => field.widget === 'deck')
+  return { ...values, ...Object.fromEntries(deckFields.map((field) => [field.name, deck ?? ''])) }
+}
+
 export function missingRequired(fields: FormField[], values: Record<string, FormValue>): string[] {
   return fields.filter((field) => field.required && !hasInput(values[field.name])).map((field) => field.name)
 }

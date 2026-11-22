@@ -366,6 +366,15 @@ class NoteNotFoundError(ServiceBaseError):
     status_code = 404
 
 
+class ParentNoteInvalidError(ServiceBaseError):
+    """The card chosen as the parent cannot hold child cards (wrong note type, or no usable title).
+
+    選為上層的卡不能放子卡（筆記類型不對，或沒有可用的標題）。
+    """
+    error_code = "PARENT_NOTE_INVALID"
+    status_code = 422
+
+
 class NoteTypeNotCreatableError(ServiceBaseError):
     """The note type given at creation is not one this handler can create.
 

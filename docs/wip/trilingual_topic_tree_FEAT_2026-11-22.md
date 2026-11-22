@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-11-22 |
 | **性質** | 新增機能設計 + 實作工作項 |
-| **狀態** | 🚧 實作中 |
+| **狀態** | 🚧 實作中（P1–P4 完成，待部署；Anki 尚未加 `Title` 欄位） |
 | **範圍** | `Speaking_Trilingual_Dark` 新增 `Title` 欄位；三語卡 handler 開放「樹狀圖譜」（後端 `execute_read_graph`、前端 KnowledgeGraph 的樹狀畫法、層數設定、點節點進入子牌組）；網頁建卡可選「建成某張卡的子卡」（自動建同名子牌組） |
 | **不動** | 跨主題關聯（第二階段，見 §8）；單字卡的關聯圖譜；三語卡的欄位修改與刪除（仍未開放）；TG 建卡（三語卡只有網頁建卡） |
 | **PR / 進度** | 尚未開始 |
@@ -55,11 +55,13 @@
 ## 3. 設計決策
 
 ### D1 新增 `Title` 欄位（使用者決定）
-- `Speaking_Trilingual_Dark` 在 `Prompt` 之後加 `Title`（短標題，例如「婉拒加班」）。`Prompt` 可能是一整句，不適合當牌組名。
+- `Speaking_Trilingual_Dark` 在 `Prompt` 之後加 `Title`（短標題，**一律用日文**，例如「残業を断る」；2026-11-22 使用者決定，網頁草稿的 LLM 也照這個規則建議）。`Prompt` 可能是一整句，不適合當牌組名。
+- 既有的 37 張卡已在 2026-11-22 補上日文標題（只寫 `Title`，其他欄位不動）。
 - 規則（建卡時檢查；Anki 裡手動改的在圖譜端寬鬆處理）：去掉前後空白、不可含 `::`（Anki 的牌組分隔符號）、不可含 `"`（搜尋語法要用引號包牌組名）、長度上限 40 字。
 - 舊卡沒有 `Title`：節點名稱顯示 `Prompt` 的前 20 字，不能有子卡（沒有名字可以對上子牌組）。
 - 卡片樣板：正面在 `Prompt` 上方以小字顯示 `Title`（有填才顯示），讓 AnkiDroid 裡看得出這張卡是哪個主題（Q1，使用者 2026-11-22 同意）。
-- 欄位新增以 `scripts/local_anki/manage_fields.py`（`AnkiSchemaBuilder`）執行；`app/anki_models/Speaking_Trilingual_Dark.json` 的 `inOrderFields` 同步加上 `Title`；`update_templates.py` 更新樣板。
+- `app/anki_models/Speaking_Trilingual_Dark.json` 的 `inOrderFields` 在 `Prompt` 後加 `Title`。現有的 `scripts/local_anki/Speaking_Trilingual_Dark/update_templates.py` 會依這份定義補上缺的欄位（先問 y/N 確認，之後要和 AnkiWeb 全量同步），再推送樣板，所以不另寫腳本。
+- **部署順序**：先在 Anki 執行 `update_templates.py` 加好 `Title`，再部署後端。反過來的話，新版後端建卡會因為 Anki 沒有 `Title` 欄位而回 400（`FIELD_MISMATCH`）。
 
 ### D2 階層只看牌組結構，不另外存
 - 「卡 X 的子卡」＝ X 所在牌組 `D` 底下、名稱等於 X 的 `Title` 的子牌組 `D::Title` 裡**直接**放著的三語卡（不含更深的子牌組）。更深的層照同樣規則往下找。
@@ -94,8 +96,17 @@
 ### D6 建成子卡（網頁建卡）
 - 牌組模式不變；三語卡的建卡參數新增 `parent_note_id: int | None`（Q2）。
 - 建卡參數新增必填的 `title`（Q3）；網頁草稿階段由 LLM 一併產生建議標題，使用者可以改。
-- 有 `parent_note_id` 時：讀父卡的牌組 `D` 與 `Title`（父卡沒有 `Title` → 422「父卡沒有標題，不能建子卡」），目標牌組＝`D::Title`，`create_deck`（已存在不會出錯），再把新卡建在那裡。沒有時照現在建在選的牌組。
-- 前端建卡畫面多一個「建成哪張卡的子卡」的選擇（搜尋三語卡標題）；從圖譜節點的卡片詳情也可以直接「在這張卡底下建子卡」，帶入 `parent_note_id`。
+- 有 `parent_note_id` 時：讀父卡的牌組 `D` 與 `Title`（父卡不存在 → 404；不是三語卡或沒有可用標題 → 422 `PARENT_NOTE_INVALID`），目標牌組＝`D::Title`，`create_deck`（已存在不會出錯），再把新卡建在那裡。沒有時照現在建在選的牌組。
+- 實作：`BaseHandler.resolve_create_deck`（新的掛鉤，預設沿用選的牌組）在參數驗證之後、`execute_create` 之前決定牌組；`NoteService.create` 回應的 `deck` 是實際放卡的牌組。
+- 前端：「放在哪張卡底下」的選單（`ParentCardSelect`）列出選的牌組裡直接放著、有可用標題的三語卡（讀主題樹 `depth=1`）。它在**生成前的輸入表單**（見 D7，讓 LLM 也看得到上層卡），預覽裡還可以再改。
+- 尚未做（之後）：從圖譜節點的卡片詳情直接「在這張卡底下建子卡」的捷徑。
+
+### D7 生成草稿時把卡片位置交給 LLM（2026-11-22 追加）
+- 動機：牌組路徑本身就是情境（例如 `日常會話::日本語面接::Queen Bee Capital株式会社::最終面接` 說明了哪家公司、哪個面試階段）；同一層已有的標題能避免重做同一個情境、讓新標題風格一致；接續型的子卡（「承接上一段」「面試官回答完你的第一個逆質問」）需要知道上層卡。
+- 草稿輸入（`SpeakingTrilingualDraftParams`）新增 `deck`（`x-ui: deck`：不顯示，網頁送出時帶入要建卡的牌組）與 `parent_note_id`（`x-ui: parent-card`：「放在哪張卡底下」選單，數字字串）。跟其他輸入一起存在草稿裡，重試時照樣帶著。
+- `BaseHandler.draft_context`（新的掛鉤，預設沒有）在背景生成時讀 Anki：三語卡讀出完整牌組路徑（選了上層卡時是它的同名子牌組）、上層卡的標題與情境（沒選上層卡、但選的牌組本身是某張卡的同名子牌組時，那張卡就是上層卡）、那個牌組直接放著的卡的標題與沒有對應卡的子牌組（各最多 40 個）。讀不到 Anki 時照常生成，只是不提供（與既有標籤相同）。不能放子卡的上層卡在這裡略過，建卡時才報錯。
+- 提示詞新增「這張卡在牌組裡的位置」：以場景為準；路徑與上層卡用來理解場合、決定語氣；路徑與上層卡裡的人名、公司名可以直接用（使用者確認牌組路徑沒有敏感資訊，不需脫敏）；接續上層卡、不重做同一層的情境、標題風格一致。沒有位置資訊時這一段不出現，原本「只用場景裡有的資訊」的規則不變。
+- 生成前選的上層卡由草稿帶回 `parent_note_id`，預覽預設就選好。
 
 ## 4. 改動清單
 
@@ -104,7 +115,6 @@
 | 檔案 | 改動 |
 |---|---|
 | `app/anki_models/Speaking_Trilingual_Dark.json`、樣板 | `inOrderFields` 加 `Title`；正面顯示 `Title`（待 Q1） |
-| `scripts/local_anki/Speaking_Trilingual_Dark/add_title_field.py`（新） | 以 `AnkiSchemaBuilder` 在 Anki 加欄位（可重跑） |
 | `app/services/task_handlers/capabilities.py` | `GraphCapability.layout` |
 | `app/services/task_handlers/topic_tree.py`（新） | 純函式：由「卡片（nid、Title、Prompt、牌組）＋牌組清單」組出樹（D2、D3、D5），不碰 Anki，方便測試 |
 | `app/services/task_handlers/speaking_trilingual_handler.py` | 開放樹狀圖譜、`execute_read_graph` 讀 Anki 後交給 `topic_tree`；建卡參數 `title`、`parent_note_id`（D6） |
