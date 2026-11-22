@@ -506,6 +506,16 @@ def test_graph_and_type_list_keep_the_old_shape(session_factory):
     assert (relation.relation_type, relation.source_note_id, relation.target_note_id) == ("has_context", 1, 2)
 
 
+def test_empty_note_set_matches_no_relations(session_factory):
+    """空集合查不到關聯、只有 None 才查全部；舊圖譜端點在牌組沒有卡片時（傳入空串列）回空圖。"""
+    _seed_type(session_factory, "core.has_context")
+    _seed(session_factory, [(1, 2)], relation_type="core.has_context")
+
+    assert _service_call(session_factory, "get_relations_by_note_ids", set()) == []
+    assert len(_service_call(session_factory, "get_relations_by_note_ids", None)) == 1
+    assert _service_call(session_factory, "get_graph_data", [], []) == {"nodes": [], "links": []}
+
+
 def test_note_deletion_and_label_updates_touch_every_relation_of_the_note(session_factory):
     """刪卡把這張筆記當任一端的關係都標成 deleted；改名稱只動這張筆記那一端的標籤。"""
     _seed(session_factory, [(1, 2), (3, 1)])
