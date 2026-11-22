@@ -182,17 +182,7 @@ class Settings(BaseSettings):
     )
 
     # ====================================================================
-    # 資料庫設定 (SQLModel + SQLAlchemy Async)
-    # ====================================================================
-    DATABASE_URL: str = Field(
-        default="sqlite+aiosqlite:///./fluencytides.db",
-        description=(
-            "主要的資料庫連線 URL。預設使用 SQLite（零配置、適合開發）。"
-        ),
-    )
-
-    # ====================================================================
-    # 語料庫專用 MySQL 設定 (用於 NLP 檢索與例句擷取)
+    # MySQL 語料庫設定（網站唯一的資料庫：卡片關聯、劇情、能力路由設定，以及建卡腳本的語料）
     # ====================================================================
     MYSQL_HOST: str = Field(
         default="127.0.0.1",
@@ -367,41 +357,6 @@ class Settings(BaseSettings):
         except (ZoneInfoNotFoundError, ValueError) as e:
             raise ValueError(f"APP_TIMEZONE 不是有效的時區名稱：{v!r}（例如 Asia/Tokyo）") from e
         return name
-
-    @field_validator("DATABASE_URL")
-    @classmethod
-    def resolve_sqlite_path(cls, v: str) -> str:
-        """Resolve relative SQLite paths against the backend root.
-
-        將 SQLite 的相對路徑以 backend 根目錄為基準解析。
-
-        URLs of the form ``sqlite+aiosqlite:///./...`` are converted to
-        absolute paths relative to the backend root, so scripts run from
-        different directories do not create multiple db files. Other URLs are
-        returned unchanged.
-
-        若使用 ``sqlite+aiosqlite:///./...`` 這種寫法，
-        將會自動相對於 backend 根目錄轉換為絕對路徑，避免在不同目錄執行腳本時
-        產生多個不同的 db 檔案。其他 URL 原樣回傳。
-
-        Args:
-            v: the raw DATABASE_URL string
-                原始 DATABASE_URL 字串
-
-        Returns:
-            the resolved DATABASE_URL
-            解析後的 DATABASE_URL
-        """
-        if v.startswith("sqlite+aiosqlite:///./"):
-            from pathlib import Path
-            # 此檔案位於 backend/app/core/config.py
-            # 往上三層即為 backend/ 根目錄
-            base_dir = Path(__file__).resolve().parent.parent.parent
-            db_name = v.replace("sqlite+aiosqlite:///./", "")
-            abs_path = base_dir / db_name
-            # URL 需要正斜線
-            return f"sqlite+aiosqlite:///{abs_path.as_posix()}"
-        return v
 
     # ====================================================================
     # AnkiConnect 設定

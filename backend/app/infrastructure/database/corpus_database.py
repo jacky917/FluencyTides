@@ -18,10 +18,10 @@ If creating the engine fails at import time, the error is logged and both ``corp
 
 若匯入時建立引擎失敗，會記錄錯誤，且 ``corpus_engine`` 與 ``corpus_async_session_factory`` 皆為 ``None``。
 
-Kept separate from the main application's database.py (SQLite) so the two
-connection pools and resources never interfere with each other.
+The website's own settings (``cfg_capability_routes``) are stored here as well, so this is the website's only
+database; it no longer uses SQLite.
 
-與主應用程式的 database.py (SQLite) 分開，確保兩者的連線池與資源互不干擾。
+網站自己的設定（``cfg_capability_routes``）也存在這裡，所以這是網站唯一的資料庫，已不再使用 SQLite。
 """
 
 import logging
@@ -77,6 +77,21 @@ async def dispose_corpus_engine() -> None:
     if corpus_engine:
         await corpus_engine.dispose()
         logger.info("語料庫資料庫引擎 (MySQL) 連線池已釋放。")
+
+
+def require_corpus_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Return the corpus session factory, read at call time so tests can replace the module attribute.
+
+    回傳語料庫的 session 工廠；每次呼叫才讀模組屬性，測試替換它即可生效。
+
+    Raises:
+        ConnectionError: if the corpus connection is not configured or failed to initialize; it is an ``OSError``,
+            so callers that treat database failures as unavailable (the capability routes) handle it the same way
+            若語料庫連線沒有設定或初始化失敗；它是 ``OSError``，把資料庫故障當成讀不到的呼叫端（能力路由）會一樣處理
+    """
+    if corpus_async_session_factory is None:
+        raise ConnectionError("MySQL 語料庫連線尚未設定或初始化失敗。請檢查 .env 中的 MYSQL_* 設定。")
+    return corpus_async_session_factory
 
 
 async def get_corpus_async_session() -> AsyncGenerator[AsyncSession, None]:

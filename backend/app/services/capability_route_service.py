@@ -140,10 +140,10 @@ logger = logging.getLogger(__name__)
 GLOBAL_DESCRIPTION = "全域預設（各用途沒有設定時使用）"
 
 _STORE_UNAVAILABLE_MESSAGE = (
-    "讀不到能力路由設定（capability_routes），無法判斷這個用途的設定；詳見後端 log 的 WARNING，DB 恢復後再試。"
+    "讀不到能力路由設定（cfg_capability_routes），無法判斷這個用途的設定；詳見後端 log 的 WARNING，DB 恢復後再試。"
 )
 _WRITE_FAILED_MESSAGE = (
-    "寫入能力路由設定（capability_routes）時資料庫異常，結果未知；請重新查看設定後再試，詳見後端 log。"
+    "寫入能力路由設定（cfg_capability_routes）時資料庫異常，結果未知；請重新查看設定後再試，詳見後端 log。"
 )
 
 
@@ -326,19 +326,25 @@ class KeyView:
 
 
 def _session_factory() -> Callable[[], AsyncSession]:
-    """Return the main database's session factory.
+    """Return the corpus database's session factory (the settings live in ``cfg_capability_routes``).
 
-    回傳主資料庫的 session 工廠。
+    回傳語料庫的 session 工廠（設定存在 ``cfg_capability_routes``）。
 
-    ``database.async_session_factory`` is read only on each call (a deferred import, not bound at import time), so
-    a test that patches that module attribute affects both the routing layer's reads and this service's writes.
+    ``corpus_database.corpus_async_session_factory`` is read only on each call (a deferred import, not bound at
+    import time), so a test that patches that module attribute affects both the routing layer's reads and this
+    service's writes.
 
-    每次呼叫才讀 ``database.async_session_factory``（延遲 import，也不在 import 時綁定），
+    每次呼叫才讀 ``corpus_database.corpus_async_session_factory``（延遲 import，也不在 import 時綁定），
     所以測試 patch 該模組屬性即可同時影響路由層的讀取與本服務的寫入。
-    """
-    from app.infrastructure.database.database import async_session_factory
 
-    return async_session_factory
+    Raises:
+        ConnectionError: if the corpus connection is not configured; it is in ``DATABASE_ERRORS``, so callers
+            report the store as unavailable (503)
+            若語料庫連線沒有設定；它屬於 ``DATABASE_ERRORS``，呼叫端回報讀不到（503）
+    """
+    from app.infrastructure.database.corpus_database import require_corpus_session_factory
+
+    return require_corpus_session_factory()
 
 
 def _client_class_for(endpoint_id: str) -> Any:
@@ -637,7 +643,7 @@ async def _strict_snapshot() -> Snapshot:
     try:
         return await routing.stored_choices_strict()
     except DATABASE_ERRORS as error:
-        logger.warning("管理操作讀取 capability_routes 失敗：%s: %s", type(error).__name__, error, exc_info=True)
+        logger.warning("管理操作讀取 cfg_capability_routes 失敗：%s: %s", type(error).__name__, error, exc_info=True)
         raise RouteStoreUnavailableError(_STORE_UNAVAILABLE_MESSAGE) from error
 
 
@@ -960,13 +966,13 @@ async def set_route(
             if not await _row_exists(route_key, capability):
                 raise
             logger.info(
-                "寫入 capability_routes 時 %s / %s 剛被另一筆寫入建立，改為更新該列（%s）：%s",
+                "寫入 cfg_capability_routes 時 %s / %s 剛被另一筆寫入建立，改為更新該列（%s）：%s",
                 route_key, capability, updated_by, first_error.orig,
             )
             await _upsert(route_key, capability, choice, updated_by)
     except DATABASE_ERRORS as error:
         logger.exception(
-            "寫入 capability_routes 失敗：%s / %s → %s / %s（%s）",
+            "寫入 cfg_capability_routes 失敗：%s / %s → %s / %s（%s）",
             route_key, capability, choice.endpoint, choice.model, updated_by,
         )
         raise RouteStoreUnavailableError(_WRITE_FAILED_MESSAGE) from error
@@ -1062,7 +1068,7 @@ async def delete_route(route_key: str, *, updated_by: str, capability: str = CAP
             )
             await session.commit()
     except DATABASE_ERRORS as error:
-        logger.exception("刪除 capability_routes 失敗：%s / %s（%s）", route_key, capability, updated_by)
+        logger.exception("刪除 cfg_capability_routes 失敗：%s / %s（%s）", route_key, capability, updated_by)
         raise RouteStoreUnavailableError(_WRITE_FAILED_MESSAGE) from error
     finally:
         routing.invalidate_cache()  # 理由同 set_route：提交後才出錯時 DB 可能已刪除
@@ -1076,7 +1082,7 @@ async def delete_route(route_key: str, *, updated_by: str, capability: str = CAP
         stored_after, read_ok = await routing.stored_choices()
         view = _view(entry, stored_after, read_ok, capability)
     except Exception:  # noqa: BLE001 - 刪除已提交：組不出刪除後狀態時只少回報狀態，不報成失敗
-        logger.exception("capability_routes 已刪除 %s / %s，但組出刪除後的狀態失敗", route_key, capability)
+        logger.exception("cfg_capability_routes 已刪除 %s / %s，但組出刪除後的狀態失敗", route_key, capability)
         return DeleteResult(deleted, None, view_unavailable=True)
     return DeleteResult(deleted, view)
 

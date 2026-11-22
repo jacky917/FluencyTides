@@ -65,7 +65,7 @@
 | M5 | 切換 `MYSQL_DATABASE`（本機與正式機 `.env`） | 🟡 | ① 只改了一邊，本機與正式機讀不同的資料庫，卡片紀錄分裂。② 有腳本寫死資料庫名 | ① 兩邊在同一個凍結時段內改，改完各自確認連到新庫。② 已搜尋：程式裡只有 `.env` 寫 `yuzusoft`，都經由 `settings.MYSQL_DATABASE` |
 | M6 | 本機 SQLite `card_relations` → `rel_links`（關係圖草案的 R2，不在這次） | 🟡 | ① 本機與正式機兩份 SQLite 內容不同，只遷一份會漏。② 和 M3 回填的關係重複 | ① 兩份都匯出、合併。② 依 `(類型, 起點, 終點)` 去重 |
 | M7 | 正式機 SQLite（同 M6） | 🟡 | 內容未知；正式機在容器裡，要從 volume 取出 | R2 前先唯讀匯出，盤點內容 |
-| M8 | SQLite `capability_routes` | 🟢 | 不遷移 | — |
+| M8 | SQLite `capability_routes` | 🟢 | 不遷移（2026-11-22 改變：兩份都是 0 列，改存語料庫 `cfg_capability_routes`，網站不再用 SQLite，見 `capability_routes_mysql_FEAT_2026-11-22.md`） | — |
 | M9 | Anki | 🟢 | 不遷移；筆記內的文字複本和新庫不同步（例：9516 的卡片欄位仍是舊字） | 不處理，屬於已存在的卡片內容；需要時另案更新 |
 | M10 | 校準檔案 → 新庫 | 🟡 | ① 匯入後兩邊都有資料，之後誰是正本不清楚。② 校準若再更新，檔案改了資料庫沒改 | ① 匯入後**資料庫是正本**，校準檔案改為來源紀錄。② 校準更新後必須重跑遷移腳本的內容部分，並在 `game_line_revisions` 留紀錄 |
 | M11 | `verb_search_config.json` 的 `exclude_script_ids` | 🟢 | id 沒變，不受影響 | 驗證時抽查清單內的 id 都存在 |

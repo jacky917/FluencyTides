@@ -492,7 +492,7 @@ def _run_against_sqlite(rows: list[CapabilityRouteSetting], key: str, *, create_
 
     routing.invalidate_cache()
     with mock.patch.object(routing, "_fetch_choices", _REAL_FETCH_CHOICES), \
-         mock.patch("app.infrastructure.database.database.async_session_factory", session_factory):
+         mock.patch("app.infrastructure.database.corpus_database.corpus_async_session_factory", session_factory):
         return asyncio.run(scenario())
 
 
@@ -517,12 +517,24 @@ def test_reads_rows_from_real_table(whitelist):
 
 
 def test_missing_table_falls_back_to_env(whitelist, caplog):
-    """資料表不存在（例如尚未建表）：退回 .env，警告點出 capability_routes。"""
+    """資料表不存在（例如尚未建表）：退回 .env，警告點出 cfg_capability_routes。"""
     with caplog.at_level(logging.WARNING, logger=routing.__name__):
         resolved = _run_against_sqlite([], "jp_verb_pair", create_table=False)
 
     assert resolved.source == "env"
-    assert "no such table: capability_routes" in caplog.text
+    assert "no such table: cfg_capability_routes" in caplog.text
+
+
+def test_no_corpus_connection_falls_back_to_env(whitelist, caplog):
+    """語料庫連線沒建起來（設定是空的）：和其他資料庫故障一樣退回 .env、標記 db_unavailable。"""
+    routing.invalidate_cache()
+    with mock.patch.object(routing, "_fetch_choices", _REAL_FETCH_CHOICES), \
+         mock.patch("app.infrastructure.database.corpus_database.corpus_async_session_factory", None), \
+         caplog.at_level(logging.WARNING, logger=routing.__name__):
+        resolved = _resolve("jp_verb_pair")
+
+    assert (resolved.source, resolved.db_unavailable) == ("env", True)
+    assert "MySQL 語料庫連線尚未設定" in caplog.text
 
 
 # ----------------------------------------------------------------------

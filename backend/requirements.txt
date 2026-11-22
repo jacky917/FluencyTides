@@ -28,15 +28,14 @@ jsonschema>=4.26.0,<5
 tzdata>=2026.6                      # zoneinfo 的時區資料（Windows 沒有系統時區資料；APP_TIMEZONE 用）
 
 # ─── Database & ORM ──────────────────────────────────────────────────
-# SQLAlchemy 直接被 app / scripts / alembic import，且用的是 async 引擎
+# SQLAlchemy 直接被 app / scripts import，且用的是 async 引擎
 # （sqlalchemy.ext.asyncio）——[asyncio] extra 會帶入必需的 greenlet。
 # 2.0 會在 x86_64 等平台「順便」附帶 greenlet，2.1 起不再附帶，必須明確宣告。
 # 上限 <2.1：2.1 尚未在本專案驗證過。
 sqlalchemy[asyncio]>=2.0.51,<2.1
 sqlmodel>=0.0.39,<1.0
-aiosqlite>=0.22.1,<1.0              # 主資料庫驅動（DATABASE_URL=sqlite+aiosqlite://）
-alembic>=1.18.5,<2
-aiomysql>=0.3.2,<1.0                # 語料庫驅動（mysql+aiomysql://），scripts 亦直接 import
+aiosqlite>=0.22.1,<1.0              # 測試以 SQLite 模擬語料庫；import_cards_*.py --db-url 也可用
+aiomysql>=0.3.2,<1.0                # 語料庫驅動（mysql+aiomysql://，網站唯一的資料庫），scripts 亦直接 import
 cryptography>=49.0.0,<50            # MySQL 8 的 caching_sha2_password 認證需要
 
 # ─── Async Clients & AI Integration ──────────────────────────────────

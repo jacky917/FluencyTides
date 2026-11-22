@@ -215,9 +215,9 @@ class InvalidRouteError(RouteError):
 
 
 class RouteStoreUnavailableError(RouteError):
-    """A database error while reading or writing the capability_routes table.
+    """A database error while reading or writing the cfg_capability_routes table.
 
-    capability_routes 資料表讀寫時資料庫異常。
+    cfg_capability_routes 資料表讀寫時資料庫異常。
 
     Two cases, with different messages: the table cannot be read (whether a setting exists cannot be
     decided, which is distinguished from "does not exist"), or a write / delete failed (the outcome

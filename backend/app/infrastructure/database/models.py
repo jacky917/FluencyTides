@@ -1,195 +1,57 @@
-"""SQLModel ORM table definitions (MySQL-compatible).
+"""SQLModel ORM table definitions of the website's settings, stored in the MySQL corpus database.
 
-SQLModel ORM 資料表模型定義（MySQL 相容版）。
+網站設定的 SQLModel ORM 資料表模型，存在 MySQL 語料庫。
 
-This module defines every table of FluencyTides' own database. These tables are independent of Anki's own
-database and store structured relational data that Anki cannot handle efficiently.
+The only table is ``cfg_capability_routes`` (:class:`CapabilityRouteSetting`). Its DDL lives in
+``scripts/database/corpus_rebuild/schema.sql`` (the single source; created at startup by
+:func:`app.infrastructure.database.corpus_schema.ensure_site_tables`); this model only describes the columns the
+website reads and writes, and ``SQLModel.metadata.create_all`` is used only by tests on SQLite. The website's old
+SQLite tables ``card_relations`` and ``relation_types`` are no longer defined here (card relations moved to the
+corpus ``rel_links`` on 2026-11-01; the ``fluencytides.db`` file is kept untouched as a backup).
 
-本模組定義了 FluencyTides 自有資料庫的所有資料表結構。
-這些資料表獨立於 Anki 本身的資料庫，專門儲存 Anki 無法高效處理的
-結構化關聯資料。
+唯一的表是 ``cfg_capability_routes``（:class:`CapabilityRouteSetting`）。建表 SQL 在
+``scripts/database/corpus_rebuild/schema.sql``（唯一來源；啟動時由
+:func:`app.infrastructure.database.corpus_schema.ensure_site_tables` 建立）；這裡的模型只描述網站讀寫的欄位，
+``SQLModel.metadata.create_all`` 只在測試用 SQLite 時使用。網站舊的 SQLite 表 ``card_relations``、
+``relation_types`` 已不在這裡定義（卡片關聯 2026-11-01 改存語料庫的 ``rel_links``；``fluencytides.db`` 檔案
+原樣保留當備份）。
 
-MySQL-compatibility rules (strictly followed in this module):
+Rules for the columns (so the model matches ``schema.sql`` on MySQL and still works on SQLite in tests):
 1. Every str column declares max_length; indexed columns must never omit it.
 2. Constraint names are managed centrally by the MetaData in conventions.py.
-3. DateTime columns use sa_column + DateTime(timezone=True) + server_default=func.now().
+3. DateTime columns use sa_column + DateTime() (MySQL DATETIME has no zone), written as UTC by the website
+   (default/onupdate=utc_now); server_default=func.now() only covers rows inserted by hand.
 4. A single auto-increment PK; composite primary keys are forbidden.
-5. No SQLite-specific syntax.
 
-MySQL 相容性鐵律（本模組嚴格遵守）：
+欄位規則（讓模型和 MySQL 上的 ``schema.sql`` 一致，測試用 SQLite 時也能用）：
 1. 所有 str 欄位一律指定 max_length，索引欄位絕對禁止省略。
 2. 約束命名由 conventions.py 中的 MetaData 統一管理。
-3. DateTime 使用 sa_column + DateTime(timezone=True) + server_default=func.now()。
+3. DateTime 使用 sa_column + DateTime()（MySQL DATETIME 不存時區），由網站寫入 UTC（default/onupdate=utc_now）；
+   server_default=func.now() 只給手動 INSERT 的列用。
 4. 單一自增 PK，禁止複合主鍵。
-5. 禁止 SQLite 特有語法。
-
-Design principles:
-- SQLModel (table=True) serves as both the ORM model and the Pydantic V2 model.
-- Every note_id column references an Anki note ID (int64)
-  but has no foreign-key constraint (the Anki database is managed by Anki itself).
-- Timestamps are UTC; the frontend and Telegram convert time zones themselves.
-
-設計原則：
-- 使用 SQLModel (table=True) 同時作為 ORM Model 與 Pydantic V2 Model。
-- 所有 note_id 欄位參照 Anki 的 Note ID（int64），
-  但不建立外鍵約束（因為 Anki 資料庫由 Anki 自行管理）。
-- 使用 UTC 時間戳，前端/TG 自行轉換時區。
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, UniqueConstraint, func
 from sqlmodel import Field, SQLModel
 
-# 確保 conventions 已載入（此 import 是防禦性的，database.py 也會 import）
+# 確保 conventions 已載入，約束名稱才會照命名規則產生
 import app.infrastructure.database.conventions  # noqa: F401
+from app.infrastructure.database.corpus_tables import CFG_CAPABILITY_ROUTES
 
 
-class CardRelation(SQLModel, table=True):
-    """Card relation table.
+def utc_now() -> datetime:
+    """Return the current UTC time without zone info, the form MySQL ``DATETIME`` stores.
 
-    卡片關聯表。
+    回傳目前的 UTC 時間（不帶時區資訊），也就是 MySQL ``DATETIME`` 存的形式。
 
-    **No longer used (2026-11-01)**: card relations moved to the corpus ``rel_links`` (``RelationService``, C of
-    D9 in docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md); this SQLite table is kept as is and not dropped, but the
-    code no longer reads or writes it.
+    MySQL's ``CURRENT_TIMESTAMP`` follows the server's time zone, so the website writes the timestamps itself
+    instead of relying on the column default.
 
-    **已停用（2026-11-01）**：卡片關聯改存語料庫的 ``rel_links``（``RelationService``，
-    docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9 的 C）；這張 SQLite 表原樣保留不刪，程式不再讀寫。
-
-    Stores directed relations between two Anki cards (notes), supporting
-    complex graph structures such as many-to-many and multiple parents.
-
-    儲存兩張 Anki 卡片（筆記）之間的有向關係，
-    支援多對多、多父節點等複雜圖譜結構。
-
-    Attributes:
-        id: the auto-increment primary key (single PK, MySQL-compatible); the internal unique identifier on which
-            all relations are based
-            自增主鍵（單一 PK，MySQL 相容）。資料庫內部唯一識別碼，所有關聯均以此 ID 為主
-        source_note_id: the source note ID (the Anki note ID); ``None`` (NULL) marks a reverse dangling node
-            起點筆記 ID（對應 Anki Note ID）。允許為 ``None`` (Null)，代表這是一個反向懸空節點
-        target_note_id: the target note ID (the Anki note ID); ``None`` (NULL) means the target card does not
-            exist in Anki yet (a dangling node). When the card is created later, this ID can be filled in from
-            ``target_label``.
-            終點筆記 ID（對應 Anki Note ID）。允許為 ``None`` (Null)，代表目標卡片尚未在 Anki 中建立（懸空節點）。
-            未來建立卡片時，可依據 ``target_label`` 補齊此 ID。
-        relation_type: the relation-type label (for example synonym, antonym, parent, collocation);
-            max_length=50, indexed to support filtering by type
-            關係類型標籤（如 synonym, antonym, parent, collocation）。max_length=50，已建立索引以支援按類型篩選
-        source_label: the human-readable label of the source note (for example ``"apple"``), used to avoid
-            looking up Anki during graph rendering, which speeds up drawing
-            起點筆記的人類可讀標籤（如 ``"apple"``）。用於圖譜渲染時避免反查 Anki，提升圖譜繪製效能
-        target_label: the human-readable label of the target note. Same as above; when ``target_note_id`` is
-            ``None``, it is also the only clue for finding the target card later.
-            終點筆記的人類可讀標籤。同上，且在 ``target_note_id`` 為 ``None`` 時，作為未來尋找目標卡片的唯一線索。
-        created_at: the creation timestamp (UTC, timezone-aware); sa_column keeps time-zone parsing consistent
-            between MySQL and SQLite
-            建立時間（UTC, timezone-aware）。使用 sa_column 確保 MySQL 與 SQLite 的時區解析一致
+    MySQL 的 ``CURRENT_TIMESTAMP`` 依伺服器時區，所以時間戳由網站自己寫入，不靠欄位預設值。
     """
-
-    __tablename__ = "card_relations"
-
-    id: int | None = Field(
-        default=None,
-        primary_key=True,
-        description="自增主鍵 ID",
-    )
-
-    source_note_id: int | None = Field(
-        default=None,
-        index=True,
-        description="起點 Anki Note ID (允許為空，代表起點未知或尚未建立)",
-    )
-    target_note_id: int | None = Field(
-        default=None,
-        index=True,
-        description="終點 Anki Note ID (允許為空，代表終點卡片尚未建立，此時依賴 target_label)",
-    )
-
-    # MySQL 中 VARCHAR 索引欄位必須指定長度，否則建索引會失敗
-    relation_type: str = Field(
-        max_length=50,
-        index=True,
-        description="關係類型：synonym, antonym, parent, collocation 等",
-    )
-
-    source_label: str = Field(
-        default="",
-        max_length=200,
-        description="起點筆記的人類可讀標籤（如單字本身）",
-    )
-    target_label: str = Field(
-        default="",
-        max_length=200,
-        description="終點筆記的人類可讀標籤",
-    )
-
-    # 使用 sa_column 確保 DateTime 帶時區且有資料庫層級的預設值
-    # 為什麼不用 default_factory：
-    #   default_factory 只在 Python 層面生效（ORM insert 時），
-    #   但若透過原生 SQL 或 Alembic 插入資料則不會觸發。
-    #   server_default=func.now() 確保資料庫引擎自動填入，
-    #   在 SQLite 與 MySQL 上行為完全一致。
-    created_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(
-            DateTime(timezone=True),
-            server_default=func.now(),
-            nullable=False,
-        ),
-    )
-
-
-class RelationType(SQLModel, table=True):
-    """Relation type table.
-
-    關聯類型表。
-
-    **No longer used (2026-11-01)**: card relations moved to the corpus ``rel_types`` (``RelationService``, C of
-    D9 in docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md); this SQLite table is kept as is and not dropped, but the
-    code no longer reads or writes it.
-
-    **已停用（2026-11-01）**：卡片關聯改存語料庫的 ``rel_types``（``RelationService``，
-    docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D9 的 C）；這張 SQLite 表原樣保留不刪，程式不再讀寫。
-
-    Dynamically stores all relation types created by users, for display in
-    frontend dropdown menus.
-
-    動態儲存使用者建立的所有關聯類型，以便前端下拉選單展示。
-
-    Attributes:
-        id: the auto-increment primary key
-            自增主鍵
-        name: the relation type name (for example synonym, collocation, travel); unique
-            關聯類型名稱（如 synonym, collocation, travel 等），不可重複
-        created_at: the creation timestamp
-            建立時間
-    """
-
-    __tablename__ = "relation_types"
-
-    id: int | None = Field(
-        default=None,
-        primary_key=True,
-        description="自增主鍵 ID",
-    )
-
-    name: str = Field(
-        max_length=50,
-        unique=True,
-        index=True,
-        description="關聯類型名稱",
-    )
-
-    created_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(
-            DateTime(timezone=True),
-            server_default=func.now(),
-            nullable=False,
-        ),
-    )
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class CapabilityRouteSetting(SQLModel, table=True):
@@ -232,13 +94,13 @@ class CapabilityRouteSetting(SQLModel, table=True):
             思考深度；只有該模型在白名單中不帶 effort 時為 ``None``
         updated_by: the last editor (``tg:<user id>`` or ``api``)
             最後修改者（``tg:<user id>`` 或 ``api``）
-        created_at: the creation timestamp
-            建立時間
-        updated_at: the last update timestamp
-            最後修改時間
+        created_at: the creation time, in UTC without zone info
+            建立時間，UTC、不帶時區資訊
+        updated_at: the last update time, in UTC without zone info
+            最後修改時間，UTC、不帶時區資訊
     """
 
-    __tablename__ = "capability_routes"
+    __tablename__ = CFG_CAPABILITY_ROUTES
     # 一個用途鍵在每種能力上最多一列
     __table_args__ = (UniqueConstraint("route_key", "capability"),)
 
@@ -281,10 +143,12 @@ class CapabilityRouteSetting(SQLModel, table=True):
         description="最後修改者：tg:<user id> 或 api",
     )
 
+    # 時間由網站寫入 UTC（utc_now）；server_default 只給手動 INSERT 的列用，那時是 MySQL 伺服器的時區
     created_at: datetime | None = Field(
         default=None,
         sa_column=Column(
-            DateTime(timezone=True),
+            DateTime(),
+            default=utc_now,
             server_default=func.now(),
             nullable=False,
         ),
@@ -293,9 +157,10 @@ class CapabilityRouteSetting(SQLModel, table=True):
     updated_at: datetime | None = Field(
         default=None,
         sa_column=Column(
-            DateTime(timezone=True),
+            DateTime(),
+            default=utc_now,
+            onupdate=utc_now,
             server_default=func.now(),
-            onupdate=func.now(),
             nullable=False,
         ),
     )

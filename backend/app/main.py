@@ -58,11 +58,8 @@ from app.bot.dispatcher import create_bot, setup_dispatcher
 from app.core.config import settings
 from app.core.exceptions import DraftStateError, DuplicateFoundError, FluencyTidesError
 from app.infrastructure.anki.client import AnkiClient
-from app.infrastructure.database.database import (
-    create_db_and_tables,
-    dispose_engine,
-)
 from app.infrastructure.database.corpus_database import dispose_corpus_engine
+from app.infrastructure.database.corpus_schema import ensure_site_tables
 from app.infrastructure.llm.endpoints import log_endpoint_summary
 from app.services import capability_route_service
 from app.infrastructure.storage.minio_client import MinioClient
@@ -85,7 +82,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Startup (before yield):
         - Initialize global logging.
         - Create the AnkiClient singleton (httpx.AsyncClient connection pool).
-        - Initialize the database (create tables).
+        - Create the website's own tables in the corpus database.
         - Load and log the LLM endpoints and whitelists.
         - Build the global LLM client for the diagnostics endpoint (``None``
           if it cannot be built).
@@ -100,7 +97,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Startup（yield 之前）：
         - 初始化全域日誌系統。
         - 建立 AnkiClient Singleton（httpx.AsyncClient 連線池）。
-        - 初始化資料庫（建立資料表）。
+        - 在語料庫建立網站自己的表。
         - 載入並記錄 LLM 端點與白名單。
         - 建立診斷端點用的全域 LLM 客戶端（建不出來時為 ``None``）。
         - 試建一次錄音評分器，失敗時記警告。
@@ -113,13 +110,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         - Remove the Telegram webhook, or stop polling, and close the bot
           session.
         - Release the AnkiClient httpx connection pool.
-        - Dispose of the database engines.
+        - Dispose of the corpus database engine.
 
     Shutdown（yield 之後）：
         - 關閉網頁的建卡工作階段（取消背景生成）。
         - 移除 Telegram Webhook 或停止 Polling，並關閉 Bot 連線。
         - 釋放 AnkiClient 的 httpx 連線池。
-        - 釋放資料庫引擎。
+        - 釋放語料庫資料庫引擎。
 
     Args:
         app: the FastAPI application
@@ -137,9 +134,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.anki_client = AnkiClient()
     logger.info("✅ AnkiClient Singleton 已初始化。")
 
-    # 初始化資料庫（建立資料表，若已存在則跳過）
-    await create_db_and_tables()
-    logger.info("✅ 資料庫初始化完成。")
+    # 語料庫裡網站自己的設定表（已存在就略過；失敗只記 ERROR，能力路由退回 .env）
+    if await ensure_site_tables():
+        logger.info("✅ 資料庫初始化完成。")
 
     # LLM 端點與白名單（.env）載入一次：設定寫錯的端點在此記 ERROR、不會讓啟動失敗
     log_endpoint_summary()
@@ -227,9 +224,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await app.state.anki_client.close()
     logger.info("✅ AnkiClient 連線池已釋放。")
-    
-    await dispose_engine()
-    logger.info("✅ 資料庫引擎已釋放。")
     
     await dispose_corpus_engine()
     

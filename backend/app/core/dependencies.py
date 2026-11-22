@@ -42,7 +42,6 @@ from typing import TYPE_CHECKING
 from fastapi import Depends, Request
 
 from app.infrastructure.database.corpus_database import get_corpus_async_session
-from app.infrastructure.database.database import get_async_session
 
 from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.storage.minio_client import MinioClient
@@ -72,11 +71,6 @@ _template_engine_instance: TemplateEngine | None = None
 # ============================================================================
 # Infrastructure Client 取得（Singleton，從 app.state 讀取）
 # ============================================================================
-
-# 將 get_async_session 重新匯出，供 Router 與 Service 層使用。
-# 命名為 get_db_session 以符合專案的 get_xxx 命名慣例。
-get_db_session = get_async_session
-
 
 def get_anki_client(request: Request) -> AnkiClient:
     """Get the AnkiClient singleton from app.state.
