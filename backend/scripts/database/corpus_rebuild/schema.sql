@@ -1,8 +1,8 @@
 -- fluencytides_corpus 的建表 SQL（docs/wip/corpus_db_rebuild_FEAT_2026-10-31.md D2）。
 -- Table DDL for fluencytides_corpus.
 --
--- 依前綴分成五個系列：game_（遊戲內容）、nlp_（語言標注）、card_（建卡帳本）、
--- rel_（通用關係圖）、story_（劇情流程圖）。
+-- 依前綴分成六個系列：game_（遊戲內容）、nlp_（語言標注）、card_（建卡帳本）、
+-- rel_（通用關係圖）、story_（劇情流程圖）、cfg_（網站設定）。
 -- game_legacy_scripts 由 rebuild.py 以 CREATE TABLE … LIKE yuzusoft.scripts 建立，
 -- 結構與舊表完全相同，所以不在這裡定義。
 --
@@ -295,4 +295,23 @@ CREATE TABLE story_node_lines (
   UNIQUE KEY uk_build_line (build_id, line_id),
   CONSTRAINT fk_nodelines_build FOREIGN KEY (build_id) REFERENCES story_builds (build_id) ON DELETE CASCADE,
   CONSTRAINT fk_nodelines_line  FOREIGN KEY (line_id)  REFERENCES game_lines (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================ cfg_
+-- 網站自己的設定（docs/wip/capability_routes_mysql_FEAT_2026-11-22.md）。網站啟動時以
+-- CREATE TABLE IF NOT EXISTS 建立（app/infrastructure/database/corpus_schema.py），本機與正式機共用。
+-- created_at / updated_at 由網站寫入 UTC（models.utc_now）；DEFAULT CURRENT_TIMESTAMP 只給手動 INSERT 的列，是伺服器時區。
+
+CREATE TABLE cfg_capability_routes (
+  id          INT          NOT NULL AUTO_INCREMENT,
+  route_key   VARCHAR(64)  COLLATE utf8mb4_bin NOT NULL,
+  capability  VARCHAR(32)  COLLATE utf8mb4_bin NOT NULL,
+  provider    VARCHAR(64)  COLLATE utf8mb4_bin NOT NULL,
+  model       VARCHAR(128) COLLATE utf8mb4_bin NULL,
+  effort      VARCHAR(16)  COLLATE utf8mb4_bin NULL,
+  updated_by  VARCHAR(64)  COLLATE utf8mb4_bin NOT NULL,
+  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_route_capability (route_key, capability)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

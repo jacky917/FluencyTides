@@ -15,7 +15,7 @@ FluencyTides 是一套**個人語言學習自動化系統**，把「LLM 內容�
 | 功能 | 說明 | 主要入口 |
 |---|---|---|
 | **LLM 生成 Anki 卡片** | 依所選模型讀取 LLM JSON Schema 與 Jinja2 System Prompt，呼叫 OpenAI 相容 LLM（實務上為 Gemini 相容層）取得結構化 JSON，經 AnkiConnect 寫入本地 Anki | Web `POST /api/v1/cards/generate`、Telegram 任意文字訊息、CLI 批次腳本 |
-| **知識圖譜** | LLM 生卡時同步輸出 `Graph_Relations` 關聯，寫入 SQLite；前端以 react-force-graph-2d 力導向圖呈現，支援連線建立/刪除關聯與卡片詳情編輯 | `GET /api/v1/relations/graph`、前端 `KnowledgeGraph.tsx` |
+| **知識圖譜** | LLM 生卡時同步輸出 `Graph_Relations` 關聯，寫入 MySQL 語料庫的 `rel_links`；前端以 react-force-graph-2d 力導向圖呈現，支援連線建立/刪除關聯與卡片詳情編輯 | `GET /api/v1/relations/graph`、前端 `KnowledgeGraph.tsx` |
 | **Telegram 語音影子跟讀評測** | 卡片內嵌 Deep Link（`rec_` 前綴），使用者錄音後依能力路由建立的評分器評分（模型直接聽音檔、Whisper 轉文字後逐字比對、或 Whisper＋文字 LLM；三語卡與對話卡可設不同策略），結果寫回 Anki 卡片的 Recordings 欄位 | `bot/handlers/voice.py` → `services/recording_eval.py` → `audio_evaluator/factory.py` |
 | **依用途選工具（能力路由）** | 每個用途（自他動詞子卡、讀音判斷、錄音評分…）可各自指定文字 LLM（端點、模型、思考深度）、錄音評分策略、聽音檔的模型與語音轉文字，存在資料庫、重啟後仍在；選項只能來自 `.env` 的白名單（多家中轉站、Google 原生、claude-code / antigravity CLI、`AUDIO_MODELS`、`STT_MODELS`），沒設定時沿用上一層（分支 → 流程 → 全域 → `.env`）。設定方式見 `backend/.env.example` 第 1、10、12、13 區 | Telegram `/setconfig`（管理員）、網頁「Tool Settings」、`/api/v1/capability-routes` |
 
@@ -31,11 +31,11 @@ FluencyTides 是一套**個人語言學習自動化系統**，把「LLM 內容�
 |---|---|---|
 | Web 框架 | fastapi、uvicorn[standard]、python-multipart | API 中樞、ASGI 伺服器、檔案上傳 |
 | 驗證/設定 | pydantic v2、pydantic-settings、python-dotenv | Pydantic v2 合約、`.env` 集中設定 |
-| 資料庫 | sqlalchemy[asyncio]（含 greenlet）、sqlmodel、aiosqlite、aiomysql、alembic | SQLAlchemy 2.0 async ORM、SQLite / MySQL 驅動、Schema 遷移 |
+| 資料庫 | sqlalchemy[asyncio]（含 greenlet）、sqlmodel、aiomysql、aiosqlite | SQLAlchemy 2.0 async ORM、MySQL 驅動（aiosqlite 只給測試模擬語料庫） |
 | AI 整合 | httpx、openai、google-genai、jinja2 | AnkiConnect 客戶端、LLM 生卡、Gemini 原生語音評測、Prompt 模板 |
 | 外部服務 | minio、aiogram（3.4+） | 媒體存儲、Telegram Bot（純 aiogram 3） |
 
-資料庫預設為 **SQLite**（`sqlite+aiosqlite`），並依 MySQL 相容準則（顯式約束命名、VARCHAR 長度、時區安全）設計，為未來遷移 MySQL 預留（見 `docs/adr/003-sqlmodel-orm-foundation.md`）。
+資料庫只有 **MySQL 語料庫**（`mysql+aiomysql`）：卡片關聯、劇情流程圖、能力路由設定與建卡語料都在這裡。早期的 SQLite（`docs/adr/003-sqlmodel-orm-foundation.md`）已在 2026-11-22 停用。
 
 ### 前端（`frontend/package.json`）
 
@@ -65,7 +65,7 @@ FluencyTides 是一套**個人語言學習自動化系統**，把「LLM 內容�
 React SPA ─┐                      ┌─ AnkiConnect (本地 Anki)
            ├─ nginx ─┐            ├─ Gemini / OpenAI 相容 LLM
 Telegram ──┤         ├─ FastAPI ──┤─ MinIO
-CLI 腳本 ──┘  (寄生 Bot 於同進程)  ├─ SQLite (card_relations / relation_types)
+CLI 腳本 ──┘  (寄生 Bot 於同進程)  ├─ MySQL 語料庫（rel_links、劇情、cfg_capability_routes）
                                   └─ Telegram Bot API
 ```
 
@@ -87,9 +87,8 @@ FluencyTides/
 │   ├── adr/                        # ADR 001-004
 │   └── new/                        # 全項目審查產出（權威現狀參考）
 ├── backend/                        # Python FastAPI 後端
-│   ├── Dockerfile / docker-compose.yml / alembic.ini / requirements.txt
+│   ├── Dockerfile / docker-compose.yml / requirements.txt
 │   ├── .env.example                # 環境變數範例
-│   ├── alembic/                    # async 遷移環境 + versions/
 │   ├── scripts/                    # 三支 CLI 維運腳本 + _bootstrap.py + samples/
 │   └── app/
 │       ├── main.py                 # 進入點：lifespan 管理全部 Singleton 與 Bot 啟停
@@ -131,16 +130,14 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.lock   # 精確版本，與容器相同；requirements.txt 只宣告範圍
 
 cp .env.example .env      # 依實際環境填入 LLM_API_KEY、ANKI_CONNECT_URL、TG_BOT_TOKEN 等
-# 本地開發建議把 DATABASE_URL 改為相對路徑，例如：
-#   DATABASE_URL=sqlite+aiosqlite:///./fluencytides.db
+# 資料庫只有 MySQL 語料庫：填 MYSQL_HOST、MYSQL_USER、MYSQL_PASSWORD、MYSQL_DATABASE
 
 uvicorn app.main:app --reload --port 8000
 ```
 
 - API 位於 `http://127.0.0.1:8000`，Swagger UI 在 `/docs`，健康檢查在 `/api/health`。
 - **API 認證**：`API_SECRET_KEY` 留空時後端**不驗證**任何請求（每次請求記一條警告）。線上目前即採此設定，存取控制交給外層：對外經 Cloudflare Tunnel（webhook 只放行 `/api/webhook`，網頁與後端的 hostname 以 Cloudflare Access 登入保護），家用區網內則視為可信。填上金鑰即啟用驗證，此時前端（nginx 代為注入 `X-API-Key`，值來自前端容器的 `API_SECRET_KEY`）與生成腳本都必須帶同一把金鑰。（舊版文件所述「`ENVIRONMENT=production` 時空金鑰拒絕啟動」並未實作，程式碼不讀取 `ENVIRONMENT`。）
-- 資料庫 schema：每次啟動都會執行 `create_all` 建立缺少的資料表（不分環境）；既有資料表的結構變更由 Alembic 管理，需要時手動執行 `alembic upgrade head`。**升級到能力路由（`capability_routes`）的版本後必須執行一次**：它把舊 `llm_routes` 的用途設定搬到新表，沒跑之前各用途都退回 `.env` 預設，啟動時會記 ERROR 提醒。
-- **容器部署的資料庫位置**：`backend/docker-compose.yml` 以 `environment` 固定 `DATABASE_URL=sqlite+aiosqlite:////app/data/fluencytides.db`（優先於主機 `.env` 的同名設定），落在掛載到主機 `/DATA/AppData/FluencyTides/backend/data` 的目錄，重建容器不會遺失。早期版本的資料庫在容器內的 `/app/fluencytides.db`，每次重建容器（當時的 `deploy_local.sh`）都會被清空；從舊版升級時，部署前先執行 `docker cp fluencytides-backend:/app/fluencytides.db /DATA/AppData/FluencyTides/backend/data/fluencytides.db` 保留資料。
+- 資料庫：網站只用 MySQL 語料庫（`.env` 的 `MYSQL_*`），本機與正式機共用同一個。建表 SQL 的唯一來源是 `backend/scripts/database/corpus_rebuild/schema.sql`；網站自己的設定表 `cfg_capability_routes`（各用途的 LLM 路由）每次啟動以 `CREATE TABLE IF NOT EXISTS` 建立，所以本機與正式機讀到同一份路由設定。2026-11-22 起不再使用 SQLite 與 Alembic；舊的 `fluencytides.db`（本機 `backend/`、正式機主機 `/DATA/AppData/FluencyTides/backend/data/`）原樣保留當備份（`docs/wip/capability_routes_mysql_FEAT_2026-11-22.md`）。
 
 ### 前端
 

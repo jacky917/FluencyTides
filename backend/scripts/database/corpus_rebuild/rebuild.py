@@ -6,10 +6,12 @@ anchor / calibration files.
 - 對 ``yuzusoft`` 只做 SELECT；
 - 會刪掉目標資料庫的所有表再從頭建立，所以**只能對空的資料庫執行**。目標資料庫只要有這支腳本
   還原不了的資料就拒絕（``data_stores_AUDIT_2026-11-01.md`` §4「紀錄表任何腳本都不得清空」）：
-  紀錄表（``PROTECTED_TABLES``：卡片紀錄、關係、修訂紀錄、詞彙索引、讀音判定、流程圖建置）有任何一列，
+  紀錄表（``PROTECTED_TABLES``：卡片紀錄、關係、修訂紀錄、詞彙索引、讀音判定、流程圖建置、能力路由設定）有任何一列，
   或 ``game_profiles`` 有其他遊戲（例如另外匯入的千戀＊萬花）。檢查的是資料庫本身，不看是哪一台機器、
   哪一份 ``.env``；沒有略過的選項。要在測試用的資料庫重跑，先自己刪掉那個資料庫再建一個空的。
 - 另外保留原本的第一道檢查：``.env`` 的 ``MYSQL_DATABASE`` 已是目標資料庫（已切換）時直接拒絕。
+- 網站設定（``cfg_capability_routes`` 等 ``SITE_TABLES``）不在舊庫裡：寫完後從 ``.env`` 的 ``MYSQL_DATABASE``
+  （目前使用中的語料庫）原樣複製到新庫，切換後設定照舊（``carry_site_settings``）。
 
 Read-only on ``yuzusoft``; drops and recreates every table in the target DB,
 so it only runs against an empty database: it refuses whenever the target
@@ -38,6 +40,7 @@ import scripts.common.env  # noqa: E402,F401  載入 .env / load .env
 import pymysql  # noqa: E402
 
 from app.core.config import settings  # noqa: E402
+from app.infrastructure.database.corpus_schema import SITE_TABLES  # noqa: E402
 from scripts.database.corpus_rebuild import logs  # noqa: E402
 from scripts.database.corpus_rebuild.content import GAME_PROFILE, Content, LegacyRow, build  # noqa: E402
 
@@ -46,7 +49,7 @@ DEFAULT_ANCHORS = Path(r"C:/Users/forip/Desktop/WorkSpace/game/SW_point_table.js
 DEFAULT_CALIB = Path(r"C:/Users/forip/Desktop/WorkSpace/game/SW_calib")
 # 依外鍵相反的順序刪表 / drop order (reverse FK order)
 DROP_ORDER = (
-    "story_node_lines", "story_builds", "rel_links", "rel_types", "rel_entity_types",
+    "cfg_capability_routes", "story_node_lines", "story_builds", "rel_links", "rel_types", "rel_entity_types",
     "card_gen_log", "nlp_line_readings", "nlp_line_terms", "game_line_revisions", "game_line_bgm",
     "game_bgm_tracks", "game_lines", "game_speakers", "game_scene_links", "game_scenes",
     "game_script_files", "game_legacy_scripts", "game_profiles",
@@ -54,9 +57,11 @@ DROP_ORDER = (
 
 
 #: 不能被清掉的表：切換後只存在新庫、持續有寫入，或由別的流程產生（data_stores_AUDIT §4）。
-#: Tables that must never be wiped once they hold rows.
+#: 注意這只檢查**目標**資料庫；網站設定改由 ``carry_site_settings`` 從目前使用中的語料庫複製過去。
+#: Tables that must never be wiped once they hold rows (checked in the target DB only).
 PROTECTED_TABLES = (
     "card_gen_log", "rel_links", "game_line_revisions", "nlp_line_terms", "nlp_line_readings", "story_builds",
+    "cfg_capability_routes",
 )
 
 
@@ -127,6 +132,44 @@ def _json(v):
     return None if v is None else json.dumps(v, ensure_ascii=False)
 
 
+def carry_site_settings(cur, source_db: str, new_db: str) -> dict[str, int]:
+    """把網站設定（``SITE_TABLES``，例如能力路由）從目前使用中的語料庫原樣複製到新庫。
+
+    Copy the website's settings tables from the corpus in use into the new DB.
+
+    重建的內容來自舊庫 ``yuzusoft``，網站設定不在那裡；不複製的話，切換 ``MYSQL_DATABASE`` 之後所有用途
+    會悄悄退回 ``.env`` 的預設（docs/wip/capability_routes_mysql_FEAT_2026-11-22.md D3）。兩邊的表都由
+    ``schema.sql`` 建立、結構相同，所以以 ``INSERT … SELECT *`` 整張複製（保留 id）；結構不同時會報錯，
+    整次重建一起回復。來源庫沒有這張表（還沒啟動過新版網站）時略過。
+
+    The rebuild content comes from ``yuzusoft``, which has no website settings; without this copy every use
+    silently falls back to ``.env`` after switching ``MYSQL_DATABASE``. A source DB without the table is
+    skipped.
+
+    Args:
+        cur: 新庫的 cursor（同一台 MySQL，可以跨庫查詢）。A cursor on the new DB.
+        source_db: 目前使用中的語料庫（``.env`` 的 ``MYSQL_DATABASE``）。The corpus in use.
+        new_db: 重建的目標資料庫。The rebuild target.
+
+    Returns:
+        ``{表名: 複製的列數}``；來源沒有的表不列出，來源與目標相同時為空 dict。
+        Rows copied per table; skipped tables are omitted.
+    """
+    if source_db == new_db:
+        return {}
+    copied: dict[str, int] = {}
+    for table in SITE_TABLES:
+        cur.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = %s AND table_name = %s",
+            (source_db, table),
+        )
+        if not cur.fetchone()[0]:
+            continue
+        cur.execute(f"INSERT INTO `{table}` SELECT * FROM `{source_db}`.`{table}`")
+        copied[table] = cur.rowcount
+    return copied
+
+
 def _insert(cur, table: str, rows: list[dict], cols: list[str], json_cols: tuple[str, ...] = ()) -> None:
     if not rows:
         return
@@ -136,8 +179,18 @@ def _insert(cur, table: str, rows: list[dict], cols: list[str], json_cols: tuple
         cur.executemany(sql, data[k:k + 2000])
 
 
-def write(c: Content, old_db: str, new_db: str) -> None:
-    """建表並寫入所有資料。Create tables and load everything."""
+def write(c: Content, old_db: str, new_db: str, settings_db: str | None = None) -> dict[str, int]:
+    """建表並寫入所有資料，再從目前使用中的語料庫複製網站設定。Create tables, load everything, carry settings.
+
+    Args:
+        c: 重建的內容。The rebuilt content.
+        old_db: 舊庫（``yuzusoft``）。The legacy DB.
+        new_db: 目標資料庫。The rebuild target.
+        settings_db: 網站設定的來源；``None`` 時用 ``.env`` 的 ``MYSQL_DATABASE``。Settings source.
+
+    Returns:
+        ``carry_site_settings`` 的結果（每張網站設定表複製的列數）。Rows of settings copied per table.
+    """
     conn = connect(new_db)
     try:
         with conn.cursor() as cur:
@@ -172,6 +225,7 @@ def write(c: Content, old_db: str, new_db: str) -> None:
                     ["line_id", "field", "old_value", "new_value", "reason", "evidence"])
 
             logs.migrate(cur, old_db)
+            carried = carry_site_settings(cur, settings_db or settings.MYSQL_DATABASE, new_db)
         conn.commit()
     except BaseException:
         # 含 SystemExit（拒絕執行）：什麼都沒刪，照樣收掉交易
@@ -179,6 +233,7 @@ def write(c: Content, old_db: str, new_db: str) -> None:
         raise
     finally:
         conn.close()
+    return carried
 
 
 def _statements(sql: str) -> list[str]:
@@ -226,8 +281,14 @@ def main() -> None:
           f"revisions={len(content.revisions)}  ({time.time() - t0:.0f}s)")
     if args.dry_run:
         return
-    write(content, args.old, args.new)
+    carried = write(content, args.old, args.new)
     print(f"✅ 已寫入 {args.new}（{time.time() - t0:.0f}s）")
+    source = settings.MYSQL_DATABASE
+    for table in SITE_TABLES:
+        if table in carried:
+            print(f"   網站設定 {table}：從 {source} 複製 {carried[table]} 列")
+        else:
+            print(f"   ⚠️ {source} 沒有 {table}，新庫的這張表是空的；切換後各用途會用 .env 的預設")
 
 
 if __name__ == "__main__":

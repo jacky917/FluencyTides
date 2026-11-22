@@ -122,3 +122,48 @@ def test_main_still_refuses_the_live_database_first(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["rebuild.py"])
     with pytest.raises(SystemExit, match="已切換"):
         rebuild.main()
+
+
+class _SettingsCursor:
+    """``carry_site_settings`` 用的假 cursor：來源庫有沒有網站設定表、複製了幾列。"""
+
+    def __init__(self, source_tables: set[str], rows: int) -> None:
+        self.source_tables, self.rows = source_tables, rows
+        self.log: list[tuple[str, tuple | None]] = []
+        self.rowcount = -1
+        self._one = None
+
+    def execute(self, sql, params=None):
+        self.log.append((sql, params))
+        if "information_schema.tables" in sql:
+            self._one = (1 if params[1] in self.source_tables else 0,)
+        elif sql.startswith("INSERT INTO"):
+            self.rowcount = self.rows
+
+    def fetchone(self):
+        return self._one
+
+
+def test_site_settings_are_copied_from_the_live_corpus():
+    """重建後從目前使用中的語料庫整張複製網站設定，切換後設定不會悄悄消失。"""
+    cur = _SettingsCursor({"cfg_capability_routes"}, rows=3)
+    assert rebuild.carry_site_settings(cur, "fluencytides_corpus", "fluencytides_corpus_v2") == {
+        "cfg_capability_routes": 3,
+    }
+    assert cur.log[0][1] == ("fluencytides_corpus", "cfg_capability_routes")
+    assert cur.log[1][0] == (
+        "INSERT INTO `cfg_capability_routes` SELECT * FROM `fluencytides_corpus`.`cfg_capability_routes`"
+    )
+
+
+def test_site_settings_skipped_when_the_source_has_no_table():
+    """來源庫還沒有這張表（沒啟動過新版網站）：略過、不報錯，主程式會印警告。"""
+    cur = _SettingsCursor(set(), rows=0)
+    assert rebuild.carry_site_settings(cur, "fluencytides_corpus", "fluencytides_corpus_v2") == {}
+    assert not any(sql.startswith("INSERT") for sql, _ in cur.log)
+
+
+def test_site_settings_not_copied_onto_themselves():
+    cur = _SettingsCursor({"cfg_capability_routes"}, rows=3)
+    assert rebuild.carry_site_settings(cur, "same_db", "same_db") == {}
+    assert cur.log == []

@@ -25,12 +25,12 @@ class RouteUpdate(BaseModel):
 
     寫入一個用途鍵在一種能力上的選擇。
 
-    The length limits match the ``capability_routes`` columns and the endpoint
+    The length limits match the ``cfg_capability_routes`` columns and the endpoint
     settings. ``provider`` and ``effort`` are case-insensitive and have leading
     and trailing whitespace stripped; normalization happens in the service
     layer, shared by Telegram and the API.
 
-    長度上限與 ``capability_routes`` 的欄位、端點設定一致。provider 與 effort 不分大小寫、
+    長度上限與 ``cfg_capability_routes`` 的欄位、端點設定一致。provider 與 effort 不分大小寫、
     前後空白會去掉（正規化在服務層，TG 與 API 共用）。
 
     Attributes:

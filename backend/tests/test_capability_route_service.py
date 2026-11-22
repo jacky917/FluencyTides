@@ -256,7 +256,24 @@ def test_database_failure_while_writing_is_503(llm_route_db, llm_whitelist, capl
     with broken_db, pytest.raises(RouteStoreUnavailableError):
         _run(capability_route_service.delete_route(KEY, updated_by="api"))
 
-    assert "寫入 capability_routes 失敗" in caplog.text and "刪除 capability_routes 失敗" in caplog.text
+    assert "寫入 cfg_capability_routes 失敗" in caplog.text and "刪除 cfg_capability_routes 失敗" in caplog.text
+
+
+def test_no_corpus_connection_is_503(llm_route_db, llm_whitelist):
+    """語料庫連線沒建起來：讀、寫、刪都回 503，列出全部時每列標記讀不到。"""
+    no_corpus = mock.patch("app.infrastructure.database.corpus_database.corpus_async_session_factory", None)
+    with no_corpus:
+        routing.invalidate_cache()
+        with pytest.raises(RouteStoreUnavailableError):
+            _run(capability_route_service.set_route(KEY, "yinli", "m1", None, updated_by="api"))
+        with pytest.raises(RouteStoreUnavailableError):
+            _run(capability_route_service.delete_route(KEY, updated_by="api"))
+        with pytest.raises(RouteStoreUnavailableError):
+            _run(capability_route_service.describe(KEY)).view("llm")
+        _, read_ok = _run(capability_route_service.list_routes())
+
+    assert read_ok is False
+    assert _rows(llm_route_db) == []
 
 
 def test_unreadable_db_cause_is_logged_on_each_management_read(llm_route_db, llm_whitelist, caplog):
@@ -266,7 +283,7 @@ def test_unreadable_db_cause_is_logged_on_each_management_read(llm_route_db, llm
             with pytest.raises(RouteStoreUnavailableError):
                 _run(capability_route_service.describe(KEY)).view("llm")
 
-    records = [r for r in caplog.records if "管理操作讀取 capability_routes 失敗" in r.getMessage()]
+    records = [r for r in caplog.records if "管理操作讀取 cfg_capability_routes 失敗" in r.getMessage()]
     assert len(records) == 2 and all(r.exc_info for r in records)
 
 

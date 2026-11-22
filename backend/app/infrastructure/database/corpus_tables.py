@@ -14,10 +14,10 @@ the columns the website reads and writes in ``rel_types`` / ``rel_links``, and d
 不負責在 MySQL 建表（測試用 SQLite 時才以 ``corpus_metadata.create_all`` 建）。
 
 Prefixes and purposes: ``game_`` game content, ``nlp_`` linguistic annotations, ``card_`` card-generation ledger,
-``rel_`` general relation graph, ``story_`` story flowchart.
+``rel_`` general relation graph, ``story_`` story flowchart, ``cfg_`` website settings.
 
 前綴與用途：``game_`` 遊戲內容、``nlp_`` 語言標注、``card_`` 建卡帳本、
-``rel_`` 通用關係圖、``story_`` 劇情流程圖。
+``rel_`` 通用關係圖、``story_`` 劇情流程圖、``cfg_`` 網站設定。
 """
 
 import re
@@ -61,6 +61,9 @@ REL_LINKS = "rel_links"
 # ============================================================ story_
 STORY_BUILDS = "story_builds"
 STORY_NODE_LINES = "story_node_lines"
+
+# ============================================================ cfg_
+CFG_CAPABILITY_ROUTES = "cfg_capability_routes"
 
 # ============================================================ 值域 / value sets
 

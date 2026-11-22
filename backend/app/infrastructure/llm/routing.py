@@ -11,7 +11,7 @@ client through it at call time (see the example in the Chinese section below).
 
 The naming rules for route keys are in §4 of the plan (alphanumerics and ``. _ -``, length ≤ 64, at most two
 levels ``<flow>.<branch>``). A key is registered when declared, so :func:`list_route_keys` is the admin UI's list of
-valid keys. Settings are stored in ``capability_routes``, each row being one route key's choice for one
+valid keys. Settings are stored in ``cfg_capability_routes``, each row being one route key's choice for one
 capability; capabilities and allowlists are in :mod:`app.infrastructure.llm.capabilities`.
 
 Each capability resolves **independently** in this order (plan §5)::
@@ -46,7 +46,7 @@ intercepted and propagate as usual.
     llm = await CHILD_CARD.client()
 
 用途鍵的命名規範見計畫書 §4（英數字與 ``. _ -``，長度 ≤ 64，最多兩層 ``<流程>.<分支>``）。
-宣告時即登記，``list_route_keys`` 就是管理介面的合法鍵清單。設定存在 ``capability_routes``，
+宣告時即登記，``list_route_keys`` 就是管理介面的合法鍵清單。設定存在 ``cfg_capability_routes``，
 每列是一個用途鍵在一種能力上的選擇；能力與白名單見 ``app.infrastructure.llm.capabilities``。
 
 每個能力**各自**依下列順序解析（計畫書 §5）::
@@ -113,7 +113,7 @@ __all__ = [
 # 全域設定的用途鍵
 GLOBAL_ROUTE_KEY = "*"
 
-# 用途鍵規則；長度與 capability_routes.route_key 欄位一致。最多兩層（<流程>.<分支>）
+# 用途鍵規則；長度與 cfg_capability_routes.route_key 欄位一致。最多兩層（<流程>.<分支>）
 ROUTE_KEY_MAX_LENGTH = 64
 _ROUTE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)?$")
 
@@ -628,27 +628,29 @@ def warn_once(message: str) -> None:
 
 
 async def _fetch_choices() -> Snapshot:
-    """Read every setting from ``capability_routes`` (capability → route key → choice).
+    """Read every setting from ``cfg_capability_routes`` (capability → route key → choice).
 
-    從 ``capability_routes`` 讀出全部設定（能力 → 用途鍵 → 選擇）。
+    從 ``cfg_capability_routes`` 讀出全部設定（能力 → 用途鍵 → 選擇）。
 
     The ``model`` column may be empty (strategy capabilities) and is read as an empty string; for capabilities that
     need a model, an empty one is skipped by the allowlist check.
 
     The database modules are imported lazily: the engine is created only when first needed, and the LLM layer
-    itself does not depend on the DB.
+    itself does not depend on the DB. Without a corpus connection this raises ``ConnectionError`` (an
+    ``OSError``), so the caller falls back to ``.env`` as for any other database failure.
 
     ``model`` 欄位可為空（策略類能力），讀成空字串；需要模型的能力若是空的，比對白名單時會被
     跳過。
 
-    延遲 import 資料庫模組：只在第一次需要時才建立引擎，LLM 層本身不依賴 DB。
+    延遲 import 資料庫模組：只在第一次需要時才建立引擎，LLM 層本身不依賴 DB。沒有語料庫連線時拋
+    ``ConnectionError``（屬於 ``OSError``），呼叫端和其他資料庫故障一樣退回 ``.env``。
     """
     from sqlalchemy import select
 
-    from app.infrastructure.database.database import async_session_factory
+    from app.infrastructure.database.corpus_database import require_corpus_session_factory
     from app.infrastructure.database.models import CapabilityRouteSetting
 
-    async with async_session_factory() as session:
+    async with require_corpus_session_factory()() as session:
         result = await session.execute(select(CapabilityRouteSetting))
         rows = result.scalars().all()
     snapshot: Snapshot = {}
@@ -675,7 +677,7 @@ async def _fetch_and_cache() -> Snapshot:
     generation = _cache_generation
     choices = await _fetch_choices()
     if _db_failing:
-        logger.info("能力路由設定（capability_routes）已恢復讀取，DB 設定重新生效。")
+        logger.info("能力路由設定（cfg_capability_routes）已恢復讀取，DB 設定重新生效。")
         _db_failing = False
     if generation == _cache_generation:
         _choices_cache = choices
@@ -707,7 +709,7 @@ async def _load_choices() -> tuple[Snapshot, bool]:
     except DATABASE_ERRORS as error:  # D4：只有 DB 異常才退回 .env
         if not _db_failing:
             logger.warning(
-                "讀取能力路由設定（capability_routes）失敗，改用 .env 設定直到 DB 恢復：%s: %s",
+                "讀取能力路由設定（cfg_capability_routes）失敗，改用 .env 設定直到 DB 恢復：%s: %s",
                 type(error).__name__,
                 error,
                 exc_info=True,

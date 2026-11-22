@@ -19,7 +19,6 @@ created in their final shape.
 
 import asyncio
 import logging
-import re
 import sys
 from pathlib import Path
 
@@ -32,35 +31,13 @@ if str(_backend_dir) not in sys.path:
 import scripts.common.env  # noqa
 
 from app.infrastructure.database.corpus_database import corpus_async_session_factory, dispose_corpus_engine
+from app.infrastructure.database.corpus_schema import SCHEMA_PATH, table_ddl
 from app.infrastructure.database.corpus_tables import CARD_GEN_LOG, NLP_LINE_READINGS
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_PATH = _backend_dir / "scripts" / "database" / "corpus_rebuild" / "schema.sql"
-
 # 本腳本負責建的表（依外鍵順序）。Tables created here, in foreign-key order.
 PIPELINE_TABLES = (NLP_LINE_READINGS, CARD_GEN_LOG)
-
-
-def table_ddl(schema_sql: str, table: str) -> str:
-    """從 schema.sql 取出一張表的 ``CREATE TABLE``，改成 ``CREATE TABLE IF NOT EXISTS``。
-
-    Extract one table's ``CREATE TABLE`` from schema.sql as ``IF NOT EXISTS``.
-
-    Args:
-        schema_sql: schema.sql 的內容。The schema.sql text.
-        table: 表名。Table name.
-
-    Returns:
-        str: 可重跑的建表 SQL。The re-runnable DDL.
-
-    Raises:
-        LookupError: schema.sql 沒有這張表。When the table is not in schema.sql.
-    """
-    match = re.search(rf"CREATE TABLE {re.escape(table)} \(.*?\)[^;]*;", schema_sql, re.DOTALL)
-    if match is None:
-        raise LookupError(f"{SCHEMA_PATH.name} 沒有 {table} 的 CREATE TABLE")
-    return match.group(0).replace(f"CREATE TABLE {table} ", f"CREATE TABLE IF NOT EXISTS {table} ", 1)
 
 
 async def init_pipeline_tables() -> None:

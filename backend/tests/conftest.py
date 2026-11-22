@@ -3,7 +3,7 @@ pytest 共用設定。Shared pytest configuration.
 
 - 確保 backend 根目錄在 sys.path 中
 - 預設隔離 LLM 路由：不讀開發機 .env 的自訂端點、不讀真實 DB
-- 共用 fixture：``llm_route_db``（暫存 ``capability_routes`` 表）、``llm_whitelist``（常用白名單）、
+- 共用 fixture：``llm_route_db``（暫存 ``cfg_capability_routes`` 表）、``llm_whitelist``（常用白名單）、
   ``declare_route_key``（測試期間宣告用途鍵）
 
 Ensures the backend root is on sys.path, isolates LLM routing from the
@@ -52,7 +52,7 @@ def _no_local_llm_endpoints():
 
 @pytest.fixture(autouse=True)
 def _no_real_llm_routes_db():
-    """LLM 路由預設讀到「沒有任何設定」，不碰 .env 的 DATABASE_URL。
+    """LLM 路由預設讀到「沒有任何設定」，不碰 .env 指向的真實語料庫。
 
     handler 或服務層的測試走到 ``await XXX_LLM.client()`` 時，否則會讀開發機的真實 DB。
     一般需要真表的測試用 :func:`llm_route_db`；記憶體 SQLite、缺表等特殊情境見
@@ -71,11 +71,11 @@ def _no_real_llm_routes_db():
 
 @pytest.fixture
 def llm_route_db(tmp_path):
-    """建一個只有 ``capability_routes`` 表的暫存 SQLite，讓路由與寫入服務都讀寫它。
+    """建一個只有 ``cfg_capability_routes`` 表的暫存 SQLite，讓路由與寫入服務都讀寫它。
 
     以 ``NullPool`` 每次操作都開新連線，可跨 ``asyncio.run`` 與 TestClient 的事件迴圈使用。
 
-    A temporary SQLite database holding only ``capability_routes``, used by both the
+    A temporary SQLite database holding only ``cfg_capability_routes``, used by both the
     resolver and the write service; ``NullPool`` lets it span event loops.
 
     Yields:
@@ -97,7 +97,7 @@ def llm_route_db(tmp_path):
 
     asyncio.run(create_table())
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    with mock.patch("app.infrastructure.database.database.async_session_factory", session_factory), \
+    with mock.patch("app.infrastructure.database.corpus_database.corpus_async_session_factory", session_factory), \
          mock.patch.object(_routing, "_fetch_choices", _REAL_FETCH_CHOICES):
         _routing.invalidate_cache()
         yield session_factory
