@@ -225,9 +225,10 @@ export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDel
             <div className="space-y-4">
               {notices.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-900">
-                  <div className="flex-1 space-y-1">
+                  {/* min-w-0 與 anywhere：說明裡的長路徑（scripts/…/delete_child_cards.py）才不會把對話框撐寬 */}
+                  <div className="min-w-0 flex-1 space-y-1">
                     {notices.map((notice) => (
-                      <p key={notice} className="break-words">
+                      <p key={notice} className="[overflow-wrap:anywhere]">
                         {notice}
                       </p>
                     ))}
@@ -313,7 +314,7 @@ export function CardDetailModal({ isOpen, onClose, note, isLoading, error, onDel
             <div role="alert" className="text-center text-sm">
               <p className="font-semibold text-destructive">無法載入筆記內容</p>
               {error !== undefined && error !== null && (
-                <p className="mt-1 break-words text-muted-foreground">{describeApiError(error).message}</p>
+                <p className="mt-1 [overflow-wrap:anywhere] text-muted-foreground">{describeApiError(error).message}</p>
               )}
             </div>
           )}

@@ -85,7 +85,7 @@ export function ConfirmDialog({ title, message, confirmLabel, destructive, onCon
         className="bg-background border shadow-lg rounded-xl w-full max-w-sm p-6 space-y-4"
       >
         <h3 className="text-lg font-bold">{title}</h3>
-        <div className="text-sm text-muted-foreground whitespace-pre-line break-words">{message}</div>
+        <div className="text-sm text-muted-foreground whitespace-pre-line [overflow-wrap:anywhere]">{message}</div>
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onCancel}>
             取消

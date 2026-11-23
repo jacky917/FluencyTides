@@ -193,9 +193,9 @@ export function TrilingualDraftPreview({
                         />
                         <span className="min-w-0 flex-1 space-y-1">
                           {reference.familiarity !== null && <FamiliarityBar value={reference.familiarity} />}
-                          <span className="block break-words text-base leading-relaxed">{reference.content}</span>
+                          <span className="block [overflow-wrap:anywhere] text-base leading-relaxed">{reference.content}</span>
                           {reference.note && (
-                            <span className="block break-words border-l-2 pl-2 text-xs leading-relaxed text-muted-foreground">
+                            <span className="block [overflow-wrap:anywhere] border-l-2 pl-2 text-xs leading-relaxed text-muted-foreground">
                               {reference.note}
                             </span>
                           )}
