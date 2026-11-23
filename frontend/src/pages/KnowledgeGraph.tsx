@@ -11,7 +11,7 @@ import { usePanelWidths } from '../hooks/usePanelWidths'
 import { collectNodePositions, readGraphView, seedNodePositions, writeGraphCamera, writeGraphView } from '../lib/graphView'
 import { GRAPH_LAYOUT } from '../lib/pageLayouts'
 import { permissionsFromCapabilities } from '../lib/cardFields'
-import { graphHandlers, graphViewScope, nodeTooltip, pickGraphHandler } from '../lib/graphQuery'
+import { graphHandlers, graphQueryKey, graphViewScope, nodeTooltip, onlyDepthChanged, pickGraphHandler } from '../lib/graphQuery'
 import { cn } from '../lib/utils'
 import type { GenericNoteDetail, GraphNode } from '../types/api'
 import { CardDetailModal } from '../components/CardDetailModal'
@@ -203,9 +203,14 @@ export default function KnowledgeGraph() {
     isLoading,
     error: graphError,
   } = useQuery({
-    queryKey: ['graph', handlerName, selectedDeck, noteType, labelField, depth],
+    queryKey: graphQueryKey(handlerName, selectedDeck, noteType, labelField, depth),
     queryFn: () => FluencyTidesAPI.getHandlerGraph(handlerName!, { deck: selectedDeck, noteType, labelField, depth }),
     enabled: handlerName !== null,
+    // 只改層數時先留著目前的樹，新的回來再換（不閃讀取中的灰框、圖不重新掛載）
+    placeholderData: (previous, previousQuery) =>
+      onlyDepthChanged(previousQuery?.queryKey, graphQueryKey(handlerName, selectedDeck, noteType, labelField, depth))
+        ? previous
+        : undefined,
   })
 
   // 點節點：以這個 handler 讀取筆記（成組卡片之後會附上整組），權限依它的能力

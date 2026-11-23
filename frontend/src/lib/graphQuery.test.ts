@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { graphHandlers, graphViewScope, nodeTooltip, pickGraphHandler } from './graphQuery'
+import { graphHandlers, graphQueryKey, graphViewScope, nodeTooltip, onlyDepthChanged, pickGraphHandler } from './graphQuery'
 import type { HandlerInfo } from '../types/api'
 
 function handler(name: string, graph: boolean, links = false): HandlerInfo {
@@ -60,5 +60,20 @@ describe('nodeTooltip', () => {
     expect(nodeTooltip({ id: 'anyhow', label: 'anyhow' }, true)).toBe('anyhow - 未建卡')
     expect(nodeTooltip({ id: '1712', label: '1712', note_id: 1712 }, false)).toBe('1712')
     expect(nodeTooltip({ id: '5' }, false)).toBe('5')
+  })
+})
+
+describe('onlyDepthChanged', () => {
+  const key = (deck: string, depth: number | null) => graphQueryKey('trilingual', deck, null, null, depth)
+
+  it('keeps the previous tree when only the depth changes', () => {
+    expect(onlyDepthChanged(key('D', 1), key('D', 3))).toBe(true)
+  })
+
+  it('does not keep it for another deck, another handler or the same key', () => {
+    expect(onlyDepthChanged(key('D', 1), key('E', 3))).toBe(false)
+    expect(onlyDepthChanged(graphQueryKey('vocab', 'D', null, null, null), key('D', 1))).toBe(false)
+    expect(onlyDepthChanged(key('D', 1), key('D', 1))).toBe(false)
+    expect(onlyDepthChanged(undefined, key('D', 1))).toBe(false)
   })
 })
