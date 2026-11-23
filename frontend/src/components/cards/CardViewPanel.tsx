@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, ArrowUp } from 'lucide-react'
 import { FluencyTidesAPI } from '../../api/client'
 import { useFaceSettings } from '../../hooks/useFaceSettings'
 import { retryTransient } from '../../lib/apiError'
@@ -45,6 +45,11 @@ interface CardViewPanelProps {
   onBrowse: (noteIds: number[]) => void
   /** 回到跳轉前的卡片。Goes back along the trail. */
   onBack: () => void
+  /**
+   * 疊成一欄時捲回清單裡這張卡片；有給才顯示「回到清單」。
+   * Scrolls back to this card in the list when stacked; the button shows only when given.
+   */
+  onBackToList?: () => void
   /** 筆記被刪除後。Called after the note is deleted. */
   onDeleted: () => void
 }
@@ -93,6 +98,7 @@ export function CardViewPanel({
   onSide,
   onBrowse,
   onBack,
+  onBackToList,
   onDeleted,
 }: CardViewPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null)
@@ -191,11 +197,21 @@ export function CardViewPanel({
 
   const header = (
     <CardHeader className={cn('px-4 pb-3 space-y-2', sideBySide && STICKY_HEADER)}>
-      {trailLength > 0 && (
-        <Button size="sm" variant="ghost" className="-ml-2 h-7 self-start px-2" onClick={onBack}>
-          <ArrowLeft className="h-4 w-4" />
-          返回上一張卡片{trailLength > 1 && `（${trailLength}）`}
-        </Button>
+      {(trailLength > 0 || onBackToList) && (
+        <div className="-ml-2 flex flex-wrap items-center gap-1">
+          {onBackToList && (
+            <Button size="sm" variant="ghost" className="h-7 px-2 pointer-coarse:h-9" onClick={onBackToList}>
+              <ArrowUp className="h-4 w-4" />
+              回到清單
+            </Button>
+          )}
+          {trailLength > 0 && (
+            <Button size="sm" variant="ghost" className="h-7 px-2 pointer-coarse:h-9" onClick={onBack}>
+              <ArrowLeft className="h-4 w-4" />
+              返回上一張卡片{trailLength > 1 && `（${trailLength}）`}
+            </Button>
+          )}
+        </div>
       )}
       {/* 讀取中也排出同樣的三行與按鈕（骨架佔位、按鈕停用），讀完時版面不會先塌再撐開；
           每行各自一行，太長就截斷（滑鼠移上去看全文） */}

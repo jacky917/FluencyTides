@@ -124,3 +124,29 @@ export function searchToRemember(params: URLSearchParams): string {
   }
   return kept.toString()
 }
+
+/** 卡片清單的層數選項的值（0＝全部子牌組）。The allowed list depths. */
+export const CARD_DEPTH_VALUES = [0, 1, 2, 3] as const
+
+/**
+ * 讀回存起來的清單層數（`docs/wip/cards_page_revamp_FEAT_2026-11-23.md` D3）；不是選項之一時回到全部（0）。
+ * Restores the stored list depth, falling back to all.
+ * @param value - 存起來的值。The stored value.
+ * @returns 層數。The depth.
+ */
+export function restoreCardDepth(value: unknown): number {
+  return (CARD_DEPTH_VALUES as readonly unknown[]).includes(value) ? (value as number) : 0
+}
+
+/**
+ * 清單要篩的筆記類型：選了筆記類型（而且屬於這個卡片類型）就是那一種，只選卡片類型就是它的全部筆記類型，
+ * 「全部卡片類型」不篩。
+ * The note types the list is limited to.
+ * @param noteTypes - 卡片類型的筆記類型；undefined 為「全部卡片類型」。The card type's note types, or undefined.
+ * @param noteType - 選的筆記類型；null 為全部。The chosen note type.
+ * @returns 筆記類型；undefined 表示不篩。The note types, or undefined for no filter.
+ */
+export function browseNoteTypes(noteTypes: string[] | undefined, noteType: string | null): string[] | undefined {
+  if (!noteTypes || noteTypes.length === 0) return undefined
+  return noteType && noteTypes.includes(noteType) ? [noteType] : noteTypes
+}

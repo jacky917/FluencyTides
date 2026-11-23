@@ -101,7 +101,14 @@ class TestSearch:
     def test_trilingual_buttons_and_tag_condition(self, client):
         handlers = {h["name"]: h for h in client.get("/api/v1/handlers").json()}
         keys = [f["key"] for f in handlers["speaking_trilingual"]["search_fields"]]
-        assert keys == ["prompt", "context", "refs", "zh", "ja", "en"]
+        assert keys == ["title", "prompt", "context", "refs", "zh", "ja", "en"]
+
+        # 短標題（Title 欄位）排在情境前面，也能用「包含」搜尋
+        response = client.post("/api/v1/handlers/speaking_trilingual/search-query", json={"conditions": [
+            {"field": "title", "value": "入社"},
+        ]})
+        assert response.status_code == 200
+        assert '"Title:*入社*"' in response.json()["query"]
 
         response = client.post("/api/v1/handlers/speaking_trilingual/search-query", json={"conditions": [
             {"field": "refs", "value": "恐れ入りますが"},

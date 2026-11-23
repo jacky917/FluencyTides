@@ -154,6 +154,33 @@ def test_build_query_without_deck_and_with_search():
     assert build_query("日本語", "note:A OR note:B") == 'deck:"日本語" (note:A OR note:B)'
 
 
+@pytest.mark.parametrize(
+    ("deck", "depth", "expected"),
+    [
+        ("日本語", 0, 'deck:"日本語"'),
+        ("日本語", 1, 'deck:"日本語" -deck:"日本語\\:\\:*"'),
+        ("日本語", 2, 'deck:"日本語" -deck:"日本語\\:\\:*\\:\\:*"'),
+        # 牌組名照樣跳脫，接上的層數是萬用字元
+        ("A_B::C", 1, 'deck:"A\\_B\\:\\:C" -deck:"A\\_B\\:\\:C\\:\\:*"'),
+        # 全部牌組：1 層只留最上層牌組
+        (None, 1, 'deck:* -deck:"*\\:\\:*"'),
+        (None, 3, 'deck:* -deck:"*\\:\\:*\\:\\:*\\:\\:*"'),
+    ],
+)
+def test_build_query_limits_the_depth(deck, depth, expected):
+    """層數 1 是牌組本身，往下每多一層就少排除一段子牌組。"""
+    assert build_query(deck, None, depth=depth) == expected
+
+
+def test_build_query_with_note_types_and_search():
+    """筆記類型以 OR 接在牌組後、使用者語句之前；空串列不限類型。"""
+    assert (
+        build_query("日本語", "x", ["A_B", "C"], depth=1)
+        == 'deck:"日本語" -deck:"日本語\\:\\:*" (note:"A\\_B" OR note:"C") (x)'
+    )
+    assert build_query(None, None, []) == "deck:*"
+
+
 # ---------------------------------------------------------------------------
 # 卡片清單（Card list）
 # ---------------------------------------------------------------------------
@@ -181,6 +208,17 @@ def test_list_cards_last_partial_page(client, anki):
 
     assert [card["card_id"] for card in body["cards"]] == [101]
     assert anki.info_requests == [[101]]
+
+
+def test_list_cards_passes_note_types_and_depth(client, anki):
+    """可重複的 note_type 與 depth 都進到 Anki 查詢；depth 超出範圍回 422。"""
+    response = client.get(
+        "/api/v1/cards", params=[("deck", "日本語"), ("note_type", "A"), ("note_type", "B"), ("depth", "1")]
+    )
+
+    assert response.status_code == 200
+    assert anki.queries == ['deck:"日本語" -deck:"日本語\\:\\:*" (note:"A" OR note:"B")']
+    assert client.get("/api/v1/cards", params={"depth": -1}).status_code == 422
 
 
 def test_list_cards_past_the_last_page_is_empty(client, anki):

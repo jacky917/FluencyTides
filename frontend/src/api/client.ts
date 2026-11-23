@@ -378,16 +378,29 @@ export const FluencyTidesAPI = {
    * @param params.q - 額外的 Anki 搜尋語句。Extra Anki search.
    * @param params.page - 頁碼（1 起算）。Page number.
    * @param params.pageSize - 每頁張數（上限 200）。Page size.
+   * @param params.noteTypes - 只列這些筆記類型；空的或省略為不限。Only these note types.
+   * @param params.depth - 包含幾層牌組（1＝牌組本身）；0 或省略為全部。Deck levels, 0 meaning all.
    * @returns 這一頁與總數。The page and the total.
    */
-  browseCards: (params: { deck?: string; q?: string; page?: number; pageSize?: number }): Promise<CardPage> =>
+  browseCards: (params: {
+    deck?: string
+    q?: string
+    page?: number
+    pageSize?: number
+    noteTypes?: string[]
+    depth?: number
+  }): Promise<CardPage> =>
     apiClient.get('/cards', {
       params: {
         deck: params.deck || undefined,
         q: params.q?.trim() || undefined,
         page: params.page,
         page_size: params.pageSize,
+        note_type: params.noteTypes?.length ? params.noteTypes : undefined,
+        depth: params.depth || undefined,
       },
+      // 陣列送成 note_type=A&note_type=B（FastAPI 的寫法），不是預設的 note_type[]=A
+      paramsSerializer: { indexes: null },
     }),
 
   /**

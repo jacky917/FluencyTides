@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  browseNoteTypes,
+  restoreCardDepth,
   MAX_TRAIL,
   parseBrowseParams,
   parseTrail,
@@ -96,5 +98,23 @@ describe('searchToRemember', () => {
 
   it('does not remember the create form', () => {
     expect(searchToRemember(new URLSearchParams('deck=A&card=5&new=1'))).toBe(new URLSearchParams('deck=A&card=5').toString())
+  })
+})
+
+describe('restoreCardDepth', () => {
+  it('keeps the offered depths and falls back to all', () => {
+    for (const depth of [0, 1, 2, 3]) expect(restoreCardDepth(depth)).toBe(depth)
+    for (const bad of [4, -1, '1', null, undefined, 1.5]) expect(restoreCardDepth(bad)).toBe(0)
+  })
+})
+
+describe('browseNoteTypes', () => {
+  it('uses the chosen note type, else every note type of the card type, else no filter', () => {
+    expect(browseNoteTypes(['A', 'B'], 'B')).toEqual(['B'])
+    expect(browseNoteTypes(['A', 'B'], null)).toEqual(['A', 'B'])
+    // 換了卡片類型、記住的筆記類型已不屬於它
+    expect(browseNoteTypes(['A', 'B'], 'C')).toEqual(['A', 'B'])
+    expect(browseNoteTypes(undefined, 'A')).toBeUndefined()
+    expect(browseNoteTypes([], null)).toBeUndefined()
   })
 })

@@ -15,11 +15,12 @@ import { graphHandlers, graphQueryKey, graphViewScope, nodeTooltip, onlyDepthCha
 import { cn } from '../lib/utils'
 import type { GenericNoteDetail, GraphNode } from '../types/api'
 import { CardDetailModal } from '../components/CardDetailModal'
-import { TopicTreeGraph, deckCrumbs } from '@/features/graph-views/engines/topic-tree'
+import { TopicTreeGraph } from '@/features/graph-views/engines/topic-tree'
 import type { GraphTheme } from '@/features/graph-views/core'
 import { useGraphTheme } from '../hooks/useGraphTheme'
 import { useStoryThemeList } from '../hooks/useStoryGame'
 import { ConfirmDialog, type ConfirmDialogProps } from '../components/shared/ConfirmDialog'
+import { DeckCrumbs, DeckScopeSelects, SCOPE_SELECT_CLASS } from '../components/shared/DeckScopeBar'
 import { DeckTreePanel } from '../components/shared/DeckTreePanel'
 import { PageHeader } from '../components/shared/PageHeader'
 import { SplitLayout } from '../components/shared/SplitLayout'
@@ -59,19 +60,6 @@ const FONT_SIZES = [
  * The stored value for all decks; `getHandlerGraph` treats it as no filter too.
  */
 const ALL_DECKS = 'All Decks'
-
-/**
- * 主題樹可選的展開層數（0＝全部）。The selectable tree depths, 0 meaning all.
- */
-const TREE_DEPTHS = [
-  { value: 1, label: '顯示 1 層' },
-  { value: 2, label: '顯示 2 層' },
-  { value: 3, label: '顯示 3 層' },
-  { value: 0, label: '全部展開' },
-]
-
-const SELECT_CLASS =
-  'h-9 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
 
 /**
  * 這個瀏覽器能不能讓元素全螢幕：iPhone 的 Safari 沒有 `Element.requestFullscreen`，內嵌視窗
@@ -408,91 +396,39 @@ export default function KnowledgeGraph() {
       )}
     >
       <div className="flex flex-wrap items-center gap-2 border-b p-3">
-        {available.length > 0 && (
-          <select
-            className={SELECT_CLASS}
-            aria-label="卡片類型"
-            value={handlerName ?? ''}
-            onChange={(e) => chooseHandler(e.target.value)}
-          >
-            {available.map((handler) => (
-              <option key={handler.name} value={handler.name}>
-                {handler.title}
-              </option>
-            ))}
-          </select>
-        )}
-        {currentHandler && currentHandler.note_types.length > 1 && (
-          <select
-            className={SELECT_CLASS}
-            aria-label="筆記類型"
-            value={noteType ?? ''}
-            onChange={(e) => setNoteTypeChoice(e.target.value || null)}
-          >
-            <option value="">全部筆記類型</option>
-            {currentHandler.note_types.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
-        )}
-        {handlerName && !relationGraph && !treeGraph && graphData && (
-          <select
-            className={SELECT_CLASS}
-            aria-label="節點名稱欄位"
-            title="節點名稱用的欄位；該欄位為空的筆記顯示 Note ID"
-            value={labelField ?? ''}
-            onChange={(e) => setLabelFieldChoices((prev) => ({ ...prev, [handlerName]: e.target.value }))}
-          >
-            <option value="">名稱：預設（{graphData.label_field ?? 'Note ID'}）</option>
-            {graphData.label_fields.map((field) => (
-              <option key={field} value={field}>
-                名稱：{field}
-              </option>
-            ))}
-          </select>
-        )}
-        {treeGraph && (
-          <select
-            className={SELECT_CLASS}
-            aria-label="展開層數"
-            value={treeDepth}
-            onChange={(e) => setTreeDepth(Number(e.target.value))}
-          >
-            {TREE_DEPTHS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        )}
-        {treeGraph ? (
-          <nav aria-label="牌組路徑" className="mr-auto flex min-w-0 flex-wrap items-center gap-1 text-sm">
-            {deckCrumbs(selectedDeck === ALL_DECKS ? null : selectedDeck).map((crumb, index, crumbs) => (
-              <span key={crumb.deck ?? ALL_DECKS} className="flex items-center gap-1">
-                {index > 0 && <span className="text-muted-foreground">›</span>}
-                {index === crumbs.length - 1 ? (
-                  <span className="font-medium" aria-current="page">{crumb.label}</span>
-                ) : (
-                  <button
-                    type="button"
-                    className="text-muted-foreground hover:text-foreground hover:underline"
-                    onClick={() => setSelectedDeck(crumb.deck ?? ALL_DECKS)}
-                  >
-                    {crumb.label}
-                  </button>
-                )}
-              </span>
-            ))}
-            {deckMissing && <span className="text-destructive">（已不存在，請重新選擇）</span>}
-          </nav>
-        ) : (
-          <span className="mr-auto truncate text-sm text-muted-foreground" title={selectedDeck}>
-            牌組：{selectedDeck === ALL_DECKS ? '全部牌組' : selectedDeck}
-            {deckMissing && <span className="text-destructive">（已不存在，請重新選擇）</span>}
-          </span>
-        )}
+        <DeckScopeSelects
+          cardTypes={available.map((handler) => ({ value: handler.name, label: handler.title }))}
+          cardType={handlerName ?? ''}
+          onCardType={chooseHandler}
+          noteTypes={currentHandler?.note_types ?? []}
+          noteType={noteType}
+          onNoteType={setNoteTypeChoice}
+          depth={treeGraph ? treeDepth : undefined}
+          onDepth={setTreeDepth}
+        >
+          {handlerName && !relationGraph && !treeGraph && graphData && (
+            <select
+              className={SCOPE_SELECT_CLASS}
+              aria-label="節點名稱欄位"
+              title="節點名稱用的欄位；該欄位為空的筆記顯示 Note ID"
+              value={labelField ?? ''}
+              onChange={(e) => setLabelFieldChoices((prev) => ({ ...prev, [handlerName]: e.target.value }))}
+            >
+              <option value="">名稱：預設（{graphData.label_field ?? 'Note ID'}）</option>
+              {graphData.label_fields.map((field) => (
+                <option key={field} value={field}>
+                  名稱：{field}
+                </option>
+              ))}
+            </select>
+          )}
+        </DeckScopeSelects>
+        <DeckCrumbs
+          className="mr-auto"
+          deck={selectedDeck === ALL_DECKS ? null : selectedDeck}
+          onDeck={(deck) => setSelectedDeck(deck ?? ALL_DECKS)}
+          missing={deckMissing}
+        />
         {relationGraph && (
           <Button
             onClick={() => {

@@ -45,11 +45,14 @@ from app.core.exceptions import (
     MediaFileNotFoundError,
 )
 from app.infrastructure.anki.client import AnkiActionError, AnkiClient
-from app.infrastructure.anki.search import deck_term
+from app.infrastructure.anki.search import deck_term, escape_search_value, note_type_term
 from app.schemas.anki import AnkiCardInfo
 from app.schemas.card_browse import CardPage, CardSummary, CardView
 
 logger = logging.getLogger(__name__)
+
+# 牌組往下一層：跳脫後的「::」（和 deck_term 跳脫牌組名的方式一致）接萬用字元。One more deck level.
+_LEVEL = r"\:\:*"
 
 
 # 媒體回應允許的類型（依副檔名，不用 mimetypes：Windows 會讀登錄檔，結果隨機器而異）。
@@ -102,10 +105,42 @@ def deck_search_term(deck: str) -> str:
     return deck_term(deck)
 
 
-def build_query(deck: str | None, search: str | None) -> str:
-    """Combine the deck term with the user's Anki search, appended in parentheses.
+def depth_term(deck: str | None, depth: int) -> str | None:
+    """Build a term that leaves out decks more than ``depth`` levels below ``deck``.
 
-    牌組條件加上使用者的 Anki 搜尋語句（以括號接在後面）。
+    排除 ``deck`` 往下超過 ``depth`` 層的牌組的條件。
+
+    Level 1 is the deck itself: ``depth=1`` leaves out every sub-deck, ``depth=2`` keeps the direct sub-decks and
+    leaves out theirs. Without a deck, level 1 is the top-level decks. The deck name is escaped as in
+    :func:`deck_search_term`; the added ``::*`` levels are wildcards. Anki's deck search already includes the
+    sub-decks of a match, so excluding ``X::*::*`` removes every deck two or more levels below ``X``.
+
+    第 1 層是牌組本身：``depth=1`` 排除所有子牌組，``depth=2`` 保留直接的子牌組、排除再下一層。沒有牌組時，
+    第 1 層是最上層的牌組。牌組名照 ``deck_search_term`` 跳脫，接上的 ``::*`` 是萬用字元。Anki 的牌組搜尋本來就
+    包含符合者的子牌組，所以排除 ``X::*::*`` 會拿掉 ``X`` 往下兩層以上的所有牌組。
+
+    Args:
+        deck: the full deck name; ``None`` or an empty string means all decks
+            牌組完整名稱；``None`` 或空字串表示全部牌組
+        depth: how many levels to keep; ``0`` or less means all of them
+            保留幾層；``0`` 以下表示全部
+
+    Returns:
+        the exclusion term, for example ``-deck:"日本語\\:\\:*"`` for ``depth=1``, or ``None`` when every level
+        is kept
+        排除條件，例如 ``depth=1`` 時為 ``-deck:"日本語\\:\\:*"``；保留全部層時為 ``None``
+    """
+    if depth <= 0:
+        return None
+    # 沒有牌組時以「*」（任一個最上層牌組）當起點，往下的層數算法相同
+    base = escape_search_value(deck) if deck else "*"
+    return f'-deck:"{base}{_LEVEL * depth}"'
+
+
+def build_query(deck: str | None, search: str | None, note_types: list[str] | None = None, depth: int = 0) -> str:
+    """Combine the deck, note type and depth terms with the user's Anki search, appended in parentheses.
+
+    牌組、筆記類型與層數的條件，加上使用者的 Anki 搜尋語句（以括號接在後面）。
 
     All decks use ``deck:*``, because an empty Anki search only searches the current deck. A user search with
     unbalanced parentheses (for example ``x) OR (deck:*``) can escape the deck term; it only affects the user's own
@@ -119,14 +154,24 @@ def build_query(deck: str | None, search: str | None) -> str:
             牌組完整名稱；``None`` 或空字串表示全部牌組
         search: the Anki search typed by the user; optional, and ignored when blank
             使用者輸入的 Anki 搜尋語句；可省略，空白時忽略
+        note_types: only these note types; ``None`` or an empty list means any note type
+            只列這些筆記類型；``None`` 或空串列表示不限
+        depth: how many deck levels to include, as in :func:`depth_term`; ``0`` means all of them
+            包含幾層牌組（同 ``depth_term``）；``0`` 表示全部
 
     Returns:
         the Anki query
         Anki 搜尋語句
     """
-    query = deck_search_term(deck) if deck else "deck:*"
+    terms = [deck_search_term(deck) if deck else "deck:*"]
+    if (excluded := depth_term(deck, depth)) is not None:
+        terms.append(excluded)
+    if note_types:
+        terms.append(f"({' OR '.join(note_type_term(name) for name in note_types)})")
     search = (search or "").strip()
-    return f"{query} ({search})" if search else query
+    if search:
+        terms.append(f"({search})")
+    return " ".join(terms)
 
 
 def _summary(info: AnkiCardInfo) -> CardSummary:
@@ -161,7 +206,13 @@ def _parse_infos(infos: list[dict[str, object]]) -> list[AnkiCardInfo]:
 
 
 async def browse_cards(
-    anki: AnkiClient, deck: str | None, search: str | None, page: int, page_size: int
+    anki: AnkiClient,
+    deck: str | None,
+    search: str | None,
+    page: int,
+    page_size: int,
+    note_types: list[str] | None = None,
+    depth: int = 0,
 ) -> CardPage:
     """List one page of cards, newest first (card IDs are creation timestamps).
 
@@ -183,6 +234,10 @@ async def browse_cards(
             頁碼（1 起算）
         page_size: the number of cards per page
             每頁張數
+        note_types: only these note types; ``None`` or an empty list means any note type
+            只列這些筆記類型；``None`` 或空串列表示不限
+        depth: how many deck levels to include (``1`` is the deck itself); ``0`` means all of them
+            包含幾層牌組（``1`` 是牌組本身）；``0`` 表示全部
 
     Returns:
         the cards on this page and the total. ``total`` includes cards deleted after the search, so it may be
@@ -196,7 +251,7 @@ async def browse_cards(
             若使用者的搜尋語句被 Anki 拒絕
     """
     try:
-        found = await anki.find_cards(build_query(deck, search))
+        found = await anki.find_cards(build_query(deck, search, note_types, depth))
     except AnkiActionError as error:
         # 牌組條件由程式組出、不會有語法錯誤；有使用者語句時，錯誤歸給它
         if search and search.strip():

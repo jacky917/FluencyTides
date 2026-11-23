@@ -58,6 +58,8 @@ async def list_cards(
     q: str | None = Query(None, description="額外的 Anki 搜尋語句，例如 note:Speaking_Coach_Dark"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
+    note_type: list[str] | None = Query(None, description="只列這些筆記類型（可重複）；省略為不限"),
+    depth: int = Query(0, ge=0, le=20, description="包含幾層牌組：1 為牌組本身、2 再加直接的子牌組；0 為全部"),
     anki: AnkiClient = Depends(get_anki_client),
 ) -> CardPage:
     """Return a page of cards, newest first, without the card face HTML.
@@ -73,6 +75,11 @@ async def list_cards(
             頁碼，從 1 起算
         page_size: the number of cards per page, 1 to 200
             每頁卡片數，1 到 200
+        note_type: only these note types (repeatable); ``None`` means any note type
+            只列這些筆記類型（可重複）；``None`` 為不限
+        depth: how many deck levels to include, 0 to 20: ``1`` is the deck itself, ``2`` adds its direct sub-decks;
+            ``0`` means all of them
+            包含幾層牌組，0 到 20：``1`` 為牌組本身，``2`` 再加直接的子牌組；``0`` 為全部
         anki: the AnkiConnect client
             AnkiConnect 客戶端
 
@@ -80,7 +87,7 @@ async def list_cards(
         the requested page of cards
         所要求的那一頁卡片
     """
-    return await card_browse_service.browse_cards(anki, deck, q, page, page_size)
+    return await card_browse_service.browse_cards(anki, deck, q, page, page_size, note_type, depth)
 
 
 @router.get(

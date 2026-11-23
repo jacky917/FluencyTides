@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-11-23 |
 | **性質** | UI 改版 + API 擴充 |
-| **狀態** | 🚧 實作中 |
+| **狀態** | 🚧 實作中（實作完成；快照 1f3828d 已部署正式機，待 PR） |
 | **範圍** | 頁面名稱「卡片瀏覽」改成「卡片」；從知識圖譜工具列抽出共用的牌組條件列（卡片類型、筆記類型、層數、麵包屑），卡片頁與知識圖譜都用它；卡片清單可以指定搜尋幾層子牌組；欄位搜尋拿掉自己的「欄位搜尋」下拉選單，改由條件列的卡片類型決定；整理清單標題區的排版；新增條件、展開進階語法時有展開動畫 |
 | **不動** | 欄位條件的功能本身（點欄位按鈕加條件、條件之間是「且」、由後端 `POST /handlers/{name}/search-query` 組成 Anki 查詢）；卡面、建卡面板、牌組樹；知識圖譜工具列右半（建立連線、Sync、主題與字級、全螢幕）與「名稱欄位」選單 |
 | **PR / 進度** | 尚未開始 |
@@ -41,7 +41,8 @@
 - 從知識圖譜工具列左半抽出來，內容依序：卡片類型選單 → 筆記類型選單（目前的卡片類型有兩種以上筆記類型時）→ 呼叫端插入的額外選單（知識圖譜的「名稱欄位」）→ 層數選單 → 麵包屑（點上層回到那個牌組，牌組不存在時標「已不存在」）。
 - 選項由呼叫端給：知識圖譜只列開放圖譜的卡片類型、層數只在樹狀圖譜出現；卡片頁列所有卡片類型，最前面多一個「全部卡片類型」（預設），層數一直都有。
 - 知識圖譜不是樹狀圖譜時原本顯示「牌組：X」文字，改成同樣的麵包屑（兩種模式一致，也能點上層）。
-- 層數選項沿用知識圖譜的 1 / 2 / 3 / 全部（`0`）。
+- 層數選項沿用知識圖譜的「顯示 1 層／顯示 2 層／顯示 3 層／全部展開」（`0`＝全部），兩頁共用同一組（`lib/deckScope.ts` 的 `DEPTH_OPTIONS`），選單名稱都是「展開層數」，不由呼叫端給（使用者 2026-11-23 決定和知識圖譜對齊；原本卡片頁另有一組「只看這一層／往下 N 層／含全部子牌組」）。
+- 實作時分成兩個元件（元件檔只匯出元件，React Fast Refresh 的要求）：`DeckScopeSelects` 回傳一組選單（Fragment，排進呼叫端的 flex 列），`DeckCrumbs` 是麵包屑；知識圖譜排在同一列，卡片頁把麵包屑放在「＋」那一列。
 
 ### D3 卡片清單的篩選（API）
 - `GET /cards` 新增兩個參數：
@@ -53,6 +54,7 @@
 - 拿掉 `FieldSearchPanel` 頂端的「欄位搜尋：［卡片類型］」選單；條件列選的卡片類型有開放欄位搜尋（`capabilities.search` 且有 `search_fields`）時，下方出現欄位按鈕與條件；「全部卡片類型」或沒開放的類型只有 Anki 語法。
 - 換卡片類型時條件清空（和現在換選單一樣，欄位按鈕不同）。
 - 沒有條件時不再需要「列出全部 X」的說明：卡片類型本身已經篩過清單。
+- 三語對話卡多一個「標題」欄位按鈕（比對短標題 `Title` 欄位），排在「情境」左邊（使用者 2026-11-23 要求；`SpeakingTrilingualHandler.SEARCH_FIELDS`）。
 
 ### D5 排版
 - 清單標題區由上到下：麵包屑＋「＋」建卡按鈕同一列 → 條件列的選單（卡片類型、筆記類型、層數，會換行）→ 欄位按鈕（chip）→ 條件（每列：欄位名、輸入框、移除）→ 搜尋 / 清除條件 →「進階：Anki 語法」→ 張數。
@@ -62,27 +64,41 @@
 ### D6 展開動畫
 - 新增的條件：高度與透明度從 0 展開（約 150ms）；移除時直接拿掉（不做收合動畫，避免移除後還佔位、輸入框焦點錯亂）。
 - 「進階：Anki 語法」改用現有的 `ui/collapsible`，內容以 `animate-collapsible-down` / `up` 展開收合（`tw-animate-css`）。
-- 動畫都包在 `motion-safe:` 裡，系統開了「減少動態效果」就不播。
+- 動畫都包在 `motion-safe:` 裡（進階語法用 `motion-reduce:animate-none`），系統開了「減少動態效果」就不播。
+- 條件的展開動畫是 `index.css` 的 `expand-in`（`max-height` 與透明度）；`overflow: hidden` 只寫在 keyframes 裡，動畫結束後恢復，輸入框的焦點框不會被裁掉。
+
+### D7 手機排版（使用者 2026-11-23 要求）
+- 改版前在手機（375px）上，牌組樹佔滿第一個畫面，第一張卡在約 1050px 處；欄位按鈕換成 3 行；看完卡面要往回捲很遠才回到清單。
+- 疊成一欄時牌組樹收成一列（`components/cards/StackedDeckPicker.tsx`），平常只顯示「牌組　日常會話 ▾」，點開才出現牌組樹，選了牌組自動收起。展開狀態放在頁面，版面模式改變不會遺失。並排時牌組樹照舊。
+- 觸控裝置（`pointer-coarse`）上，欄位按鈕排成一行左右滑動，右緣淡出表示還有更多；滑鼠裝置照舊換行。
+- 卡面在清單下方時（疊成一欄，或牌組與清單並排、卡面在下），卡面標題列加「回到清單」，捲回剛才選的那張卡並置中；那張卡不在這一頁時捲到清單。
+- 只有剛加的條件播展開動畫；回到頁面時還原的條件直接顯示（原本每次載入都會播一次）。
 
 ## 4. 改動清單
 
 | 檔案 | 改動 |
 |---|---|
-| `frontend/src/components/shared/DeckScopeBar.tsx`（新） | 共用的牌組條件列 |
+| `frontend/src/components/shared/DeckScopeBar.tsx`（新） | 共用的牌組條件列（`DeckScopeSelects`、`DeckCrumbs`） |
+| `frontend/src/lib/deckScope.ts`（新） | 條件列的選項型別與共用的層數選項 |
+| `frontend/src/index.css` | `animate-expand-in` |
+| `frontend/src/components/cards/StackedDeckPicker.tsx`（新） | 疊成一欄時收成一列的牌組選擇 |
+| `frontend/src/components/cards/CardViewPanel.tsx` | 卡面在清單下方時的「回到清單」 |
+| `frontend/src/pages/Preferences.tsx`、`components/generate/PreviewCreate.tsx` | 使用者看得到的「卡片瀏覽頁」改「卡片頁」 |
 | `frontend/src/pages/KnowledgeGraph.tsx` | 工具列左半改用 `DeckScopeBar` |
 | `frontend/src/pages/Cards.tsx` | 標題改「卡片」；卡片類型、筆記類型、層數的狀態 |
 | `frontend/src/components/cards/CardListPanel.tsx` | 用 `DeckScopeBar`、排版、查詢帶新參數、進階語法改 collapsible |
 | `frontend/src/components/cards/FieldSearchPanel.tsx` | 拿掉卡片類型選單，handler 由外面給；條件展開動畫 |
-| `frontend/src/lib/fieldSearch.ts`、`lib/cardBrowse.ts` | 卡片類型換算成筆記類型、層數選項 |
+| `frontend/src/lib/cardBrowse.ts` | 卡片類型換算成筆記類型（`browseNoteTypes`）、讀回層數（`restoreCardDepth`） |
 | `frontend/src/api/client.ts` | `browseCards` 加 `noteTypes`、`depth` |
 | `backend/app/api/cards.py`、`backend/app/services/card_browse_service.py` | `note_type`、`depth` 參數與查詢 |
+| `backend/app/services/task_handlers/speaking_trilingual_handler.py` | 欄位搜尋加「標題」（第一個） |
 | 測試 | 後端 `build_query`（筆記類型、各層數、全部牌組、牌組名跳脫）；前端換算規則 |
 
 ## 5. 驗收標準
 
-- [ ] 頁面標題是「卡片」
-- [ ] 卡片頁與知識圖譜的條件列外觀與行為一致（同一個元件）；知識圖譜原本的功能都還在
-- [ ] 層數 1 只列這個牌組本身的卡，2 加上下一層，全部＝現在的結果；全部牌組＋1 層只列最上層牌組
-- [ ] 選卡片類型只列這種卡；選筆記類型只列那一種；欄位條件照常可用
-- [ ] 新增條件、打開進階語法有展開動畫；減少動態效果時沒有
-- [ ] 窄欄與手機排版正常
+- [x] 頁面標題是「卡片」
+- [x] 卡片頁與知識圖譜的條件列外觀與行為一致（同一個元件）；知識圖譜原本的功能都還在（切換卡片類型、主題樹層數、麵包屑回上層）
+- [x] 層數 1 只列這個牌組本身的卡，2 加上下一層，全部＝現在的結果；全部牌組＋1 層只列最上層牌組（2026-11-23 實測日常會話：1 層 0 張、2 層 9 張、3 層 14 張、全部 35 張；全部牌組＋1 層只有人脈、人際關係的 3 張）
+- [x] 選卡片類型只列這種卡；選筆記類型只列那一種；欄位條件照常可用（外語糾錯 29 張、只看 Micro 23 張；三語卡「日文包含 花」4 張）
+- [x] 新增條件、打開進階語法有展開動畫（實測 `expand-in`、`collapsible-down`）；減少動態效果時沒有（`motion-safe:`／`motion-reduce:`，沒有實際切換系統設定測）
+- [x] 窄欄與手機排版正常（375px 沒有橫向捲動）；第一張卡從約 1050px 移到 610px；欄位按鈕一行（40px）可滑動；選牌組後自動收起；「回到清單」把選的卡捲回畫面中間
