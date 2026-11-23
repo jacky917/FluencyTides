@@ -127,6 +127,12 @@ export const DEFAULT_THEME: GraphTheme = {
     'minimap-view': 'rgba(37,99,235,0.18)',
     'scroll-button-bg': '#ffffff',
     'scroll-button-text': '#3f3f46',
+    // 知識圖譜（單字卡）節點的學習狀態；主題沒寫時繼承這組（graph_themes 計畫書 D2）
+    'status-new': '#0ea5e9',
+    'status-learning': '#ea580c',
+    'status-review': '#84cc16',
+    'status-suspended': '#eab308',
+    'status-ghost': '#94a3b8',
   },
   size: DEFAULT_SIZE,
   fonts: {

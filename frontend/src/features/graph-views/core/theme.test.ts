@@ -1,5 +1,15 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_THEME, loadTheme, mergeTheme, resolveAssetUrl, themeToCssVars, type GraphThemeFile } from './theme'
+import {
+  DEFAULT_THEME,
+  loadTheme,
+  mergeTheme,
+  resolveAssetUrl,
+  themeToCssVars,
+  type GraphThemeFile,
+  type ThemeFetcher,
+} from './theme'
 
 const files: Record<string, GraphThemeFile> = {
   '/story-themes/night/theme.json': {
@@ -57,5 +67,39 @@ describe('theme', () => {
     expect(vars['--sf-asset-mask-scene']).toBe('url("/m.svg")')
     expect(vars['--sf-asset-node-texture']).toBeUndefined()
     expect(Object.keys(themeToCssVars(DEFAULT_THEME)).some((k) => k.startsWith('--sf-asset-'))).toBe(false)
+  })
+})
+
+describe('內建主題（public/story-themes）', () => {
+  // 讀真正的主題檔：知識圖譜與劇情流程圖共用這份清單（graph_themes 計畫書 D1–D3）
+  const root = resolve(__dirname, '../../../../public/story-themes')
+  const builtIn: ThemeFetcher = async (url) => JSON.parse(readFileSync(resolve(root, url.replace(/^\/story-themes\//, '')), 'utf8'))
+  const ids = (JSON.parse(readFileSync(resolve(root, 'index.json'), 'utf8')) as { themes: { id: string }[] }).themes.map(
+    (theme) => theme.id,
+  )
+
+  it('lists the two new themes next to the existing ones', () => {
+    expect(ids).toEqual(['default', 'classic-white', 'slate-gray', 'sabbat-night', 'senren-hoori'])
+  })
+
+  it.each(ids)('%s has every colour key, including the learning-status colours', async (id) => {
+    const theme = await loadTheme(id, '/story-themes', builtIn)
+    for (const key of Object.keys(DEFAULT_THEME.colors)) expect(theme.colors[key], key).toBeTruthy()
+  })
+
+  it.each(['classic-white', 'slate-gray'])('%s extends the default and only overrides known keys', async (id) => {
+    const file = await builtIn(`/story-themes/${id}/theme.json`)
+    expect(file.extends).toBe('default')
+    for (const key of Object.keys(file.colors ?? {})) expect(Object.keys(DEFAULT_THEME.colors), key).toContain(key)
+    // 尺寸與字型全部沿用預設
+    expect(file.size).toBeUndefined()
+    expect(file.fonts).toBeUndefined()
+  })
+
+  it('existing themes get the learning-status colours from the default without editing their files', async () => {
+    for (const id of ['sabbat-night', 'senren-hoori']) {
+      const theme = await loadTheme(id, '/story-themes', builtIn)
+      expect(theme.colors['status-new']).toBe(DEFAULT_THEME.colors['status-new'])
+    }
   })
 })

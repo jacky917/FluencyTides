@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import type { GraphLink, GraphNode } from '../types/api'
-import { LEVEL_GAP, ROW_GAP, deckCrumbs, isFolded, layoutTree, nodeAction } from './topicTreeLayout'
+import type { TopicTreeLink, TopicTreeNode } from './types'
+import { LEVEL_GAP, ROW_GAP, deckCrumbs, isFolded, layoutTree, nodeAction } from './layout'
 
-const node = (id: string, extra: Partial<GraphNode> = {}): GraphNode => ({ id, label: id, ...extra })
-const link = (source: string, target: string): GraphLink => ({ source, target, label: 'child' })
+const node = (id: string, extra: Partial<TopicTreeNode> = {}): TopicTreeNode => ({ id, label: id, ...extra })
+const link = (source: string, target: string): TopicTreeLink => ({ source, target, label: 'child' })
 
 describe('layoutTree', () => {
   it('puts levels in columns, leaves in rows and parents between their children', () => {
@@ -20,7 +20,7 @@ describe('layoutTree', () => {
 
   it('accepts links whose ends force-graph already replaced with node objects', () => {
     const nodes = [node('root'), node('a')]
-    const links = [{ source: { id: 'root' }, target: { id: 'a' } } as unknown as GraphLink]
+    const links = [{ source: { id: 'root' }, target: { id: 'a' } } as unknown as TopicTreeLink]
     expect(layoutTree(nodes, links).get('a')).toEqual({ x: LEVEL_GAP, y: 0 })
   })
 

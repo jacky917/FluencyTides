@@ -6,7 +6,7 @@
  * coordinates instead of a force simulation.
  */
 
-import type { GraphLink, GraphNode } from '../types/api'
+import type { TopicTreeLink, TopicTreeNode } from './types'
 
 /** 一欄的寬度（圖的座標單位）。The column width, in graph units. */
 export const LEVEL_GAP = 240
@@ -29,7 +29,7 @@ export interface TreePosition {
  * 連線的端點：後端給的是 id；交給 react-force-graph 之後會被換成節點物件。
  * A link end, either the id from the API or the node object force-graph swaps in.
  */
-export function linkEnd(end: GraphLink['source'] | { id: string }): string {
+export function linkEnd(end: TopicTreeLink['source'] | { id: string }): string {
   return typeof end === 'string' ? end : end.id
 }
 
@@ -41,7 +41,7 @@ export function linkEnd(end: GraphLink['source'] | { id: string }): string {
  * @param rootId - 根節點 id。The root id.
  * @returns id → 座標。Positions by node id.
  */
-export function layoutTree(nodes: GraphNode[], links: GraphLink[], rootId: string = ROOT_ID): Map<string, TreePosition> {
+export function layoutTree(nodes: TopicTreeNode[], links: TopicTreeLink[], rootId: string = ROOT_ID): Map<string, TreePosition> {
   const known = new Set(nodes.map((node) => node.id))
   const children = new Map<string, string[]>()
   for (const link of links) {
@@ -79,7 +79,7 @@ export function layoutTree(nodes: GraphNode[], links: GraphLink[], rootId: strin
  * @param links - 連線。The links.
  * @returns 有子節點但都沒畫出來時為 true。True when folded.
  */
-export function isFolded(node: GraphNode, links: GraphLink[]): boolean {
+export function isFolded(node: TopicTreeNode, links: TopicTreeLink[]): boolean {
   if (!node.child_count) return false
   return !links.some((link) => linkEnd(link.source) === node.id)
 }
@@ -91,7 +91,7 @@ export function isFolded(node: GraphNode, links: GraphLink[]): boolean {
  * @param node - 節點。The node.
  * @returns 進入的牌組、要開的筆記，或 null。The deck to enter, the note to open, or null.
  */
-export function nodeAction(node: GraphNode): { enter: string } | { open: number } | null {
+export function nodeAction(node: TopicTreeNode): { enter: string } | { open: number } | null {
   if (node.kind !== 'root' && node.child_deck && node.child_count) return { enter: node.child_deck }
   if (node.note_id) return { open: node.note_id }
   return null

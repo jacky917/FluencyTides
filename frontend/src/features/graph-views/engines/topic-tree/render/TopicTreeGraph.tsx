@@ -1,54 +1,45 @@
 /**
- * 三語對話卡的主題樹圖（`docs/wip/trilingual_topic_tree_FEAT_2026-11-22.md` D3）：由左往右的樹，卡片是實線圓角框、
+ * 主題樹圖（`docs/wip/trilingual_topic_tree_FEAT_2026-11-22.md` D3）：由左往右的樹，卡片是實線圓角框、
  * 沒有對應卡的子牌組是虛線框、根節點加粗。收起的節點右側顯示子卡數；點有子節點的節點進入它的子牌組，
  * 點沒有子節點的卡片（含根節點的主題卡）開卡片詳情。
  *
- * 座標由 `layoutTree` 固定算好（不跑力導向排版、不能拖曳），資料一換就縮放到整張圖都看得到。
+ * 顏色、字型與背景圖都取自圖主題（`graph-views/core/theme.ts`，`docs/wip/graph_themes_FEAT_2026-11-22.md` D2），
+ * 和劇情流程圖共用同一套主題；主題的 `theme.css` 只認劇情流程圖的元素，canvas 用不到。
+ * 座標由 `layoutTree` 固定算好（不跑力導向排版、不能拖曳），資料或大小一換就縮放到整張圖都看得到。
  *
- * The topic tree graph: a left-to-right tree with fixed coordinates; clicking a node with children enters its
- * deck, clicking a card without children opens it.
+ * The topic tree graph: a left-to-right tree with fixed coordinates, coloured by the shared graph theme;
+ * clicking a node with children enters its deck, clicking a card without children opens it.
  */
 
 import { useEffect, useMemo, useRef } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
-import {
-  NODE_HEIGHT,
-  NODE_WIDTH,
-  isFolded,
-  layoutTree,
-  linkEnd,
-  nodeAction,
-} from '../../lib/topicTreeLayout'
-import type { GraphData, GraphNode } from '../../types/api'
+import type { GraphTheme } from '../../../core/theme'
+import { NODE_HEIGHT, NODE_WIDTH, isFolded, layoutTree, linkEnd, nodeAction } from '../core/layout'
+import type { TopicTreeData, TopicTreeNode } from '../core/types'
 
-/** 畫布上的節點：API 的節點加上固定座標。A drawn node, with fixed coordinates. */
-type DrawnNode = GraphNode & { x: number; y: number; fx: number; fy: number; folded: boolean }
+/** 畫布上的節點：資料的節點加上固定座標。A drawn node, with fixed coordinates. */
+type DrawnNode = TopicTreeNode & { x: number; y: number; fx: number; fy: number; folded: boolean }
 
 /**
- * 節點的配色：卡片紫色實線、牌組灰色虛線，深色主題時改用深底淺字（與單字卡的圓點節點明顯不同）。
- * Node colours by kind and theme.
+ * 從主題取出主題樹要用的顏色（graph_themes 計畫書 D2 的對照表）。
+ * The theme colours the topic tree uses.
+ * @param theme - 圖主題。The graph theme.
+ * @returns 各部位的顏色。Colours by part.
  */
-function palette(dark: boolean) {
-  return dark
-    ? {
-        card: { fill: '#3C3489', stroke: '#AFA9EC', text: '#EEEDFE' },
-        deck: { fill: '#2C2C2A', stroke: '#B4B2A9', text: '#F1EFE8' },
-        badge: { fill: '#AFA9EC', text: '#26215C' },
-        warn: '#EF9F27',
-        link: '#5F5E5A',
-      }
-    : {
-        card: { fill: '#EEEDFE', stroke: '#534AB7', text: '#3C3489' },
-        deck: { fill: '#F1EFE8', stroke: '#888780', text: '#444441' },
-        badge: { fill: '#534AB7', text: '#FFFFFF' },
-        warn: '#BA7517',
-        link: '#B4B2A9',
-      }
+export function treeColors(theme: GraphTheme) {
+  const c = theme.colors
+  return {
+    canvas: c.canvas,
+    card: { fill: c['node-bg'], stroke: c['node-border'], text: c['node-text'] },
+    deck: { fill: c['node-dim-bg'], stroke: c['node-border'], text: c['node-dim-text'] },
+    root: c['node-border-strong'],
+    badge: { fill: c['badge-bg'], text: c['badge-text'] },
+    warn: c['node-highlight'],
+    link: c.edge,
+  }
 }
 
-/**
- * 截斷文字到指定寬度（加上省略號）。Truncates text to a width.
- */
+/** 截斷文字到指定寬度（加上省略號）。Truncates text to a width. */
 function fitText(ctx: CanvasRenderingContext2D, text: string, width: number): string {
   if (ctx.measureText(text).width <= width) return text
   let end = text.length
@@ -72,7 +63,7 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
  * @param node - 節點。The node.
  * @returns 提示文字。The tooltip.
  */
-export function topicTooltip(node: GraphNode): string {
+export function topicTooltip(node: TopicTreeNode): string {
   const lines = [node.label ?? node.id]
   if (node.prompt && node.prompt !== node.label) lines.push(node.prompt)
   if (node.duplicate_title) lines.push('⚠️ 同一層有標題相同的卡，子牌組只算給前一張')
@@ -82,34 +73,49 @@ export function topicTooltip(node: GraphNode): string {
   return lines.join('\n')
 }
 
+/** {@link TopicTreeGraph} 的 props。Props of {@link TopicTreeGraph}. */
+export interface TopicTreeGraphProps {
+  /** 樹狀圖譜（後端 `topic_tree.build_graph`）。The tree graph. */
+  graph: TopicTreeData
+  /** 圖主題。The graph theme. */
+  theme: GraphTheme
+  width?: number
+  height?: number
+  /** 進入子牌組。Called with the deck to enter. */
+  onEnter: (deck: string) => void
+  /** 開卡片詳情。Called with the note to open. */
+  onOpenNote: (noteId: number) => void
+  /** 文字大小倍率（頁面的字級設定）。The font size multiplier. */
+  fontScale?: number
+}
+
+/**
+ * 文字在螢幕上小於這個大小（px）時只畫框、不畫字。主題樹的字是框的一部分、會跟著縮放，所以不沿用單字卡
+ * 「多大的縮放才顯示文字」的設定（那是螢幕上固定大小的標籤用的；套上去的話，放進整張圖的縮放通常小於
+ * 100%，字一開始就不見）。
+ * Below this on-screen size (px) only the boxes are drawn.
+ */
+export const MIN_TEXT_PX = 5
+
 /**
  * 主題樹圖。The topic tree graph.
- * @param props.graph - `GET /handlers/{name}/graph` 的結果（樹狀）。The tree graph.
- * @param props.width - 畫布寬度。Canvas width.
- * @param props.height - 畫布高度。Canvas height.
- * @param props.onEnter - 進入子牌組。Called with the deck to enter.
- * @param props.onOpenNote - 開卡片詳情。Called with the note to open.
- * @param props.fontScale - 文字大小倍率（頁面的字級設定）。The font size multiplier.
+ * @param props - 見 {@link TopicTreeGraphProps}。See {@link TopicTreeGraphProps}.
  * @returns 圖的 JSX。The graph JSX.
  */
 export function TopicTreeGraph({
   graph,
+  theme,
   width,
   height,
   onEnter,
   onOpenNote,
   fontScale = 1,
-}: {
-  graph: GraphData
-  width?: number
-  height?: number
-  onEnter: (deck: string) => void
-  onOpenNote: (noteId: number) => void
-  fontScale?: number
-}) {
+}: TopicTreeGraphProps) {
+  // react-force-graph 沒有提供 ref 的型別
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fgRef = useRef<any>()
-  const dark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
-  const colors = palette(dark)
+  const colors = treeColors(theme)
+  const font = theme.fonts.node ?? 'sans-serif'
 
   const data = useMemo(() => {
     const positions = layoutTree(graph.nodes, graph.links)
@@ -151,11 +157,14 @@ export function TopicTreeGraph({
       width={width}
       height={height}
       graphData={data}
+      backgroundColor="rgba(0,0,0,0)"
       cooldownTicks={0}
       enableNodeDrag={false}
-      nodeLabel={(node: any) => topicTooltip(node as GraphNode)}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      nodeLabel={(node: any) => topicTooltip(node as TopicTreeNode)}
       nodeCanvasObjectMode={() => 'replace'}
-      nodeCanvasObject={(raw: any, ctx: CanvasRenderingContext2D) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      nodeCanvasObject={(raw: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
         const node = raw as DrawnNode
         const style = node.kind === 'deck' ? colors.deck : colors.card
         const left = node.x - NODE_WIDTH / 2
@@ -165,14 +174,14 @@ export function TopicTreeGraph({
         ctx.fill()
         ctx.setLineDash(node.kind === 'deck' ? [4, 3] : [])
         ctx.lineWidth = node.kind === 'root' ? 2 : 1
-        ctx.strokeStyle = node.duplicate_title ? colors.warn : style.stroke
+        ctx.strokeStyle = node.duplicate_title ? colors.warn : node.kind === 'root' ? colors.root : style.stroke
         ctx.stroke()
         ctx.setLineDash([])
+        if (12 * fontScale * globalScale < MIN_TEXT_PX) return
 
         const badge = node.folded ? String(node.child_count) : ''
         const badgeWidth = badge ? Math.max(20, 8 + badge.length * 7) : 0
-        const fontSize = 12 * fontScale
-        ctx.font = `${node.kind === 'deck' ? '' : '600 '}${fontSize}px sans-serif`
+        ctx.font = `${node.kind === 'deck' ? '' : '600 '}${12 * fontScale}px ${font}`
         ctx.textAlign = 'left'
         ctx.textBaseline = 'middle'
         ctx.fillStyle = style.text
@@ -184,18 +193,20 @@ export function TopicTreeGraph({
           roundRect(ctx, bx, node.y - 9, badgeWidth, 18, 9)
           ctx.fillStyle = colors.badge.fill
           ctx.fill()
-          ctx.font = `600 ${11 * fontScale}px sans-serif`
+          ctx.font = `600 ${11 * fontScale}px ${font}`
           ctx.textAlign = 'center'
           ctx.fillStyle = colors.badge.text
           ctx.fillText(badge, bx + badgeWidth / 2, node.y + 0.5)
         }
       }}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       nodePointerAreaPaint={(raw: any, color: string, ctx: CanvasRenderingContext2D) => {
         const node = raw as DrawnNode
         ctx.fillStyle = color
         ctx.fillRect(node.x - NODE_WIDTH / 2, node.y - NODE_HEIGHT / 2, NODE_WIDTH, NODE_HEIGHT)
       }}
       linkCanvasObjectMode={() => 'replace'}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       linkCanvasObject={(link: any, ctx: CanvasRenderingContext2D) => {
         const source = link.source as DrawnNode
         const target = link.target as DrawnNode
@@ -211,8 +222,9 @@ export function TopicTreeGraph({
         ctx.strokeStyle = colors.link
         ctx.stroke()
       }}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       onNodeClick={(raw: any) => {
-        const action = nodeAction(raw as GraphNode)
+        const action = nodeAction(raw as TopicTreeNode)
         if (!action) return
         if ('enter' in action) onEnter(action.enter)
         else onOpenNote(action.open)

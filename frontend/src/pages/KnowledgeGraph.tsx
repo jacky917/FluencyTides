@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect, type ReactNode } from 'react'
+import { useState, useMemo, useRef, useEffect, type CSSProperties, type ReactNode } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import ForceGraph2D from 'react-force-graph-2d'
 import { RefreshCw, Settings, Link as LinkIcon, Loader2, X, Maximize2, Minimize2 } from 'lucide-react'
@@ -15,8 +15,10 @@ import { graphHandlers, graphViewScope, nodeTooltip, pickGraphHandler } from '..
 import { cn } from '../lib/utils'
 import type { GenericNoteDetail, GraphNode } from '../types/api'
 import { CardDetailModal } from '../components/CardDetailModal'
-import { TopicTreeGraph } from '../components/graph/TopicTreeGraph'
-import { deckCrumbs } from '../lib/topicTreeLayout'
+import { TopicTreeGraph, deckCrumbs } from '@/features/graph-views/engines/topic-tree'
+import type { GraphTheme } from '@/features/graph-views/core'
+import { useGraphTheme } from '../hooks/useGraphTheme'
+import { useStoryThemeList } from '../hooks/useStoryGame'
 import { ConfirmDialog, type ConfirmDialogProps } from '../components/shared/ConfirmDialog'
 import { DeckTreePanel } from '../components/shared/DeckTreePanel'
 import { PageHeader } from '../components/shared/PageHeader'
@@ -29,17 +31,16 @@ import { Toaster } from '../components/ui/sonner'
 import { describeApiError, isBackendError, retryTransient } from '../lib/apiError'
 
 /**
- * 節點文字標籤的可選字型樣式。
- * Selectable font styles for node text labels.
+ * 圖的區塊底色與背景圖（主題的 `canvas` 與 `assets.background`；graph_themes 計畫書 D2）。
+ * The graph area's background from the theme.
  */
-const FONT_STYLES = [
-  { id: 'classic', name: 'Classic White', fill: '#ffffff', stroke: '#000000', strokeWidth: 3 },
-  { id: 'slate', name: 'Slate Gray', fill: '#f8fafc', stroke: '#334155', strokeWidth: 3 },
-  { id: 'neon', name: 'Neon Cyan', fill: '#22d3ee', stroke: '#1e3a8a', strokeWidth: 3 },
-  { id: 'sunset', name: 'Sunset Gold', fill: '#fbbf24', stroke: '#7f1d1d', strokeWidth: 3 },
-  { id: 'mint', name: 'Mint Green', fill: '#6ee7b7', stroke: '#064e3b', strokeWidth: 3 },
-  { id: 'cyber', name: 'Cyber Pink', fill: '#f472b6', stroke: '#4c1d95', strokeWidth: 3 },
-];
+function canvasStyle(theme: GraphTheme): CSSProperties {
+  const image = theme.assets.background
+  return {
+    backgroundColor: theme.colors.canvas,
+    ...(image ? { backgroundImage: `url("${image}")`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}),
+  }
+}
 
 /**
  * 節點文字標籤的可選字級倍率。
@@ -114,7 +115,9 @@ export default function KnowledgeGraph() {
   const [labelFieldChoices, setLabelFieldChoices] = useLocalStorage<Record<string, string>>('kg_label_fields', {})
   const [treeDepth, setTreeDepth] = useLocalStorage('kg_tree_depth', 1)
 
-  const [fontStyleId, setFontStyleId] = useLocalStorage('kg_fontStyleId', 'classic');
+  // 圖主題（和劇情流程圖共用；單字卡舊的標籤樣式由 useGraphTheme 換算過來）
+  const { theme, themeId, choose: chooseTheme } = useGraphTheme()
+  const { data: themeList } = useStoryThemeList()
   const [fontSizeMultiplier, setFontSizeMultiplier] = useLocalStorage('kg_fontSizeMultiplier', 1.0);
   const [textVisibilityThreshold, setTextVisibilityThreshold] = useLocalStorage('kg_textVisibilityThreshold', 1.0);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -292,22 +295,21 @@ export default function KnowledgeGraph() {
     }
   })
 
+  // 學習狀態的顏色取自主題（status-*；主題沒寫時繼承平台預設）。顏色在畫的時候才取（nodeColor／linkColor），
+  // 不寫進圖資料：換主題時節點物件不重建，力導向排版與視角都不受影響
   const getStatusColor = (status?: string, group?: number) => {
-    if (group === 4) return '#94a3b8' // Slate 400 for ghost nodes
-    if (status === 'learning') return '#ea580c' // Orange for learning/relearning
-    if (status === 'review') return '#84cc16' // Green for mature/review
-    if (status === 'suspended') return '#eab308' // Yellow for suspended
-    return '#0ea5e9' // Sky blue for new cards
+    if (group === 4) return theme.colors['status-ghost'] // 幽靈節點（還沒建卡）
+    if (status === 'learning') return theme.colors['status-learning']
+    if (status === 'review') return theme.colors['status-review']
+    if (status === 'suspended') return theme.colors['status-suspended']
+    return theme.colors['status-new']
   }
 
   // Format data for the graph
   const formattedGraphData = useMemo(() => {
     if (!graphData) return { nodes: [], links: [] }
     return {
-      nodes: graphData.nodes.map((n: any) => ({
-        ...n,
-        color: getStatusColor(n.status, n.group),
-      })),
+      nodes: graphData.nodes.map((n: any) => ({ ...n })),
       links: graphData.links.map((l: any) => {
         // Check for reverse links
         const sId = l.source.id || l.source;
@@ -327,7 +329,6 @@ export default function KnowledgeGraph() {
 
         return {
           ...l,
-          color: '#64748b',
           isBidirectional: reverseSame,
           curvature: reverseDiff ? 0.2 : 0
         };
@@ -523,7 +524,7 @@ export default function KnowledgeGraph() {
           size="icon"
           onClick={() => setIsSettingsOpen(!isSettingsOpen)}
           aria-expanded={isSettingsOpen}
-          aria-label="標籤樣式與字級"
+          aria-label="主題與字級"
         >
           <Settings className="w-4 h-4" />
         </Button>
@@ -581,9 +582,10 @@ export default function KnowledgeGraph() {
               </p>
             </div>
           ) : (
-            <div ref={graphAreaRef} className="flex-1 min-h-0 relative bg-slate-50/50 dark:bg-slate-900/50 rounded-xl overflow-hidden m-1">
+            <div ref={graphAreaRef} className="flex-1 min-h-0 relative rounded-xl overflow-hidden m-1" style={canvasStyle(theme)}>
               <TopicTreeGraph
                 graph={graphData}
+                theme={theme}
                 width={graphSize.width || undefined}
                 height={graphSize.height || undefined}
                 fontScale={fontSizeMultiplier}
@@ -601,7 +603,7 @@ export default function KnowledgeGraph() {
             </p>
           </div>
         ) : (
-          <div ref={graphAreaRef} className="flex-1 min-h-0 relative bg-slate-50/50 dark:bg-slate-900/50 rounded-xl overflow-hidden m-1">
+          <div ref={graphAreaRef} className="flex-1 min-h-0 relative rounded-xl overflow-hidden m-1" style={canvasStyle(theme)}>
             <ForceGraph2D
               ref={fgRef}
               width={graphSize.width || undefined}
@@ -611,6 +613,8 @@ export default function KnowledgeGraph() {
               onEngineStop={saveLayout}
               onZoomEnd={saveCamera}
               nodeLabel={(node: any) => nodeTooltip(node as GraphNode, relationGraph)}
+              nodeColor={(node: any) => getStatusColor(node.status, node.group)}
+              linkColor={() => theme.colors.edge}
               linkDirectionalArrowLength={(link: any) => link.isBidirectional ? 0 : 3.5}
               linkDirectionalArrowRelPos={1}
               linkCurvature={(link: any) => link.curvature}
@@ -632,25 +636,23 @@ export default function KnowledgeGraph() {
                 // 當縮放比例超過設定的閾值時顯示文字 (100% = 1.0)
                 if (globalScale >= textVisibilityThreshold) {
                   const fontSize = (12 * fontSizeMultiplier) / globalScale;
-                  // 使用加粗字體讓邊框效果更好
-                  ctx.font = `bold ${fontSize}px Sans-Serif`;
+                  // 使用加粗字體讓邊框效果更好；字型取自主題
+                  ctx.font = `bold ${fontSize}px ${theme.fonts.node ?? 'Sans-Serif'}`;
                   ctx.textAlign = 'center';
                   ctx.textBaseline = 'middle';
-
-                  const activeStyle = FONT_STYLES.find(s => s.id === fontStyleId) || FONT_STYLES[0];
 
                   // 將文字繪製在節點正下方
                   const nodeSize = Math.sqrt(node.val || 20) * 1.5;
                   const textY = node.y + nodeSize + (fontSize / 2);
 
-                  // 1. 畫黑色邊框 (Stroke) 讓文字在任何背景都清晰
-                  ctx.lineWidth = activeStyle.strokeWidth / globalScale;
-                  ctx.strokeStyle = activeStyle.stroke;
+                  // 1. 以畫布底色描邊，文字在任何背景都清晰（主題的 canvas-text 配 canvas）
+                  ctx.lineWidth = 3 / globalScale;
+                  ctx.strokeStyle = theme.colors.canvas;
                   ctx.lineJoin = "round";
                   ctx.strokeText(label, node.x, textY);
 
                   // 2. 畫內部顏色 (Fill)
-                  ctx.fillStyle = activeStyle.fill;
+                  ctx.fillStyle = theme.colors['canvas-text'];
                   ctx.fillText(label, node.x, textY);
                 }
               }}
@@ -689,17 +691,17 @@ export default function KnowledgeGraph() {
         )}
         {isSettingsOpen && (
           <div className="absolute right-3 top-2 z-50 w-48 max-h-[calc(100%-1rem)] overflow-y-auto bg-background border shadow-xl rounded-xl p-2">
-            <p className="text-xs font-semibold text-muted-foreground px-2 py-1 mb-1">Label Style</p>
-            {FONT_STYLES.map(style => (
+            <p className="text-xs font-semibold text-muted-foreground px-2 py-1 mb-1">主題</p>
+            {(themeList ?? [{ id: themeId, label: theme.label ?? themeId }]).map(option => (
               <button
-                key={style.id}
+                key={option.id}
                 onClick={() => {
-                  setFontStyleId(style.id)
+                  chooseTheme(option.id)
                   setIsSettingsOpen(false)
                 }}
-                className={`w-full text-left px-3 py-2 text-sm rounded-md transition-colors ${fontStyleId === style.id ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                className={`w-full text-left px-3 py-2 text-sm rounded-md transition-colors ${themeId === option.id ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`}
               >
-                {style.name}
+                {option.label}
               </button>
             ))}
             <p className="text-xs font-semibold text-muted-foreground px-2 py-1 mb-1 border-t mt-2 pt-2">Font Size</p>
@@ -715,24 +717,29 @@ export default function KnowledgeGraph() {
                 {size.name}
               </button>
             ))}
-            <p className="text-xs font-semibold text-muted-foreground px-2 py-1 mb-1 border-t mt-2 pt-2">Label Appears At (Zoom)</p>
-            <div className="flex items-center justify-between px-3 py-1 mb-2">
-              <button
-                onClick={() => setTextVisibilityThreshold(prev => Math.max(0.2, Number((prev - 0.1).toFixed(1))))}
-                className="w-6 h-6 flex items-center justify-center bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-sm font-bold"
-              >
-                -
-              </button>
-              <span className="text-sm font-medium w-12 text-center">
-                {Math.round(textVisibilityThreshold * 100)}%
-              </span>
-              <button
-                onClick={() => setTextVisibilityThreshold(prev => Math.min(3.0, Number((prev + 0.1).toFixed(1))))}
-                className="w-6 h-6 flex items-center justify-center bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-sm font-bold"
-              >
-                +
-              </button>
-            </div>
+            {/* 樹狀圖的字是框的一部分、會跟著縮放（太小才不畫），這個門檻只給力導向圖的標籤用 */}
+            {!treeGraph && (
+              <>
+              <p className="text-xs font-semibold text-muted-foreground px-2 py-1 mb-1 border-t mt-2 pt-2">Label Appears At (Zoom)</p>
+              <div className="flex items-center justify-between px-3 py-1 mb-2">
+                <button
+                  onClick={() => setTextVisibilityThreshold(prev => Math.max(0.2, Number((prev - 0.1).toFixed(1))))}
+                  className="w-6 h-6 flex items-center justify-center bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-sm font-bold"
+                >
+                  -
+                </button>
+                <span className="text-sm font-medium w-12 text-center">
+                  {Math.round(textVisibilityThreshold * 100)}%
+                </span>
+                <button
+                  onClick={() => setTextVisibilityThreshold(prev => Math.min(3.0, Number((prev + 0.1).toFixed(1))))}
+                  className="w-6 h-6 flex items-center justify-center bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-sm font-bold"
+                >
+                  +
+                </button>
+              </div>
+              </>
+            )}
           </div>
         )}
       </div>
