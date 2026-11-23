@@ -154,7 +154,7 @@ class TestInitialCapabilities:
         assert handler_registry.creators_for_handler("jp_context") == []
 
     def test_web_creatable_handlers(self):
-        """Generate 頁可選單字卡（§6）、人脈卡（人脈卡計畫書 §3.11）、三語對話卡（預覽流程），以及
+        """網頁建卡畫面可選單字卡（§6）、人脈卡（人脈卡計畫書 §3.11）、三語對話卡（預覽流程），以及
         對話卡、外語糾錯（server_drafts 計畫書 D10）。"""
         web = [c.creator_name for c in handler_registry.all_creators() if "web" in c.CAPABILITIES.create.channels]
         assert sorted(web) == [

@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-11-23 |
 | **性質** | 前端頁面移除 + 程式碼／文檔清理 |
-| **狀態** | 📝 未實作（等使用者確認 §3 的決策） |
+| **狀態** | 🚧 實作完成（2026-11-23，§3 全部照建議 A，使用者確認），待 PR 與上線驗收；實作紀錄見 §8 |
 | **範圍** | 前端：`/generate` 頁、側欄項目、版面設定與測試、草稿通知的「前往」、只有 Generate 會走到的分支（成功提示的連結、不存的成功提示）、`components/generate/` 目錄名稱、`generate_*` 瀏覽器儲存鍵、`.env.example`；文檔：README 與仍描述現況的文件 |
 | **不動** | 建卡本身（`CreatePanelBody`、填表／預覽流程、人脈卡「用一段話建立」、伺服器草稿）；後端 API 與 handler 的 `create.channels`；牌組樹；Knowledge Graph 的 `VITE_DEFAULT_DECK`；已完成的歷史紀錄（`docs/archive/`、`docs/bk/` 的審查與實作紀錄） |
 | **PR / 進度** | 尚未開始 |
@@ -150,3 +150,29 @@
 - [ ] 手機 375px 與 PC 沒有橫向捲動。
 - [ ] `npx tsc -b`、eslint、vitest、後端 `test_handler_declarations.py` 都通過。
 - [ ] 收尾搜尋（§4 測試的最後一點）除了保留的歷史文件以外都是 0 筆。
+
+## 8. 實作紀錄（2026-11-23）
+
+分支 `feat/retire-generate`（從 `origin/main` 開），三個 commit：
+
+- **P1**：頁面、路由、萬用路由、`GENERATE_LAYOUT`；D3 的「前往」改用 `hooks/useOpenCreateForm.ts` 與 `lib/cardBrowse.ts` 的 `createFormPath`。記住位置的讀寫（`readRememberedSearch`、`writeRememberedSearch`）從 `useCardNavigation` 搬到 `lib/cardBrowse.ts`，讓通知也讀得到。D4 的 `selectDeck` 在建卡畫面開著時保留 `new`。
+- **P2**：`git mv components/generate components/create`；儲存鍵集中到 `lib/createStorage.ts`；`onViewCreated` 改成必填，`CreatedNotice` 拿掉連結分支，`useCreatedNotice` 拿掉 `persist`。
+- **P3**：註解、README、`frontend/.env.example`、`vite-env.d.ts`，以及本機 `frontend/.env`（先備份成 `frontend/.env.bak-20261123233033`）；`server_drafts` 計畫書未勾選的驗收項目；後端 `test_handler_declarations.py` 的 docstring。
+- **D7**：`app/schemas/card.py` 的說明改成現況，刪掉沒有任何地方用到的 `CardUpdateRequest` 與 `CardGenerateResponse`（盤點時發現後者也沒有人用）。README 第 17 行改成實際的建卡端點。
+
+### 盤點時發現、還沒處理的
+- `backend/scripts/local_anki/import_cards_with_llm.py` 呼叫已不存在的 `CardService.generate_card`，執行一定失敗（`docs/archive/handlers_api_redesign_FEAT_2026-10-20.md:1044` 已記錄）。它是 `CardGenerateRequest` 唯一的使用者，屬於舊 Card Generator（`POST /cards/generate`）留下的東西。是否連同 `CardGenerateRequest` 刪除，等使用者決定。
+
+### 驗證
+- `npx tsc -b`、`npx eslint .`（0 個錯誤；18 個警告都在其他檔案，原本就有）、`npx vitest run`（440 個測試通過，含新增的 `createFormPath` 測試）。
+- 後端 `python -m pytest tests -q`：2616 passed。2 個失敗（`test_llm_endpoints.py::test_list_endpoints_only_selectable_ones`、`test_models_menu.py::test_malformed_buttons_are_stale_and_do_nothing[effort-token-mismatch]`）是本機 `backend/.env` 多了一個 `audio` LLM 端點造成的，與這次的改動無關。
+- 瀏覽器（假後端，不碰正式 Anki）：
+  - 手機 375px：
+    - `/generate` 回到首頁。
+    - 建卡畫面換牌組，表單保持開著、內容還在。
+    - 建立後提示有「查看新卡片」，按了會打開新卡片。
+    - 在 Dashboard 等草稿生成，按「前往」會回到上次在卡片頁的位置（`deck=People&card=…&new=1`），並選好對話卡。
+    - 在卡片頁的另一個牌組按「前往」，會留在目前的牌組。
+    - 沒有橫向捲動。
+  - PC 1280px：側欄沒有 Card Generator，沒有橫向捲動。
+  - AI 整理對話框的「前往那份草稿」和通知共用 `useOpenCreateForm`，沒有另外在瀏覽器測。

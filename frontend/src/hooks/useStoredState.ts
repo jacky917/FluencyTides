@@ -5,8 +5,8 @@ import { useCallback, useMemo, useSyncExternalStore } from 'react'
  * React state kept in browser storage; one core for localStorage and sessionStorage.
  *
  * - `useLocalStorage`：永久保存、跨分頁同步（例如選的牌組、卡片類型、版面設定）。
- * - `useSessionStorage`：只在這個分頁，切換頁面、重新整理都還在，關掉分頁才消失（例如建卡頁填到一半的
- *   內容與 LLM 草稿：兩個分頁各填各的，不會互相覆蓋）。
+ * - `useSessionStorage`：只在這個分頁，切換頁面、重新整理都還在，關掉分頁才消失（例如建卡成功的提示：
+ *   兩個分頁各自顯示自己建的卡）。
  * - 同一分頁裡用到同一個鍵的元件即時同步；元件卸載後也能用 {@link writeStored}、{@link removeStored}
  *   寫入（例如生成中離開頁面，草稿完成時照樣存下）。
  * - 儲存區不能用（隱私模式、容量滿）時退回記憶體，這次開啟期間照常運作，只是不會留下來。

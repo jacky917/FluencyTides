@@ -14,7 +14,7 @@ FluencyTides 是一套**個人語言學習自動化系統**，把「LLM 內容�
 
 | 功能 | 說明 | 主要入口 |
 |---|---|---|
-| **LLM 生成 Anki 卡片** | 依所選模型讀取 LLM JSON Schema 與 Jinja2 System Prompt，呼叫 OpenAI 相容 LLM（實務上為 Gemini 相容層）取得結構化 JSON，經 AnkiConnect 寫入本地 Anki | Web `POST /api/v1/cards/generate`、Telegram 任意文字訊息、CLI 批次腳本 |
+| **LLM 生成 Anki 卡片** | 依所選模型讀取 LLM JSON Schema 與 Jinja2 System Prompt，呼叫 OpenAI 相容 LLM（實務上為 Gemini 相容層）取得結構化 JSON，經 AnkiConnect 寫入本地 Anki | 網頁「Cards」頁的建卡畫面（`POST /api/v1/handlers/{handler}/notes`；預覽流程先 `POST /api/v1/handlers/{handler}/drafts` 生成草稿）、Telegram 任意文字訊息、CLI 批次腳本 |
 | **知識圖譜** | LLM 生卡時同步輸出 `Graph_Relations` 關聯，寫入 MySQL 語料庫的 `rel_links`；前端以 react-force-graph-2d 力導向圖呈現，支援連線建立/刪除關聯與卡片詳情編輯 | `GET /api/v1/relations/graph`、前端 `KnowledgeGraph.tsx` |
 | **Telegram 語音影子跟讀評測** | 卡片內嵌 Deep Link（`rec_` 前綴），使用者錄音後依能力路由建立的評分器評分（模型直接聽音檔、Whisper 轉文字後逐字比對、或 Whisper＋文字 LLM；三語卡與對話卡可設不同策略），結果寫回 Anki 卡片的 Recordings 欄位 | `bot/handlers/voice.py`（依筆記類型找 handler，讀它的 `RECORDING_EVAL`）→ `audio_evaluator/factory.py` |
 | **依用途選工具（能力路由）** | 每個用途（自他動詞子卡、讀音判斷、錄音評分…）可各自指定文字 LLM（端點、模型、思考深度）、錄音評分策略、聽音檔的模型與語音轉文字，存在資料庫、重啟後仍在；選項只能來自 `.env` 的白名單（多家中轉站、Google 原生、claude-code / antigravity CLI、`AUDIO_MODELS`、`STT_MODELS`），沒設定時依序看：用途自己的設定 → 它的全域（文字用途看 `*`、錄音評分看 `*voice`）→ `.env`；全域可打開「全局生效」，讓那一邊的用途都改用全域。設定方式見 `backend/.env.example` 第 1、10、12、13 區 | Telegram `/setconfig`（管理員）、網頁「Tool Settings」、`/api/v1/capability-routes` |
@@ -45,7 +45,7 @@ FluencyTides 是一套**個人語言學習自動化系統**，把「LLM 內容�
 | 建置 | vite 6、typescript 5.6（strict） | 開發伺服器 + 建置，`/api` 代理至 `127.0.0.1:8000` |
 | 樣式 | tailwindcss v4 + @tailwindcss/vite | `index.css` 以 `@theme inline` 映射 shadcn 風格 HSL 變數 |
 | 資料層 | @tanstack/react-query v5、axios | 伺服器狀態管理、單一 axios instance |
-| 路由 | react-router-dom v6 | 三條路由（Dashboard / CardGenerator / KnowledgeGraph） |
+| 路由 | react-router-dom v6 | Dashboard / Cards / Knowledge Graph / Story Flowchart / Tool Settings / Preferences；不存在的網址回到首頁 |
 | 視覺化 / UI | react-force-graph-2d、lucide-react、sonner、@radix-ui、cva、clsx、tailwind-merge | 知識圖譜力導向圖、手動拷貝的 shadcn/ui 元件體系 |
 
 ### 基礎設施
@@ -108,10 +108,11 @@ FluencyTides/
         ├── main.tsx / App.tsx / index.css
         ├── api/client.ts           # 單一 axios instance，集中所有後端呼叫
         ├── types/api.ts            # 手寫對齊後端 Pydantic 的介面
-        ├── pages/                  # Dashboard / CardGenerator / KnowledgeGraph
-        ├── components/             # CardDetailModal + ui/（shadcn 手動拷貝）
-        ├── hooks/useLocalStorage.ts
-        └── lib/utils.ts
+        ├── pages/                  # Dashboard / Cards / KnowledgeGraph / StoryGraph / ToolSettings / Preferences
+        ├── components/             # cards/（卡片頁）、create/（建卡表單）、person/、story/、settings/、shared/、ui/（shadcn 手動拷貝）
+        ├── features/graph-views/   # 知識圖譜的各種畫法
+        ├── hooks/                  # 網址導覽、瀏覽器儲存、伺服器草稿等
+        └── lib/                    # 與 React 無關的純函式（多數有 vitest 測試）
 ```
 
 > 註：`backend/` 根目錄下另有 `api/ core/ models/ services/ utils/ scripts/` 等頂層目錄與 `app/domain/`，其中 `api/ core/ models/ services/ utils/` 與 `app/domain/` 為早期 scaffold 殘留（僅含空 `__init__.py`，無任何引用），實際代碼一律位於 `backend/app/` 下。

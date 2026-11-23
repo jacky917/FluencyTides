@@ -1,12 +1,13 @@
-"""Pydantic V2 request/response schemas for the card-generation API.
+"""Pydantic V2 schemas for card generation input and API errors.
 
-卡片生成 API 請求/回應 Pydantic V2 Schema 定義模組。
+卡片生成輸入與 API 錯誤回應的 Pydantic V2 Schema 定義模組。
 
-Defines the request/response structures needed by the card-generation endpoint
-(``POST /api/v1/cards/generate``) and the project-wide error response format.
+Defines the card generation input read by the local batch script
+``scripts/local_anki/import_cards_with_llm.py`` and the project-wide
+error response format of every API router.
 
-本模組定義了卡片生成端點 (``POST /api/v1/cards/generate``) 所需的
-請求與回應資料結構，以及專案統一的錯誤回應格式。
+本模組定義本機批次腳本 ``scripts/local_anki/import_cards_with_llm.py``
+讀取的卡片生成輸入，以及所有 API 路由共用的錯誤回應格式。
 
 All cross-boundary data structures are strongly validated with Pydantic V2;
 raw dicts and ``typing.Any`` are strictly forbidden.
@@ -22,34 +23,38 @@ Design decisions:
       (``model_file_name``, ``model_name``, ``deck_name``, and so on) with no
       defaults, so the caller always knows which model and deck it is
       operating on.
+    - Web card creation does not use ``CardGenerateRequest``; it goes
+      through the handler API (``POST /api/v1/handlers/{handler}/notes``).
 
 設計決策：
     - ``ErrorResponse`` 遵循 03_Acceptance_Criteria.md §2 的統一格式要求，
       包含 ``error_code``, ``message``, ``details`` 三個欄位。
-    - ``CardGenerateRequest`` 要求前端完整傳入所有參數（``model_file_name``,
+    - ``CardGenerateRequest`` 要求呼叫端完整傳入所有參數（``model_file_name``,
       ``model_name``, ``deck_name`` 等），不提供預設值，確保呼叫端明確知道
       自己在操作哪個模型與牌組。
+    - 網頁建卡不使用 ``CardGenerateRequest``，走 handler API
+      （``POST /api/v1/handlers/{handler}/notes``）。
 """
 
 from pydantic import BaseModel, Field
 
 
 # ============================================================================
-# 卡片生成 API 請求 Schema
+# 卡片生成的輸入 Schema
 # ============================================================================
 
 
 class CardGenerateRequest(BaseModel):
-    """The request structure for the card-generation API.
+    """The input of one card generation.
 
-    卡片生成 API 的請求結構。
+    一次卡片生成的輸入。
 
-    The frontend or Telegram Bot must supply every required field; the system
-    offers no default model or deck configuration. ``deck_name`` supports
+    Callers must supply every required field; the system offers no
+    default model or deck configuration. ``deck_name`` supports
     ``'::'``-separated nested decks.
 
-    前端或 Telegram Bot 必須完整提供所有必填欄位，
-    系統不提供預設的模型或牌組配置。``deck_name`` 支援 ``'::'`` 分隔的巢狀牌組。
+    呼叫端必須完整提供所有必填欄位，系統不提供預設的模型或牌組配置。
+    ``deck_name`` 支援 ``'::'`` 分隔的巢狀牌組。
     """
 
     user_input: str = Field(
@@ -93,52 +98,6 @@ class CardGenerateRequest(BaseModel):
             "使用者手動提供的固定欄位（如音檔佔位符），"
             "不經過 LLM 生成，直接合併進最終 Note。"
         ),
-    )
-
-
-# ============================================================================
-# 卡片生成 API 回應 Schema
-# ============================================================================
-
-
-class CardGenerateResponse(BaseModel):
-    """The success response structure for card generation.
-
-    卡片生成成功的回應結構。
-    """
-
-    note_id: int = Field(
-        ...,
-        description="成功建立後 Anki 回傳的筆記 ID",
-    )
-    deck_name: str = Field(
-        ...,
-        description="卡片所在的牌組名稱",
-    )
-    model_name: str = Field(
-        ...,
-        description="使用的 Anki 筆記類型名稱",
-    )
-    message: str = Field(
-        default="卡片生成成功",
-        description="人類可讀的成功訊息",
-    )
-
-
-# ============================================================================
-# 卡片更新 API 請求 Schema
-# ============================================================================
-
-
-class CardUpdateRequest(BaseModel):
-    """The request structure for the card-update API.
-
-    卡片更新 API 的請求結構。
-    """
-
-    fields: dict[str, str] = Field(
-        ...,
-        description="要更新的卡片欄位字典（例如 {'Expression': 'apple', 'Meaning': '蘋果'}）",
     )
 
 
