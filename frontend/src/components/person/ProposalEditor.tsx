@@ -11,7 +11,7 @@ import type { FillProposal } from '../../types/api'
 import { FOLLOWUP_TYPES, historyItemKeys, keyLabel } from '../../lib/personFill'
 import { cn } from '../../lib/utils'
 import { Input } from '../ui/input'
-import { TEXTAREA_CLASS } from '../generate/formParts'
+import { TEXTAREA_CLASS } from '../create/formParts'
 
 /** 欄位旁的小標。A field label. */
 function Labeled({ label, children }: { label: string; children: ReactNode }) {

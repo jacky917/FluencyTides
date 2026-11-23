@@ -41,8 +41,8 @@ import { draftBackupKey, draftFromError, timeLabel } from '../../lib/serverDraft
 import type { FillProposal, FillResultParams, HandlerInfo, ServerDraft } from '../../types/api'
 import { Button } from '../ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet'
-import { TEXTAREA_CLASS } from '../generate/formParts'
-import { useDiscardDraft } from '../generate/useDiscardDraft'
+import { TEXTAREA_CLASS } from '../create/formParts'
+import { useDiscardDraft } from '../create/useDiscardDraft'
 import { OriginalContent, type EditState } from './OriginalContent'
 import { ProposalEditor } from './ProposalEditor'
 

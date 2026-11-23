@@ -1,6 +1,6 @@
 /**
  * 外語糾錯網頁建卡的預覽（`docs/wip/server_drafts_FEAT_2026-11-04.md` D10.2）：草稿的形狀、子卡的編號與勾選、
- * 錯誤標示的切分。畫面在 `components/generate/ExpressionDraftPreview.tsx`。
+ * 錯誤標示的切分。畫面在 `components/create/ExpressionDraftPreview.tsx`。
  *
  * The expression correction web-create preview: draft shape, micro card
  * numbering and selection, and the error marks.

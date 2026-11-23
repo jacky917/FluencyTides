@@ -1,5 +1,5 @@
 /**
- * 建卡表單的預覽流程（`create.flow="preview"`，Card Generator 與卡片瀏覽頁共用）：以 `draft_schema` 的表單
+ * 建卡表單的預覽流程（`create.flow="preview"`，卡片頁的建卡畫面）：以 `draft_schema` 的表單
  * 請 LLM 生成草稿 → 預覽、勾選 → 建立或廢棄（計畫書 `docs/archive/trilingual_web_create_FEAT_2026-10-30.md` §3）。
  *
  * 草稿存在後端記憶體（`docs/wip/server_drafts_FEAT_2026-11-04.md`）：全站同一時間只有一份，生成在後端背景跑，
@@ -32,6 +32,7 @@ import {
   withDeck,
   type FormErrors,
 } from '../../lib/createForm'
+import { createFormKey } from '../../lib/createStorage'
 import {
   expressionParams,
   initialSelection,
@@ -151,7 +152,7 @@ interface FlowProps {
   handler: HandlerInfo
   selectedDeck: string | null
   deckStatus: DeckStatus
-  onViewCreated?: (result: CreateNoteResponse) => void
+  onViewCreated: (result: CreateNoteResponse) => void
 }
 
 /** 各畫面共用的參數：建立成功的提示放在上層，換畫面（預覽 → 輸入）時還在。Props shared by the screens. */
@@ -166,7 +167,7 @@ interface ScreenProps extends FlowProps {
  * @param props.handler - 預覽流程的 handler。The handler.
  * @param props.selectedDeck - 牌組樹選的牌組。The deck picked in the tree.
  * @param props.deckStatus - 牌組樹所選牌組的狀態（見 `useDeckStatus`）。The selected deck's status.
- * @param props.onViewCreated - 建立成功的提示上「查看新卡片」按下時；省略時提示改顯示到 Cards 頁的連結。
+ * @param props.onViewCreated - 建立成功的提示上「查看新卡片」按下時。
  *   Views a created note from the success notice.
  * @returns 建卡畫面 JSX。The create screen JSX.
  */
@@ -176,7 +177,7 @@ export function PreviewCreate(props: FlowProps) {
   const create = handler.capabilities.create
   const { data: current, isPending, error } = useCurrentDraft()
   // 建立成功後預覽畫面換成輸入畫面：提示放在這一層才不會跟著消失
-  const [result, setResult] = useCreatedNotice(handler.name, props.onViewCreated !== undefined)
+  const [result, setResult] = useCreatedNotice(handler.name)
   const ready = handler.draft_schema && create.note_type !== null && handler.name in GENERATING_HINTS
   const fixedDeck = create.deck === 'fixed' ? create.fixed_deck : null
 
@@ -263,7 +264,7 @@ function InputScreen({
   const { fields } = schemaFields(handler.draft_schema ?? null)
   const fieldNames = fields.map((field) => field.name)
   // 生成前的輸入存在 localStorage：關掉分頁再開還在，建立成功才清掉（D11）
-  const formKey = `generate_form:${handler.name}`
+  const formKey = createFormKey(handler.name)
   const [storedValues, setStoredValues] = useLocalStorage<Record<string, string>>(formKey, {})
   const [inputErrors, setInputErrors] = useState<FormErrors | null>(null)
   const generating = draft?.status === 'generating'
@@ -475,7 +476,7 @@ function InputScreen({
           結果回來前不能廢棄。
         </p>
       )}
-      {result && <CreatedNotice result={result} onView={onViewCreated && (() => onViewCreated(result))} />}
+      {result && <CreatedNotice result={result} onView={() => onViewCreated(result)} />}
       {discardMutation.dialog}
     </form>
   )
@@ -560,7 +561,7 @@ function ReadyPreview<S extends DraftStateBase>({
   const queryClient = useQueryClient()
   const setCurrent = useSetCurrentDraft()
   const create = handler.capabilities.create
-  const formKey = `generate_form:${handler.name}`
+  const formKey = createFormKey(handler.name)
   const [createError, setCreateError] = useState<string | null>(null)
   const editor = useDraftEditor<S>(draft, () => kind.initialState(draft))
   const state = editor.state
