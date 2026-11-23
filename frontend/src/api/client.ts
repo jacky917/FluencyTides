@@ -20,6 +20,8 @@ import type {
   CreateNoteRequest,
   CreateNoteResponse,
   ServerDraft,
+  ApplyFillResponse,
+  FillProposal,
   DuplicateDecision,
   TagCount,
   DeleteNoteResponse,
@@ -140,6 +142,44 @@ export const FluencyTidesAPI = {
       params,
       duplicate_decision: duplicateDecision ?? null,
     }),
+
+  /**
+   * 網頁的「AI 整理」：開始在背景把一段描述整理成建議（不寫入 Anki），立刻回傳生成中的草稿。和預覽建卡共用
+   * 全站一份草稿，已有草稿時回 409 `CREATE_SESSION_BUSY`（錯誤附上目前的草稿 `draft`）。
+   * Starts organizing a description for "AI 整理"; shares the site-wide draft slot.
+   * @param handlerName - handler 名稱（目前只有 `person_profile`）。Handler name.
+   * @param body.text - 描述。The description.
+   * @param body.noteId - 要補的卡；建新卡時省略。The card to add to.
+   * @param body.deck - 建新卡的牌組。The deck of a new card.
+   * @returns 生成中的草稿。The generating draft.
+   */
+  startFill: (
+    handlerName: string,
+    body: { text: string; noteId?: number | null; deck?: string | null },
+  ): Promise<ServerDraft> =>
+    apiClient.post(`/handlers/${encodeURIComponent(handlerName)}/fill`, {
+      text: body.text,
+      note_id: body.noteId ?? null,
+      deck: body.deck ?? null,
+    }),
+
+  /**
+   * 寫入「AI 整理」草稿裡勾選的建議：不合格的回報在 `errors`、其他照常寫入；勾選的都寫入了就結束草稿，
+   * 否則回傳留著的草稿（記下新卡與已寫入的項目，再送一次只補寫剩下的）。
+   * Writes the ticked proposals of an "AI 整理" draft.
+   * @param draftId - 草稿 ID。The draft.
+   * @param version - 草稿版本。The draft version.
+   * @param proposals - 編輯後的全部建議（順序同草稿）。Every proposal, edited.
+   * @param selected - 勾選的序號。The ticked indexes.
+   * @returns 寫入的結果。What was written.
+   */
+  applyFill: (
+    draftId: string,
+    version: number,
+    proposals: FillProposal[],
+    selected: number[],
+  ): Promise<ApplyFillResponse> =>
+    apiClient.post(`/drafts/${encodeURIComponent(draftId)}/apply`, { version, proposals, selected }),
 
   /**
    * 目前的建卡草稿（全站最多一份）；沒有時為 null。

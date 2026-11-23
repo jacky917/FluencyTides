@@ -33,7 +33,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -537,6 +537,49 @@ class CreateSession:
                 return
             draft.status = "ready"
             draft.touch()
+
+    async def finish_apply(
+        self, draft_id: str, *, done: bool, progress: Mapping[str, object]
+    ) -> dict[str, object] | None:
+        """Finish writing an "AI 整理" draft (``person_llm_fill`` plan D7), claimed with :meth:`begin_create`.
+
+        「AI 整理」的草稿寫入結束（``person_llm_fill`` 計畫書 D7），之前以 ``begin_create`` 佔用。
+
+        When everything chosen was written the slot is cleared. Otherwise the draft returns to ``ready`` with the
+        progress merged into ``result["params"]`` (the new card's note ID, the indexes already written, and the
+        reasons the others were rejected), so writing again only writes the rest and never creates a second card.
+        If the slot no longer holds the claimed draft, this only logs an error.
+
+        勾選的都寫入了就清空槽位；否則草稿退回 ``ready``，進度併進 ``result["params"]``（新卡的 Note ID、已寫入的
+        序號、其他項目被拒絕的原因），再寫一次只會補寫剩下的，不會建出第二張卡。槽位裡已不是佔用的草稿時只記 error。
+
+        Args:
+            draft_id: the ID returned by :meth:`begin_create`
+                ``begin_create`` 回傳的 ID
+            done: whether every chosen proposal was written
+                勾選的建議是否都寫入了
+            progress: the keys to merge into ``result["params"]``
+                要併進 ``result["params"]`` 的鍵
+
+        Returns:
+            the draft in the API shape when it stays, or ``None`` when the slot was cleared (or lost)
+            草稿還在時為 API 形狀的草稿；槽位清空了（或已不在）時為 ``None``
+        """
+        async with self._lock:
+            draft = self.current
+            if draft is None or draft.id != draft_id:
+                # 寫入中不能廢棄（D8）：走到這裡表示有地方違反了這個前提
+                logger.error("AI 整理寫入結束時槽位裡不是佔用的草稿 %s（現在是 %s）", draft_id, draft and draft.id)
+                return None
+            if done:
+                self.current = None
+                return None
+            result = dict(draft.result or {})
+            result["params"] = {**dict(result.get("params") or {}), **progress}  # type: ignore[arg-type]
+            draft.result = result
+            draft.status = "ready"
+            draft.touch()
+            return draft.to_dict()
 
     # =========================================================================
     # 關機

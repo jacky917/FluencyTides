@@ -497,7 +497,7 @@ export default function KnowledgeGraph() {
         ) : handlersError || graphError ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-center">
             <p className="font-semibold text-destructive">{handlersError ? '無法載入卡片類型' : '無法載入圖譜'}</p>
-            <p className="break-words text-sm text-muted-foreground">{describeApiError(handlersError ?? graphError).message}</p>
+            <p className="[overflow-wrap:anywhere] text-sm text-muted-foreground">{describeApiError(handlersError ?? graphError).message}</p>
             {/* 記住的名稱欄位可能已不存在（筆記類型改過欄位）：給一個回到預設的出口 */}
             {graphError && labelField && handlerName && (
               <Button

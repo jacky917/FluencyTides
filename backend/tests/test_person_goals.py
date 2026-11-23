@@ -260,7 +260,7 @@ class TestGoalProposals:
         ]), {}, {}, TODAY)
         (goal,) = [p for p in proposals if p.kind == "goal"]
         assert goal.data == {"kind": "證照", "item": "日本語能力試驗 N1", "target": "2026-12-07", "reason": "下個月考"}
-        assert person_profile._proposal_action("goal", goal.data) == (
+        assert ingest.proposal_action("goal", goal.data) == (
             "add_item", {"field": "Goals_JSON", "item": {"kind": "證照", "item": "日本語能力試驗 N1", "target": "2026-12-07"}}
         )
         line = view.proposal_line("goal", goal.data)

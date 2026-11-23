@@ -23,7 +23,7 @@ function Block({ label, children }: { label: string; children: React.ReactNode }
   return (
     <div className="space-y-1">
       <p className="text-sm font-medium">{label}</p>
-      <div className="whitespace-pre-line break-words rounded-md border px-3 py-2 text-base leading-relaxed">
+      <div className="whitespace-pre-line [overflow-wrap:anywhere] rounded-md border px-3 py-2 text-base leading-relaxed">
         {children}
       </div>
     </div>
@@ -145,16 +145,16 @@ export function ExpressionPreviewBody({ state, onChange, disabled }: PreviewBody
                       <span className="flex flex-wrap items-baseline gap-2">
                         <span className="text-xs tabular-nums text-muted-foreground">#{entry.number}</span>
                         <span className="rounded bg-muted px-1.5 py-0.5 text-xs">{entry.label}</span>
-                        <span className="break-words text-base font-medium">{point.target_phrase}</span>
+                        <span className="[overflow-wrap:anywhere] text-base font-medium">{point.target_phrase}</span>
                       </span>
                       {point.context_sentence && (
-                        <span className="block break-words leading-relaxed">{point.context_sentence}</span>
+                        <span className="block [overflow-wrap:anywhere] leading-relaxed">{point.context_sentence}</span>
                       )}
                       {point.native_translation && (
-                        <span className="block break-words text-sm text-muted-foreground">{point.native_translation}</span>
+                        <span className="block [overflow-wrap:anywhere] text-sm text-muted-foreground">{point.native_translation}</span>
                       )}
                       {point.error_hint && (
-                        <span className="block break-words border-l-2 pl-2 text-xs leading-relaxed text-muted-foreground">
+                        <span className="block [overflow-wrap:anywhere] border-l-2 pl-2 text-xs leading-relaxed text-muted-foreground">
                           {point.error_hint}
                         </span>
                       )}

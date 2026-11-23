@@ -97,6 +97,7 @@ def _note_service(**overrides):
     service = mock.MagicMock()
     service.run_action = mock.AsyncMock(return_value=None)
     service.create = mock.AsyncMock(return_value={"note_ids": [1, 2, 3], "deck": "D", "sync_warning": None})
+    service.sync_after_write = mock.AsyncMock(return_value=None)
     for name, value in overrides.items():
         setattr(service, name, value)
     return service

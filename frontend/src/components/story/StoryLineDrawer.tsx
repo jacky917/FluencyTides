@@ -388,7 +388,7 @@ export function StoryLineDrawer({
                         </div>
                       ) : (
                         text(line).map((t, i) => (
-                          <p key={i} className={cn('whitespace-pre-wrap break-words', i === 1 && 'text-muted-foreground')}>{t}</p>
+                          <p key={i} className={cn('whitespace-pre-wrap [overflow-wrap:anywhere]', i === 1 && 'text-muted-foreground')}>{t}</p>
                         ))
                       )}
                       {(cards.length > 0 || (canSave && line.can_save) || showPlay) && (

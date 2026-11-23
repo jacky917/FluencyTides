@@ -3,6 +3,7 @@ import { Routes, Route, Link, Navigate, useLocation } from 'react-router-dom'
 import { LayoutDashboard, PlusCircle, Network, Bot, Layers, SlidersHorizontal, GitBranch } from 'lucide-react'
 import { Toaster } from './components/ui/sonner'
 import { DraftWatcher } from './components/shared/DraftWatcher'
+import { PersonFillDialog } from './components/person/PersonFillDialog'
 import {
   Sidebar,
   SidebarContent,
@@ -118,6 +119,8 @@ function App() {
       <Toaster />
       {/* 建卡草稿生成完成、草稿已不在的通知（全站） */}
       <DraftWatcher />
+      {/* 人脈卡的「AI 整理」對話框（全站一個，從卡面、建卡畫面或通知打開） */}
+      <PersonFillDialog />
     </SidebarProvider>
   )
 }

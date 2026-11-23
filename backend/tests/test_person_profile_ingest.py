@@ -237,7 +237,10 @@ class TestIngestFlow:
             ("add_followup", {"item": {"item": "介紹 Ken 給他", "type": "my_promise"}}),
             ("add_history", {"field": "Interests", "item": {"value": "登山"}}),
         ]
-        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Notes": "第一次見面<br>很健談"})
+        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Notes": "第一次見面<br>很健談"}, sync=False)
+        # 每一項都不同步，全部寫完才同步一次
+        assert all(c.kwargs == {"sync": False} for c in note_service.run_action.await_args_list)
+        note_service.sync_after_write.assert_awaited_once()
         assert _run(state.get_state()) is None
 
     def test_two_appends_to_one_field_are_combined(self):
@@ -249,7 +252,7 @@ class TestIngestFlow:
         ])
         _ingested(state, card_service, result)
         _press("pp:igsave", state, note_service, card_service)
-        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Notes": "攝影<br>登山<br>露營"})
+        note_service.update_fields.assert_awaited_once_with("person_profile", 5, {"Notes": "攝影<br>登山<br>露營"}, sync=False)
 
     def test_end_proposal_is_saved_as_set_history_status(self):
         items = [{"company": "Geekly", "title": "", "added": "", "ended": ""}]

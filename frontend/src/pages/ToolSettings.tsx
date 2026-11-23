@@ -102,7 +102,7 @@ const toastLines = (lines: string[]) => <span className="whitespace-pre-line">{l
  * @returns 說明文字。The lines.
  */
 function describeAfterWrite(routeKey: string, state: CapabilityState): string[] {
-  const lines = [`${routeKey}：${state.label}（來源：${SOURCE_LABELS[state.source]}）`]
+  const lines = [`${routeKey}：${state.label}（${SOURCE_LABELS[state.source]}）`]
   if (state.db_unavailable) {
     lines.push('讀不到資料庫，無法確認退回後的設定，上面顯示的是 .env 預設。')
   }
@@ -133,23 +133,23 @@ export default function ToolSettings() {
     })
 
   const readOnly = data?.db_unavailable ?? true
-  const listedKeys = new Set(data?.routes.map((route) => route.route_key) ?? [])
+  // 用途鍵 → 說明（分支顯示「沿用哪個用途」用）
+  const descriptions = new Map(data?.routes.map((route) => [route.route_key, route.description]) ?? [])
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight">工具設定</h2>
-          <p className="text-muted-foreground mt-2">
-            為每個用途選擇使用的工具與模型（文字 LLM、錄音評分策略、聽音檔的模型、語音轉文字），下一次使用即生效、
-            重啟後仍在。來源：<b>用途</b>＝該用途自己的設定、<b>流程</b>＝分支沿用流程鍵的設定、<b>全域</b>＝
-            <code>*</code> 的設定、<b>.env</b>＝部署預設。
-          </p>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">工具設定</h2>
+          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCw className={cn('h-4 w-4 mr-2', isFetching && 'animate-spin')} />
+            重新整理
+          </Button>
         </div>
-        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
-          <RefreshCw className={cn('h-4 w-4 mr-2', isFetching && 'animate-spin')} />
-          重新整理
-        </Button>
+        <p className="text-sm text-muted-foreground sm:text-base">
+          每個用途可以各自選要用的模型，儲存後下一次使用就生效。沒有自己設定的項目，依序沿用流程、全域預設，
+          最後是部署時 <code>.env</code> 的預設。
+        </p>
       </div>
 
       {isPending && fetchStatus === 'paused' ? (
@@ -182,7 +182,7 @@ export default function ToolSettings() {
               <RouteCard
                 key={route.route_key}
                 route={route}
-                isBranch={listedKeys.has(parentKey(route.route_key) ?? '')}
+                parentTitle={branchParent(route.route_key, descriptions)}
                 providers={data.providers}
                 strategies={data.strategies ?? {}}
                 readOnly={readOnly}
@@ -214,7 +214,7 @@ function Warning({ title, lines }: { title: string; lines: string[] }) {
       <div className="space-y-1">
         <p className="font-semibold text-amber-800">{title}</p>
         {lines.map((line, index) => (
-          <p key={index} className="text-amber-900 break-words">
+          <p key={index} className="text-amber-900 [overflow-wrap:anywhere]">
             {line}
           </p>
         ))}
@@ -226,8 +226,8 @@ function Warning({ title, lines }: { title: string; lines: string[] }) {
 /** {@link RouteCard} 的 props。Props of {@link RouteCard}. */
 interface RouteCardProps {
   route: CapabilityRoute
-  /** 分支鍵（流程鍵也在清單中）：縮排顯示。A branch whose flow key is listed. */
-  isBranch: boolean
+  /** 分支鍵（流程鍵也在清單中）時是流程鍵的說明：縮排顯示。The flow's title when this is a listed branch. */
+  parentTitle: string | null
   providers: Record<string, ProviderOption[]>
   strategies: Record<string, string[]>
   readOnly: boolean
@@ -244,7 +244,7 @@ interface RouteCardProps {
  */
 function RouteCard({
   route,
-  isBranch,
+  parentTitle,
   providers,
   strategies,
   readOnly,
@@ -264,20 +264,32 @@ function RouteCard({
         inUse.has(capability) && (!state.declared || state.rejected.length > 0 || state.problem !== null),
     )
 
+  const isBranch = parentTitle !== null
+  // 標題用說明（人看得懂的用途），用途鍵放旁邊小字
+  const title = isGlobal ? '全域預設' : (route.description ?? '（程式裡已沒有這個用途）')
+  const subtitle = isGlobal
+    ? '各用途沒有自己設定時用這裡的'
+    : isBranch
+      ? `沒設定的項目沿用「${parentTitle}」`
+      : null
+
   return (
-    <Card className={cn(flagged && 'border-amber-500/60', isBranch && 'ml-6 sm:ml-10')}>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base flex items-center gap-2">
-          {flagged && <AlertTriangle className="h-4 w-4 text-amber-600" aria-label="警示" />}
+    <Card className={cn(flagged && 'border-amber-500/60', isBranch && 'ml-4 sm:ml-8')}>
+      <CardHeader className="space-y-1 px-4 pb-1 pt-4 sm:px-5">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          {flagged && <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" aria-label="警示" />}
           {isBranch && <span className="text-muted-foreground" aria-hidden>└</span>}
-          <code>{route.route_key}</code>
-          {isGlobal && <span className="text-xs font-normal text-muted-foreground">全域</span>}
-          {isBranch && <span className="text-xs font-normal text-muted-foreground">分支，沒設定的能力沿用流程鍵</span>}
-        </CardTitle>
-        <CardDescription>{route.description ?? '（程式中已沒有這個用途）'}</CardDescription>
+          <CardTitle className="text-base">{title}</CardTitle>
+          <code className="text-xs text-muted-foreground">{route.route_key}</code>
+        </div>
+        {subtitle && <CardDescription className="text-xs">{subtitle}</CardDescription>}
       </CardHeader>
-      <CardContent className="space-y-4 text-sm">
-        {!route.declared && <Warning title="孤兒設定" lines={['程式中已沒有這個用途，只能恢復預設以刪除。']} />}
+      <CardContent className="divide-y p-0 text-sm">
+        {!route.declared && (
+          <div className="px-4 py-3 sm:px-5">
+            <Warning title="孤兒設定" lines={['程式裡已沒有這個用途，只能恢復預設來刪除。']} />
+          </div>
+        )}
         {states.map(([capability, state]) => {
           const slot = slotId(route.route_key, capability)
           return (
@@ -360,27 +372,31 @@ function CapabilityPanel({
   const busy = useIsMutating({ mutationKey: writeKey(routeKey, capability) }) > 0
 
   return (
-    <section className="space-y-3 rounded-lg border p-3" aria-label={capabilityLabel(capability)}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <section className="space-y-3 px-4 py-3 sm:px-5" aria-label={capabilityLabel(capability)}>
+      <div className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1.5 sm:grid-cols-[7.5rem_1fr_auto]">
         <h3 className="font-medium">{capabilityLabel(capability)}</h3>
-        <div className="flex gap-2">
+        <div className="col-span-2 row-start-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 sm:col-span-1 sm:col-start-2 sm:row-start-1">
+          <code className="min-w-0 break-all rounded bg-muted px-2 py-0.5 text-xs sm:text-sm">{state.label}</code>
+          <SourceBadge source={state.source} />
+        </div>
+        <div className="col-start-2 row-start-1 flex justify-end gap-2 sm:col-start-3">
           {declared && !readOnly && (
             <Button
               size="sm"
-              variant={editing ? 'secondary' : 'default'}
+              variant={editing ? 'secondary' : 'outline'}
               onClick={() => {
                 onNotice(null)
                 onEdit(!editing)
               }}
               disabled={busy}
             >
-              {editing ? '取消' : '設定'}
+              {editing ? '取消' : '更改'}
             </Button>
           )}
           {state.stored !== null && !readOnly && (
             <Button
               size="sm"
-              variant="outline"
+              variant="ghost"
               onClick={() => {
                 onNotice(null)
                 deleteMutation.mutate()
@@ -392,19 +408,15 @@ function CapabilityPanel({
           )}
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-muted-foreground">目前生效：</span>
-        <code className="rounded bg-muted px-2 py-0.5">{state.label}</code>
-        <SourceBadge source={state.source} />
-      </div>
-      {state.stored !== null && (
+      {/* 自己有設定、但生效的不是它（例如被略過）時才另外列出；生效的就是它時上面已經看得到 */}
+      {state.stored !== null && state.source !== 'route' && (
         <div className="text-muted-foreground">
-          本用途的設定：<code>{formatChoice(state.stored)}</code>
+          自己的設定（沒有生效）：<code className="break-all">{formatChoice(state.stored)}</code>
         </div>
       )}
 
       {declared === false && state.declared === false && (
-        <Warning title="孤兒設定" lines={['程式中這個用途已不用這個能力，只能恢復預設以刪除。']} />
+        <Warning title="孤兒設定" lines={['程式裡這個用途已經不用這項，只能恢復預設來刪除。']} />
       )}
       {state.problem && <Warning title="目前生效的設定無法使用" lines={[state.problem]} />}
       {state.rejected.length > 0 && (
@@ -447,13 +459,13 @@ function SourceBadge({ source }: { source: CapabilityState['source'] }) {
   return (
     <span
       className={cn(
-        'rounded-full px-2 py-0.5 text-xs font-medium',
+        'shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium',
         source === 'route' && 'bg-primary text-primary-foreground',
-        source === 'global' && 'bg-secondary text-secondary-foreground border',
+        (source === 'global' || source === 'parent') && 'bg-secondary text-secondary-foreground border',
         source === 'env' && 'bg-muted text-muted-foreground border',
       )}
     >
-      來源：{SOURCE_LABELS[source]}
+      {SOURCE_LABELS[source]}
     </span>
   )
 }
@@ -476,7 +488,7 @@ function NoticeBox({ notice }: { notice: Notice }) {
         {notice.title}
       </p>
       {notice.lines.map((line, index) => (
-        <p key={index} className="break-words">
+        <p key={index} className="[overflow-wrap:anywhere]">
           {line}
         </p>
       ))}
@@ -646,9 +658,9 @@ function CapabilityEditor({
 
       {choice && provider && (
         <div className="space-y-1">
-          <p>
+          <p className="[overflow-wrap:anywhere]">
             <b>{routeKey}</b> 的{capabilityLabel(capability)}改用：
-            <code className="rounded bg-background px-2 py-0.5 border">
+            <code className="break-all rounded bg-background px-2 py-0.5 border">
               {previewLabel(provider, choice.model, choice.effort)}
             </code>
             {capability === CAPABILITY_LLM && <span className="text-muted-foreground">（將寫進卡片的標籤）</span>}
@@ -656,8 +668,8 @@ function CapabilityEditor({
           {provider.title && <p className="text-muted-foreground">{provider.title}</p>}
           <p className="text-muted-foreground">
             {capability === CAPABILITY_AUDIO_EVAL
-              ? '策略用到的模型在「聽音檔的模型」「語音轉文字」「文字 LLM」設定。儲存後下一次評分即生效、重啟後仍在。'
-              : '儲存時會先試建一次（檢查 CLI、金鑰、伺服器設定），之後立即生效、重啟後仍在。'}
+              ? '策略用到的模型在「聽音檔的模型」「語音轉文字」「文字 LLM」設定。儲存後下一次評分就生效。'
+              : '儲存時會先試連一次（檢查 CLI、金鑰、伺服器設定），成功才存，之後馬上生效。'}
           </p>
         </div>
       )}
@@ -672,6 +684,19 @@ function CapabilityEditor({
       </div>
     </form>
   )
+}
+
+/**
+ * 分支鍵的流程鍵說明（流程鍵也在清單裡時）；不是分支時為 null。
+ * The flow's title for a listed branch key, or null.
+ * @param routeKey - 用途鍵。The route key.
+ * @param descriptions - 清單裡各用途鍵的說明。Descriptions of the listed keys.
+ * @returns 流程鍵的說明（沒有說明時用鍵本身），或 null。The flow's title, or null.
+ */
+function branchParent(routeKey: string, descriptions: Map<string, string | null>): string | null {
+  const parent = parentKey(routeKey)
+  if (parent === null || !descriptions.has(parent)) return null
+  return descriptions.get(parent) ?? parent
 }
 
 /**

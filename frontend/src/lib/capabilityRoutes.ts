@@ -19,10 +19,10 @@ export const CAPABILITY_STT = 'stt'
 
 /** 來源的顯示名稱（與 TG `/setconfig` 相同）。Source display names, same as TG `/setconfig`. */
 export const SOURCE_LABELS: Record<RouteSource, string> = {
-  route: '用途',
-  parent: '流程',
-  global: '全域',
-  env: '.env',
+  route: '自己設定',
+  parent: '沿用流程',
+  global: '沿用全域',
+  env: '.env 預設',
 }
 
 /** 能力的顯示名稱（與 TG `/setconfig` 相同）；不在表中的能力直接顯示代號。Capability display names. */

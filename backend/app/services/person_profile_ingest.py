@@ -27,21 +27,33 @@ from __future__ import annotations
 import html
 import logging
 import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
 from app.core.dependencies import get_template_engine
-from app.core.exceptions import LLMGenerationError
-from app.infrastructure.llm.routing import route
-from app.schemas.llm.person_profile import IngestListUpdate, LLMPersonIngestResult
+from app.core.exceptions import AnkiFieldCorruptedError, FluencyTidesError, LLMGenerationError, NoteNotFoundError
+from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
+from app.infrastructure.llm.routing import Route, route
+from app.schemas.llm.person_profile import (
+    IngestListUpdate,
+    LLMPersonCreateResult,
+    LLMPersonFillResult,
+    LLMPersonIngestResult,
+)
 from app.schemas.person_profile import (
     GOAL_STATUSES,
     HISTORY_PERIOD_KEYS,
+    ITEM_EDIT_KEYS,
     NOTE_FIELDS,
     PERSON_HISTORY_FIELDS,
+    PERSON_JSON_ITEMS,
+    PERSON_NOTE_TYPE,
     RETIRED_FIELDS,
+    FamilyMember,
     Followup,
     Goal,
     Interaction,
@@ -57,10 +69,19 @@ from app.schemas.person_profile import (
     normalize_period,
     period_order_error,
 )
+from app.services.task_handlers.base import note_field_values
+
+if TYPE_CHECKING:
+    from app.services.card_service import CardService
+    from app.services.note_service import NoteService
 
 logger = logging.getLogger(__name__)
 
-INGEST_ROUTE = route("person_profile", "人脈卡：整理一段話", capabilities={"llm", "stt"})
+INGEST_ROUTE = route("person_profile", "人脈卡：TG 用一段話記錄（文字或語音）", capabilities={"llm", "stt"})
+
+#: ``update`` adds to an existing card (as in Telegram); ``create`` makes a new card from a description.
+#: ``update`` 補現有的卡（同 TG）；``create`` 從一段描述建新卡。
+IngestMode = Literal["update", "create"]
 
 WEEKDAYS = "一二三四五六日"
 
@@ -88,13 +109,15 @@ class Proposal:
     一項建議。
 
     Attributes:
-        kind: ``interaction``, ``followup``, ``goal``, ``field``, ``history_add``, or ``history_end``
-            ``interaction``、``followup``、``goal``、``field``、``history_add`` 或 ``history_end``
-        data: the interaction, follow-up, or goal item (validated; a goal also carries ``reason``); a text field
-            suggestion is ``{"field", "value", "mode", "reason"}``; adding an entry is
-            ``{"field", "item", "text", "reason"}`` (``item`` goes to ``add_history``); striking out an entry is
-            ``{"field", "index", "fingerprint", "text", "reason"}``
-            互動、待追蹤或目標的項目（已驗證；目標另附 ``reason``）；文字欄位的建議為
+        kind: ``display_name`` (only when creating a card), ``interaction``, ``followup``, ``goal``, ``family``,
+            ``field``, ``history_add``, or ``history_end``
+            ``display_name``（只有建新卡）、``interaction``、``followup``、``goal``、``family``、``field``、
+            ``history_add`` 或 ``history_end``
+        data: the display name is ``{"value"}``; the interaction, follow-up, goal or family item (validated; a goal
+            and a family member also carry ``reason``); a text field suggestion is ``{"field", "value", "mode", "reason"}``; adding an
+            entry is ``{"field", "item", "text", "reason"}`` (``item`` goes to ``add_history``); striking out an
+            entry is ``{"field", "index", "fingerprint", "text", "reason"}``
+            稱呼為 ``{"value"}``；互動、待追蹤、目標或家人的項目（已驗證；目標與家人另附 ``reason``）；文字欄位的建議為
             ``{"field", "value", "mode", "reason"}``；新增一筆為 ``{"field", "item", "text", "reason"}``
             （``item`` 交給 ``add_history``）；劃掉一筆為 ``{"field", "index", "fingerprint", "text", "reason"}``
     """
@@ -163,24 +186,40 @@ def _history_lines(name: str, items: list[object]) -> tuple[list[str], list[str]
     return current, past
 
 
-def build_prompt(fields: dict[str, str], lists: dict[str, list[object]], text: str, today: date) -> str:
+def build_prompt(
+    fields: dict[str, str],
+    lists: dict[str, list[object]],
+    text: str,
+    today: date,
+    mode: IngestMode = "update",
+    *,
+    optional_interaction: bool = False,
+) -> str:
     """Render the prompt: today, what is already known about this person, the user's text, and updatable fields.
 
     組出提示：今天、這個人目前已知的資料、使用者記下的話、可更新的欄位。
 
-    The known data is included to avoid repeated suggestions.
+    The known data is included to avoid repeated suggestions. In ``create`` mode the prompt describes a new
+    person instead (plan D3): it asks for a display name, the interaction becomes optional, there is no known data,
+    and nothing can be struck out.
 
-    已知資料是為了避免重複建議。
+    已知資料是為了避免重複建議。``create`` 模式改為描述一個新的人（計畫書 D3）：要稱呼、互動可以沒有、沒有已知
+    資料、不能劃掉。
 
     Args:
-        fields: the person's current fields
-            這個人目前的欄位
-        lists: the parsed lists
-            解析好的清單
+        fields: the person's current fields (empty in ``create`` mode)
+            這個人目前的欄位（``create`` 模式為空）
+        lists: the parsed lists (empty in ``create`` mode)
+            解析好的清單（``create`` 模式為空）
         text: the text the user recorded
             使用者記下的話
         today: today's date
             今天
+        mode: ``update`` (add to an existing card, as in Telegram) or ``create`` (a new card)
+            ``update``（補現有的卡，同 TG）或 ``create``（建新卡）
+        optional_interaction: in ``update`` mode, whether the interaction may be left out (the web: the text is
+            often what the user learned about the person, not one conversation); Telegram always asks for one
+            ``update`` 模式下互動可不可以沒有（網頁：描述的常是對他的了解，而不是一次聊天）；TG 一律要一筆
 
     Returns:
         the prompt
@@ -200,16 +239,6 @@ def build_prompt(fields: dict[str, str], lists: dict[str, list[object]], text: s
         current, past = _history_lines(name, lists.get(name, []))
         if current or past:
             known_lists.append((name, spec.title, current, past))
-    open_followups = [
-        str(f.get("item", ""))
-        for f in lists.get("Followups_JSON", [])
-        if isinstance(f, dict) and f.get("status", "open") != "done"
-    ]
-    recent = sorted(
-        (i for i in lists.get("Interactions_JSON", []) if isinstance(i, dict)),
-        key=lambda i: str(i.get("date", "")),
-        reverse=True,
-    )[:3]
     updatable = [
         (name, PersonCreateParams.model_fields[name].title or name, PersonCreateParams.model_fields[name].description)
         for name in UPDATABLE_FIELDS
@@ -217,40 +246,219 @@ def build_prompt(fields: dict[str, str], lists: dict[str, list[object]], text: s
     list_fields = [(name, spec.title, spec.single, spec.split) for name, spec in PERSON_HISTORY_FIELDS.items()]
     return get_template_engine().render(
         "prompts/anki/Person_Profile_Ingest.j2",
+        mode=mode,
         display_name=plain_text(fields.get("Display_Name", "")),
         today=today.isoformat(),
         weekday=WEEKDAYS[today.weekday()],
         known_fields=known,
         known_lists=known_lists,
-        open_followups=open_followups,
-        known_goals=[
-            f"{g.get('kind') or '目標'}：{g.get('item', '')}" + (f"（目標 {g['target']}）" if g.get("target") else "")
-            + ("" if str(g.get("status") or "open") == "open" else f"（{GOAL_STATUSES.get(str(g['status']), '')}）")
-            for g in lists.get("Goals_JSON", []) if isinstance(g, dict)
-        ],
-        recent_interactions=[f"{i.get('date', '')}：{i.get('topics', '')}" for i in recent],
+        open_followups=_open_followups(lists),
+        known_goals=_known_goals(lists),
+        known_family=_known_family(lists),
+        recent_interactions=_recent_interactions(lists),
+        optional_interaction=optional_interaction,
         updatable_fields=updatable,
         list_fields=list_fields,
         text=text,
     )
 
 
-async def ingest(
-    fields: dict[str, str], lists: dict[str, list[object]], text: str, today: date
-) -> LLMPersonIngestResult:
-    """Ask the LLM to structure a text.
+def _open_followups(lists: Mapping[str, list[object]]) -> list[str]:
+    """Return the follow-ups not done yet.
 
-    呼叫 LLM 整理一段話。
+    回傳還沒完成的待追蹤。
+    """
+    return [
+        str(f.get("item", ""))
+        for f in lists.get("Followups_JSON", [])
+        if isinstance(f, dict) and f.get("status", "open") != "done"
+    ]
+
+
+def _known_goals(lists: Mapping[str, list[object]]) -> list[str]:
+    """Return the goals, each with its target time and (when not open) its status.
+
+    回傳目標，各附目標時間與（不是進行中時的）狀態。
+    """
+    return [
+        f"{g.get('kind') or '目標'}：{g.get('item', '')}"
+        + (f"（目標 {g['target']}）" if g.get("target") else "")
+        + ("" if str(g.get("status") or "open") == "open" else f"（{GOAL_STATUSES.get(str(g['status']), '')}）")
+        for g in lists.get("Goals_JSON", [])
+        if isinstance(g, dict)
+    ]
+
+
+def _known_family(lists: Mapping[str, list[object]]) -> list[str]:
+    """Return the family members, one line each.
+
+    回傳家人，一人一行。
+    """
+    return [_family_text(f) for f in lists.get("Family_JSON", []) if isinstance(f, dict)]
+
+
+def _recent_interactions(lists: Mapping[str, list[object]], limit: int = 3) -> list[str]:
+    """Return the latest interactions, newest first, as 「date：topics」.
+
+    回傳最近的互動（新到舊），每筆「日期：聊了什麼」。
+    """
+    recent = sorted(
+        (i for i in lists.get("Interactions_JSON", []) if isinstance(i, dict)),
+        key=lambda i: str(i.get("date", "")),
+        reverse=True,
+    )[:limit]
+    return [f"{i.get('date', '')}：{i.get('topics', '')}" for i in recent]
+
+
+def known_summary(fields: Mapping[str, str], lists: Mapping[str, list[object]]) -> dict[str, object]:
+    """Return what is already on the card, as the web "AI 整理" dialog shows it next to each proposal.
+
+    回傳卡片上已經有的資料，網頁「AI 整理」對話框在每項建議旁邊顯示。
+
+    It is the same data the prompt lists as known (:func:`build_prompt`), so the user sees what the LLM was told
+    and can tell a real addition from a repeat. Entries keep the prompt's wording; struck-out entries of a changing
+    field are listed separately.
+
+    和提示列出的已知資料相同（``build_prompt``），使用者看得到 LLM 知道了什麼，分得出是新的還是重複。項目沿用提示的
+    寫法；會變的欄位裡劃掉的另外列。
 
     Args:
         fields: the person's current fields
             這個人目前的欄位
         lists: the parsed lists
             解析好的清單
+
+    Returns:
+        ``{"fields": {name: text}, "lists": {name: {"current", "past"}}, "followups", "goals", "family",
+        "interactions", "items": {name: [entry]}}``; empty parts are left out of ``fields``, ``lists`` and
+        ``items``. ``items`` are the original entries the dialog lets the user edit (see :func:`known_items`)
+        ``{"fields": {欄位: 文字}, "lists": {欄位: {"current", "past"}}, "followups", "goals", "family",
+        "interactions", "items": {欄位: [項目]}}``；``fields``、``lists``、``items`` 裡沒有內容的不列。``items`` 是
+        對話框讓使用者修改的原本項目（見 ``known_items``）
+    """
+    known_lists: dict[str, dict[str, list[str]]] = {}
+    for name in PERSON_HISTORY_FIELDS:
+        current, past = _history_lines(name, lists.get(name, []))
+        if current or past:
+            # 去掉給 LLM 看的編號與登錄日（網頁上用不到）
+            known_lists[name] = {"current": [_without_marks(line) for line in current], "past": past}
+    return {
+        "fields": {name: plain_text(fields.get(name, ""), 1000) for name in UPDATABLE_FIELDS if plain_text(fields.get(name, ""))},
+        "lists": known_lists,
+        "followups": _open_followups(lists),
+        "goals": _known_goals(lists),
+        "family": _known_family(lists),
+        "interactions": _recent_interactions(lists),
+        "items": known_items(lists),
+    }
+
+
+#: The lists whose original entries the dialog shows and lets the user edit (with ``edit_item``).
+#: 對話框列出、讓使用者修改（以 ``edit_item``）原本項目的清單。
+EDITABLE_LISTS: tuple[str, ...] = (*PERSON_HISTORY_FIELDS, "Family_JSON", "Goals_JSON", "Followups_JSON", "Interactions_JSON")
+
+
+def known_items(lists: Mapping[str, list[object]]) -> dict[str, list[dict[str, object]]]:
+    """Return the original entries of the lists, in the shape ``edit_item`` needs to change one.
+
+    回傳各清單原本的項目，形狀是 ``edit_item`` 修改一筆時需要的。
+
+    Each entry carries its index and fingerprint (to find the same entry when writing), the editable values
+    (exactly :data:`ITEM_EDIT_KEYS` of that list; a key the entry does not have is ``None``), a one-line text and
+    whether it is still active. Done follow-ups are left out; only the latest three interactions are listed.
+
+    每筆帶序號與指紋（寫入時找回同一筆）、能改的值（剛好是那個清單的 ``ITEM_EDIT_KEYS``；那一筆沒有的鍵為
+    ``None``）、一行文字，以及是否仍有效。已完成的待追蹤不列；互動只列最近三筆。
+
+    Args:
+        lists: the parsed lists
+            解析好的清單
+
+    Returns:
+        ``{list name: [{"index", "fingerprint", "values", "text", "active"}]}``; lists without entries are left out
+        ``{清單名: [{"index", "fingerprint", "values", "text", "active"}]}``；沒有項目的清單不列
+    """
+    result: dict[str, list[dict[str, object]]] = {}
+    for name in EDITABLE_LISTS:
+        keys = ITEM_EDIT_KEYS[name]
+        entries: list[dict[str, object]] = []
+        for index, item in enumerate(lists.get(name, [])):
+            if not isinstance(item, dict):
+                continue
+            if name == "Followups_JSON" and item.get("status", "open") == "done":
+                continue
+            entries.append({
+                "index": index,
+                "fingerprint": item_fingerprint(item),
+                "values": {key: item.get(key) for key in keys},
+                "text": _item_text(name, item),
+                "active": is_active(item) if name in PERSON_HISTORY_FIELDS else True,
+            })
+        if name == "Interactions_JSON":
+            entries = sorted(entries, key=lambda e: str((e["values"] or {}).get("date") or ""), reverse=True)[:3]  # type: ignore[union-attr]
+        if entries:
+            result[name] = entries
+    return result
+
+
+def _item_text(name: str, item: Mapping[str, object]) -> str:
+    """Return one original entry as a line of text.
+
+    回傳一筆原本項目的一行文字。
+    """
+    if name in PERSON_HISTORY_FIELDS:
+        return plain_text(entry_detail(name, item), 200)
+    if name == "Family_JSON":
+        return _family_text(item)
+    if name == "Goals_JSON":
+        target = f"（目標 {item['target']}）" if item.get("target") else ""
+        return f"{item.get('kind') or '目標'}：{item.get('item', '')}{target}"
+    if name == "Interactions_JSON":
+        return f"{item.get('date', '')}：{item.get('topics', '')}"
+    return plain_text(str(item.get("item") or ""), 200)
+
+
+def _without_marks(line: str) -> str:
+    """Drop the 「#n 」 number and the 「（登錄 date）」 the prompt adds to an active entry.
+
+    去掉提示裡有效項目前面的「#n 」編號與後面的「（登錄 日期）」。
+    """
+    return re.sub(r"（登錄 [^）]*）$", "", re.sub(r"^#\d+ ", "", line))
+
+
+async def ingest(
+    fields: dict[str, str],
+    lists: dict[str, list[object]],
+    text: str,
+    today: date,
+    *,
+    mode: IngestMode = "update",
+    llm_route: Route | None = None,
+    optional_interaction: bool = False,
+) -> LLMPersonIngestResult:
+    """Ask the LLM to structure a text.
+
+    呼叫 LLM 整理一段話。
+
+    Args:
+        fields: the person's current fields (empty in ``create`` mode)
+            這個人目前的欄位（``create`` 模式為空）
+        lists: the parsed lists (empty in ``create`` mode)
+            解析好的清單（``create`` 模式為空）
         text: the text the user recorded
             使用者記下的話
         today: today's date
             今天
+        mode: ``update`` or ``create`` (see :func:`build_prompt`); ``create`` returns an
+            :class:`LLMPersonCreateResult`
+            ``update`` 或 ``create``（見 ``build_prompt``）；``create`` 回傳 ``LLMPersonCreateResult``
+        llm_route: the route whose model is used; ``None`` means ``person_profile`` (Telegram), the web passes
+            ``person_profile.fill`` (``person_profile_fill.FILL_ROUTE``)
+            用哪個用途鍵的模型；``None`` 為 ``person_profile``（TG），網頁傳 ``person_profile.fill``
+            （``person_profile_fill.FILL_ROUTE``）
+        optional_interaction: in ``update`` mode, let the interaction be left out (see :func:`build_prompt`); the
+            result is then an :class:`LLMPersonFillResult`
+            ``update`` 模式下互動可以沒有（見 ``build_prompt``）；結果為 ``LLMPersonFillResult``
 
     Returns:
         the validated LLM result; turn it into proposals with :func:`proposals_from`
@@ -264,14 +472,19 @@ async def ingest(
         TemplateEngineError: if the prompt template is broken (a code or deployment error)
             若提示詞模板有誤（程式或部署錯誤）
     """
-    client = await INGEST_ROUTE.client()
+    schema: type[LLMPersonIngestResult] = LLMPersonIngestResult
+    if mode == "create":
+        schema = LLMPersonCreateResult
+    elif optional_interaction:
+        schema = LLMPersonFillResult
+    client = await (llm_route or INGEST_ROUTE).client()
     result = await client.generate_structured_data(
         system_prompt="You are a careful assistant that extracts facts into strict JSON. Never invent facts.",
-        user_prompt=build_prompt(fields, lists, text, today),
-        response_schema=LLMPersonIngestResult.model_json_schema(),
+        user_prompt=build_prompt(fields, lists, text, today, mode, optional_interaction=optional_interaction),
+        response_schema=schema.model_json_schema(),
     )
     try:
-        return LLMPersonIngestResult.model_validate(result.parsed_data)
+        return schema.model_validate(result.parsed_data)
     except ValidationError as e:
         # 調整提示詞時要看哪個模型、哪種輸出常出錯：記下前幾個錯誤與原始輸出的開頭
         logger.warning(
@@ -314,9 +527,10 @@ def proposals_from(
 
     把 LLM 的結果整理成可勾選的建議：格式不對的丟掉。
 
-    An interaction whose date is invalid gets today's date instead.
+    An interaction whose date is invalid gets today's date instead. A create-mode result
+    (:class:`LLMPersonCreateResult`) starts with the display name, and may have no interaction.
 
-    日期不對的互動改成今天。
+    日期不對的互動改成今天。建新卡的結果（``LLMPersonCreateResult``）第一項是稱呼，也可能沒有互動。
 
     Args:
         result: the LLM result
@@ -330,18 +544,23 @@ def proposals_from(
             今天
 
     Returns:
-        the proposals, in the order interaction, follow-ups, goals, text fields, changing fields
-        建議，依互動、待追蹤、目標、文字欄位、會變的欄位的順序
+        the proposals, in the order display name (create mode), interaction, follow-ups, goals, family members,
+        text fields, changing fields; a family member already on the card is left out
+        建議，依稱呼（建新卡）、互動、待追蹤、目標、家人、文字欄位、會變的欄位的順序；卡片上已有的家人不列
     """
     proposals: list[Proposal] = []
-    interaction = result.interaction.model_dump()
-    try:
-        item = Interaction.model_validate(interaction)
-    except ValidationError:
-        item = Interaction.model_validate({**interaction, "date": today.isoformat()})
-    data = {k: v for k, v in item.model_dump().items() if v not in ("", None)}
-    if data.get("topics") or data.get("updates"):
-        proposals.append(Proposal("interaction", data))
+    if isinstance(result, LLMPersonCreateResult):
+        # 稱呼是建卡必填的：LLM 沒給也列出來（空的），由使用者填
+        proposals.append(Proposal("display_name", {"value": plain_text(result.display_name, 100)}))
+    if result.interaction is not None:
+        interaction = result.interaction.model_dump()
+        try:
+            item = Interaction.model_validate(interaction)
+        except ValidationError:
+            item = Interaction.model_validate({**interaction, "date": today.isoformat()})
+        data = {k: v for k, v in item.model_dump().items() if v not in ("", None)}
+        if data.get("topics") or data.get("updates"):
+            proposals.append(Proposal("interaction", data))
 
     for followup in result.followups:
         try:
@@ -373,6 +592,19 @@ def proposals_from(
             **{k: v for k, v in validated_goal.model_dump().items() if k in ("kind", "item", "target") and v},
             "reason": goal.reason,
         }))
+
+    known_family = {_family_key(f) for f in lists.get("Family_JSON", []) if isinstance(f, dict)}
+    for member in result.family:
+        try:
+            validated_member = FamilyMember.model_validate(member.model_dump(exclude={"reason"}))
+        except ValidationError:
+            logger.warning("略過格式不對的家人建議: %s（%s）", member.relation, member.reason)
+            continue
+        member_data = {k: v for k, v in validated_member.model_dump().items() if k in ("relation", "name", "note") and v}
+        if _family_key(member_data) in known_family:
+            continue
+        known_family.add(_family_key(member_data))
+        proposals.append(Proposal("family", {**member_data, "reason": member.reason}))
 
     for update in result.field_updates:
         name, value = update.field, update.value.strip()
@@ -439,6 +671,25 @@ def proposals_from(
             "text": entry_detail(name, item), "reason": change.reason,
         }))
     return proposals
+
+
+def _family_key(member: Mapping[str, object]) -> tuple[str, str]:
+    """Return what identifies a family member: the relation, and the name or (without one) the note.
+
+    回傳辨認一位家人的鍵：關係，加上名字（沒有名字時用說明）。
+    """
+    relation = str(member.get("relation") or "").strip()
+    return relation, str(member.get("name") or "").strip() or str(member.get("note") or "").strip()
+
+
+def _family_text(member: Mapping[str, object]) -> str:
+    """Return a family member as one line for the prompt, for example 「弟弟（健太）：在大阪工作」.
+
+    回傳提示裡的一位家人，例如「弟弟（健太）：在大阪工作」。
+    """
+    name = plain_text(str(member.get("name") or ""), 40)
+    note = plain_text(str(member.get("note") or ""), 120)
+    return plain_text(str(member.get("relation") or ""), 20) + (f"（{name}）" if name else "") + (f"：{note}" if note else "")
 
 
 def _already_known(name: str, items: list[object], item: dict[str, object]) -> bool:
@@ -622,3 +873,269 @@ def field_html(field: str, current: str, value: str, mode: str) -> str:
     """
     new = html.escape(value.strip()).replace("\n", "<br>")
     return append_field_html(current, new) if mode == "append" else new
+
+
+# =============================================================================
+# 讀卡片與寫入勾選的建議（TG 與網頁共用）
+# =============================================================================
+
+#: The handler that owns person cards.
+#: 人脈卡的 handler。
+HANDLER_NAME = "person_profile"
+
+#: The message when the note is gone or is not a person card.
+#: 筆記不在或不是人脈卡時的訊息。
+PERSON_NOT_FOUND = "Anki 裡找不到這張人脈卡（可能已刪除或尚未同步）。"
+
+#: The proposals written with an action that takes the item as is.
+#: 直接以項目當參數寫入的建議。
+_ITEM_ACTIONS = {"interaction": "add_interaction", "followup": "add_followup"}
+
+
+async def load_person(
+    card_service: CardService, note_id: int
+) -> tuple[dict[str, str], dict[str, list[object]], list[str]] | None:
+    """Load a person: plain fields, parsed lists, and the note's tags; ``None`` when the note is not a person card.
+
+    讀出一個人：一般欄位、解析好的清單與筆記的標籤；不是人脈卡時為 ``None``。
+
+    The lists include the JSON lists and the history fields (``PERSON_HISTORY_FIELDS``). A list whose format is
+    broken (including old text not yet run through ``migrate_history_fields.py``) is treated as empty and a warning
+    is logged; display code marks it, and the handler refuses to write it (no overwrite).
+
+    清單含 JSON 清單與會變的欄位（``PERSON_HISTORY_FIELDS``）。格式壞掉的清單（包括還沒跑
+    ``migrate_history_fields.py`` 的舊文字）當成空的，記一筆 warning；顯示的地方會標出，寫入時 handler 會拒絕
+    （不覆寫）。
+
+    Args:
+        card_service: the card service
+            卡片服務
+        note_id: the note ID
+            筆記 ID
+
+    Returns:
+        ``(fields, lists, tags)``, or ``None`` when the note is not a person card
+        ``(欄位, 清單, 標籤)``；不是人脈卡時為 ``None``
+
+    Raises:
+        AnkiConnectError: if AnkiConnect is unreachable
+            若 AnkiConnect 連不上
+        NoteNotFoundError: if the note does not exist
+            若筆記不存在
+    """
+    note = await card_service.get_note(note_id)
+    if str(note.get("modelName")) != PERSON_NOTE_TYPE:
+        return None
+    fields = note_field_values(note)
+    lists: dict[str, list[object]] = {}
+    broken = []
+    for name in (*PERSON_JSON_ITEMS, *PERSON_HISTORY_FIELDS):
+        try:
+            lists[name] = AnkiJsonFieldManager.parse_field_string(fields.get(name, ""))
+        except AnkiFieldCorruptedError:
+            lists[name] = []
+            broken.append(name)
+    if broken:
+        logger.warning("人脈卡 note %s 的清單格式壞了（當成空的）: %s", note_id, "、".join(broken))
+    return fields, lists, [str(tag) for tag in note.get("tags") or []]
+
+
+def proposal_action(kind: str, data: Mapping[str, object]) -> tuple[str, dict[str, object]]:
+    """Return the named action and parameters that write one proposal (other than text fields).
+
+    回傳一項建議（文字欄位以外）要執行的具名動作與參數。
+
+    Args:
+        kind: the proposal kind (see :class:`Proposal`)
+            建議的種類（見 ``Proposal``）
+        data: the proposal data
+            建議的內容
+
+    Returns:
+        ``(action, params)`` for ``NoteService.run_action``
+        給 ``NoteService.run_action`` 的 ``(動作, 參數)``
+
+    Raises:
+        ValueError: if the kind is not one written by an action (a programming error)
+            若種類不是以動作寫入的（程式錯誤）
+    """
+    if kind in _ITEM_ACTIONS:
+        return _ITEM_ACTIONS[kind], {"item": dict(data)}
+    if kind == "goal":
+        return "add_item", {"field": "Goals_JSON", "item": {k: v for k, v in data.items() if k != "reason"}}
+    if kind == "family":
+        return "add_item", {"field": "Family_JSON", "item": {k: v for k, v in data.items() if k != "reason"}}
+    if kind == "history_add":
+        return "add_history", {"field": data["field"], "item": data["item"]}
+    if kind == "history_end":
+        return "set_history_status", {
+            "field": data["field"], "index": data["index"], "fingerprint": data["fingerprint"], "ended": True,
+        }
+    if kind == "edit_item":
+        return "edit_item", {
+            "field": data["field"], "index": data["index"], "fingerprint": data["fingerprint"],
+            "values": data["values"], "expected": data.get("expected"),
+        }
+    raise ValueError(f"未知的建議種類 {kind!r}")
+
+
+async def apply_proposals(
+    note_service: NoteService,
+    card_service: CardService,
+    note_id: int,
+    proposals: Sequence[Mapping[str, object]],
+    indexes: Iterable[int],
+    saved: set[int],
+    errors: dict[int, str] | None = None,
+    *,
+    force_sync: bool = False,
+) -> str | None:
+    """Write the chosen proposals to a person card, skipping the ones already written.
+
+    把勾選的建議寫進人脈卡，已經寫過的略過。
+
+    Interaction, follow-up, goal and changing-field proposals are each written with their own action; text field
+    proposals are combined into one ``update_fields``, computed from the field's value at the time of writing (so
+    an "append" lands after what is there now, even if the card changed after the proposals were made). ``saved``
+    is updated in place as each proposal is written, so when a write fails midway the caller still knows what was
+    written, and calling again with the same ``saved`` writes only the rest without duplicating.
+
+    互動、待追蹤、目標與會變的欄位建議各以自己的動作寫入，文字欄位的建議合成一次 ``update_fields``，以寫入當下的
+    欄位內容計算（建議產生後卡片又被改過，「接在後面」也會接在現在的內容之後）。每寫入一項就就地加進 ``saved``：
+    中途失敗時呼叫端仍知道寫了哪些，帶同一個 ``saved`` 再呼叫一次只補寫剩下的，不會重複。
+
+    Everything is written first and AnkiWeb is synced once at the end (not after every write, which made a dozen
+    proposals take a dozen syncs). The sync also runs when a write fails midway, so what was written is still
+    uploaded.
+
+    全部寫完才同步 AnkiWeb 一次（不是每寫一項同步一次：十幾項建議就要同步十幾次）。中途寫入失敗時也照樣同步，
+    已經寫進去的還是會上傳。
+
+    By default the first rejection stops the writing (Telegram). With ``errors`` (the web), a proposal the handler
+    rejects gets its reason recorded there and the rest are still written; the text field proposals stand or fall
+    together, since they are one write. An Anki connection failure always stops, as the rest would fail too.
+
+    預設第一個被拒絕的項目就停止（TG）。帶 ``errors`` 時（網頁），handler 拒絕的項目把原因記在那裡、其他的照常寫入；
+    文字欄位的建議是同一次寫入，會一起成功或一起失敗。Anki 連線失敗一律停止，因為剩下的也會失敗。
+
+    Args:
+        note_service: the note service
+            筆記服務
+        card_service: the card service (to read the current text fields)
+            卡片服務（讀目前的文字欄位）
+        note_id: the person card
+            人脈卡
+        proposals: every proposal, each ``{"kind", "data"}`` (see :class:`Proposal`); ``display_name`` proposals
+            are not written here (they become the display name when a card is created)
+            所有建議，每項 ``{"kind", "data"}``（見 ``Proposal``）；``display_name`` 不在這裡寫（建卡時當稱呼）
+        indexes: the indexes of the chosen proposals
+            勾選的建議的序號
+        saved: the indexes already written; updated in place
+            已寫入的序號，會就地更新
+        errors: when given, collects ``{index: reason}`` for rejected proposals instead of raising; cleared for the
+            proposals written this time
+            有給時，收集被拒絕的項目 ``{序號: 原因}`` 而不拋出；這次寫入成功的項目會清掉
+        force_sync: sync at the end even if nothing is written here (the caller wrote something without syncing,
+            for example the new card of "AI 整理")
+            這裡什麼都沒寫入時也要同步（呼叫端已經寫了東西但還沒同步，例如「AI 整理」剛建的新卡）
+
+    Returns:
+        the sync warning, or ``None`` when the sync succeeded or nothing needed syncing
+        同步提醒；同步成功或不需要同步時為 ``None``
+
+    Raises:
+        AnkiConnectError: if AnkiConnect fails while writing
+            若寫入時 AnkiConnect 失敗
+        FluencyTidesError: if the handler rejects a proposal (for example an entry to strike out has changed) or
+            the card is gone, and ``errors`` is not given; ``saved`` holds what was written before
+            若 handler 拒絕某一項（例如要劃掉的那筆已經變了）或卡片不在，且沒有給 ``errors``；``saved`` 是在那之前
+            寫入的
+    """
+    pending = [i for i in indexes if i not in saved and proposals[i]["kind"] != "display_name"]
+    written_before = len(saved)
+    try:
+        await _write_each(note_service, card_service, note_id, proposals, pending, saved, errors)
+    finally:
+        # 寫完（或寫到一半失敗）才同步一次：有寫入東西才需要
+        warning = await note_service.sync_after_write() if force_sync or len(saved) > written_before else None
+    return warning
+
+
+async def _write_each(
+    note_service: NoteService,
+    card_service: CardService,
+    note_id: int,
+    proposals: Sequence[Mapping[str, object]],
+    pending: list[int],
+    saved: set[int],
+    errors: dict[int, str] | None,
+) -> None:
+    """Write the pending proposals without syncing (see :func:`apply_proposals`).
+
+    寫入還沒寫的建議，不同步（見 ``apply_proposals``）。
+    """
+    for i in pending:
+        kind = str(proposals[i]["kind"])
+        if kind in ("field", "edit_field"):
+            continue
+        data = proposals[i]["data"]
+        assert isinstance(data, Mapping)
+        action, params = proposal_action(kind, data)
+        try:
+            await note_service.run_action(note_id, action, params, sync=False)
+        except FluencyTidesError as e:
+            if errors is None:
+                raise
+            errors[i] = e.message
+            continue
+        saved.add(i)
+        if errors is not None:
+            errors.pop(i, None)
+    # 修改原本的文字欄位排在建議之前：先取代、再接上新的內容
+    field_indexes = sorted(
+        (i for i in pending if proposals[i]["kind"] in ("edit_field", "field")),
+        key=lambda i: proposals[i]["kind"] != "edit_field",
+    )
+    if field_indexes:
+        try:
+            await _write_fields(note_service, card_service, note_id, proposals, field_indexes)
+        except FluencyTidesError as e:
+            if errors is None:
+                raise
+            errors.update({i: e.message for i in field_indexes})
+            return
+        saved.update(field_indexes)
+        if errors is not None:
+            for i in field_indexes:
+                errors.pop(i, None)
+
+
+async def _write_fields(
+    note_service: NoteService,
+    card_service: CardService,
+    note_id: int,
+    proposals: Sequence[Mapping[str, object]],
+    indexes: list[int],
+) -> None:
+    """Write the text field proposals as one ``update_fields``, from the fields' current values, without syncing.
+
+    把文字欄位的建議合成一次 ``update_fields`` 寫入，以欄位目前的內容計算，不同步。
+
+    Raises:
+        AnkiConnectError: if AnkiConnect fails
+            若 AnkiConnect 失敗
+        FluencyTidesError: if the card is gone or the handler rejects the fields
+            若卡片不在或 handler 拒絕這些欄位
+    """
+    loaded = await load_person(card_service, note_id)
+    if loaded is None:
+        raise NoteNotFoundError(PERSON_NOT_FOUND)
+    current, changes = loaded[0], {}
+    for i in indexes:
+        update = proposals[i]["data"]
+        assert isinstance(update, Mapping)
+        name = str(update["field"])
+        # 修改原本的內容是整段取代（mode 固定 replace）
+        mode = "replace" if proposals[i]["kind"] == "edit_field" else str(update["mode"])
+        changes[name] = field_html(name, changes.get(name, current.get(name, "")), str(update["value"]), mode)
+    await note_service.update_fields(HANDLER_NAME, note_id, changes, sync=False)

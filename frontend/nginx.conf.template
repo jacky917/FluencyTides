@@ -16,6 +16,18 @@ server {
         # 關鍵：若找不到對應的路徑，一律回傳 index.html 交給前端 React 路由處理
         try_files $uri $uri/ /index.html;
     }
+    # 入口頁每次都向伺服器確認（ETag 沒變就回 304）：沒有 Cache-Control 時瀏覽器自己估快取時間，
+    # 加到主畫面的 App 部署後可能還拿著舊的入口頁、載入舊的 JS。「/」與 SPA 路由的 try_files 都會轉到這裡
+    location = /index.html {
+        root   /usr/share/nginx/FluencyTides;
+        add_header Cache-Control "no-cache";
+    }
+    # Vite 建置的檔名帶內容雜湊，內容變了檔名就變：可以放心長期快取
+    location /assets/ {
+        root   /usr/share/nginx/FluencyTides;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+    }
     # 加到主畫面用的 Web App Manifest：nginx 內建的 mime.types 沒有 .webmanifest（會回 application/octet-stream），
     # 這裡指定正確的類型；不快取，改了 scope 或圖示時重新加到主畫面就讀得到新的
     location = /manifest.webmanifest {

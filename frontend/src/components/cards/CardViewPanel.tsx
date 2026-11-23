@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ArrowUp } from 'lucide-react'
+import { ArrowLeft, ArrowUp, Sparkles } from 'lucide-react'
 import { FluencyTidesAPI } from '../../api/client'
 import { useFaceSettings } from '../../hooks/useFaceSettings'
 import { retryTransient } from '../../lib/apiError'
 import type { CardSide } from '../../lib/cardBrowse'
 import { nextShownFace, parseFaceValue, rememberLatest, type FaceValue, type ShownFace } from '../../lib/cardFaces'
 import { relativeDeckPath } from '../../lib/deckTree'
+import { openPersonFill } from '../../lib/personFill'
 import { facePreference } from '../../lib/faceTransitions'
 import { cn } from '../../lib/utils'
 import type { CardView } from '../../types/api'
@@ -133,6 +134,11 @@ export function CardViewPanel({
   })
   // 選取的這張卡片的資料（舊卡片的暫代資料不算）
   const card = data !== undefined && !isPlaceholderData ? data : undefined
+  // 這種卡片開放「AI 整理」時（人脈卡），卡面標題列多一個按鈕
+  const { data: handlers } = useQuery({ queryKey: ['handlers'], queryFn: FluencyTidesAPI.listHandlers, retry: retryTransient })
+  const fillable = !!card && (handlers ?? []).some(
+    (handler) => handler.capabilities.fill?.supported && handler.note_types.includes(card.model_name),
+  )
   const noteId = card?.note_id ?? null
   const {
     data: noteDetail,
@@ -235,7 +241,7 @@ export function CardViewPanel({
             {card ? card.note_id : <TextSkeleton className="h-3 w-24 align-middle" />}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <div className="inline-flex rounded-md border p-0.5" role="group" aria-label="卡面">
             {(['question', 'answer'] as const).map((value) => (
               <button
@@ -256,6 +262,12 @@ export function CardViewPanel({
           <Button size="sm" variant="outline" disabled={!card} onClick={() => onFieldsOpen(true)}>
             筆記欄位
           </Button>
+          {fillable && card && (
+            <Button size="sm" variant="outline" onClick={() => openPersonFill({ noteId: card.note_id })}>
+              <Sparkles className="h-4 w-4" />
+              AI 整理
+            </Button>
+          )}
           <ShowInStoryButton noteId={card?.note_id} modelName={card?.model_name} />
         </div>
       </div>

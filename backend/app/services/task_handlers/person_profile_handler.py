@@ -386,6 +386,7 @@ class PersonProfileHandler(BaseHandler):
             supported=True, channels=("web", "tg"), flow="form", deck="selected", note_type=PERSON_NOTE_TYPE
         ),
         update_fields=Operation(supported=True),
+        fill=Operation(supported=True),
         update_json=Operation(supported=True),
         delete=Operation(supported=True),
         actions=ACTIONS,

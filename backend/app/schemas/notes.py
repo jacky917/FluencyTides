@@ -74,6 +74,7 @@ class CapabilitiesOut(BaseModel):
     actions: list[str]
     graph: GraphCapabilityOut
     search: OperationOut = Field(description="網頁卡片頁的欄位搜尋（欄位按鈕見 search_fields）")
+    fill: OperationOut = Field(description="網頁的「AI 整理」：一段描述經 LLM 整理成建議，編輯、勾選後寫入（目前只有人脈卡）")
 
 
 class HandlerInfo(BaseModel):

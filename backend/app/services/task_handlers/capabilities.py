@@ -217,6 +217,12 @@ class HandlerCapabilities:
     #: ``BaseHandler.search_fields``.
     #: 網頁卡片頁的欄位搜尋（點欄位、輸入關鍵字）；可搜尋的欄位見 ``BaseHandler.search_fields``。
     search: Operation = field(default_factory=Operation)
+    #: The web "AI 整理" dialog (``docs/wip/person_llm_fill_FEAT_2026-11-23.md``): a description is organized by the
+    #: LLM into proposals that are edited and ticked before writing, to an existing note or a new one. Only person
+    #: cards offer it; it shares the site-wide draft slot with the preview flow.
+    #: 網頁的「AI 整理」對話框（``docs/wip/person_llm_fill_FEAT_2026-11-23.md``）：一段描述經 LLM 整理成建議，編輯、
+    #: 勾選後寫進現有的筆記或建一張新的。目前只有人脈卡開放；和預覽流程共用全站一份草稿的槽位。
+    fill: Operation = field(default_factory=Operation)
     graph: GraphCapability = field(default_factory=GraphCapability)
 
     def to_dict(self) -> dict[str, object]:

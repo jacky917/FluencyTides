@@ -53,6 +53,11 @@ export interface HandlerCapabilities {
   graph: GraphCapability;
   /** 卡片頁的欄位搜尋（欄位按鈕見 `search_fields`）。Field search on the card page. */
   search?: Operation;
+  /**
+   * 網頁的「AI 整理」：一段描述經 LLM 整理成建議，編輯、勾選後寫入（`docs/wip/person_llm_fill_FEAT_2026-11-23.md`）。
+   * The web "AI 整理": a description organized into proposals, edited and ticked before writing.
+   */
+  fill?: Operation;
 }
 
 /** 欄位搜尋的一個欄位按鈕。One field-search button. */
@@ -229,6 +234,95 @@ export interface ServerDraft {
   created_at: string;
   updated_at: string;
   generation_started_at: string | null;
+}
+
+/**
+ * 「AI 整理」的一項建議（`person_profile_ingest.Proposal`）：種類與內容。
+ * One "AI 整理" proposal: its kind and data.
+ */
+export type FillProposalKind =
+  | 'display_name'
+  | 'interaction'
+  | 'followup'
+  | 'goal'
+  | 'family'
+  | 'field'
+  | 'history_add'
+  | 'history_end'
+  // 使用者修改卡片原本的內容（不是 LLM 的建議）
+  | 'edit_field'
+  | 'edit_item';
+
+/** 「AI 整理」的一項建議。One "AI 整理" proposal. */
+export interface FillProposal {
+  kind: FillProposalKind;
+  data: Record<string, unknown>;
+}
+
+/**
+ * 「AI 整理」草稿的生成結果（`result.params`）：模式、要補的卡、建新卡的牌組、建議，與寫到一半時的進度。
+ * The generated "AI 整理" result, with the progress of a partial write.
+ */
+/**
+ * 卡片原本的一筆（`person_profile_ingest.known_items`）：修改時以 `edit_item` 寫回。
+ * One original entry of a list, edited back with `edit_item`.
+ */
+export interface FillKnownItem {
+  /** 在清單裡的序號。The index in the list. */
+  index: number;
+  /** 寫入時找回同一筆用。Finds the same entry when writing. */
+  fingerprint: string;
+  /** 能改的值（剛好是那個清單能改的鍵；沒有的為 null）。The editable values. */
+  values: Record<string, unknown>;
+  text: string;
+  /** 還有效（會變的資料裡劃掉的為 false）。Whether it is still active. */
+  active: boolean;
+}
+
+/**
+ * 卡片上已經有的資料（`person_profile_ingest.known_summary`），和提示裡給 LLM 的相同。
+ * What the card already has, the same as the LLM was told.
+ */
+export interface FillKnown {
+  /** 文字欄位：欄位名 → 內容。Text fields. */
+  fields: Record<string, string>;
+  /** 會變的欄位：有效的與劃掉的。Changing fields, active and struck out. */
+  lists: Record<string, { current: string[]; past: string[] }>;
+  /** 還沒完成的待追蹤。Open follow-ups. */
+  followups: string[];
+  goals: string[];
+  family: string[];
+  /** 最近的互動（「日期：聊了什麼」）。Recent interactions. */
+  interactions: string[];
+  /** 各清單原本的項目（可以修改）。The original entries of each list. */
+  items?: Record<string, FillKnownItem[]>;
+}
+
+export interface FillResultParams {
+  mode: 'update' | 'create';
+  /** 要補的卡；建新卡時建好後才有。The card, set once a new card is created. */
+  note_id: number | null;
+  deck: string | null;
+  proposals: FillProposal[];
+  /** 卡片上已經有的資料；建新卡時為 null。What the card already has, or null for a new card. */
+  known: FillKnown | null;
+  /** 已寫入的建議序號。The indexes already written. */
+  saved: number[];
+  /** 上次沒寫入的建議與原因（鍵是序號字串）。Why some were not written. */
+  errors: Record<string, string>;
+}
+
+/** `POST /drafts/{id}/apply` 的回應。The result of writing an "AI 整理" draft. */
+export interface ApplyFillResponse {
+  /** 勾選的都寫入了（草稿已結束）。Whether everything ticked was written. */
+  done: boolean;
+  note_id: number | null;
+  saved: number[];
+  /** 沒寫入的建議與原因（鍵是序號字串）。Why some were not written. */
+  errors: Record<string, string>;
+  sync_warning: string | null;
+  /** 還沒寫完時的草稿。The draft when it stays. */
+  draft: ServerDraft | null;
 }
 
 /** 三語對話卡的一句參考答案（草稿與建卡參數）。One trilingual reference answer. */

@@ -504,10 +504,10 @@ function DuplicateNotice({
   return (
     <div role="alert" className="space-y-2 rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-3 text-sm">
       <p className="font-medium">Anki 已經有相同原文的卡</p>
-      {card.original_text && <p className="whitespace-pre-line break-words">原文：{card.original_text}</p>}
-      {card.correct_answer && <p className="whitespace-pre-line break-words">舊卡的修正：{card.correct_answer}</p>}
+      {card.original_text && <p className="whitespace-pre-line [overflow-wrap:anywhere]">原文：{card.original_text}</p>}
+      {card.correct_answer && <p className="whitespace-pre-line [overflow-wrap:anywhere]">舊卡的修正：{card.correct_answer}</p>}
       {card.reorganized_expression && (
-        <p className="whitespace-pre-line break-words">舊卡的重組：{card.reorganized_expression}</p>
+        <p className="whitespace-pre-line [overflow-wrap:anywhere]">舊卡的重組：{card.reorganized_expression}</p>
       )}
       <p className="text-xs text-muted-foreground">
         「覆蓋舊卡」會在新卡建立成功後刪掉舊的母卡與子卡（建立失敗時舊卡不動）；「另建新卡」會留著舊卡。還沒呼叫 LLM。
@@ -662,7 +662,7 @@ function ReadyPreview<S extends DraftStateBase>({
     <div className="space-y-4" aria-busy={creating}>
       {deckSummary}
       {summary && (
-        <p className="break-words rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">{summary}</p>
+        <p className="[overflow-wrap:anywhere] rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">{summary}</p>
       )}
       <Body state={state} onChange={editor.setState} disabled={busy} deck={deck} />
       <TagInput
