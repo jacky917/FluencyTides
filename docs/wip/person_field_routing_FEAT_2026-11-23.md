@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-11-23 |
 | **性質** | 筆記類型加欄位＋提示詞重整（TG「用一段話記錄」與網頁「AI 整理」共用） |
-| **狀態** | 🚧 實作中 |
+| **狀態** | 🚀 已部署正式機（2026-11-23，`4378393`）；待用真的 LLM 實測 |
 | **範圍** | ① 人脈卡加兩個會變的欄位 `Credentials`（身分與證照）、`Daily_Life`（生活圈與日常），卡面、TG、網頁、搜尋、AI 話題都接上；② `Person_Profile_Ingest.j2` 的「放哪裡」改成一張由欄位定義產生的分工表，拿掉針對單一測試文字補上的規則與範例；③ 工作經歷的打工與工作細節、有把握的名稱校正 |
 | **不動** | 既有欄位的資料格式與寫入規則、AI 整理對話框的介面（新欄位自動出現）、目標的狀態（達成／放棄仍是手動，見 §6） |
 | **PR / 進度** | 分支 `feat/person-field-routing`（接在 `feat/person-llm-fill`、PR #58 之後） |
@@ -120,23 +120,35 @@ python scripts/local_anki/Person_Profile_Dark/migrate_single_card.py --apply
 
 | 檔案 | 改動 |
 |---|---|
-| `backend/app/anki_models/Person_Profile_Dark.json` | `inOrderFields` 加 `Credentials`（`Languages` 後）、`Daily_Life`（`Residence` 後） |
-| `backend/app/anki_models/Person_Profile_Dark_front.html` | 欄位 div、`HISTORY_FIELDS`、`NOTE_FIELDS`、`PERIOD_KEYS`、「認識脈絡與基本資料」一段的兩列 |
-| `backend/app/schemas/person_profile.py` | `PersonCreateParams` 兩個欄位；`Credentials` 的項目模型（`value`、`since`、`until`、`note`）；`PERSON_HISTORY_FIELDS`、`NOTE_FIELDS`、`HISTORY_PERIOD_KEYS`；`history_period` 顯示「取得～到期」；新增 `FIELD_GUIDES`、`FIELD_TIME_HINTS` |
-| `backend/app/schemas/llm/person_profile.py` | `time_start`／`time_end` 的說明不再逐一列欄位 |
-| `backend/app/templates/prompts/anki/Person_Profile_Ingest.j2` | 整理原則改成 D3 的五條；分工表由 `FIELD_GUIDES` 產生；工作經歷加打工；範例換成不取自實測文字的例子 |
-| `backend/app/services/person_profile_ingest.py` | 把分工說明與時間意義傳給模板 |
-| `backend/app/services/task_handlers/person_profile_handler.py` | 搜尋按鈕（`SEARCH_FIELDS`）；其餘（JSON 欄位規格、建卡轉換）由欄位定義自動帶入 |
-| `backend/app/bot/utils/person_profile_view.py` | `LIST_CODES`（`CR`、`DY`）、`SECTION_FIELDS["context"]`、`DISPLAY_GROUPS`、`HISTORY_DETAIL_STEPS`、`PERIOD_PAIRS`（取得／到期） |
-| `frontend/src/lib/personFill.ts` | `HISTORY_ITEM_LABELS`、`ITEM_KEY_LABELS` 加 `until`（到期）；其餘由後端的項目 schema 帶入 |
-| 測試 | 仿 `tests/test_person_experiences.py` 新增 `tests/test_person_credentials_daily_life.py`（模型、建卡表單位置、搜尋、TG 代號與段落、新增流程、卡面一列、整理的建議與提示詞、AI 話題、遷移只加這兩個欄位）；`FIELD_GUIDES` 完整性；更新卡面契約、TG 代號、時間鍵的既有測試 |
+| `backend/app/anki_models/Person_Profile_Dark.json` | `inOrderFields` 加 `Daily_Life`（`Residence` 後）、`Credentials`（`Languages` 後） |
+| `backend/app/anki_models/Person_Profile_Dark_front.html` | 欄位 div、`HISTORY_FIELDS`、`NOTE_FIELDS`、`PERIOD_KEYS`、「認識脈絡與基本資料」一段的兩列（期間顯示沿用兩個時間鍵的寫法） |
+| `backend/app/schemas/person_profile.py` | `PersonCreateParams` 兩個欄位；`CredentialEntry`（`value`、`since`、`until`、`note`）與 `CREDENTIAL_LABELS`；`PERSON_HISTORY_FIELDS`、`NOTE_FIELDS`、`HISTORY_PERIOD_KEYS`；import 時的檢查：`NOTE_FIELDS` 剛好是有說明鍵的模型、時間鍵最多兩個、起訖名稱和模型的欄位名稱相同 |
+| `backend/app/services/person_field_guide.py`（新） | `FIELD_GUIDES`（放什麼、不放什麼）、`FIELD_TIME_HINTS`（各時間的意義）、`FIELD_NOTE_HINTS`（說明寫什麼）：給 LLM 的用語，放在 services、和欄位定義分開 |
+| `backend/app/services/person_profile_ingest.py` | 分工表由欄位說明產生；import 時檢查說明剛好涵蓋所有欄位（少了、多了都失敗）；`item_labels()`（清單各鍵的中文名稱，取自項目模型）；劃掉先於新增處理（D6） |
+| `backend/app/services/person_profile_fill.py` | 生成結果多 `labels`；可切欄位一次寫了好幾項又填時間時擋下（D6） |
+| `backend/app/schemas/llm/person_profile.py` | `time_start`／`time_end`／`note` 的說明不再逐一列欄位（意義見提示詞）；例子換掉實測文字 |
+| `backend/app/templates/prompts/anki/Person_Profile_Ingest.j2` | 整理原則改成 D3 的五條；分工表由欄位說明產生；工作經歷的打工、不知道名字時填種類；範例換成不取自實測文字的例子 |
+| `backend/app/services/task_handlers/person_profile_handler.py` | 搜尋按鈕（`SEARCH_FIELDS`：生活圈、身分與證照）；其餘（JSON 欄位規格、建卡轉換）由欄位定義自動帶入 |
+| `backend/app/bot/utils/person_profile_view.py` | `LIST_CODES`（`DY`、`CR`）、`SECTION_FIELDS["context"]`、`DISPLAY_GROUPS`、`HISTORY_DETAIL_STEPS`（取得、到期、說明）、`PERIOD_PAIRS`；import 時檢查有起訖的欄位都在 `PERIOD_PAIRS`、有說明的欄位最後問說明 |
+| `backend/scripts/local_anki/Person_Profile_Dark/migrate_single_card.py` | 只改說明（腳本本身由定義檔帶入新欄位） |
+| `frontend/src/types/api.ts`、`frontend/src/lib/personFill.ts` | `FillResultParams.labels`；`keyLabel()`（後端的名稱優先，後備給舊草稿）；`historyItemKeys(item, labels)` 有後端名稱時列出那個欄位所有能改的鍵（沒填的到期日也補得上）；移除 `HISTORY_ITEM_LABELS` |
+| `frontend/src/components/person/OriginalContent.tsx`、`ProposalEditor.tsx`、`PersonFillDialog.tsx` | 輸入框名稱改用 `labels` |
+| 測試 | 新增 `tests/test_person_credentials_daily_life.py`（模型、建卡表單位置、搜尋、TG 代號・段落・新增流程、handler 寫入與劃掉後保留到期日、卡面、分工表由說明產生、`item_labels`、續簽、AI 話題、遷移只加這兩個欄位）；更新 `test_person_event_times`、`test_person_experiences`、`test_person_fill`（續簽寫入、`labels`、範例不取自實測文字也檢查 LLM 輸出模型）、`test_person_profile_ingest`、`test_person_work_merge`；前端 `personFill.test.ts` |
+
+### D6 審查後的修正（2026-11-23，多面向審查：程式、測試、註解、型別）
+
+- **續簽的新增被丟掉**（Important）：身分與證照是第一個「同一個內容、時間會換新」的欄位。LLM 照提示輸出「劃掉舊的簽證＋新增同名、新到期日的一筆」時，新增被當成已知而丟掉，寫入後只剩劃掉的那筆。→ `proposals_from` 先處理劃掉、再處理新增，同一批要劃掉的那筆不算已知；劃掉的建議排在前面，寫入時也先劃掉。劃掉又新增一模一樣（沒有新時間或說明）的，兩個建議互相矛盾，新增略過並記 log；只給新到期日、沒劃掉舊的，也略過並記 log。提示詞的到期說明加上「續簽、換了新的：劃掉舊的那筆，再新增一筆」。
+- **說法互相矛盾**：工作經歷 `value` 不知道時填什麼（提示詞、LLM 輸出模型、打工的說明三處不同）→ 統一成「公司或店名；不知道名字但知道種類時填種類；連種類都沒提才空字串」。整理原則第 4 條原本「依順序放進第一個合適的地方」把互動排第一，剛拿到的簽證這類近況可能只進互動 → 改成列出各自放什麼，互動只放話題與一時的近況。生活圈的例子和興趣重疊 → 寫明活動本身是興趣、固定的時間地點路線才是生活圈。
+- **型別與不變條件**：上面列的 import 時檢查；建卡表單的身分與證照改成單行（和項目模型一致）；`labels` 的型別改成可能沒有（`Partial`）。
+- **網頁對話框的可切欄位**：列出所有能改的鍵後，興趣等可切欄位在網頁也能填時間；一次寫了好幾項又填時間時擋下並說明（TG 與整理本來就不這樣做）。
+- **過時的註解**：多處還寫著「有說明／有起訖的只有職位、學歷」、`HISTORY_PERIOD_KEYS` 的 LLM 鍵名寫錯（應為 `time_start`／`time_end`）並補上「第二個鍵不能叫 `end`」的規則、遷移腳本的說明補上這次的兩個欄位。
 
 ## 5. 驗收標準
 
-- [ ] 後端、前端測試與 ruff、eslint 通過；新欄位在卡面（以假資料渲染）、TG 清單與新增、網頁的卡片欄位編輯、AI 整理對話框都看得到
-- [ ] 分工說明的完整性測試：拿掉任一欄位的說明會失敗
-- [ ] 遷移 dry-run（對真的 Anki，只讀）只列出加兩個欄位與換模板
-- [ ] 提示詞裡不再有出自實測文字的例子（人工檢查）
+- [x] 後端、前端測試與 ruff、eslint 通過；新欄位在卡面（以假資料渲染，瀏覽器實測）、TG 清單與新增（測試）、網頁的卡片欄位編輯（`json_field_specs` 的項目 schema）、建卡表單與 AI 整理對話框（假後端，瀏覽器實測：建議與 ✏️ 修改的輸入框是「取得／到期／說明」，寫入後舊簽證劃掉、新簽證有效）都看得到
+- [x] 分工說明的完整性：拿掉任一欄位的說明，import 就失敗
+- [x] 遷移 dry-run（對真的 Anki，只讀）只列出加兩個欄位與換模板；`--apply` 後 NAS 的 Anki 有 53 個欄位（`Daily_Life` 第 14、`Credentials` 第 16），使用者完整同步上傳，2026-11-23 部署 `4378393`
+- [x] 提示詞與 LLM 輸出模型裡不再有出自實測文字的例子（`test_person_fill` 自動檢查）
 - [ ] 用真的 LLM 實測（使用者在正式機）：
   - 原本那段描述：通勤 → 生活圈與日常；簽證、兵役、駕照 → 身分與證照；兩份打工有店名或店的種類、沒有「公司不明」；「江戶線」寫成「大江戶線」；只剩「做包包的那家公司也在六本木」在備註
   - 另外兩段不同的人的描述（實作時一起準備，存成測試案例的文字）：沒有把能放進專門欄位的事丟進備註

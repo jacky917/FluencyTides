@@ -8,7 +8,7 @@
 import type { ReactNode } from 'react'
 import { CheckCircle2 } from 'lucide-react'
 import type { FillProposal } from '../../types/api'
-import { FOLLOWUP_TYPES, HISTORY_ITEM_LABELS, historyItemKeys } from '../../lib/personFill'
+import { FOLLOWUP_TYPES, historyItemKeys, keyLabel } from '../../lib/personFill'
 import { cn } from '../../lib/utils'
 import { Input } from '../ui/input'
 import { TEXTAREA_CLASS } from '../generate/formParts'
@@ -36,6 +36,8 @@ interface ProposalEditorProps {
   heading: string
   /** 畫面上的標題（段標題已經是欄位名稱，這裡只說是 AI 的建議與動作）；省略時用 heading。The visible label. */
   label?: string
+  /** 這個欄位各鍵的名稱（後端帶來的；清單的一筆用）。The names of the field's keys. */
+  labels?: Record<string, string>
   selected: boolean
   /** 建新卡的稱呼一定要寫入，不能取消勾選。Whether unticking is not allowed. */
   required?: boolean
@@ -58,6 +60,7 @@ export function ProposalEditor({
   proposal,
   heading,
   label,
+  labels,
   selected,
   required = false,
   saved,
@@ -190,9 +193,9 @@ export function ProposalEditor({
     const item = (data.item && typeof data.item === 'object' ? data.item : {}) as Record<string, unknown>
     body = (
       <div className="grid gap-2 @[28rem]:grid-cols-2">
-        {historyItemKeys(item).map((key) => (
+        {historyItemKeys(item, labels).map((key) => (
           <div key={key} className={cn((key === 'value' || key === 'note') && '@[28rem]:col-span-2')}>
-            <Labeled label={HISTORY_ITEM_LABELS[key]}>
+            <Labeled label={keyLabel(labels, key)}>
               <Input
                 value={typeof item[key] === 'string' ? (item[key] as string) : ''}
                 onChange={(e) => set('item', { ...item, [key]: e.target.value })}

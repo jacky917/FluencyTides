@@ -28,6 +28,7 @@ import {
   initialFillState,
   isFillDraft,
   plainField,
+  proposalField,
   revertEdit,
   selectedIndexes,
   upsertEdit,
@@ -419,6 +420,7 @@ function ReviewStep({ draft, params }: { draft: ServerDraft; params: FillResultP
                   : undefined
               }
               items={params.known?.items?.[section.field]}
+              labels={params.labels[section.field]}
               editOf={(itemIndex) => editOf(section.field, itemIndex)}
               onEditText={(value) =>
                 editor.setState(upsertEdit(state, { kind: 'edit_field', data: { field: section.field, value } }))
@@ -451,6 +453,7 @@ function ReviewStep({ draft, params }: { draft: ServerDraft; params: FillResultP
                 key={index}
                 proposal={proposal}
                 heading={proposalHeading(proposal, titles)}
+                labels={params.labels[proposalField(proposal)]}
                 label={
                   proposal.kind === 'history_add'
                     ? 'AI 建議：新增一筆'

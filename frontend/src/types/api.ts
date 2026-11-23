@@ -306,6 +306,12 @@ export interface FillResultParams {
   proposals: FillProposal[];
   /** 卡片上已經有的資料；建新卡時為 null。What the card already has, or null for a new card. */
   known: FillKnown | null;
+  /**
+   * 清單項目各鍵的名稱（`person_profile_ingest.item_labels`）。鍵的集合就是輸入框的集合、順序就是輸入框的順序：
+   * 不能只為了顯示名稱加鍵。舊的草稿沒有，`fillParams` 補成空物件（`keyLabel` 再退回後備名稱）；文字欄位也沒有。
+   * The names of list item keys; the keys are also the inputs and their order. Old drafts get `{}`.
+   */
+  labels: Partial<Record<string, Record<string, string>>>;
   /** 已寫入的建議序號。The indexes already written. */
   saved: number[];
   /** 上次沒寫入的建議與原因（鍵是序號字串）。Why some were not written. */

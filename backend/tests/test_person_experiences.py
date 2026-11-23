@@ -84,7 +84,7 @@ class TestAi:
     def test_ingest_prompt_explains_the_split_with_interests_and_goals(self):
         prompt = ingest.build_prompt({"Display_Name": "陳さん"}, {"Experiences": [YUSHAN]}, "上個月爬了玉山", TODAY)
         assert "`Experiences`" in prompt and "去過玉山" in prompt
-        assert "興趣、經歷、目標的分工" in prompt
+        assert "做過的具體事件放經歷，還想做的放目標" in prompt  # 興趣的分工說明（欄位分工計畫書 D2）
 
     def test_topics_read_experiences(self):
         assert "去過玉山" in topics.history_text("Experiences", [YUSHAN])

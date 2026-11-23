@@ -64,11 +64,13 @@ from app.schemas.person_profile import (
     entry_text,
     history_from_text,
     is_active,
+    item_model,
     item_fingerprint,
     merged_note,
     normalize_period,
     period_order_error,
 )
+from app.services.person_field_guide import FIELD_GUIDES, FIELD_NOTE_HINTS, FIELD_TIME_HINTS
 from app.services.task_handlers.base import note_field_values
 
 if TYPE_CHECKING:
@@ -97,6 +99,13 @@ UPDATABLE_FIELDS: tuple[str, ...] = tuple(
     and name not in PERSON_HISTORY_FIELDS
     and name not in RETIRED_FIELDS
 )
+
+# 提示詞的分工表由這些說明產生：加欄位時忘了寫說明，import 就失敗（欄位分工計畫書 D2）
+assert set(FIELD_GUIDES) == set(PERSON_HISTORY_FIELDS) | set(UPDATABLE_FIELDS), "FIELD_GUIDES 與欄位不一致"
+assert {name: len(hints) for name, hints in FIELD_TIME_HINTS.items()} == {
+    name: len(keys) for name, keys in HISTORY_PERIOD_KEYS.items()
+}, "FIELD_TIME_HINTS 與 HISTORY_PERIOD_KEYS 不一致"
+assert set(FIELD_NOTE_HINTS) == set(NOTE_FIELDS), "FIELD_NOTE_HINTS 與 NOTE_FIELDS 不一致"
 
 _BREAK = re.compile(r"<\s*(br|/div|/p|/li)\s*/?\s*>", re.IGNORECASE)
 _TAG = re.compile(r"<[^>]+>")
@@ -162,13 +171,13 @@ def _history_lines(name: str, items: list[object]) -> tuple[list[str], list[str]
     回傳會變的欄位給 LLM 看的：有效的與過去的項目。
 
     Each active entry is numbered (``#index+1``, used when striking it out); past entries are struck-out ones or
-    positions with an end date. Each entry carries its event time and description (:func:`entry_detail`; work
-    history and education have descriptions); active ones also carry 「登錄 日期」, written differently from the
+    positions with an end date. Each entry carries its event time and description (:func:`entry_detail`; the
+    fields in :data:`NOTE_FIELDS` have descriptions); active ones also carry 「登錄 日期」, written differently from the
     event time (「2015 起」) so the LLM can tell which is the time of the event and which is just the day it was
     recorded.
 
     有效的每筆附編號（``#序號+1``，劃掉時用），以及過去的（劃掉的，或有離職年月的職位）。每筆附事件時間與說明
-    （``entry_detail``，工作經歷與學歷有說明）；有效的另外附「登錄 日期」：寫法和事件時間
+    （``entry_detail``，``NOTE_FIELDS`` 的欄位有說明）；有效的另外附「登錄 日期」：寫法和事件時間
     （「2015 起」）不同，LLM 才分得出哪個是那件事的時間、哪個只是記下的日子。
     """
     current, past = [], []
@@ -239,11 +248,23 @@ def build_prompt(
         current, past = _history_lines(name, lists.get(name, []))
         if current or past:
             known_lists.append((name, spec.title, current, past))
+    # 分工表的文字來自 person_field_guide（欄位分工計畫書 D2）
     updatable = [
-        (name, PersonCreateParams.model_fields[name].title or name, PersonCreateParams.model_fields[name].description)
+        {"name": name, "title": PersonCreateParams.model_fields[name].title or name, "guide": FIELD_GUIDES[name]}
         for name in UPDATABLE_FIELDS
     ]
-    list_fields = [(name, spec.title, spec.single, spec.split) for name, spec in PERSON_HISTORY_FIELDS.items()]
+    list_fields = [
+        {
+            "name": name,
+            "title": spec.title,
+            "single": spec.single,
+            "split": spec.split,
+            "guide": FIELD_GUIDES[name],
+            "times": list(zip(("time_start", "time_end"), FIELD_TIME_HINTS.get(name, ()), strict=False)),
+            "note": FIELD_NOTE_HINTS.get(name),
+        }
+        for name, spec in PERSON_HISTORY_FIELDS.items()
+    ]
     return get_template_engine().render(
         "prompts/anki/Person_Profile_Ingest.j2",
         mode=mode,
@@ -399,6 +420,29 @@ def known_items(lists: Mapping[str, list[object]]) -> dict[str, list[dict[str, o
         if entries:
             result[name] = entries
     return result
+
+
+def item_labels() -> dict[str, dict[str, str]]:
+    """Return the Chinese name of every editable key of every list, from the item models.
+
+    回傳每個清單每個能改的鍵的中文名稱（取自項目模型）。
+
+    The dialog labels its inputs with these instead of keeping its own map, so a new field or key (for example a
+    credential's 「取得」「到期」) shows the right name without a frontend change. The keys are in the order of
+    :data:`ITEM_EDIT_KEYS`, which is also the order the inputs are shown in.
+
+    對話框用這些名稱標示輸入框，不自己維護一份對照表：新的欄位或鍵（例如身分與證照的「取得」「到期」）不改前端也
+    顯示得出正確的名稱。鍵的順序同 ``ITEM_EDIT_KEYS``，也是輸入框的順序。
+
+    Returns:
+        ``{list name: {key: name}}``; a key without a title in its model is named by the key itself
+        ``{清單名: {鍵: 名稱}}``；模型裡沒有 title 的鍵以鍵本身命名
+    """
+    labels: dict[str, dict[str, str]] = {}
+    for name, keys in ITEM_EDIT_KEYS.items():
+        fields = item_model(name).model_fields
+        labels[name] = {key: fields[key].title or key for key in keys}
+    return labels
 
 
 def _item_text(name: str, item: Mapping[str, object]) -> str:
@@ -629,7 +673,9 @@ def proposals_from(
         proposals.append(Proposal("field", {"field": name, "value": value, "mode": mode, "reason": update.reason}))
 
     ended: set[tuple[str, int]] = set()
-    for change in result.list_updates:
+    # 先處理劃掉、再處理新增（欄位分工計畫書審查）：同一批裡要劃掉的那一筆不算「已知」，續簽、換新（劃掉舊的、
+    # 新增同名的新一筆）的新增才不會被當成重複丟掉；劃掉的建議排在前面，寫入時也先劃掉、再新增
+    for change in sorted(result.list_updates, key=lambda change: change.op != "end"):
         name = change.field
         if name not in PERSON_HISTORY_FIELDS:
             logger.warning("略過不認得的清單欄位建議: %s（%s）", name, change.reason)
@@ -664,13 +710,48 @@ def proposals_from(
             logger.warning("略過格式不對的新增建議: %s=%r（職稱 %r；理由：%s）", name, change.value, change.job_title,
                            change.reason)
             continue
-        if _already_known(name, items, item):
+        remaining = [entry for index, entry in enumerate(items) if (name, index) not in ended]
+        if _already_known(name, remaining, item):
+            continue
+        if _repeats_an_ended_entry(name, [items[i] for field, i in ended if field == name], item):
+            logger.warning("略過和同一批劃掉的那筆相同、又沒有新的時間或說明的新增建議: %s %r（%s）", name,
+                           entry_text(name, item), change.reason)
             continue
         proposals.append(Proposal("history_add", {
             "field": name, "item": {k: v for k, v in item.items() if k not in ("added", "ended")},
             "text": entry_detail(name, item), "reason": change.reason,
         }))
     return proposals
+
+
+def _repeats_an_ended_entry(name: str, ending: list[object], item: dict[str, object]) -> bool:
+    """Return whether an add only repeats an entry that the same batch strikes out.
+
+    回傳這筆新增是不是只重複同一批要劃掉的那一筆。
+
+    Striking out an entry and adding the same content is a renewal or a replacement (a visa with a new expiry)
+    only when the new entry brings an event time or a note; without either, the two suggestions contradict
+    each other (positions are told apart by company and title, so they are left alone).
+
+    劃掉一筆又新增同樣的內容，只有新的一筆帶了事件時間或說明才是續簽、換新（例如簽證的新到期日）；
+    兩者都沒有時，兩個建議互相矛盾（職位以公司與職稱區分，不在此列）。
+
+    Args:
+        name: the history field
+            會變的欄位
+        ending: the entries of this field the same batch strikes out
+            同一批要劃掉的這個欄位的項目
+        item: the suggested entry
+            建議新增的那一筆
+
+    Returns:
+        ``True`` when the add should be dropped
+        應該略過這筆新增時為 ``True``
+    """
+    if name == "Company" or any(item.get(key) for key in (*HISTORY_PERIOD_KEYS.get(name, ()), "note")):
+        return False
+    key = entry_key(name, item)
+    return any(entry_key(name, entry) == key for entry in ending)
 
 
 def _family_key(member: Mapping[str, object]) -> tuple[str, str]:
@@ -719,6 +800,15 @@ def _already_known(name: str, items: list[object], item: dict[str, object]) -> b
             return True
         if merged_note(str(target.get("note") or ""), str(item.get("note") or "")) is not None:
             return False
+        conflicts = [
+            key for key in keys
+            if item.get(key) and str(target.get(key) or "").strip() not in ("", str(item.get(key)))
+        ]
+        if conflicts:
+            # 同一筆、時間卻不同（例如續簽只給了新的到期日）：handler 會拒絕，這裡略過並記下，方便調提示詞
+            logger.warning("略過時間和已知的不同的新增建議（續簽、換新要先劃掉舊的）: %s %r %s", name,
+                           entry_text(name, item), {key: (target.get(key), item.get(key)) for key in conflicts})
+            return True
         return not any(item.get(key) and not str(target.get(key) or "").strip() for key in keys)
     if not is_active(item):
         if text in current:
@@ -781,7 +871,7 @@ def _add_periods(name: str, item: dict[str, object], change: IngestListUpdate) -
 
     職位以外的事件時間（``HISTORY_PERIOD_KEYS``）放進項目。
 
-    ``time_start`` goes to the first key and ``time_end`` to the second (graduation for education). Unusable times
+    ``time_start`` goes to the first key and ``time_end`` to the second (graduation, expiry). Unusable times
     are degraded rather than dropping the whole entry (times can be added later with a long press), and each case is
     logged to help tune the prompt:
 
@@ -794,7 +884,7 @@ def _add_periods(name: str, item: dict[str, object], change: IngestListUpdate) -
       several interests are entered at once either).
 
     ``time_start`` 放第一個鍵、``time_end`` 放第二個
-    （學歷的畢業）。降級而不丟掉整筆（時間之後可以長按補），每種都記 log 方便調提示詞：
+    （學歷的畢業、身分與證照的到期）。降級而不丟掉整筆（時間之後可以長按補），每種都記 log 方便調提示詞：
 
     - 看不懂的那個時間略過。
     - 整筆驗證不過（例如畢業早於入學）時拿掉全部時間。

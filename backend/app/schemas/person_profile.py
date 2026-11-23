@@ -211,7 +211,10 @@ class PersonCreateParams(BaseModel):
     Birthday: str = _text("生日", "例如 1994-03-15；不知年份只寫月日，例如 3/15", pattern=BIRTHDAY)
     Hometown: str = _text("出身地")
     Residence: str = _text("現居地")
+    Daily_Life: str | list[str] = _rows("生活圈與日常", "通勤路線、常去的地方、作息；一件一列", multiline=True)
     Languages: str | list[str] = _rows("語言", "點選或輸入後按 Enter 加入", tags=True, quick=("中文", "日文", "英文"))
+    # 一筆是「工作簽證」這類短語（細節記在說明），和項目模型的單行內容一致
+    Credentials: str | list[str] = _rows("身分與證照", "簽證與在留資格、駕照、已取得的證照、兵役；一項一列")
     Timezone: str = _text("時區", "例如 Asia/Tokyo")
     Met_Date: str = _text("認識日期", "YYYY-MM-DD", pattern=OPTIONAL_DATE)
     Met_Where: str = _text("認識場合", "例如「Geekly 面談」")
@@ -694,12 +697,12 @@ def period_order_error(start: str, end: str, *, labels: tuple[str, str] = ("到�
     directly would give the wrong result. Values that cannot be read are not
     reported here (the format check reports them). With different precision
     (2021 against 2021-04), the common prefix is compared, so the same year
-    counts as reasonable. Every start/end order check (positions, educations)
-    uses this function, so the messages are consistent.
+    counts as reasonable. Every start/end order check (positions, educations,
+    credentials) uses this function, so the messages are consistent.
 
     比較的是補零後的字串（字典序就是時間序），所以先各自經 ``normalize_period`` 整理：卡上手改留下的
     ``2021/4`` 這種寫法直接比會比錯。看不懂的值不在這裡報（由格式檢查報）。精度不同（2021 對 2021-04）時
-    比共同的前綴：同一年算合理。所有起訖先後檢查（職位、學歷）都用這裡，訊息一致。
+    比共同的前綴：同一年算合理。所有起訖先後檢查（職位、學歷、身分與證照）都用這裡，訊息一致。
 
     Args:
         start: the start
@@ -707,8 +710,8 @@ def period_order_error(start: str, end: str, *, labels: tuple[str, str] = ("到�
         end: the end; ``?`` means unknown
             結束；``?`` 表示不知道
         labels: the names of the start and the end used in the message (defaults to a position's start and end;
-            educations pass 「入學」「畢業」)
-            訊息裡開始與結束的名稱（預設是職位的「到職」「離職」，學歷傳「入學」「畢業」）
+            educations pass 「入學」「畢業」, credentials 「取得」「到期」)
+            訊息裡開始與結束的名稱（預設是職位的「到職」「離職」，學歷傳「入學」「畢業」、身分與證照傳「取得」「到期」）
 
     Returns:
         the error message, or ``None`` in every other case (either side blank or unreadable, or the end is ``?``)
@@ -896,6 +899,47 @@ class EducationEntry(HistoryEntry):
         return self
 
 
+#: The names of a credential's start and expiry (used in messages).
+#: 身分與證照起訖的名稱（訊息用）。
+CREDENTIAL_LABELS = ("取得", "到期")
+
+
+class CredentialEntry(HistoryEntry):
+    """One status or credential: a visa, residence status, driving licence, certification, military service.
+
+    身分與證照的一筆：簽證、在留資格、駕照、證照、兵役（欄位分工計畫書 D1）。
+
+    It has when it was obtained ``since``, when it expires ``until`` (a year, a year and month, or a date, both may
+    be empty; the expiry must not be earlier than the start) and the note ``note`` (for example 「效期 3 年」); see
+    the field routing plan D1. The expiry is not called ``end``: ``is_active`` treats an entry with ``end`` as no
+    longer valid, but a credential with an expiry date is still valid until it is struck out. Passing the expiry
+    does not strike it out automatically: the user does (a renewal strikes out the old entry and adds a new one).
+
+    取得 ``since``、到期 ``until``（年、年月或日期，都可空；到期不能早於取得）、說明 ``note``（例如「效期 3 年」）。
+    到期不叫 ``end``：``is_active`` 把有 ``end`` 的當成失效，有到期日的證照在劃掉前仍是有效的資料。過了到期日
+    也不會自動劃掉，由使用者劃掉（續簽是劃掉舊的、新增一筆）。
+    """
+
+    _OMIT_WHEN_EMPTY: ClassVar[tuple[str, ...]] = ("hidden", "since", "until", "note")
+
+    value: str = Field(min_length=1, title="內容", description="例如「人文簽證」「普通駕照」「沒當過兵」")
+    since: str = Field("", title="取得", description="年、年月或日期，例如 2024-04", pattern=PERIOD)
+    until: str = Field("", title="到期", description="效期到什麼時候；沒有期限或不知道就空白", pattern=PERIOD)
+    note: str = Field("", title="說明", description="例如「效期 3 年」「每年要更新」（可以多行）", json_schema_extra=_TEXTAREA)
+
+    @field_validator("since", "until", mode="before")
+    @classmethod
+    def _normalize_bounds(cls, value: object, info: ValidationInfo) -> object:
+        return _period_value(value, CREDENTIAL_LABELS[0 if info.field_name == "since" else 1])
+
+    @model_validator(mode="after")
+    def _check_order(self) -> CredentialEntry:
+        error = period_order_error(self.since, self.until, labels=CREDENTIAL_LABELS)
+        if error:
+            raise ValueError(error)
+        return self
+
+
 #: The kinds of a goal (quick choices; any other value may also be typed).
 #: 目標的類型（快速選項；也可以自己填）。
 GOAL_KINDS = ("證照", "簽證", "資格", "升學", "職涯", "努力方向", "夢想", "願景")
@@ -1022,7 +1066,9 @@ PERSON_HISTORY_FIELDS: dict[str, HistoryField] = {
     "Common_Ground": HistoryField(HistoryNote, "共同點"),
     "Comm_Prefs": HistoryField(HistoryNote, "溝通偏好"),
     "Residence": HistoryField(SinceEntry, "現居地", single=True),
+    "Daily_Life": HistoryField(HistoryNote, "生活圈與日常"),
     "Languages": HistoryField(HistoryEntry, "語言", split=True),
+    "Credentials": HistoryField(CredentialEntry, "身分與證照"),
     "Timezone": HistoryField(HistoryEntry, "時區", single=True),
     "Relationship": HistoryField(HistoryEntry, "關係", single=True),
     "Closeness": HistoryField(ClosenessEntry, "親密度", single=True),
@@ -1040,16 +1086,20 @@ RETIRED_FIELDS: dict[str, str] = {
 }
 
 #: The history fields whose entries have a note (``note``): what the job is for the work history, the major for
-#: the education (§18).
-#: 每筆有說明（``note``）的會變欄位：工作經歷是做什麼，學歷是科系（§18）。
-NOTE_FIELDS = ("Company", "Education")
+#: the education (§18), details such as the validity for a credential (field routing plan D1).
+#: 每筆有說明（``note``）的會變欄位：工作經歷是做什麼，學歷是科系（§18），身分與證照是效期等細節（欄位分工計畫書 D1）。
+NOTE_FIELDS = ("Company", "Education", "Credentials")
 
 #: The keys of each history field that record an "event time" (work history plan §15): the time of the event,
 #: which differs from the added date and the strike-out date filled by the system. The order is the order of the
-#: follow-up questions when adding; in "record in one paragraph", ``start`` maps to the first and ``end`` to the
-#: second.
+#: follow-up questions when adding; the LLM's ``time_start`` maps to the first and ``time_end`` to the second, so
+#: a field has at most two. A second key must not be called ``end`` unless it really ends the entry:
+#: :func:`is_active` treats an entry with ``end`` as no longer valid (only a position's leaving date means that;
+#: education uses ``finish`` and credentials ``until`` for this reason).
 #: 會變的欄位裡記「事件時間」的鍵（工作經歷計畫書 §15）：那件事的時間，和系統填的登錄日、劃掉日不同。
-#: 順序是新增時追問的順序；「用一段話記錄」的 ``start`` 對應第一個、``end`` 對應第二個。
+#: 順序是新增時追問的順序；LLM 的 ``time_start`` 對應第一個、``time_end`` 對應第二個，所以最多兩個。第二個鍵除非
+#: 真的代表失效，不能叫 ``end``：``is_active`` 把有 ``end`` 的當成失效（只有職位的離職是這個意思，學歷用
+#: ``finish``、身分與證照用 ``until`` 就是這個原因）。
 HISTORY_PERIOD_KEYS: dict[str, tuple[str, ...]] = {
     "Company": ("start", "end"),
     "Education": ("start", "finish"),
@@ -1057,6 +1107,7 @@ HISTORY_PERIOD_KEYS: dict[str, tuple[str, ...]] = {
     "Praise": ("when",),
     "Interests": ("since",),
     "Residence": ("since",),
+    "Credentials": ("since", "until"),
 }
 
 #: The keys "edit one item" may change (work history plan §16), in the order of the Telegram questions: for
@@ -1093,6 +1144,14 @@ SYSTEM_ITEM_KEYS = frozenset({"added", "ended", "hidden", "status", "closed"})
 assert all(SYSTEM_ITEM_KEYS.isdisjoint(keys) for keys in ITEM_EDIT_KEYS.values()), "ITEM_EDIT_KEYS 含系統管理的鍵"
 assert set(RETIRED_FIELDS).isdisjoint(PersonCreateParams.model_fields) \
     and set(RETIRED_FIELDS).isdisjoint(PERSON_HISTORY_FIELDS), "停用的欄位還在建立參數或會變的欄位裡"
+# 有說明鍵的模型剛好是 NOTE_FIELDS（漏列時說明不能改、整理的說明會被當成用不到而丟掉）
+assert {name for name, spec in PERSON_HISTORY_FIELDS.items() if "note" in spec.model.model_fields} == set(NOTE_FIELDS), \
+    "NOTE_FIELDS 與項目模型不一致"
+# LLM 的輸出只有 time_start、time_end 兩個時間（第三個鍵會被靜默丟掉）
+assert all(len(keys) <= 2 for keys in HISTORY_PERIOD_KEYS.values()), "HISTORY_PERIOD_KEYS 最多兩個時間鍵"
+# 訊息用的起訖名稱和模型的欄位名稱相同
+assert EDUCATION_LABELS == (EducationEntry.model_fields["start"].title, EducationEntry.model_fields["finish"].title)
+assert CREDENTIAL_LABELS == (CredentialEntry.model_fields["since"].title, CredentialEntry.model_fields["until"].title)
 
 
 def item_model(name: str) -> type[BaseModel]:
@@ -1355,10 +1414,12 @@ def history_period(field: str, item: object) -> str:
     回傳一筆的事件時間文字（``HISTORY_PERIOD_KEYS``）。
 
     For example 「2021-04～」 for a position, 「2011～2015」 for an education,
+    「2024-04～2029-04」 for a credential (「～2028-03」 with only an expiry),
     「2019」 for experiences and praise material, and 「2015 起」 for interests
     and residence.
 
-    職位「2021-04～」、學歷「2011～2015」、經歷與讚美素材「2019」、興趣與現居地「2015 起」。
+    職位「2021-04～」、學歷「2011～2015」、身分與證照「2024-04～2029-04」（只有到期時「～2028-03」）、
+    經歷與讚美素材「2019」、興趣與現居地「2015 起」。
 
     Args:
         field: the history field name

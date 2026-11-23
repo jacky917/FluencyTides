@@ -37,6 +37,7 @@ from app.core.exceptions import AnkiServiceError, NoteNotFoundError
 from app.infrastructure.anki.client import AnkiConnectError
 from app.infrastructure.llm.routing import route
 from app.schemas.person_profile import (
+    HISTORY_PERIOD_KEYS,
     PERSON_HISTORY_FIELDS,
     PERSON_NOTE_TYPE,
     FamilyMember,
@@ -44,6 +45,7 @@ from app.schemas.person_profile import (
     Goal,
     Interaction,
     PersonCreateParams,
+    history_from_text,
 )
 from app.services import person_profile_ingest as ingest_service
 
@@ -119,10 +121,12 @@ async def generate(card_service: CardService, parameters: Mapping[str, object]) 
             草稿輸入（見 ``draft_input``）
 
     Returns:
-        ``{"params": {"mode", "note_id", "deck", "proposals", "known", "saved", "errors"}, "suggested_tags": []}``;
-        ``known`` is what the card already has (``person_profile_ingest.known_summary``), ``None`` for a new card
-        ``{"params": {"mode", "note_id", "deck", "proposals", "known", "saved", "errors"}, "suggested_tags": []}``；
-        ``known`` 是卡片上已有的資料（``person_profile_ingest.known_summary``），建新卡時為 ``None``
+        ``{"params": {"mode", "note_id", "deck", "proposals", "known", "labels", "saved", "errors"},
+        "suggested_tags": []}``; ``known`` is what the card already has (``person_profile_ingest.known_summary``),
+        ``None`` for a new card; ``labels`` names the keys of list items (``person_profile_ingest.item_labels``)
+        ``{"params": {"mode", "note_id", "deck", "proposals", "known", "labels", "saved", "errors"},
+        "suggested_tags": []}``；``known`` 是卡片上已有的資料（``person_profile_ingest.known_summary``），建新卡時為
+        ``None``；``labels`` 是清單項目各鍵的名稱（``person_profile_ingest.item_labels``）
 
     Raises:
         AnkiServiceError: if the card cannot be read because AnkiConnect fails
@@ -160,6 +164,7 @@ async def generate(card_service: CardService, parameters: Mapping[str, object]) 
             "proposals": proposals,
             # 卡片上已經有的資料（和提示裡的相同），對話框在每項建議旁邊顯示；建新卡時沒有
             "known": ingest_service.known_summary(fields, lists) if note_id else None,
+            "labels": ingest_service.item_labels(),
             "saved": [],
             "errors": {},
         },
@@ -236,6 +241,14 @@ def normalize(kind: str, data: Mapping[str, object]) -> dict[str, object]:
         name, item = str(values.get("field")), values.get("item")
         if name not in PERSON_HISTORY_FIELDS or not isinstance(item, Mapping):
             raise ValueError("新增的那一筆格式不對")
+        # 可切的欄位（興趣等）一次寫了好幾項又填了時間：寫入時會切成多筆，同一個時間套到每一筆會記錯
+        # （TG 與整理都刻意不這樣做），請使用者分開
+        if (
+            PERSON_HISTORY_FIELDS[name].split
+            and any(str(item.get(key) or "").strip() for key in HISTORY_PERIOD_KEYS.get(name, ()))
+            and len(history_from_text(name, str(item.get("value") or ""), "")) > 1
+        ):
+            raise ValueError("一次寫了好幾項時不能填時間：拿掉時間，或一項一項新增")
         # 內容與事件時間由 handler 的 add_history 驗證（不合格時回報在這一項）
         return {**values, "field": name, "item": dict(item)}
     if kind == "history_end":

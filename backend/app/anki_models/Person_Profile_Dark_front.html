@@ -37,7 +37,9 @@
     <div id="f-Birthday">{{Birthday}}</div>
     <div id="f-Hometown">{{Hometown}}</div>
     <div id="f-Residence">{{Residence}}</div>
+    <div id="f-Daily_Life">{{Daily_Life}}</div>
     <div id="f-Languages">{{Languages}}</div>
+    <div id="f-Credentials">{{Credentials}}</div>
     <div id="f-Timezone">{{Timezone}}</div>
     <div id="f-Met_Date">{{Met_Date}}</div>
     <div id="f-Met_Where">{{Met_Where}}</div>
@@ -520,10 +522,10 @@
 
     // 與後端 PERSON_HISTORY_FIELDS 相同（tests/test_person_profile_template.py 比對）
     var HISTORY_FIELDS = ['Interests', 'Experiences', 'Food_Drink', 'Dislikes', 'Dietary', 'Company', 'Education',
-        'Personality_Values', 'Praise', 'Ask_Advice', 'Needs', 'Common_Ground', 'Comm_Prefs', 'Residence', 'Languages',
-        'Timezone', 'Relationship', 'Closeness', 'Sensitive'];
-    // 每筆有說明（note）的欄位（與後端 NOTE_FIELDS 相同）：工作經歷由 careerRow 顯示，學歷在 historyRow 的那一筆底下
-    var NOTE_FIELDS = ['Company', 'Education'];
+        'Personality_Values', 'Praise', 'Ask_Advice', 'Needs', 'Common_Ground', 'Comm_Prefs', 'Residence', 'Daily_Life',
+        'Languages', 'Credentials', 'Timezone', 'Relationship', 'Closeness', 'Sensitive'];
+    // 每筆有說明（note）的欄位（與後端 NOTE_FIELDS 相同）：工作經歷由 careerRow 顯示，學歷、身分與證照在 historyRow 的那一筆底下
+    var NOTE_FIELDS = ['Company', 'Education', 'Credentials'];
     var historyLists = {};
     HISTORY_FIELDS.forEach(function (name) { historyLists[name] = readJsonList(name); });
 
@@ -549,12 +551,13 @@
         Experiences: ['when'],
         Praise: ['when'],
         Interests: ['since'],
-        Residence: ['since']
+        Residence: ['since'],
+        Credentials: ['since', 'until']
     };
 
     /**
-     * 一筆的事件時間（與後端 history_period 相同）：學歷「2011～2015」、經歷與讚美素材「2019」、
-     * 興趣與現居地「2015 起」；沒有時為空。職位見 positionPeriod。
+     * 一筆的事件時間（與後端 history_period 相同）：學歷「2011～2015」、身分與證照「2024-04～2029-04」
+     * （只有到期時「～2028-03」）、經歷與讚美素材「2019」、興趣與現居地「2015 起」；沒有時為空。職位見 positionPeriod。
      */
     function historyPeriod(name, item) {
         var keys = PERIOD_KEYS[name];
@@ -565,7 +568,7 @@
         return keys[0] === 'since' ? values[0] + ' 起' : values[0];
     }
 
-    /** 依時間排序用的值：學歷看畢業（沒有就看入學），其他看唯一的時間鍵；沒有時間為空字串。 */
+    /** 依時間排序用的值：有兩個時間鍵的看後一個（沒有就看前一個），其他看唯一的時間鍵；沒有時間為空字串。 */
     function periodSortKey(name, item) {
         var keys = PERIOD_KEYS[name] || [];
         for (var i = keys.length - 1; i >= 0; i--) {
@@ -1221,7 +1224,9 @@
             longPressField(htmlRow('外貌特徵', 'Appearance'), 'Appearance'),
             longPressField(row('出身', readField('Hometown')), 'Hometown'),
             historyRow('現居', 'Residence'),
+            historyRow('生活圈', 'Daily_Life'),
             historyRow('語言', 'Languages', { chips: true }),
+            historyRow('身分與證照', 'Credentials'),
             historyRow('時區', 'Timezone'),
             historyRow('關係', 'Relationship'),
             historyRow('親密度（1–5）', 'Closeness')

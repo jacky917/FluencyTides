@@ -9,7 +9,7 @@
 import { useState, type ReactNode } from 'react'
 import { CheckCircle2, Pencil, Undo2 } from 'lucide-react'
 import type { FillKnownItem } from '../../types/api'
-import { ITEM_KEY_LABELS } from '../../lib/personFill'
+import { keyLabel } from '../../lib/personFill'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -36,6 +36,8 @@ interface OriginalContentProps {
   text?: string
   /** 清單原本的項目；文字欄位時省略。The list's original entries. */
   items?: FillKnownItem[]
+  /** 這個欄位各鍵的名稱（後端帶來的）。The names of the field's keys. */
+  labels?: Record<string, string>
   /** 找這個欄位（或那一筆）的修改。Looks up the edit of the field or an entry. */
   editOf: (itemIndex?: number) => EditState | null
   /** 送出修改。Records an edit. */
@@ -51,7 +53,16 @@ interface OriginalContentProps {
  * @param props - 見 {@link OriginalContentProps}。See {@link OriginalContentProps}.
  * @returns 原本內容的 JSX；沒有內容時為 null。The block, or null.
  */
-export function OriginalContent({ text, items, editOf, onEditText, onEditItem, onRevert, disabled }: OriginalContentProps) {
+export function OriginalContent({
+  text,
+  items,
+  labels,
+  editOf,
+  onEditText,
+  onEditItem,
+  onRevert,
+  disabled,
+}: OriginalContentProps) {
   if (!text && !(items && items.length > 0)) return null
   return (
     // 灰底虛線框與 ✏️ 已足夠表示「卡片原本、可修改」，不另外寫標題；讀屏仍讀得到
@@ -63,6 +74,7 @@ export function OriginalContent({ text, items, editOf, onEditText, onEditItem, o
         <ItemRow
           key={item.index}
           item={item}
+          labels={labels}
           edit={editOf(item.index)}
           onSave={(values) => onEditItem(item, values)}
           onRevert={() => onRevert(item.index)}
@@ -167,12 +179,14 @@ function TextRow({
 /** 清單原本的一筆。One original entry of a list. */
 function ItemRow({
   item,
+  labels,
   edit,
   onSave,
   onRevert,
   disabled,
 }: {
   item: FillKnownItem
+  labels?: Record<string, string>
   edit: EditState | null
   onSave: (values: Record<string, unknown>) => void
   onRevert: () => void
@@ -187,7 +201,7 @@ function ItemRow({
         <div className="grid gap-2 @[28rem]:grid-cols-2">
           {Object.keys(item.values).map((key) => (
             <label key={key} className={cn('block space-y-1', (key === 'note' || key === 'topics' || key === 'updates') && '@[28rem]:col-span-2')}>
-              <span className="text-xs text-muted-foreground">{ITEM_KEY_LABELS[key] ?? key}</span>
+              <span className="text-xs text-muted-foreground">{keyLabel(labels, key)}</span>
               <Input
                 type={key === 'birth_year' ? 'number' : 'text'}
                 value={draft[key] === null || draft[key] === undefined ? '' : String(draft[key])}
@@ -212,7 +226,7 @@ function ItemRow({
   return (
     <RowFrame edit={edit} struck={!item.active} onPencil={() => setDraft({ ...current })} onRevert={onRevert}
       disabled={disabled}>
-      {edit?.active ? summarize(current) : item.text}
+      {edit?.active ? summarize(current, labels) : item.text}
       {!item.active && <span className="ml-1 text-xs no-underline">（已劃掉）</span>}
     </RowFrame>
   )
@@ -249,9 +263,9 @@ function normalizeValues(draft: Record<string, unknown>, original: Record<string
 }
 
 /** 修改後的一筆的一行文字（各鍵的值依序接起來）。A line for an edited entry. */
-function summarize(values: Record<string, unknown>): string {
+function summarize(values: Record<string, unknown>, labels?: Record<string, string>): string {
   const filled = Object.entries(values).filter(([, value]) => value !== null && value !== undefined && value !== '')
   // 只有一個鍵的清單（例如興趣）和原本的一行一樣，只寫值
   if (Object.keys(values).length === 1) return filled.map(([, value]) => String(value)).join('')
-  return filled.map(([key, value]) => `${ITEM_KEY_LABELS[key] ?? key}：${String(value)}`).join('　')
+  return filled.map(([key, value]) => `${keyLabel(labels, key)}：${String(value)}`).join('　')
 }

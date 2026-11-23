@@ -7,6 +7,7 @@ import {
   findEdit,
   hasPending,
   historyItemKeys,
+  keyLabel,
   initialFillState,
   isFillDraft,
   openPersonFill,
@@ -38,6 +39,7 @@ const CREATE: FillResultParams = {
   note_id: null,
   deck: '人脈',
   known: null,
+  labels: {},
   proposals: [
     { kind: 'display_name', data: { value: '田中さん' } },
     { kind: 'interaction', data: { date: '2026-11-23', topics: '登山' } },
@@ -59,7 +61,9 @@ describe('isFillDraft / fillParams', () => {
   it('reads the result, filling in missing progress', () => {
     expect(fillParams(draft({ purpose: 'fill' }))).toBeNull()
     const params = fillParams(draft({ purpose: 'fill' }, { mode: 'update', note_id: 5, proposals: [] }))
-    expect(params).toEqual({ mode: 'update', note_id: 5, deck: null, proposals: [], known: null, saved: [], errors: {} })
+    expect(params).toEqual({
+      mode: 'update', note_id: 5, deck: null, proposals: [], known: null, labels: {}, saved: [], errors: {},
+    })
   })
 })
 
@@ -125,12 +129,29 @@ describe('edits of the original content', () => {
 })
 
 describe('historyItemKeys', () => {
-  it('lists the editable keys of an entry in a fixed order', () => {
+  it('lists every key the backend named, filled or not, in its order', () => {
+    const labels = { value: '內容', since: '取得', until: '到期', note: '說明' }
+    expect(historyItemKeys({ value: '工作簽證', added: '2026-01-01' }, labels)).toEqual(['value', 'since', 'until', 'note'])
+  })
+
+  it('falls back to the keys an entry has on old drafts', () => {
     expect(historyItemKeys({ note: 'n', company: 'Sony', title: 'PM', added: '2026-01-01' })).toEqual([
       'company',
       'title',
       'note',
     ])
+  })
+})
+
+describe('keyLabel', () => {
+  it("uses the backend's name for the field first", () => {
+    expect(keyLabel({ since: '取得', until: '到期' }, 'since')).toBe('取得')
+  })
+
+  it('falls back when there are no names, or the names miss the key', () => {
+    expect(keyLabel(undefined, 'since')).toBe('開始於')
+    expect(keyLabel({ value: '內容' }, 'note')).toBe('說明')
+    expect(keyLabel(undefined, 'unknown_key')).toBe('unknown_key')
   })
 })
 

@@ -42,6 +42,7 @@ from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.anki.search import escape_search_value, note_type_term
 from app.schemas.llm.person_profile import LLMPersonTopicsResult
 from app.schemas.person_profile import (
+    CREDENTIAL_LABELS,
     GOAL_KINDS,
     GOAL_STATUSES,
     EDUCATION_LABELS,
@@ -101,7 +102,9 @@ LIST_CODES = {
     "CG": "Common_Ground",
     "CP": "Comm_Prefs",
     "RS": "Residence",
+    "DY": "Daily_Life",
     "LG": "Languages",
+    "CR": "Credentials",
     "TZ": "Timezone",
     "RL": "Relationship",
     "CL": "Closeness",
@@ -126,7 +129,7 @@ SECTION_FIELDS: dict[str, tuple[str, ...]] = {
     "contacts": ("Contacts_JSON", "Comm_Prefs"),
     # 生日是文字欄位：沒填時卡片上沒有那一列可以長按，從這裡新增（走改資料）
     "dates": ("Birthday", "Key_Dates_JSON"),
-    "context": ("Residence", "Languages", "Timezone", "Relationship", "Closeness"),
+    "context": ("Residence", "Daily_Life", "Languages", "Credentials", "Timezone", "Relationship", "Closeness"),
 }
 
 #: Plain fields editable through Telegram's "edit data": history fields go through list operations and
@@ -153,7 +156,8 @@ FIELD_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
 #: 「全部資料」的分組：文字欄位與會變的欄位（只列有效的）。
 DISPLAY_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     FIELD_GROUPS[0],
-    ("外貌與基本資料", ("Appearance", "Birthday", "Hometown", "Residence", "Languages", "Timezone")),
+    ("外貌與基本資料", ("Appearance", "Birthday", "Hometown", "Residence", "Daily_Life", "Languages", "Credentials",
+                  "Timezone")),
     ("認識", ("Met_Date", "Met_Where", "Met_Via", "Introducer_Note_ID", "Relationship", "Closeness", "First_Impression")),
     ("工作", ("Company", "Education")),
     ("興趣、經歷與飲食", ("Interests", "Experiences", "Food_Drink", "Dislikes", "Dietary")),
@@ -817,10 +821,10 @@ POSITION_DETAIL_STEPS: tuple[Step, ...] = (
 )
 
 #: The event-time steps asked after the content when adding a history field (work-history plan §15; keys as
-#: in :data:`HISTORY_PERIOD_KEYS`), also asked when editing (§16). Fields with a note (:data:`NOTE_FIELDS`:
-#: positions and education) then ask for the note after the time (§18).
+#: in :data:`HISTORY_PERIOD_KEYS`), also asked when editing (§16). Fields with a note (:data:`NOTE_FIELDS`)
+#: then ask for the note after the time (§18).
 #: 會變的欄位新增時接在內容後面追問的事件時間（工作經歷計畫書 §15；鍵同 :data:`HISTORY_PERIOD_KEYS`），修改
-#: （§16）也問。有說明的欄位（:data:`NOTE_FIELDS`：職位、學歷）時間後面再問說明（§18）。
+#: （§16）也問。有說明的欄位（:data:`NOTE_FIELDS`）時間後面再問說明（§18）。
 HISTORY_DETAIL_STEPS: dict[str, tuple[Step, ...]] = {
     "Company": POSITION_DETAIL_STEPS,
     "Education": (
@@ -840,6 +844,11 @@ HISTORY_DETAIL_STEPS: dict[str, tuple[Step, ...]] = {
     "Residence": (
         Step("since", "什麼時候搬來的？（例如 2023-04）", kind="period", skip_hint="不知道就略過。"),
     ),
+    "Credentials": (
+        Step("since", "什麼時候取得的？（例如 2024-04，或只寫年 2024）", kind="period", skip_hint="不知道就略過。"),
+        Step("until", "到什麼時候到期？（例如 2029-04）", kind="period", skip_hint="沒有期限或不知道就略過。"),
+        Step("note", "補充說明？（例如「效期 3 年」「每年要更新」，可以多行）", skip_hint="沒有就略過。"),
+    ),
 }
 # 步驟的鍵要和 HISTORY_PERIOD_KEYS 一致（有說明的欄位時間後面多了說明，只比前面的時間）
 assert {name: tuple(step.key for step in steps)[:len(HISTORY_PERIOD_KEYS[name])]
@@ -851,8 +860,12 @@ assert {name: tuple(step.key for step in steps)[:len(HISTORY_PERIOD_KEYS[name])]
 PERIOD_PAIRS: dict[str, tuple[str, str, str, str]] = {
     "Company": ("start", "end", "到職", "離職"),
     "Education": ("start", "finish", *EDUCATION_LABELS),
+    "Credentials": ("since", "until", *CREDENTIAL_LABELS),
 }
 assert all(pair[:2] == HISTORY_PERIOD_KEYS[name] for name, pair in PERIOD_PAIRS.items()), "PERIOD_PAIRS 的鍵與 HISTORY_PERIOD_KEYS 不一致"
+# 有起訖的欄位都要列（漏了時問到結束那一步不會當場檢查先後）；有說明的欄位最後一步問說明
+assert set(PERIOD_PAIRS) == {name for name, keys in HISTORY_PERIOD_KEYS.items() if len(keys) == 2}, "PERIOD_PAIRS 漏了有起訖的欄位"
+assert all(HISTORY_DETAIL_STEPS[name][-1].key == "note" for name in NOTE_FIELDS), "有說明的欄位最後要問說明"
 
 
 def skip_detail_step(field_name: str, item: dict[str, object], step: Step) -> bool:
