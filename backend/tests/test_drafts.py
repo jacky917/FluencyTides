@@ -27,7 +27,7 @@ from tests.test_handlers_api import _error, anki, client, relations  # noqa: F40
 from tests.test_note_service import _service
 from tests.test_trilingual_create import TRILINGUAL, _draft
 
-RESULT = {"params": {"prompt": "p"}, "suggested_tags": []}
+RESULT = {"params": {"title": "t", "prompt": "p"}, "suggested_tags": []}
 
 
 def run_pending(slot: list) -> None:
@@ -417,7 +417,9 @@ def _create_body(draft: dict, **extra) -> dict:
     return {
         "deck": "Default",
         "note_type": TRILINGUAL,
-        "params": {"prompt": "朋友約你爬山", "references_ja": [{"content": "行こう", "familiarity": 7}]},
+        "params": {
+            "title": "婉拒爬山", "prompt": "朋友約你爬山", "references_ja": [{"content": "行こう", "familiarity": 7}],
+        },
         "draft": {"id": draft["id"], "version": draft["version"]},
         **extra,
     }

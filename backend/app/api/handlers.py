@@ -515,6 +515,7 @@ async def read_graph(
     deck: str | None = Query(None, description="牌組完整名稱（含子牌組）；省略為全部牌組"),
     note_type: str | None = Query(None, description="只看這個 handler 負責的其中一種筆記類型"),
     label_field: str | None = Query(None, description="節點名稱用的欄位；省略為 handler 的預設（沒宣告就是 nid）"),
+    depth: int = Query(1, ge=0, le=5, description="樹狀圖譜展開的層數（0＝全部）；其他圖譜不使用"),
     note_service: NoteService = Depends(get_note_service),
 ) -> dict[str, object]:
     """Return the handler's graph.
@@ -531,6 +532,8 @@ async def read_graph(
         label_field: the field used for node names; ``None`` means the handler's default (``nid`` if
             it declares none)
             節點名稱用的欄位；``None`` 為 handler 的預設（沒宣告就是 nid）
+        depth: how many levels a tree graph expands (1–5, ``0`` meaning all); other graphs ignore it
+            樹狀圖譜展開的層數（1–5，``0`` 表示全部）；其他圖譜不使用
         note_service: the note service
             筆記服務
 
@@ -538,4 +541,4 @@ async def read_graph(
         the graph's nodes and edges
         圖譜的節點與邊
     """
-    return await note_service.graph(handler_name, deck, note_type=note_type, label_field=label_field)
+    return await note_service.graph(handler_name, deck, note_type=note_type, label_field=label_field, depth=depth)

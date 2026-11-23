@@ -4,7 +4,9 @@
  *
  * 三種語言各是一個可折疊的區塊（標題列顯示已選幾句），句子多時可以收起已看完的語言。
  *
- * Preview of a trilingual draft: the prompt and context are editable; the
+ * 標題（也是子牌組名）必填，不合規則時框線變紅並在下方說明（規則見 `titleProblem`）。
+ *
+ * Preview of a trilingual draft: the title, prompt and context are editable; the
  * sayings are sorted by familiarity, all selected by default.
  */
 
@@ -13,6 +15,8 @@ import {
   FAMILIARITY_COLORS,
   REFERENCE_LANGS,
   familiarityOrder,
+  titleProblem,
+  TITLE_MAX_LENGTH,
   type DraftSelection,
   type ReferenceKey,
   type TrilingualDraftState,
@@ -20,6 +24,7 @@ import {
 import { cn } from '../../lib/utils'
 import type { TrilingualCreateParams } from '../../types/api'
 import { CollapsibleSection, TEXTAREA_CLASS } from './formParts'
+import { ParentCardSelect } from './ParentCardSelect'
 import type { PreviewBodyProps } from './previewTypes'
 
 /**
@@ -50,6 +55,8 @@ function FamiliarityBar({ value }: { value: number }) {
  * @param props.draft - 草稿。The draft.
  * @param props.selection - 勾選狀態。The selection.
  * @param props.onSelectionChange - 勾選改變時。Called with the new selection.
+ * @param props.title - 短標題（可修改，也是子牌組名）。The title.
+ * @param props.onTitleChange - 標題改變時。Called on title edits.
  * @param props.prompt - 卡面情境（可修改）。The prompt.
  * @param props.onPromptChange - 情境改變時。Called on prompt edits.
  * @param props.context - 補充（可修改）。The context.
@@ -61,6 +68,8 @@ export function TrilingualDraftPreview({
   draft,
   selection,
   onSelectionChange,
+  title,
+  onTitleChange,
   prompt,
   onPromptChange,
   context,
@@ -70,6 +79,8 @@ export function TrilingualDraftPreview({
   draft: TrilingualCreateParams
   selection: DraftSelection
   onSelectionChange: (selection: DraftSelection) => void
+  title: string
+  onTitleChange: (value: string) => void
   prompt: string
   onPromptChange: (value: string) => void
   context: string
@@ -86,6 +97,28 @@ export function TrilingualDraftPreview({
 
   return (
     <div className="space-y-5">
+      <div className="space-y-1">
+        <label htmlFor={`${id}-title`} className="text-sm font-medium">
+          標題<span className="ml-1 text-destructive">*</span>
+        </label>
+        <input
+          id={`${id}-title`}
+          value={title}
+          disabled={disabled}
+          maxLength={TITLE_MAX_LENGTH + 10}
+          placeholder="例如：残業を断る"
+          onChange={(e) => onTitleChange(e.target.value)}
+          aria-invalid={titleProblem(title) !== null}
+          aria-describedby={`${id}-title-hint`}
+          className={cn(
+            'h-9 w-full rounded-md border border-input bg-background px-3 text-sm',
+            titleProblem(title) !== null && 'border-destructive',
+          )}
+        />
+        <p id={`${id}-title-hint`} className={cn('text-xs', titleProblem(title) ? 'text-destructive' : 'text-muted-foreground')}>
+          {titleProblem(title) ?? '短標題也是子牌組的名稱：之後在這張卡底下建的子卡，會放進同名的子牌組。'}
+        </p>
+      </div>
       <div className="space-y-1">
         <label htmlFor={`${id}-prompt`} className="text-sm font-medium">
           卡面情境<span className="ml-1 text-destructive">*</span>
@@ -188,17 +221,27 @@ export function TrilingualDraftPreview({
  * @param props.disabled - 建立中時停用。Disabled while busy.
  * @returns 預覽 JSX。The preview JSX.
  */
-export function TrilingualPreviewBody({ state, onChange, disabled }: PreviewBodyProps<TrilingualDraftState>) {
+export function TrilingualPreviewBody({ state, onChange, disabled, deck }: PreviewBodyProps<TrilingualDraftState>) {
   return (
-    <TrilingualDraftPreview
-      draft={state.draft}
-      selection={state.selection}
-      onSelectionChange={(selection) => onChange({ ...state, selection })}
-      prompt={state.prompt}
-      onPromptChange={(prompt) => onChange({ ...state, prompt })}
-      context={state.context}
-      onContextChange={(context) => onChange({ ...state, context })}
-      disabled={disabled}
-    />
+    <div className="space-y-5">
+      <ParentCardSelect
+        deck={deck ?? null}
+        value={state.parentNoteId ?? null}
+        onChange={(parentNoteId) => onChange({ ...state, parentNoteId })}
+        disabled={disabled}
+      />
+      <TrilingualDraftPreview
+        draft={state.draft}
+        selection={state.selection}
+        onSelectionChange={(selection) => onChange({ ...state, selection })}
+        title={state.title ?? ''}
+        onTitleChange={(title) => onChange({ ...state, title })}
+        prompt={state.prompt}
+        onPromptChange={(prompt) => onChange({ ...state, prompt })}
+        context={state.context}
+        onContextChange={(context) => onChange({ ...state, context })}
+        disabled={disabled}
+      />
+    </div>
   )
 }

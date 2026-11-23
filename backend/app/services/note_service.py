@@ -276,6 +276,8 @@ class NoteService:
                 若用到的上傳檔已不在暫存區（什麼都沒寫）
             NoteTypeNotCreatableError: if the note type is not the one that can be created
                 若筆記類型不是能建立的那種
+            ParentNoteInvalidError: if the chosen parent card cannot hold child cards (checked before creating)
+                若選的上層卡不能放子卡（建卡之前檢查）
             TagInvalidError: if a tag is invalid (checked before creating, so no card is created)
                 若標籤不合格（在建卡之前檢查，不會建出卡片）
             pydantic.ValidationError: if parameter validation fails (REST turns it into 422)
@@ -298,6 +300,8 @@ class NoteService:
             parameters = model.model_validate(dict(params)).model_dump(by_alias=True)
 
         user_tags = normalize_tags(tags or [])
+        # 例如三語卡的子卡：放進上層卡的同名子牌組（在加標籤、存媒體之前決定，失敗就什麼都沒寫）
+        deck = await handler.resolve_create_deck(self.card_service, deck, parameters)
 
         media = staged_names(parameters, _create_media_fields(handler))
         async with committed_media(self.anki_client, self.staging, media):
@@ -481,15 +485,16 @@ class NoteService:
         請 LLM 生成草稿（不寫入 Anki）。
 
         The input must first go through :meth:`validate_draft_input`. This runs in the background
-        (``CreateSession``) long after the request has ended: it uses only ``self.anki_client`` (the AnkiConnect
-        singleton under ``card_service``, to look up existing tags) and the handler registry, and ``execute_draft``
-        takes no service. ``relation_service`` must not be used here: it is bound to the request's DB session, which
-        is closed once the response is sent (server_drafts plan D4, §11.1).
+        (``CreateSession``) long after the request has ended: it uses only the AnkiConnect singleton (through
+        ``self.anki_client`` and ``card_service``, to look up existing tags and the handler's ``draft_context``) and
+        the handler registry, and ``execute_draft`` takes no service. ``relation_service`` must not be used here: it
+        is bound to the request's DB session, which is closed once the response is sent (server_drafts plan D4,
+        §11.1). An Anki failure while reading the tags or the context only leaves them out.
 
         輸入要先經 ``validate_draft_input``。在背景執行（``CreateSession``），請求早已結束：只用到
-        ``self.anki_client``（``card_service`` 底下的 AnkiConnect 單例，查既有標籤）與 handler 註冊表，
-        ``execute_draft`` 不接任何服務。不能在這裡用 ``relation_service``：它綁著請求的 DB session，回應送出後
-        就關閉了（server_drafts 計畫書 D4、§11.1）。
+        AnkiConnect 單例（經 ``self.anki_client`` 與 ``card_service``，查既有標籤與 handler 的 ``draft_context``）
+        與 handler 註冊表，``execute_draft`` 不接任何服務。不能在這裡用 ``relation_service``：它綁著請求的 DB
+        session，回應送出後就關閉了（server_drafts 計畫書 D4、§11.1）。讀標籤或情境時 Anki 失敗，只是不提供那部分。
 
         Args:
             handler_name: the handler name
@@ -517,7 +522,13 @@ class NoteService:
             # 既有標籤只是給 LLM 參考：Anki 連不上時照樣生成草稿（建卡時才真的需要 Anki）
             logger.warning("生成草稿時查不到既有標籤，改為不提供：%s", exc)
             existing = []
-        draft = dict(await handler.execute_draft(parameters, existing[:MAX_PROMPT_TAGS]))
+        try:
+            context = await handler.draft_context(self.card_service, parameters)
+        except AnkiConnectError as exc:
+            # 情境（例如三語卡的牌組路徑）只是給 LLM 參考：Anki 連不上時照樣生成
+            logger.warning("生成草稿時讀不到 %s 的情境，改為不提供：%s", handler_name, exc)
+            context = {}
+        draft = dict(await handler.execute_draft(parameters, existing[:MAX_PROMPT_TAGS], context))
         raw_tags = draft.pop("tags", None)
         return {"params": draft, "suggested_tags": _suggested_tags(raw_tags, existing)}
 
@@ -845,6 +856,7 @@ class NoteService:
         *,
         note_type: str | None = None,
         label_field: str | None = None,
+        depth: int = 1,
     ) -> dict[str, object]:
         """Read a handler's graph (§4.6).
 
@@ -859,6 +871,8 @@ class NoteService:
                 要限定的筆記類型；``None`` 表示不限定
             label_field: the field used as node labels; ``None`` uses the handler's default
                 作為節點標籤的欄位；``None`` 時用 handler 的預設
+            depth: how many levels a tree graph expands, ``0`` meaning all; other graphs ignore it
+                樹狀圖譜展開的層數，``0`` 表示全部；其他圖譜不使用
 
         Returns:
             the graph from the handler
@@ -877,7 +891,7 @@ class NoteService:
         if not graph.supported:
             raise HandlerOperationUnsupportedError(graph.reason or "")
         return await handler.execute_read_graph(
-            self.card_service, self.relation_service, deck, note_type=note_type, label_field=label_field
+            self.card_service, self.relation_service, deck, note_type=note_type, label_field=label_field, depth=depth
         )
 
     async def _owning_handler(self, handler_name: str, note_id: int, operation: str) -> BaseHandler:

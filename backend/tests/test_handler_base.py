@@ -189,6 +189,11 @@ class TestCapabilityShapes:
         with pytest.raises(ValueError):
             GraphCapability(links=True)
 
+    def test_tree_layout_has_no_relation_links(self):
+        """樹狀圖譜的連線就是上下層，不能再宣告關聯連線。"""
+        with pytest.raises(ValueError, match="layout='tree'"):
+            GraphCapability(supported=True, links=True, layout="tree")
+
     def test_defaults_offer_read_only(self):
         caps = HandlerCapabilities()
         assert caps.to_dict() == {
@@ -201,7 +206,7 @@ class TestCapabilityShapes:
             "update_json": {"supported": False, "reason": "尚未開放"},
             "delete": {"supported": False, "reason": "尚未開放"},
             "actions": [],
-            "graph": {"supported": False, "links": False, "reason": "尚未開放"},
+            "graph": {"supported": False, "links": False, "layout": "force", "reason": "尚未開放"},
             "search": {"supported": False, "reason": "尚未開放"},
         }
 
@@ -235,6 +240,10 @@ class TestRegistryChecks:
             ),
             ({"CAPABILITIES": HandlerCapabilities(actions=("add_audio",))}, "execute_update"),
             ({"CAPABILITIES": HandlerCapabilities(graph=GraphCapability(supported=True, links=True))}, "RelationGraphMixin"),
+            (
+                {"CAPABILITIES": HandlerCapabilities(graph=GraphCapability(supported=True, layout="tree"))},
+                "execute_read_graph",
+            ),
             ({"JSON_FIELDS": ("Nope_JSON",)}, "Nope_JSON"),
             ({"MEDIA_FIELDS": {"Nope_Audio": "audio"}}, "Nope_Audio"),
             ({"MEDIA_FIELDS": {"Word_Audio": "video"}}, "種類只能是"),

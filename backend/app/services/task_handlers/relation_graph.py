@@ -51,6 +51,7 @@ class RelationGraphMixin(BaseHandler):
         *,
         note_type: str | None = None,
         label_field: str | None = None,
+        depth: int = 1,
     ) -> dict[str, object]:
         """Return the relation graph: note nodes colored by study status, plus relation links and ghost nodes.
 
@@ -74,6 +75,8 @@ class RelationGraphMixin(BaseHandler):
                 只看其中一種筆記類型；``None`` 表示全部
             label_field: not applicable; rejected when given
                 不適用，帶了就拒絕
+            depth: unused (only tree graphs expand by levels)
+                不使用（只有樹狀圖譜依層展開）
 
         Returns:
             ``{"nodes", "links", "label_fields": [], "label_field": RELATION_LABEL_FIELD}``

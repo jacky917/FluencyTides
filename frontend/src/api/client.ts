@@ -268,17 +268,19 @@ export const FluencyTidesAPI = {
    * @param options.deck - 牌組；省略或 `All Decks` 為全部牌組。The deck, or all.
    * @param options.noteType - 只看其中一種筆記類型。One of the handler's note types.
    * @param options.labelField - 節點名稱用的欄位；省略為 handler 的預設。The label field.
+   * @param options.depth - 樹狀圖譜展開的層數（0＝全部）；其他圖譜不帶。Levels for tree graphs.
    * @returns 節點、連線與可選的名稱欄位。The graph.
    */
   getHandlerGraph: (
     handlerName: string,
-    options: { deck?: string | null; noteType?: string | null; labelField?: string | null } = {},
+    options: { deck?: string | null; noteType?: string | null; labelField?: string | null; depth?: number | null } = {},
   ): Promise<GraphData> =>
     apiClient.get(`/handlers/${encodeURIComponent(handlerName)}/graph`, {
       params: {
         deck: options.deck && options.deck !== 'All Decks' ? options.deck : undefined,
         note_type: options.noteType || undefined,
         label_field: options.labelField || undefined,
+        depth: options.depth ?? undefined,
       },
     }),
 

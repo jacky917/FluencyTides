@@ -1,6 +1,8 @@
 {
   "themes": [
     { "id": "default", "label": "預設（灰階）" },
+    { "id": "classic-white", "label": "經典白" },
+    { "id": "slate-gray", "label": "石板灰" },
     { "id": "sabbat-night", "label": "魔女之夜" },
     { "id": "senren-hoori", "label": "穗織之櫻" }
   ]

@@ -290,6 +290,9 @@ def validate_handler(handler: BaseHandler) -> None:
     if caps.actions and cls.execute_update is BaseHandler.execute_update:
         problems.append(f"宣告了動作 {list(caps.actions)}，但沒有覆寫 execute_update")
 
+    if caps.graph.layout == "tree" and cls.execute_read_graph is BaseHandler.execute_read_graph:
+        problems.append("樹狀圖譜（graph.layout='tree'）必須覆寫 execute_read_graph")
+
     uses_relation_graph = isinstance(handler, RelationGraphMixin)
     if caps.graph.supported and caps.graph.links != uses_relation_graph:
         problems.append("graph.links 必須與是否使用 RelationGraphMixin 一致")

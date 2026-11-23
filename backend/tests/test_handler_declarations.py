@@ -68,7 +68,7 @@ class TestInitialCapabilities:
             "update_json": {"supported": False, "reason": "尚未開放"},
             "delete": {"supported": True, "reason": None},
             "actions": [],
-            "graph": {"supported": True, "links": True, "reason": None},
+            "graph": {"supported": True, "links": True, "layout": "force", "reason": None},
             "search": {"supported": False, "reason": "尚未開放"},
         }
 
@@ -84,7 +84,7 @@ class TestInitialCapabilities:
             "update_json": {"supported": False, "reason": "尚未開放"},
             "delete": {"supported": False, "reason": "對話卡的刪除尚未開放"},
             "actions": SPEAKING_ACTIONS,
-            "graph": {"supported": False, "links": False, "reason": "口說卡沒有知識圖譜"},
+            "graph": {"supported": False, "links": False, "layout": "force", "reason": "口說卡沒有知識圖譜"},
             "search": {"supported": False, "reason": "尚未開放"},
         }
 
@@ -98,7 +98,8 @@ class TestInitialCapabilities:
         assert caps["update_fields"] == {"supported": False, "reason": "三語對話卡的欄位修改尚未開放"}
         assert caps["delete"] == {"supported": False, "reason": "三語對話卡的刪除尚未開放"}
         assert caps["actions"] == SPEAKING_ACTIONS
-        assert caps["graph"]["supported"] is False
+        # 主題樹：卡片＋同名子牌組（trilingual_topic_tree 計畫書）
+        assert caps["graph"] == {"supported": True, "links": False, "layout": "tree", "reason": None}
 
     def test_expression_correction(self):
         caps = _caps("expression_correction")
@@ -110,7 +111,7 @@ class TestInitialCapabilities:
         assert caps["update_fields"] == {"supported": False, "reason": "目前只支援新增音檔"}
         assert caps["delete"] == {"supported": False, "reason": "外語糾錯的母子卡刪除尚未開放"}
         assert caps["actions"] == ["add_audio"]
-        assert caps["graph"] == {"supported": False, "links": False, "reason": "尚未實作"}
+        assert caps["graph"] == {"supported": False, "links": False, "layout": "force", "reason": "尚未實作"}
 
     @pytest.mark.parametrize(("name", "folder"), [("jp_verb_pair", "JP_VerbPair"), ("jp_core_verb", "JP_CoreVerb")])
     def test_jp_handlers_are_script_managed(self, name, folder):
@@ -266,11 +267,14 @@ class TestCreateParams:
         assert schema["properties"]["references"]["x-ui"] == "lines"
         assert "tg_bot" not in schema["properties"]
 
-    def test_trilingual_prompt_required(self):
+    def test_trilingual_title_and_prompt_required(self):
         with pytest.raises(ValidationError):
             SpeakingTrilingualCreateParams.model_validate({"context": "x"})
-        assert SpeakingTrilingualCreateParams(prompt="x").model_dump() == {
-            "prompt": "x", "context": "", "references_zh": [], "references_ja": [], "references_en": [],
+        with pytest.raises(ValidationError):
+            SpeakingTrilingualCreateParams.model_validate({"prompt": "x"})
+        assert SpeakingTrilingualCreateParams(title=" 婉拒加班 ", prompt="x").model_dump() == {
+            "title": "婉拒加班", "prompt": "x", "context": "", "references_zh": [], "references_ja": [],
+            "references_en": [], "parent_note_id": None,
         }
 
     def test_expression_accepts_exactly_what_tg_sends(self):

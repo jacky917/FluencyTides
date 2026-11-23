@@ -24,6 +24,8 @@ export interface PreviewBodyProps<S extends DraftStateBase> {
   onChange: (next: S) => void
   /** 建立中、廢棄中時停用。Disabled while busy. */
   disabled: boolean
+  /** 要建卡的牌組（還沒選好時為 null）。The deck the card will be created in, or null. */
+  deck?: string | null
 }
 
 /** 一種卡片的預覽。One card type's preview. */
