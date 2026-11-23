@@ -95,5 +95,7 @@ export function capabilityRows(handler: HandlerInfo): CapabilityRow[] {
     operation('刪除', remove),
     operation('圖譜', graph, graph.links ? '含關聯連線' : '單點'),
     { label: '動作', supported: actions.length > 0, detail: actions.length > 0 ? actions.join('、') : '無' },
+    // AI 整理（一段話整理進卡片）：舊的後端沒有這一項時不列
+    ...(handler.capabilities.fill ? [operation('AI 整理', handler.capabilities.fill, '網頁')] : []),
   ]
 }

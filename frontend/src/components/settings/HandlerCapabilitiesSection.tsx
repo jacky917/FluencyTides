@@ -28,10 +28,10 @@ export function HandlerCapabilitiesSection() {
     <section className="space-y-3" aria-labelledby="handler-capabilities-title">
       <div>
         <h3 id="handler-capabilities-title" className="text-xl font-semibold tracking-tight">
-          Handler 能力
+          各卡片類型的功能
         </h3>
         <p className="text-sm text-muted-foreground mt-1">
-          每種卡片（handler）在網頁與 TG 能做什麼；不開放的項目附上原因。唯讀，由後端宣告。
+          每種卡片在網頁與 TG 能做什麼，不開放的附上原因。由後端宣告，這裡只能看。
         </p>
       </div>
       {isPending ? (
@@ -58,19 +58,20 @@ export function HandlerCapabilitiesSection() {
  * @returns 卡片 JSX。Card JSX.
  */
 function HandlerCard({ handler }: { handler: HandlerInfo }) {
+  // 格狀排版的項目預設最小寬度是內容寬度：長的英文（動作名稱）會把整頁撐寬，手機上就能左右滑
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base">
+    <Card className="min-w-0">
+      <CardHeader className="px-4 pb-3 pt-4 sm:px-5">
+        <CardTitle className="text-base [overflow-wrap:anywhere]">
           {handler.title} <span className="font-mono text-xs font-normal text-muted-foreground">{handler.name}</span>
         </CardTitle>
         <CardDescription className="break-all">{handler.note_types.join('、')}</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="px-4 pb-4 sm:px-5">
         <dl className="space-y-2 text-sm">
           {capabilityRows(handler).map((row) => (
             <div key={row.label} className="flex gap-2">
-              <dt className="flex w-20 shrink-0 items-center gap-1 font-medium">
+              <dt className="flex w-24 shrink-0 items-center gap-1 font-medium">
                 {row.supported ? (
                   <Check className="h-4 w-4 text-emerald-600" aria-label="開放" />
                 ) : (
@@ -78,7 +79,7 @@ function HandlerCard({ handler }: { handler: HandlerInfo }) {
                 )}
                 {row.label}
               </dt>
-              <dd className={cn('min-w-0 break-words', !row.supported && 'text-muted-foreground')}>
+              <dd className={cn('min-w-0 [overflow-wrap:anywhere]', !row.supported && 'text-muted-foreground')}>
                 {row.detail ?? (row.supported ? '開放' : '不開放')}
               </dd>
             </div>
