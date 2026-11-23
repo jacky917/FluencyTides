@@ -17,6 +17,7 @@ import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useCurrentDraft } from '../../hooks/useServerDraft'
 import { readStored, removeStored, writeStored } from '../../hooks/useStoredState'
+import { isFillDraft, openPersonFill } from '../../lib/personFill'
 import { CURRENT_DRAFT_ID_KEY, draftNotice } from '../../lib/serverDraft'
 import type { HandlerInfo, ServerDraft } from '../../types/api'
 
@@ -50,15 +51,22 @@ export function DraftWatcher() {
     }
     if (!notify || !data) return
     const handlers = queryClient.getQueryData<HandlerInfo[]>(['handlers'])
-    const title = handlers?.find((handler) => handler.name === data.handler)?.title ?? '建卡'
+    const fill = isFillDraft(data)
+    const handlerTitle = handlers?.find((handler) => handler.name === data.handler)?.title ?? '建卡'
+    const title = fill ? `${handlerTitle} AI 整理` : handlerTitle
+    // AI 整理的對話框掛在版面上，任何一頁都能直接打開；其他草稿到建卡畫面
     const action = {
       label: '前往',
-      onClick: () => {
-        writeStored('local', 'generate_handler', data.handler)
-        navigate('/generate')
-      },
+      onClick: fill
+        ? () => openPersonFill()
+        : () => {
+            writeStored('local', 'generate_handler', data.handler)
+            navigate('/generate')
+          },
     }
-    if (notify === 'ready') {
+    if (notify === 'ready' && fill) {
+      toast.success(`${title}已整理好`, { description: '打開對話框確認後寫入', action })
+    } else if (notify === 'ready') {
       toast.success(`${title}草稿已生成`, { description: '回到建卡畫面勾選後建立', action })
     } else {
       toast.error(`${title}草稿生成失敗`, { description: data.error?.message, action })

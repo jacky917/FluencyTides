@@ -21,7 +21,7 @@
 
 import { useId, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Eraser, Loader2 } from 'lucide-react'
+import { Eraser, Loader2, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../../api/client'
 import { useCreatedNotice } from '../../hooks/useCreatedNotice'
@@ -29,6 +29,7 @@ import { useCurrentDraft, useSetCurrentDraft } from '../../hooks/useServerDraft'
 import { removeStored, useLocalStorage } from '../../hooks/useStoredState'
 import type { DeckStatus } from '../../hooks/useDeckStatus'
 import { describeApiError, failureTitle, isBackendError, retryTransient } from '../../lib/apiError'
+import { isFillDraft, openPersonFill } from '../../lib/personFill'
 import {
   deckBlockedReason,
   deckBlocksForm,
@@ -104,7 +105,9 @@ export function CreatePanelBody({ selectedDeck, deckStatus, onViewCreated }: Cre
   const current = selectable.find((handler) => handler.name === storedHandler) ?? selectable[0]
   // 全站唯一的建卡草稿；是別種卡片的就先處理它
   const { data: draft } = useCurrentDraft()
-  const otherDraft = draft && current && draft.handler !== current.name ? draft : null
+  // 人脈卡「AI 整理」的草稿也佔著全站唯一的槽位：任何卡片類型都先處理它
+  const fillDraft = draft && isFillDraft(draft) ? draft : null
+  const otherDraft = draft && !fillDraft && current && draft.handler !== current.name ? draft : null
 
   if (handlersPending) {
     return (
@@ -134,7 +137,15 @@ export function CreatePanelBody({ selectedDeck, deckStatus, onViewCreated }: Cre
           }}
         />
       </CollapsibleSection>
-      {current && otherDraft ? (
+      {fillDraft ? (
+        <div role="status" className="space-y-2 rounded-md border px-3 py-2 text-sm">
+          <p>有一份人脈卡「AI 整理」的草稿還沒處理完（全站同時只有一份草稿），請先寫入或丟棄。</p>
+          <Button type="button" size="sm" variant="outline" onClick={() => openPersonFill()}>
+            <Sparkles className="mr-2 h-4 w-4" />
+            打開 AI 整理
+          </Button>
+        </div>
+      ) : current && otherDraft ? (
         <OtherDraftNotice
           draft={otherDraft}
           title={(handlers ?? []).find((handler) => handler.name === otherDraft.handler)?.title ?? otherDraft.handler}
@@ -155,13 +166,32 @@ export function CreatePanelBody({ selectedDeck, deckStatus, onViewCreated }: Cre
             onViewCreated={onViewCreated}
           />
         ) : (
-          <CreateForm
-            key={current.name}
-            handler={current}
-            selectedDeck={selectedDeck}
-            deckStatus={deckStatus}
-            onViewCreated={onViewCreated}
-          />
+          <>
+            {current.capabilities.fill?.supported && (
+              <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={!selectedDeck}
+                  onClick={() => openPersonFill({ deck: selectedDeck })}
+                >
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  用一段話建立
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  {selectedDeck ? '描述這個人，AI 幫你放到對的欄位，確認後再建立。' : '先在牌組樹選要建在哪個牌組。'}
+                </span>
+              </div>
+            )}
+            <CreateForm
+              key={current.name}
+              handler={current}
+              selectedDeck={selectedDeck}
+              deckStatus={deckStatus}
+              onViewCreated={onViewCreated}
+            />
+          </>
         )
       ) : (
         <p className="text-sm text-muted-foreground">目前沒有能在網頁建立的卡片類型。</p>
@@ -279,7 +309,7 @@ function HandlerPicker({
             <span className="min-w-0">
               <span className="font-medium">{handler.title}</span>
               {availability.kind === 'disabled' && (
-                <span className="block break-words text-xs text-muted-foreground">{availability.reason}</span>
+                <span className="block [overflow-wrap:anywhere] text-xs text-muted-foreground">{availability.reason}</span>
               )}
             </span>
           </label>

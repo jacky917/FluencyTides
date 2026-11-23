@@ -70,6 +70,7 @@ class TestInitialCapabilities:
             "actions": [],
             "graph": {"supported": True, "links": True, "layout": "force", "reason": None},
             "search": {"supported": False, "reason": "尚未開放"},
+            "fill": {"supported": False, "reason": "尚未開放"},
         }
 
     def test_speaking_coach(self):
@@ -86,6 +87,7 @@ class TestInitialCapabilities:
             "actions": SPEAKING_ACTIONS,
             "graph": {"supported": False, "links": False, "layout": "force", "reason": "口說卡沒有知識圖譜"},
             "search": {"supported": False, "reason": "尚未開放"},
+            "fill": {"supported": False, "reason": "尚未開放"},
         }
 
     def test_speaking_trilingual(self):

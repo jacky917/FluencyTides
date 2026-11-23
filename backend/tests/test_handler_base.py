@@ -208,6 +208,7 @@ class TestCapabilityShapes:
             "actions": [],
             "graph": {"supported": False, "links": False, "layout": "force", "reason": "尚未開放"},
             "search": {"supported": False, "reason": "尚未開放"},
+            "fill": {"supported": False, "reason": "尚未開放"},
         }
 
 

@@ -57,6 +57,8 @@ def _note_service():
     service.run_action = mock.AsyncMock(return_value=None)
     service.update_fields = mock.AsyncMock(return_value={"sync_warning": None})
     service.create = mock.AsyncMock(return_value={"note_ids": [5], "deck": "人脈", "sync_warning": None})
+    # 「用一段話記錄」寫完全部才同步一次（apply_proposals）
+    service.sync_after_write = mock.AsyncMock(return_value=None)
     return service
 
 

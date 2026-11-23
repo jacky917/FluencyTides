@@ -82,7 +82,6 @@ from app.schemas.person_profile import (
     HISTORY_PERIOD_KEYS,
     ITEM_EDIT_KEYS,
     PERSON_HISTORY_FIELDS,
-    PERSON_JSON_ITEMS,
     PERSON_NOTE_TYPE,
     TEXT_UNMASKED_TAG,
     PersonCreateParams,
@@ -104,7 +103,6 @@ from app.services import person_profile_ingest as ingest_service
 from app.services import person_profile_topics as topics_service
 from app.services.card_service import CardService
 from app.services.note_service import NoteService, sync_warning
-from app.services.task_handlers.base import note_field_values
 from app.services.task_handlers.person_profile_handler import new_card_id, resolve_index
 
 logger = logging.getLogger(__name__)
@@ -177,25 +175,11 @@ async def _load(card_service: CardService, note_id: int) -> tuple[dict[str, str]
 async def _load_with_tags(
     card_service: CardService, note_id: int
 ) -> tuple[dict[str, str], dict[str, list[object]], list[str]] | None:
-    """Load a person like :func:`_load`, also returning the note's tags.
+    """Load a person like :func:`_load`, also returning the note's tags (``person_profile_ingest.load_person``).
 
-    同 ``_load``，另外帶回筆記的標籤。
+    同 ``_load``，另外帶回筆記的標籤（``person_profile_ingest.load_person``）。
     """
-    note = await card_service.get_note(note_id)
-    if str(note.get("modelName")) != PERSON_NOTE_TYPE:
-        return None
-    fields = note_field_values(note)
-    lists: dict[str, list[object]] = {}
-    broken = []
-    for name in (*PERSON_JSON_ITEMS, *PERSON_HISTORY_FIELDS):
-        try:
-            lists[name] = AnkiJsonFieldManager.parse_field_string(fields.get(name, ""))
-        except AnkiFieldCorruptedError:
-            lists[name] = []
-            broken.append(name)
-    if broken:
-        logger.warning("人脈卡 note %s 的清單格式壞了（當成空的）: %s", note_id, "、".join(broken))
-    return fields, lists, [str(tag) for tag in note.get("tags") or []]
+    return await ingest_service.load_person(card_service, note_id)
 
 
 async def _ensure_ids(card_service: CardService, note_id: int, fields: dict[str, str]) -> None:
@@ -2540,33 +2524,6 @@ async def _toggle_proposal(message: types.Message, state: FSMContext, index: int
     await message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 
-#: The named actions for interaction and follow-up proposals.
-#: 互動、待追蹤建議對應的具名動作。
-_PROPOSAL_ACTIONS = {"interaction": "add_interaction", "followup": "add_followup"}
-
-
-def _proposal_action(kind: str, data: dict[str, object]) -> tuple[str, dict[str, object]]:
-    """Return the named action and parameters to run for one proposal (other than text fields).
-
-    回傳一項建議（文字欄位以外）要執行的具名動作與參數。
-
-    Raises:
-        ValueError: if the kind is not recognized (a programming error)
-            若種類不認得（程式錯誤）
-    """
-    if kind in _PROPOSAL_ACTIONS:
-        return _PROPOSAL_ACTIONS[kind], {"item": data}
-    if kind == "goal":
-        return "add_item", {"field": "Goals_JSON", "item": {k: v for k, v in data.items() if k != "reason"}}
-    if kind == "history_add":
-        return "add_history", {"field": data["field"], "item": data["item"]}
-    if kind == "history_end":
-        return "set_history_status", {
-            "field": data["field"], "index": data["index"], "fingerprint": data["fingerprint"], "ended": True,
-        }
-    raise ValueError(f"未知的建議種類 {kind!r}")
-
-
 async def _save_proposals(
     message: types.Message, state: FSMContext, note_service: NoteService, card_service: CardService
 ) -> None:
@@ -2574,13 +2531,14 @@ async def _save_proposals(
 
     寫入勾選的建議。
 
-    Interaction, follow-up, goal and history proposals are each written with their own action; field
-    proposals are combined into one ``update_fields``. When it fails midway, the state is kept and the
-    written proposals are recorded (marked 「已存」 in the preview), so pressing save again writes only the
-    rest without duplicating.
+    The writing itself is ``person_profile_ingest.apply_proposals`` (shared with the web): each proposal with its
+    own action, text fields combined into one ``update_fields``. When it fails midway, the state is kept and the
+    written proposals are recorded (marked 「已存」 in the preview), so pressing save again writes only the rest
+    without duplicating.
 
-    互動、待追蹤、目標與會變的欄位建議各以自己的動作寫入，欄位建議合成一次 ``update_fields``。
-    中途失敗時保留狀態並記下已寫入的項目（預覽標「已存」），再按一次儲存只補存其他的，不會重複寫入。
+    寫入本身是 ``person_profile_ingest.apply_proposals``（與網頁共用）：各項以自己的動作寫入，文字欄位合成一次
+    ``update_fields``。中途失敗時保留狀態並記下已寫入的項目（預覽標「已存」），再按一次儲存只補存其他的，
+    不會重複寫入。
     """
     if await state.get_state() != PersonStates.ingest_confirm.state:
         await message.answer("⌛ 這個步驟已結束，請重新開始。")
@@ -2599,29 +2557,7 @@ async def _save_proposals(
     await state.update_data(saving=True)
     warning: str | None = None
     try:
-        for i in pending:
-            kind = proposals[i]["kind"]
-            if kind == "field":
-                continue
-            action, params = _proposal_action(kind, proposals[i]["data"])
-            warning = await note_service.run_action(note_id, action, params)
-            saved.add(i)
-        field_indexes = [i for i in pending if proposals[i]["kind"] == "field"]
-        if field_indexes:
-            loaded = await _load(card_service, note_id)
-            if loaded is None:
-                raise NoteNotFoundError(CARD_NOT_FOUND)
-            current, changes = loaded[0], {}
-            for i in field_indexes:
-                update = proposals[i]["data"]
-                name = str(update["field"])
-                changes[name] = ingest_service.field_html(
-                    name, changes.get(name, current.get(name, "")), str(update["value"]), str(update["mode"])
-                )
-            result = await note_service.update_fields(HANDLER_NAME, note_id, changes)
-            saved.update(field_indexes)
-            # 每次寫入後都會同步：最後一次的結果涵蓋前面的寫入
-            warning = result.get("sync_warning")  # type: ignore[assignment]
+        warning = await ingest_service.apply_proposals(note_service, card_service, note_id, proposals, pending, saved)
     except (FluencyTidesError, AnkiConnectError) as e:
         await state.update_data(saved=sorted(saved), saving=False)
         logger.error("人脈卡整理：寫入中斷（note %s，已寫 %d/%d 項）: %s", note_id, len(saved), len(saved) + len(pending), e)

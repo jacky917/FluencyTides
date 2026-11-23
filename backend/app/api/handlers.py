@@ -7,6 +7,8 @@ Handlers plan D5, §4.
 - ``GET    /handlers``: every handler, its capabilities, and its card creation form
 - ``POST   /handlers/{name}/drafts``: web preview flow; start generating a draft in the background
   (202, server_drafts plan)
+- ``POST   /handlers/{name}/fill``: the web "AI 整理"; start organizing a description in the background (202,
+  person_llm_fill plan)
 - ``POST   /handlers/{name}/notes``: create cards (201), optionally with the user's tags and a draft ID
 - ``GET    /handlers/{name}/tags``: tags this kind of card has used, with counts (for autocomplete and
   suggestions)
@@ -33,6 +35,7 @@ handlers 計畫書 D5、§4。
 
 - ``GET    /handlers``                             所有 handler、能力與建卡表單
 - ``POST   /handlers/{name}/drafts``                 網頁預覽流程：開始在背景生成草稿（202，server_drafts 計畫書）
+- ``POST   /handlers/{name}/fill``                   網頁的「AI 整理」：開始在背景整理一段描述（202，person_llm_fill 計畫書）
 - ``POST   /handlers/{name}/notes``                  建卡（201），可帶使用者的標籤與草稿 ID
 - ``GET    /handlers/{name}/tags``                   這種卡片用過的標籤與次數（自動完成、推薦用）
 - ``GET    /handlers/{name}/notes/{note_id}``        handler 讀取
@@ -62,6 +65,7 @@ from app.core.auth import verify_api_key
 from app.core.dependencies import get_note_service
 from app.schemas.card import ErrorResponse
 from app.schemas.drafts import DraftOut, StartDraftRequest
+from app.schemas.person_fill import StartFillRequest
 from app.schemas.notes import (
     CreateNoteRequest,
     CreateNoteResponse,
@@ -77,6 +81,7 @@ from app.schemas.notes import (
     UpdateNoteRequest,
     UpdateNoteResponse,
 )
+from app.services import person_profile_fill
 from app.services.create_session import CreateSession, get_create_session
 from app.services.note_service import NoteService
 
@@ -315,6 +320,61 @@ async def start_draft(
     if session.snapshot() is None:
         parameters = await note_service.resolve_draft_duplicate(handler_name, parameters, body.duplicate_decision)
     return await session.start(handler_name, parameters, lambda p: note_service.generate_draft(handler_name, p))
+
+
+@router.post(
+    "/{handler_name}/fill",
+    response_model=DraftOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="網頁的「AI 整理」：開始在背景整理一段描述",
+    description=(
+        "驗證輸入後立刻回 202，LLM 在背景把描述整理成建議；結果用 GET /drafts/current 讀，編輯、勾選後以 "
+        "POST /drafts/{id}/apply 寫入。帶 note_id 是補這張卡，不帶是建新卡（要帶 deck）。和預覽建卡共用全站一份"
+        "草稿，已經有草稿時回 409 CREATE_SESSION_BUSY。只整理、不寫入 Anki。"
+    ),
+    responses={
+        **_REFUSED,
+        **_NOT_FOUND,
+        409: {"model": ErrorResponse, "description": _SESSION_BUSY},
+        422: {"description": "輸入驗證失敗（detail）"},
+    },
+)
+async def start_fill(
+    handler_name: str,
+    body: StartFillRequest,
+    note_service: NoteService = Depends(get_note_service),
+    session: CreateSession = Depends(get_create_session),
+) -> dict[str, object]:
+    """Start organizing a description into proposals for "AI 整理".
+
+    開始把描述整理成「AI 整理」的建議。
+
+    Args:
+        handler_name: the handler; only person cards offer it
+            handler；目前只有人脈卡開放
+        body: the description, and the card to add to or the deck of a new card
+            描述，以及要補的卡或建新卡的牌組
+        note_service: the note service
+            筆記服務
+        session: the site-wide create session
+            全站共用的建卡工作階段
+
+    Returns:
+        the new draft; the LLM organizes in the background
+        新的草稿；LLM 在背景整理
+
+    Raises:
+        CreateSessionBusyError: if a draft already exists
+            若已經有一份草稿
+        HandlerNotFoundError: if the handler does not exist
+            若 handler 不存在
+        HandlerOperationUnsupportedError: if the handler does not offer "AI 整理"
+            若 handler 沒有開放「AI 整理」
+    """
+    note_service.require_fill(handler_name)
+    parameters = person_profile_fill.draft_input(body.text, body.note_id, body.deck)
+    card_service = note_service.card_service
+    return await session.start(handler_name, parameters, lambda p: person_profile_fill.generate(card_service, p))
 
 
 @router.get(

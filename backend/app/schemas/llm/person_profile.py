@@ -2,16 +2,24 @@
 
 人脈卡「用一段話記錄」的 LLM 輸出格式（人脈卡計畫書 §3.13 P5）。
 
-See the person profile card plan §3.13 P5. The LLM only makes suggestions;
-nothing is written until the user ticks each item in Telegram, and at write
-time the handler's models validate it once more.
+See the person profile card plan §3.13 P5 and the web "AI 整理" plan
+(``docs/wip/person_llm_fill_FEAT_2026-11-23.md``). The LLM only makes
+suggestions; nothing is written until the user ticks each item (in Telegram,
+or on the web after editing), and at write time the handler's models validate
+it once more.
 
-LLM 只提建議；使用者在 TG 上逐項勾選後才寫入，寫入時再經 handler 的模型驗證一次。
+LLM 只提建議；使用者在 TG 上逐項勾選（或在網頁上編輯、勾選）後才寫入，寫入時再經 handler 的模型驗證一次
+（網頁見 ``docs/wip/person_llm_fill_FEAT_2026-11-23.md``）。
 """
 
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+
+#: The description of ``reason``: the exact words of the text, so the user can check what a proposal is based on.
+#: ``reason`` 的說明：文中的原句，使用者才能核對建議的依據。
+REASON = "依據：照抄文中的原句（可以只節錄一段，但不要改寫、不要加字）"
 
 
 class IngestInteraction(BaseModel):
@@ -40,7 +48,18 @@ class IngestGoal(BaseModel):
     kind: str = Field(description="類型：證照、簽證、資格、升學、職涯、努力方向、夢想、願景，或其他簡短的說法")
     item: str = Field(description="目標的內容，例如「日本語能力試驗 N1」「拿到永住」")
     target: str = Field("", description="目標時間：YYYY、YYYY-MM 或 YYYY-MM-DD；文中沒提就空字串")
-    reason: str = Field(description="依據文中的哪句話（簡短）")
+    reason: str = Field(description=REASON)
+
+
+class IngestFamily(BaseModel):
+    """一位家人（或寵物）。One family member, or a pet."""
+
+    relation: str = Field(description="和他的關係，例如「弟弟」「太太」「兒子」「貓」")
+    name: str = Field("", description="名字；文中沒提就空字串")
+    note: str = Field(
+        "", description="關於這位家人的事，例如「大約 2026-09 來日本，考慮和在日本工作的台灣人女友結婚」（相對時間換成日期）；沒有就空字串"
+    )
+    reason: str = Field(description=REASON)
 
 
 class IngestFieldUpdate(BaseModel):
@@ -51,7 +70,7 @@ class IngestFieldUpdate(BaseModel):
     mode: Literal["append", "replace"] = Field(
         description="append：接在原本內容後面（備註、第一印象等描述）；replace：取代原本的值（生日、出身地等單一值）"
     )
-    reason: str = Field(description="依據文中的哪句話（簡短）")
+    reason: str = Field(description=REASON)
 
 
 class IngestListUpdate(BaseModel):
@@ -82,7 +101,7 @@ class IngestListUpdate(BaseModel):
         "研究；其他欄位與沒有時空字串"
     ))
     entry: int = Field(0, description="op 為 end 時要劃掉的那一筆的編號（提示中「#」後面的數字）；op 為 add 時 0")
-    reason: str = Field(description="依據文中的哪句話（簡短）")
+    reason: str = Field(description=REASON)
 
 
 class LLMPersonIngestResult(BaseModel):
@@ -91,8 +110,33 @@ class LLMPersonIngestResult(BaseModel):
     interaction: IngestInteraction
     followups: list[IngestFollowup] = Field(default_factory=list)
     goals: list[IngestGoal] = Field(default_factory=list)
+    family: list[IngestFamily] = Field(default_factory=list)
     field_updates: list[IngestFieldUpdate] = Field(default_factory=list)
     list_updates: list[IngestListUpdate] = Field(default_factory=list)
+
+
+class LLMPersonFillResult(LLMPersonIngestResult):
+    """網頁「AI 整理」補舊卡的整理結果：互動可以沒有（描述的常是對他的了解，而不是一次聊天）。
+
+    The structured result of the web "AI 整理" when adding to a card: the interaction is optional, since the
+    description is often what the user learned about the person rather than one conversation.
+    """
+
+    interaction: IngestInteraction | None = Field(  # type: ignore[assignment]
+        None, description="文中描述了一次具體的見面或聊天時才填；只是記下對他的了解時為 null"
+    )
+
+
+class LLMPersonCreateResult(LLMPersonFillResult):
+    """建新卡的整理結果（網頁「AI 整理」的建新卡模式）：多了稱呼，互動可以沒有。
+
+    The structured result when creating a new person card: it adds the display name, and the interaction is
+    optional (a description of a person may not be about one meeting).
+    """
+
+    display_name: str = Field(
+        description="使用者平常怎麼稱呼他，例如「田中さん」「Ken」；文中沒有明確的叫法時，用文中最常出現的叫法"
+    )
 
 
 

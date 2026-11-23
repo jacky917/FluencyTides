@@ -1192,9 +1192,10 @@ def proposal_line(kind: str, data: dict[str, object]) -> str:
     回傳 LLM 一項建議的文字（已轉義）。
 
     Args:
-        kind: the proposal kind: ``interaction``, ``followup``, ``goal``, ``history_add``, ``history_end``;
-            anything else is treated as a text-field update
-            建議種類：``interaction``、``followup``、``goal``、``history_add``、``history_end``；其他視為文字欄位更新
+        kind: the proposal kind: ``interaction``, ``followup``, ``goal``, ``family``, ``history_add``,
+            ``history_end``; anything else is treated as a text-field update
+            建議種類：``interaction``、``followup``、``goal``、``family``、``history_add``、``history_end``；其他視為
+            文字欄位更新
         data: the proposal's data
             建議的資料
 
@@ -1216,6 +1217,10 @@ def proposal_line(kind: str, data: dict[str, object]) -> str:
     if kind == "goal":
         target = f"（目標 {get('target')}）" if data.get("target") else ""
         return f"<b>目標</b> 新增：[{get('kind') or '目標'}] {get('item')}{target}" + reason
+    if kind == "family":
+        name = f"（{get('name', 40)}）" if data.get("name") else ""
+        note = f"：{get('note', 200)}" if data.get("note") else ""
+        return f"<b>家人</b> 新增：{get('relation', 20)}{name}{note}" + reason
     if kind in ("history_add", "history_end"):
         name = str(data.get("field", ""))
         title = escape_tg(field_title(name))

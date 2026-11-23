@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-11-23 |
 | **性質** | 新功能（網頁），沿用 TG 既有的整理邏輯與網頁既有的草稿機制 |
-| **狀態** | 🚧 實作中 |
+| **狀態** | 🚧 實作中（實作完成，本機以假 Anki、假 LLM 驗證過；尚未用真的 LLM 實測、尚未部署） |
 | **範圍** | 網頁的人脈卡「AI 整理」對話框：輸入一段描述 → LLM 在背景整理成建議 → 逐項編輯、勾選 → 寫入。兩種模式：**補舊卡**（卡面上的按鈕）與**建新卡**（建卡畫面的入口）。草稿可暫存、丟棄、重試，和三語卡共用全站一份草稿的鎖；模型用獨立的用途鍵。TG「用一段話記錄」的寫入邏輯搬到 service 層，TG 與網頁共用 |
 | **不動** | TG「用一段話記錄」的行為（提示詞的補舊卡部分、建議格式、寫入結果都不變，只是寫入的程式搬家）；人脈卡的填表建卡與欄位編輯；三語卡等其他預覽流程；草稿只存在記憶體的取捨（server_drafts R1） |
 | **PR / 進度** | 尚未開始 |
@@ -44,8 +44,9 @@
 - 兩種模式的差別只在：提示詞的說明與可填欄位（D3）、LLM 輸出模型（D4）、寫入的第一步（D7）。
 
 ### D2 LLM 請求與用途鍵
-- 沿用 `person_profile_ingest.ingest()`、`build_prompt()`、`proposals_from()`；`ingest()` 多一個參數指定用途鍵，TG 照舊用 `person_profile`，網頁用新的 `person_profile.fill`（「人脈卡：網頁整理一段話」，能力 `llm`）。
+- 沿用 `person_profile_ingest.ingest()`、`build_prompt()`、`proposals_from()`；`ingest()` 多一個參數指定用途鍵，TG 照舊用 `person_profile`，網頁用新的 `person_profile.fill`（「人脈卡：網頁 AI 整理」，能力 `llm`）。
 - 用途鍵在能力路由登記一行即可（`route(...)`），設定存在 `cfg_capability_routes`，工具設定頁自動出現。只宣告 `llm`：網頁只有文字輸入，不需要 `stt`。
+- 實作：專案規定一個模組只宣告一個用途鍵（`test_llm_routing.test_call_sites_declare_their_keys`），所以 `person_profile.fill` 放在新的 `services/person_profile_fill.py`（網頁專用的生成與寫入也在這裡），`ingest()` 的 `llm_route` 預設 `None`（呼叫時才取 `INGEST_ROUTE`，測試換掉模組屬性才有效）。
 
 ### D3 提示詞：沿用 `Person_Profile_Ingest.j2`，依模式分支
 同一個模板加一個 `mode`（`update` / `create`）變數，共用的整理原則（只記文中有的事、日期換算、待追蹤、目標、會變的欄位與文字欄位的規則、輸出格式）不重寫。兩種模式不同的地方：
@@ -56,25 +57,27 @@
 | 已知資料 | 列出目前的欄位、清單（含 `#` 編號）、待追蹤、目標、最近的互動 | 沒有這一段 |
 | 互動 | 一定要有一筆 | **文中有提到見面或聊天才填**，沒有就 `null` |
 | 劃掉（`op: "end"`） | 可以用 | 不能用（沒有已知的項目）；以前的工作等直接 `add` 並帶結束時間 |
-| 可填的文字欄位 | `UPDATABLE_FIELDS`（排除稱呼與姓名：補舊卡時不該讓 LLM 改名字） | 再加上姓名相關欄位（`Name_ZH`、`Name_EN`、`Name_JA`、`Name_JA_Kana`、`Name_Romaji`、`Honorific`）與認識的資料（`Met_Date`、`Met_Where`、`Met_Via`） |
+| 可填的文字欄位 | `UPDATABLE_FIELDS` | 同左。實作時發現 `UPDATABLE_FIELDS` 本來就含姓名相關欄位與認識的資料（`Met_*`），只排除稱呼、聯絡日與介紹人，所以兩種模式的可填欄位相同，建新卡只多輸出稱呼 |
 | 稱呼 | 不輸出 | 輸出 `display_name`：平常怎麼稱呼他；文中沒有明確的稱呼時，用最常出現的叫法 |
 | 輸出範例 | 現有的範例 | 另一組建新卡的範例（`interaction` 可為 `null`、有 `display_name`、沒有 `end`） |
 
 - 「重新組織語言」維持現有的原則：簡潔、用使用者的語言、人名與對方的原話保留原文；不加內容。
-- 補舊卡的提示詞內容不變（只是包在 `{% if mode == "update" %}` 裡），TG 的結果不受影響；改完用現有的 TG 測試確認。
+- 補舊卡的提示詞內容不變（只是包在 `{% if mode ... %}` 分支裡），TG 的結果不受影響。實作時以改模板前的輸出比對：補舊卡模式產生的提示詞與改之前逐字相同（新的分支標籤用 Jinja 的 `-` 去掉多出的換行；`-%}` 會連下一行的縮排一起去掉，所以清單項目的分支把內容寫在標籤同一行）。
 
 ### D4 LLM 輸出的 Pydantic 模型
 - 補舊卡：沿用 `LLMPersonIngestResult`，不改。
 - 建新卡：新增 `LLMPersonCreateResult(LLMPersonIngestResult)`，多 `display_name: str`，`interaction` 改成 `IngestInteraction | None`。其他欄位（待追蹤、目標、文字欄位、會變的欄位）的模型都沿用。
 - `proposals_from()` 支援沒有互動與建新卡的可填欄位；建新卡時稱呼成為一項必填的建議（`kind: "display_name"`），不能取消勾選，可以改。
 
-### D5 草稿：沿用 `CreateSession`，人脈卡宣告整理用的草稿輸入
-- 人脈卡 handler 宣告草稿輸入 `PersonFillDraftParams`：`text`（必填，1–4000 字）與 `note_id`（選填；有值是補舊卡，沒有是建新卡）、建新卡時的 `deck`。
-- 開始：沿用 `POST /handlers/person_profile/drafts`。背景生成時 handler 的 `draft_context` 讀出那張卡的欄位與清單（補舊卡），`execute_draft` 呼叫 `ingest()` 並轉成建議。
-- 生成結果放在現有的 `result.params` 裡：`{"mode", "note_id", "proposals": [...]}`（`suggested_tags` 為空；人脈卡的標籤是固定的），**草稿機制的資料形狀不必改**。
+### D5 草稿：沿用 `CreateSession`，AI 整理有自己的開始端點
+- 輸入 `StartFillRequest`（`schemas/person_fill.py`）：`text`（必填，1–4000 字）與 `note_id`（選填；有值是補舊卡，沒有是建新卡）、建新卡時的 `deck`（建新卡必填）。
+- 開始：`POST /handlers/{name}/fill`（202），能力 `fill` 沒開放時 400。**實作時改用自己的端點**：原本打算沿用 `POST /handlers/{name}/drafts` 與 `DRAFT_PARAMS`，但草稿輸入只開放給建卡流程是 `preview` 的 handler（`_draft_schema`），人脈卡是 `form`；改成 `preview` 會把人脈卡的建卡畫面也換成通用的預覽流程。
+- 草稿輸入帶 `purpose: "fill"`（`person_profile_fill.draft_input`），重試（`POST /drafts/{id}/retry`）與寫入（`POST /drafts/{id}/apply`）依它走 AI 整理的路；重試時沿用原本要補的卡或建新卡的牌組，只換描述。
+- 背景生成：`person_profile_fill.generate` 讀出那張卡（補舊卡）→ `ingest()` → `proposals_from()`；讀卡時 Anki 失敗轉成 `AnkiServiceError`（存成草稿的失敗原因，不當成未預期的錯誤）。
+- 生成結果放在現有的 `result.params` 裡：`{"mode", "note_id", "deck", "proposals": [...], "saved": [], "errors": {}}`（`suggested_tags` 為空；人脈卡的標籤是固定的），**草稿機制的資料形狀不必改**。
 - 暫存：網頁的編輯與勾選存在草稿的 `state`（沿用 `PATCH /drafts/{id}`，帶版本）。丟棄、重試沿用現有端點。
 - 鎖：沿用全站同時只有一份草稿（server_drafts D2）。有人脈卡草稿時不能開始三語卡草稿，反之亦然，回 409 並附上目前的草稿。
-- handler 的能力多一項 `fill: Operation`（網頁的 AI 整理），網頁依它決定要不要顯示按鈕；沒有預覽建卡流程的 handler 預設不支援。
+- handler 的能力多一項 `fill: Operation`（網頁的 AI 整理），網頁依它決定要不要顯示按鈕；預設不支援，目前只有人脈卡開放。
 
 ### D6 寫入勾選的建議：搬成共用函式，TG 與網頁都用
 - 把 TG 的 `_save_proposals`／`_proposal_action`（`bot/handlers/person_profile.py`）搬到 `person_profile_ingest.apply_proposals(note_service, card_service, note_id, proposals, saved)`：互動、待追蹤、目標、會變的欄位各用自己的動作（`add_interaction`、`add_followup`、`add_item`、`add_history`、`set_history_status`），文字欄位的建議合成一次 `update_fields`（取代或接在後面在寫入時以當下的欄位內容計算）。回傳這次寫入了哪些項目與同步警告。
@@ -82,7 +85,7 @@
 - 卡片在生成之後又被改過：文字欄位以寫入當下的內容計算；劃掉某筆靠指紋找到同一筆（`resolve_index`），找不到時那一項失敗並說明；handler 寫入前照常驗證。
 
 ### D7 寫入的端點：`POST /drafts/{id}/apply`
-- 網頁送出：草稿版本、勾選並編輯過的建議清單。後端用 `PersonProposalEdit`（依 `kind` 分開的 Pydantic 模型，每一種沿用 `schemas/person_profile` 既有的項目模型）驗證。
+- 網頁送出：草稿版本、編輯後的全部建議與勾選的序號（`ApplyFillRequest`）。勾選的每一項在 `person_profile_fill.normalize` 以 handler 用的項目模型（`Interaction`、`Followup`、`Goal`、`PersonCreateParams`）檢查；不合格的不寫入、原因回報在那一項，其他照常寫入（不整份回 422）。
 - 佔用：沿用草稿的 `ready → creating` 轉換（同建卡，server_drafts D6、D7），寫入期間不能丟棄或重複送出。
 - 補舊卡：`apply_proposals(note_id, …)`。
 - 建新卡：先以稱呼與勾選的文字欄位建立卡片（`NoteService.create`，建在選的牌組），**成功後草稿立刻改記這張新卡的 `note_id`**，再對新卡 `apply_proposals` 其他項目。之後任何一步失敗，重試只會補寫，不會再建第二張卡。
@@ -113,37 +116,91 @@
 - 全站的草稿通知（`DraftWatcher`）：人脈卡草稿的「前往」，補舊卡時打開那張卡並開啟對話框，建新卡時到建卡畫面並開啟對話框。
 - 驗證：前端只做基本格式提示（日期、必填），以後端的驗證為準。
 
+### D9 實測後的修正（2026-11-23，使用者在正式機試用）
+使用者用一段關於某人的描述試補舊卡（通勤路線、簽證、弟弟來日本、個性、打工、六本木、二手衣、學日文、駕照），看到「互動紀錄 → 聊了什麼」把所有話題串成一行，覺得整理得很爛。查正式機的草稿，14 項建議裡大多放對了（學日文→目標、二手衣→興趣、打工→工作經歷、I人→個性、長電影→不喜歡的事），真正的問題有三個：
+
+1. **家人沒有地方放**：TG 的整理本來就沒開放「家人」（`Family_JSON`），弟弟的事只能擠進互動的「對方的近況」與一筆待追蹤。
+   → LLM 輸出加 `family`（`IngestFamily`：關係、名字、說明、依據），`proposals_from` 轉成 `family` 建議（卡片上已有同一位家人時不列），寫入用 `add_item` 進 `Family_JSON`；提示詞加上「家人」的規則與已知的家人。TG 與網頁都有（TG 預覽也顯示）。
+2. **補舊卡一定要一筆互動**：描述的是「對他的了解」，不是一次聊天，模型只好把每個話題都列進「聊了什麼」。
+   → **只有網頁**的補舊卡改成互動可以沒有（`optional_interaction`，結果為 `LLMPersonFillResult`）：描述了一次具體的見面或聊天才填，「聊了什麼」只寫話題本身、已放進人物資料／家人／目標的不再列。TG 照舊一定要一筆。
+3. **推測了文中沒有的事**：把「包包的公司也在六本木」寫成「前一份工作…對六本木很熟」，還衍生出「可以請教六本木一帶」與「六本木有沒有推薦的店」的待追蹤，依據也改寫了原話。
+   → 整理原則第 1 條加上：有歧義或不確定時照原文、保留語氣；不加文中沒有的形容或推論；不從一件事衍生出另一項建議；別人轉述的要記來源；`reason` 照抄原句（`REASON` 說明同步改）。待追蹤只來自「即將發生、結果未知」或「有人答應」的事，不從事實自己想問題。輸出範例的依據改成原句。TG 也一起套用（使用者同意第 1、3 點兩邊都改）。
+
+第二次實測（同一段描述）：沒有硬湊互動、弟弟進了家人、沒有推測的內容；但使用者指出兩點，加上一個需求：
+
+4. **相對時間沒換成日期**：家人的說明寫成「上上個月（2026-09）來日本」。之後再看「上上個月」就不準了。
+   → 整理原則第 7 條：內容裡的相對時間（上上個月、去年、三年前、下個月）以今天換算後直接寫成日期（「大約 2026-09 來日本」），不保留相對說法、也不寫成「上上個月（2026-09）」。
+5. **沒有重新組織語言**：「包包的公司也在六本木」「打工做過拉麵炒飯」照抄口語，之後看不懂。
+   → 同一條：口語、省略、跳躍的句子整理成意思完整、通順的說法（「做包包的那家公司也在六本木」「在拉麵炒飯店打工過」「逛二手衣店（second street）」），只改說法、不加事實；`reason` 仍照抄原句。
+6. **對話框也要看到卡片上原本的資料**（使用者問：舊的人物資訊有沒有發給 AI）：補舊卡時，提示本來就附上目前的欄位、會變的資料（含已劃掉的）、還沒完成的待追蹤、目標、最近 3 次互動，以及這次加的家人；但對話框只有文字欄位顯示「目前：」。
+   → `person_profile_ingest.known_summary` 整理出和提示相同的已知資料（提示與對話框共用同一組函式），生成結果多 `known`；對話框在每項建議旁顯示同類的「已有」（例如新增興趣旁列出已有的興趣與已劃掉的、家人旁列出已有的家人）。另外對話框每次打開都重讀目前的草稿（在別的裝置開始的草稿也看得到）。
+
+7. **寫入太慢：每寫一項就同步 AnkiWeb 一次**（使用者問寫入的流程時發現）：十幾項建議就要同步十幾次，TG 的「用一段話記錄」也一樣。
+   → `NoteService.create`、`update_fields`、`run_action` 多一個 `sync`（預設 `True`，其他呼叫端不受影響）；`apply_proposals` 每一項都以 `sync=False` 寫入，全部寫完在 `finally` 同步一次（中途失敗也會同步，已寫入的照樣上傳）；AI 整理的建新卡也先不同步，和其他建議一起同步（`force_sync`，只有建卡時也會同步）。TG 與網頁都套用。
+
+8. **只看到「已有」的一行字還不夠，要看到卡片原本的內容，而且能改**（使用者：原本存在卡片內的內容不用 LLM 提供，直接加上，要和 AI 的建議區分出來，但也可以點筆的圖示修改）。
+   → 對話框改成**依欄位分段**（`fieldSections`）：每段先是灰底虛線框的卡片原本內容（不另外寫標題，灰框與 ✏️ 已足夠；讀屏讀「卡片原本的內容」），再是 AI 的建議（標題改成「AI 建議」「AI 建議：新增一筆」「AI 建議：劃掉」，段標題已是欄位名稱）。原本的內容直接從卡片讀，不經過 LLM：文字欄位讀目前的欄位值；清單由 `known_items` 列出（會變的資料、家人、目標、未完成的待追蹤、最近 3 次互動），每筆帶序號、指紋與能改的值。平常只能看，點 ✏️ 才修改（多一個「完成」的步驟），改過的標「已修改」、可以還原。手機上 ✏️、還原放大到 36px，「完成」「取消」40px 高，輸入框 16px 字（iOS 不放大整頁）。
+   修改也是一項（`edit_field`：文字欄位整段取代；`edit_item`：清單的一筆，走 handler 既有的 `edit_item`，序號、指紋與原值對不上時記在那一項），勾選、自動存回草稿、和其他建議一起寫入與同步一次的方式都相同。同一個文字欄位先套用修改、再接上 AI 建議的「接在後面」。目前只有有 AI 建議的欄位才列出原本的內容。
+
+9. **工具設定裡 `person_profile` 有「語音轉文字」**（使用者問：不是沒有這個功能嗎？）：那是 TG 的「用一段話記錄」本來就收語音訊息（P5），網頁的 AI 整理只有文字（`person_profile.fill` 只有 `llm`）。
+   → 用途說明改成看得出是哪一邊：`person_profile`「人脈卡：TG 用一段話記錄（文字或語音）」、`person_profile.fill`「人脈卡：網頁 AI 整理」。順便整理工具設定頁（使用者要求手機與 PC 排版、文字一起優化）：卡片標題用說明、用途鍵放旁邊小字；每個能力一列（手機上名稱與「更改」一行、生效的設定在下一行，寬畫面三欄一行），不再框中有框；來源標記改成「自己設定／沿用流程／沿用全域／.env 預設」；分支寫「沒設定的項目沿用『…』」；頁首說明改短。下方的「各卡片類型的功能」多列 AI 整理。
+10. **手機上有些畫面可以左右滑**：逐一量過所有路由（含各卡片類型的卡面與筆記欄位、建卡頁七種表單、選單、劇情圖），原因都是格狀或彈性排版裡的長英文（動作名稱、`scripts/…/delete_child_cards.py` 這類路徑）：`break-words` 不會縮小最小寬度，把整頁或對話框撐寬。工具設定的卡片類型區塊（整頁被撐到 476px）、核心動詞卡的編輯對話框（對話框可以橫捲）兩處修掉；全站的 `break-words` 改成 `[overflow-wrap:anywhere]`，訊息裡的長字串會折行。劇情圖的章節頁籤與畫布本來就是橫向捲動，不動。
+
+11. **備註又把幾件事擠成一句**（第三次實測）：江戶線通勤、人文簽證、沒當兵、做包包的公司、駕照五件事變成一項備註，用「；」接起來，也沒辦法分開勾選。原因是提示詞只說描述性欄位用 `append`，沒說要分開，範例也只有一項文字欄位。
+   → 文字欄位規則加上：`append` 的欄位一件事一項（同一個欄位可以出現多次），不要用「；」「、」接成一句，每項的 `reason` 只放那件事的原句；備註是最後才考慮的地方，放得進清單、家人、目標的放那裡。兩個模式的輸出範例都多兩項備註。寫入不用改：勾選的幾項依序接在後面、各自一行（補測試）。TG 共用同一份提示詞，也一起套用。
+
+這些都是提示詞與 LLM 輸出格式（加上家人的寫入動作）與寫入時的同步次數，沒有改資料表；TG 補舊卡的提示詞因此也有變（加了家人、更嚴的不推測），不再與 D3 時逐字相同。
+
 ## 4. 改動清單
 
 | 檔案 | 改動 |
 |---|---|
-| `backend/app/services/person_profile_ingest.py` | `ingest()`、`build_prompt()` 加 `mode` 與用途鍵；建新卡的可填欄位；`proposals_from()` 支援沒有互動與稱呼；新增 `apply_proposals()`（從 bot 搬來）；`FILL_ROUTE` |
-| `backend/app/templates/prompts/anki/Person_Profile_Ingest.j2` | 依 `mode` 分支（D3）；補舊卡的內容不變 |
+| `backend/app/services/person_profile_ingest.py` | `build_prompt()`、`ingest()` 加 `mode`；`ingest()` 可指定用途鍵；`proposals_from()` 支援稱呼與沒有互動；從 bot 搬來 `load_person()`、`proposal_action()`、`apply_proposals()`（帶 `errors` 時被拒絕的項目記下原因、其他照常寫入） |
+| `backend/app/services/person_profile_fill.py`（新） | 用途鍵 `person_profile.fill`；草稿輸入的標記；背景生成；編輯後的建議檢查（`normalize`）與寫入（`apply`，建新卡只建一次） |
+| `backend/app/templates/prompts/anki/Person_Profile_Ingest.j2` | 依 `mode` 分支（D3）；補舊卡的輸出逐字不變 |
 | `backend/app/schemas/llm/person_profile.py` | 新增 `LLMPersonCreateResult` |
-| `backend/app/schemas/person_profile.py` 或新檔 | `PersonFillDraftParams`、`PersonProposalEdit`（寫入時的建議驗證） |
-| `backend/app/services/task_handlers/person_profile_handler.py` | 宣告 `DRAFT_PARAMS`、`fill` 能力；`draft_context`、`execute_draft` |
-| `backend/app/services/task_handlers/capabilities.py` | `HandlerCapabilities.fill` |
-| `backend/app/services/create_session.py` | `finish_apply`（更新 `note_id` 與已寫入項目） |
-| `backend/app/api/drafts.py` | `POST /drafts/{id}/apply` |
-| `backend/app/bot/handlers/person_profile.py` | 改呼叫 `apply_proposals()`，行為不變 |
-| `frontend/src/components/person/PersonFillDialog.tsx`（新） | 對話框：輸入、生成中、建議清單、寫入、丟棄 |
+| `backend/app/schemas/person_fill.py`（新） | `StartFillRequest`、`ApplyFillRequest`、`ApplyFillResponse` |
+| `backend/app/services/task_handlers/capabilities.py`、`schemas/notes.py` | `HandlerCapabilities.fill` 與 API 的 `fill` |
+| `backend/app/services/task_handlers/person_profile_handler.py` | 開放 `fill` |
+| `backend/app/services/note_service.py` | `require_fill()` |
+| `backend/app/services/create_session.py` | `finish_apply`（寫完清空槽位；沒寫完帶著進度退回 `ready`） |
+| `backend/app/api/handlers.py` | `POST /handlers/{name}/fill` |
+| `backend/app/api/drafts.py` | 重試依草稿的用途分開；`POST /drafts/{id}/apply` |
+| `backend/app/bot/handlers/person_profile.py` | 讀卡與寫入改呼叫共用函式，行為不變 |
+| `frontend/src/lib/personFill.ts`（新） | AI 整理草稿的判斷、編輯狀態、分組、全站一個對話框的開關 |
+| `frontend/src/components/person/PersonFillDialog.tsx`（新） | 對話框：輸入、整理中、失敗重試、建議清單、寫入、丟棄 |
 | `frontend/src/components/person/ProposalEditor.tsx`（新） | 各種建議的勾選與編輯 |
-| `frontend/src/components/cards/CardViewPanel.tsx` | 人脈卡的「AI 整理」按鈕 |
-| 建卡畫面（`CreatePanelBody` 等） | 人脈卡的「用一段話建立」入口 |
-| `frontend/src/components/shared/DraftWatcher.tsx`、`lib/serverDraft.ts` | 人脈卡草稿的「前往」 |
-| `frontend/src/api/client.ts`、`types/api.ts` | `applyDraft`、建議的型別 |
-| 測試 | 後端：兩種模式的提示詞內容、`LLMPersonCreateResult`、`proposals_from` 的建新卡情況、`apply_proposals`（部分失敗只補寫、劃掉找不到）、`/drafts/{id}/apply`（建新卡後重試不重建、鎖與版本）、TG 寫入行為不變；前端：建議的編輯與暫存狀態 |
+| `frontend/src/components/person/OriginalContent.tsx`（新） | 每段的「卡片原本」：顯示、✏️ 修改、還原（D9 第 8 點） |
+| `frontend/src/App.tsx` | 掛上對話框（全站一個） |
+| `frontend/src/components/cards/CardViewPanel.tsx` | 人脈卡的「AI 整理」按鈕；按鈕列可換行 |
+| `frontend/src/components/generate/CreatePanelBody.tsx` | 人脈卡的「用一段話建立」；有 AI 整理草稿時提示並可打開 |
+| `frontend/src/components/shared/DraftWatcher.tsx` | AI 整理草稿的通知與「前往」（直接打開對話框） |
+| `frontend/src/api/client.ts`、`types/api.ts` | `startFill`、`applyFill`、建議與結果的型別、能力 `fill` |
+| 測試 | 後端 `tests/test_person_fill.py`（兩種模式的提示詞、建新卡的結果與建議、`normalize`、`apply` 的部分失敗與建新卡只建一次、TG 仍在第一個拒絕停止、`finish_apply`、API 的開始／共用槽位／重試／寫入）；能力宣告的測試補上 `fill`；用途鍵的測試登記新的鍵；前端 `lib/personFill.test.ts` |
+
+### 實作時與設計不同的地方
+- D3：可填欄位兩種模式相同（`UPDATABLE_FIELDS` 本來就含姓名與認識的資料）。
+- D5：開始用自己的端點 `POST /handlers/{name}/fill`，草稿輸入以 `purpose: "fill"` 標記（原因見 D5）。
+- D8：對話框掛在版面層級、全站一個，從卡面、建卡畫面與通知的「前往」都打開同一個（不必先換頁）。建新卡寫完後的提示附「查看」（到卡片頁搜 `nid:`）。
+- D8：卡面的「AI 整理」依 handler 的 `fill` 能力與筆記類型決定要不要顯示，不寫死人脈卡。
 
 ## 5. 驗收標準
 
-- [ ] 補舊卡：輸入一段描述，建議放到正確的位置，內容只有描述裡有的事；每項都能改、能不勾；寫入後卡片正確
-- [ ] 建新卡：從一段描述整理出稱呼、姓名、認識的資料與其他內容；建立的卡片與勾選的一致；沒提到見面時沒有互動
-- [ ] 關掉對話框、重新整理頁面，草稿（含編輯與勾選）還在；丟棄後就沒了；生成失敗可重試
-- [ ] 有人脈卡草稿時不能開始三語卡草稿（反之亦然），提示目前的草稿
-- [ ] 工具設定裡 `person_profile.fill` 可以單獨選模型，網頁整理用的是它；TG 仍用 `person_profile`
-- [ ] 部分寫入失敗時，再送一次只補寫剩下的；建新卡不會建出第二張
-- [ ] TG「用一段話記錄」的行為不變（現有測試通過，實際操作一次）
-- [ ] 手機上對話框可用（全螢幕、輸入框不放大頁面）
+本機以假 Anki（記憶體）與假 LLM 跑這個分支的真實後端驗證（2026-11-23）；沒有寫進真的 Anki、也沒有呼叫 LLM。
+
+- [x] 補舊卡：建議依互動、待追蹤、目標、人物資料、會變的資料分組，全部預設勾選；改了待追蹤的內容、取消勾選目標後寫入：改過的內容寫進去、沒勾的沒寫；文字欄位「接在後面」接在目前的內容之後；興趣劃掉舊的、新增新的；工作經歷帶起訖與說明
+- [x] 建新卡：從 Card Generator 選人脈卡與牌組 →「用一段話建立」：稱呼固定勾選、可以改；沒提到見面時沒有互動；建出的卡片與勾選的一致
+- [x] 編輯與勾選自動存回草稿；重新整理頁面再打開，改過的內容與勾選都還在；丟棄後就沒了
+- [x] 有 AI 整理草稿時，建卡畫面提示先處理並可直接打開；後端測試確認此時開始三語卡等草稿回 409
+- [x] 網頁整理用的是 `person_profile.fill`（假後端的紀錄）；TG 仍用 `person_profile`（測試）
+- [x] 部分寫入失敗時再送一次只補寫剩下的；建新卡不會建出第二張（後端測試）
+- [x] TG「用一段話記錄」的行為不變：補舊卡的提示詞與改之前逐字相同，人脈卡相關的 636 個既有測試照樣通過（沒有在 TG 上實際操作）
+- [x] 手機上對話框是全螢幕、一欄排列，寫入按鈕固定在底部，沒有橫向捲動
+- [ ] 卡片頁卡面上的「AI 整理」按鈕（假 Anki 沒有卡面，這一步改從程式打開對話框驗證）
+- [x] 用真的 LLM 實測一次（2026-11-23 第一次：見 D9 的三個問題，已修）
+- [x] D9 修正後再用同一段描述實測：弟弟進家人、沒有硬湊的互動、沒有推測的內容（2026-11-23 第二次）
+- [x] 第 8 點（假後端）：備註、興趣段先列出卡片原本的內容；✏️ 改備註與興趣的一筆後寫入：備註先取代再接上 AI 建議、興趣那筆改了內容也照 AI 建議劃掉
+- [ ] 第 4–8 點修正後再實測：相對時間換成日期、口語整理成通順的說法、每段看得到並能修改卡片原本的內容
 
 ## 6. 待確認
 

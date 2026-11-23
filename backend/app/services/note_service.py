@@ -217,6 +217,7 @@ class NoteService:
         *,
         tg_bot: str | None = None,
         tags: list[str] | None = None,
+        sync: bool = True,
     ) -> dict[str, object]:
         """Create cards (§4.2).
 
@@ -315,8 +316,9 @@ class NoteService:
         except Exception:  # noqa: BLE001 - 卡片已寫入：不能報成建立失敗，否則草稿退回可建立、使用者會再建一組
             logger.exception("%s 建卡後的後續處理失敗（note_ids=%s）", handler_name, list(note_ids))
             after_warning = "⚠️ 卡片已建立，但建立後的後續處理失敗（例如沒刪掉要覆蓋的舊卡），請到 Cards 頁確認。"
-        sync = await self.sync_after_write()
-        warning = "\n".join(w for w in (tag_warning, after_warning, sync) if w) or None
+        # 一次寫好幾筆的呼叫端（AI 整理）最後才同步一次
+        sync_text = await self.sync_after_write() if sync else None
+        warning = "\n".join(w for w in (tag_warning, after_warning, sync_text) if w) or None
         return {"note_ids": list(note_ids), "deck": deck, "sync_warning": warning}
 
     async def _add_tags(self, note_ids: list[int], tags: list[str]) -> str | None:
@@ -402,6 +404,25 @@ class NoteService:
         if handler.DRAFT_PARAMS is None or _draft_schema(handler) is None:
             raise HandlerOperationUnsupportedError(f"「{handler.title}」沒有網頁的預覽建卡流程")
         return handler.DRAFT_PARAMS.model_validate(dict(params)).model_dump()
+
+    def require_fill(self, handler_name: str) -> None:
+        """Check that the handler offers the web "AI 整理" (``person_llm_fill`` plan).
+
+        確認 handler 開放網頁的「AI 整理」（``person_llm_fill`` 計畫書）。
+
+        Args:
+            handler_name: the handler name
+                handler 名稱
+
+        Raises:
+            HandlerNotFoundError: if the handler does not exist
+                若 handler 不存在
+            HandlerOperationUnsupportedError: if it does not offer "AI 整理"
+                若沒有開放「AI 整理」
+        """
+        handler = self.registry.get_handler(handler_name)
+        if not handler.CAPABILITIES.fill.supported:
+            raise HandlerOperationUnsupportedError(f"「{handler.title}」沒有開放 AI 整理")
 
     async def resolve_draft_duplicate(
         self,
@@ -614,7 +635,7 @@ class NoteService:
         }
 
     async def update_fields(
-        self, handler_name: str, note_id: int, fields: Mapping[str, object]
+        self, handler_name: str, note_id: int, fields: Mapping[str, object], *, sync: bool = True
     ) -> dict[str, object]:
         """Update fields (§4.4): write only the changed fields, and return the updated note with the sync warning.
 
@@ -663,7 +684,7 @@ class NoteService:
             await handler.execute_update(
                 self.card_service, self.relation_service, note_id, {"action": "update_fields", "fields": dict(fields)}
             )
-        sync_warning = await self.sync_after_write()
+        sync_warning = await self.sync_after_write() if sync else None
         detail = note_detail(await self.card_service.get_note(note_id))
         return {**detail, "sync_warning": sync_warning}
 
@@ -781,7 +802,9 @@ class NoteService:
             terms.append(alternatives[0] if len(alternatives) == 1 else "(" + " OR ".join(alternatives) + ")")
         return " ".join(terms)
 
-    async def run_action(self, note_id: int, action: str, params: Mapping[str, object]) -> str | None:
+    async def run_action(
+        self, note_id: int, action: str, params: Mapping[str, object], *, sync: bool = True
+    ) -> str | None:
         """Run a named action (for example ``add_audio`` of speaking cards).
 
         執行具名動作（例如口說卡的 ``add_audio``）。
@@ -797,10 +820,13 @@ class NoteService:
                 動作名稱，必須在 ``CAPABILITIES.actions`` 內
             params: the action parameters
                 動作參數
+            sync: whether to sync with AnkiWeb afterwards; a caller writing several things in a row passes
+                ``False`` and calls :meth:`sync_after_write` once at the end
+                寫完要不要同步 AnkiWeb；連續寫好幾筆的呼叫端傳 ``False``，最後自己呼叫一次 ``sync_after_write``
 
         Returns:
-            the sync warning, or ``None`` if the sync succeeded
-            同步提醒；同步成功時為 ``None``
+            the sync warning, or ``None`` if the sync succeeded or was not done
+            同步提醒；同步成功或沒有同步時為 ``None``
 
         Raises:
             HandlerOperationUnsupportedError: if no handler owns the note, or the action is not offered
@@ -818,7 +844,7 @@ class NoteService:
         await handler.execute_update(
             self.card_service, self.relation_service, note_id, {**params, "action": action}
         )
-        return await self.sync_after_write()
+        return await self.sync_after_write() if sync else None
 
     async def delete(self, handler_name: str, note_id: int) -> str | None:
         """Delete a note (§4.5); when deleting is not offered, neither Anki nor relations are touched.
