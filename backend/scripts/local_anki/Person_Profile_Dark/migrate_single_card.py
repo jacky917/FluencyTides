@@ -1,11 +1,12 @@
-"""人脈卡的筆記類型跟上定義檔：加欄位、只留一種卡片、換模板（工作經歷計畫書 §8、§12.5、§14、§15）。
+"""人脈卡的筆記類型跟上定義檔：加欄位、只留一種卡片、換模板（工作經歷計畫書 §8、§12.5、§14、§15；欄位分工計畫書 D5）。
 
 Bring the person note type up to the definition: fields, the single card, templates.
 
 會讓 AnkiWeb 要求完整同步的變更（第 1–3 步）一次做完，只完整同步一次：
 
 1. 加欄位：定義檔（``Person_Profile_Dark.json``）有、Anki 還沒有的欄位，插在定義檔的位置（已經有的略過）。
-   §13 加了 ``Goals_JSON``、``Common_Ground``、``Needs``、``Dislikes``，§14 加了 ``Experiences``。
+   §13 加了 ``Goals_JSON``、``Common_Ground``、``Needs``、``Dislikes``，§14 加了 ``Experiences``；
+   欄位分工計畫書（person_field_routing_FEAT_2026-11-23）加了 ``Daily_Life``、``Credentials``。
 2. 卡片模板「見面前複習」改名「人脈卡」（每個人都已經有這張卡）。
 3. 刪掉「認人」模板：所有人的認人卡與它的複習紀錄一起刪掉（使用者同意複習紀錄可以丟，D15）；筆記與欄位內容不動。
 4. 換成新的模板與 CSS（同 ``import_model.py``；每次都做，只換模板不需要完整同步）。

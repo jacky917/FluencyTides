@@ -1661,13 +1661,13 @@ async def _store_answer(message: types.Message, state: FSMContext, raw: str | No
     原本有的離職年月時一併清掉失效日（改回現職，和 handler 的 ``edit_item`` 相同，預覽才不會說錯）。可切的欄位
     改了內容時只能改成一個值（沒改的舊資料可以含頓號）。
 
-    For fields with a start and an end (positions and education, :data:`view.PERIOD_PAIRS`), the end step
-    (skipping included) checks that the end is not before the start; otherwise this step is asked again
-    with a 「重新輸入到職／入學」 button (the start is often the wrong one). The user is not told to skip or
+    For fields with a start and an end (:data:`view.PERIOD_PAIRS`), the end step (skipping included) checks
+    that the end is not before the start; otherwise this step is asked again with a 「重新輸入」 button named
+    after the start (「重新輸入到職」, 「重新輸入入學」; the start is often the wrong one). The user is not told to skip or
     clear: for positions, both would turn a past job into the current job.
 
-    有起訖的欄位（職位、學歷，:data:`view.PERIOD_PAIRS`）問到結束那一步時（略過也算）檢查不早於開始，不對就重問
-    這一步，並提供「重新輸入到職／入學」（錯的常是開始）；不叫使用者略過或清空：職位的那兩個都會讓以前的工作
+    有起訖的欄位（:data:`view.PERIOD_PAIRS`）問到結束那一步時（略過也算）檢查不早於開始，不對就重問
+    這一步，並提供以開始命名的「重新輸入」（「重新輸入到職」「重新輸入入學」；錯的常是開始）；不叫使用者略過或清空：職位的那兩個都會讓以前的工作
     變成現職。
     """
     data = await state.get_data()

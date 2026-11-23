@@ -39,6 +39,7 @@ export function fillParams(draft: ServerDraft | null | undefined): FillResultPar
     deck: typeof params.deck === 'string' ? params.deck : null,
     proposals: Array.isArray(params.proposals) ? params.proposals : [],
     known: params.known && typeof params.known === 'object' ? params.known : null,
+    labels: params.labels && typeof params.labels === 'object' ? params.labels : {},
     saved: Array.isArray(params.saved) ? params.saved : [],
     errors: params.errors && typeof params.errors === 'object' ? params.errors : {},
   }
@@ -167,7 +168,11 @@ export const LIST_TITLES: Record<string, string> = {
   Family_JSON: '家人',
 }
 
-/** 原本的一筆裡各個鍵的名稱。Labels of the keys of an original entry. */
+/**
+ * 後端沒給名稱時的後備：新的草稿由後端帶各欄位的名稱（`FillResultParams.labels`），這裡給沒有這份名稱的舊草稿，
+ * 以及後端名稱缺了某個鍵的情況。
+ * Fallback key labels when the backend gave none (old drafts, or a missing key).
+ */
 export const ITEM_KEY_LABELS: Record<string, string> = {
   value: '內容',
   company: '公司',
@@ -176,6 +181,7 @@ export const ITEM_KEY_LABELS: Record<string, string> = {
   end: '結束',
   finish: '畢業',
   since: '開始於',
+  until: '到期',
   when: '時間',
   note: '說明',
   relation: '關係',
@@ -246,20 +252,18 @@ export const FOLLOWUP_TYPES: { value: string; label: string }[] = [
 ]
 
 /**
- * 會變的資料一筆裡可以改的鍵與名稱（系統填的登錄日、劃掉日不在這裡）。
- * The editable keys of a changing-field entry; the system dates are left out.
+ * 鍵的名稱：後端帶來的（那個欄位的）名稱優先，沒有時用後備。
+ * The name of a key: the backend's name for that field first, then the fallback.
+ * @param labels - 那個欄位各鍵的名稱（可能沒有）。The field's labels, if any.
+ * @param key - 鍵。The key.
+ * @returns 名稱。The name.
  */
-export const HISTORY_ITEM_LABELS: Record<string, string> = {
-  value: '內容',
-  company: '公司',
-  title: '職稱',
-  start: '開始',
-  end: '結束',
-  finish: '畢業',
-  since: '開始於',
-  when: '時間',
-  note: '說明',
+export function keyLabel(labels: Record<string, string> | undefined, key: string): string {
+  return labels?.[key] ?? ITEM_KEY_LABELS[key] ?? key
 }
+
+/** 舊草稿（沒有後端的名稱）時，會變的資料一筆裡可以改的鍵的順序。Key order for old drafts. */
+const LEGACY_HISTORY_KEYS = ['value', 'company', 'title', 'start', 'end', 'finish', 'since', 'when', 'note']
 
 /**
  * 欄位的 HTML 轉成顯示用的純文字（換行保留）。A field's HTML as plain text.
@@ -281,9 +285,17 @@ export function plainField(html: string): string {
     .trim()
 }
 
-/** 一筆會變的資料裡，可以編輯的鍵（依 {@link HISTORY_ITEM_LABELS} 的順序）。The editable keys of an entry. */
-export function historyItemKeys(item: Record<string, unknown>): string[] {
-  return Object.keys(HISTORY_ITEM_LABELS).filter((key) => key in item)
+/**
+ * 一筆會變的資料裡要顯示的輸入框：有後端的名稱時是那個欄位所有能改的鍵（沒填的也列出來，才補得上，例如到期日）；
+ * 舊草稿只列這一筆已經有的鍵。
+ * The keys to show for an entry: every editable key of the field when the backend named them, else the keys it has.
+ * @param item - 那一筆。The entry.
+ * @param labels - 那個欄位各鍵的名稱（可能沒有）。The field's labels, if any.
+ * @returns 鍵。The keys.
+ */
+export function historyItemKeys(item: Record<string, unknown>, labels?: Record<string, string>): string[] {
+  if (labels && Object.keys(labels).length > 0) return Object.keys(labels)
+  return LEGACY_HISTORY_KEYS.filter((key) => key in item)
 }
 
 // =============================================================================

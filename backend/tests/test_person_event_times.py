@@ -19,6 +19,7 @@ from app.core.exceptions import InvalidNoteFieldsError, JsonItemChangedError
 from app.schemas.person_profile import (
     HISTORY_PERIOD_KEYS,
     PERSON_HISTORY_FIELDS,
+    CredentialEntry,
     EducationEntry,
     SinceEntry,
     WhenNote,
@@ -69,7 +70,10 @@ class TestModels:
         dumped = EducationEntry.model_validate({"value": "台大", "start": "2011年9月", "finish": "2015"}).model_dump()
         assert (dumped["start"], dumped["finish"]) == ("2011-09", "2015")
 
-    @pytest.mark.parametrize("model,key", [(WhenNote, "when"), (SinceEntry, "since"), (EducationEntry, "start")])
+    @pytest.mark.parametrize("model,key", [
+        (WhenNote, "when"), (SinceEntry, "since"), (EducationEntry, "start"),
+        (CredentialEntry, "since"), (CredentialEntry, "until"),
+    ])
     def test_unreadable_time_is_rejected(self, model, key):
         with pytest.raises(ValueError, match="看不懂"):
             model.model_validate({"value": "x", key: "2019年春"})
@@ -458,7 +462,8 @@ class TestIngest:
 
     def test_prompt_explains_event_times(self):
         prompt = ingest.build_prompt({"Display_Name": "陳さん"}, {"Experiences": [YUSHAN]}, "上個月爬了玉山", TODAY)
-        assert "**事件時間**" in prompt and "`time_start` 是入學、`time_end` 是畢業" in prompt
+        # 各欄位的時間意義由欄位說明產生（欄位分工計畫書 D2）
+        assert "記的是那件事的時間" in prompt and "`time_start`：入學。`time_end`：畢業" in prompt
         assert "去過玉山（2019-08）" in prompt  # 已知的資料附時間
         assert "job_start" not in prompt
 

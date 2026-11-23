@@ -414,6 +414,8 @@ class PersonProfileHandler(BaseHandler):
         SearchField("languages", "語言", ("Languages",)),
         SearchField("met", "認識", ("Met_Where", "Met_Via", "Met_Date")),
         SearchField("place", "出身／現居", ("Hometown", "Residence")),
+        SearchField("daily", "生活圈", ("Daily_Life",)),
+        SearchField("credentials", "身分與證照", ("Credentials",)),
         SearchField("interactions", "互動", ("Interactions_JSON",)),
         SearchField("followups", "待追蹤", ("Followups_JSON",)),
         SearchField("family", "家人", ("Family_JSON",)),

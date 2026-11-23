@@ -6,6 +6,8 @@ proposals, writing them (rejections reported, the rest still written; a new card
 """
 
 import asyncio
+import html
+import json
 from datetime import date
 from unittest import mock
 
@@ -352,6 +354,9 @@ class PersonAnki(ApiAnki):
 
 INTERESTS = '[{"value": "攝影", "added": "2026-01-01", "ended": ""}]'
 
+#: 實測用的描述裡的字（2026-11-23）：提示詞與 LLM 輸出模型的例子都不能用（欄位分工計畫書 D3）
+BANNED_EXAMPLES = ("六本木", "胥樊", "second street", "江戶線", "拉麵炒飯", "人文簽證", "不常開")
+
 
 @pytest.fixture
 def anki():
@@ -452,14 +457,21 @@ class TestQualityFixes:
             ingest.build_prompt({"Display_Name": "x"}, {}, "t", TODAY, optional_interaction=True),
             ingest.build_prompt({}, {}, "t", TODAY, "create"),
         ):
-            assert "**家人**（放在 `family`）" in prompt
-            assert "不能寫成「前一份工作」或「對六本木很熟」" in prompt
+            assert "**家人**（`family`）" in prompt
+            assert "不從一件事衍生出另一項建議" in prompt
             assert "不要從文中的事實自己想出要問的問題" in prompt
             assert "照抄文中的原句" in prompt
-            # 重新組織成一看就懂的說法、相對時間換成日期（2026-11-23 第二次實測後）
-            assert "「包包的公司也在六本木」→「做包包的那家公司也在六本木」" in prompt
-            assert "**相對時間一律換成日期**" in prompt
-            assert "不要寫成「上上個月（2026-09）」" in prompt
+            # 重新組織成一看就懂的說法、相對時間換成日期、有把握的校正（欄位分工計畫書 D3）
+            assert "**整理成之後一看就懂的說法**" in prompt
+            assert "寫進內容的相對時間" in prompt
+            assert "**有把握的校正不算補充**" in prompt
+            # 範例不取自實測用的描述（D3）：若範例取自實測的那段話，用它實測就分不出是規則有效還是 LLM 照抄範例
+            for phrase in BANNED_EXAMPLES:
+                assert phrase not in prompt, phrase
+        # LLM 輸出模型的欄位說明也會送給 LLM，同樣不能用實測的文字當例子
+        for model in (LLMPersonIngestResult, LLMPersonFillResult, LLMPersonCreateResult):
+            schema = json.dumps(model.model_json_schema(), ensure_ascii=False)
+            assert not [phrase for phrase in BANNED_EXAMPLES if phrase in schema], model.__name__
 
     def test_telegram_still_asks_for_one_interaction_but_the_web_may_leave_it_out(self):
         telegram = ingest.build_prompt({"Display_Name": "x"}, {}, "t", TODAY)
@@ -599,6 +611,33 @@ def test_several_appends_to_one_field_each_get_a_line():
     progress = fill.ApplyProgress(note_id=7)
     assert _run(fill.apply(notes, FakeCardService(), {"note_id": 7}, proposals, [0, 2], progress))
     assert notes.updates == [(7, {"Notes": "舊的<br>通勤搭丸之內線<br>有駕照，但不常開"})]
+
+
+def test_renewal_is_written_as_strike_out_then_add(client, anki, draft_slot):
+    visa = {"value": "工作簽證", "added": "2026-01-01", "ended": "", "until": "2026-03"}
+    anki.notes[1].fields["Credentials"]["value"] = json.dumps([visa], ensure_ascii=False)
+    result = _update_result(list_updates=[
+        {"field": "Credentials", "op": "add", "value": "工作簽證", "time_end": "2031-03", "reason": "續到 2031 年 3 月"},
+        {"field": "Credentials", "op": "end", "entry": 1, "reason": "簽證續了"},
+    ])
+    with mock.patch.object(ingest, "ingest", mock.AsyncMock(return_value=result)):
+        draft = _start(client, draft_slot, {"text": "簽證續了", "note_id": 1})
+    params = draft["result"]["params"]
+    assert params["labels"]["Credentials"]["until"] == "到期"  # 對話框的輸入框名稱由後端帶
+    picked = [i for i, p in enumerate(params["proposals"]) if p["data"].get("field") == "Credentials"]
+    response = client.post(f"/api/v1/drafts/{draft['id']}/apply", json={
+        "version": draft["version"], "proposals": params["proposals"], "selected": picked,
+    })
+    assert response.status_code == 200 and response.json()["done"] is True, response.json()
+    old, new = json.loads(html.unescape(anki.notes[1].fields["Credentials"]["value"]))
+    assert (old["until"], bool(old["ended"])) == ("2026-03", True)
+    assert (new["until"], new["ended"]) == ("2031-03", "")
+
+
+def test_several_interests_at_once_with_a_time_are_refused():
+    with pytest.raises(ValueError, match="好幾項時不能填時間"):
+        fill.normalize("history_add", {"field": "Interests", "item": {"value": "登山、潛水", "since": "2020"}})
+    assert fill.normalize("history_add", {"field": "Interests", "item": {"value": "登山", "since": "2020"}})
 
 
 def test_original_entry_is_edited_with_edit_item(client, anki, draft_slot):

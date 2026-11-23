@@ -4,6 +4,7 @@ Tests for merging the work-detail field into each job's note.
 """
 
 import json
+import re
 from datetime import date
 
 import pytest
@@ -12,6 +13,7 @@ from app.bot.utils import person_profile_view as view
 from app.core.exceptions import FieldNotEditableError, InvalidNoteFieldsError
 from app.schemas.person_profile import (
     ITEM_EDIT_KEYS,
+    NOTE_FIELDS,
     PERSON_HISTORY_FIELDS,
     RETIRED_FIELDS,
     PersonCreateParams,
@@ -100,7 +102,9 @@ class TestEducationNote:
     def test_tg_line_and_card_show_the_note(self):
         line = view.item_line("Education", {**NTU, "note": "資工系\n吉他社"})
         assert "台大（2011～2015）｜資工系／吉他社" in line
-        assert "appendNote(line, name, e.item)" in SOURCE and "var NOTE_FIELDS = ['Company', 'Education']" in SOURCE
+        assert "appendNote(line, name, e.item)" in SOURCE
+        declared = re.search(r"var NOTE_FIELDS = \[([^\]]*)\]", SOURCE)
+        assert declared and re.findall(r"'(\w+)'", declared.group(1)) == list(NOTE_FIELDS)  # 和後端相同
 
 
 TODAY = date(2026, 11, 15)

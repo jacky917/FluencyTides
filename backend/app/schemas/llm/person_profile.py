@@ -57,7 +57,7 @@ class IngestFamily(BaseModel):
     relation: str = Field(description="和他的關係，例如「弟弟」「太太」「兒子」「貓」")
     name: str = Field("", description="名字；文中沒提就空字串")
     note: str = Field(
-        "", description="關於這位家人的事，例如「大約 2026-09 來日本，考慮和在日本工作的台灣人女友結婚」（相對時間換成日期）；沒有就空字串"
+        "", description="關於這位家人的事，例如「2025 年春天開始在大阪工作」；內容裡的相對時間換成日期；沒有就空字串"
     )
     reason: str = Field(description=REASON)
 
@@ -80,25 +80,27 @@ class IngestListUpdate(BaseModel):
     op: Literal["add", "end"] = Field(
         description="add：新增一筆；end：劃掉目前有效的某一筆（不再適用了，例如離職、搬走、不再玩的興趣）"
     )
-    value: str = Field("", description="op 為 add 時要新增的內容（純文字）；工作經歷（Company）填公司名稱，不知道就空字串；op 為 end 時空字串")
+    value: str = Field("", description=(
+        "op 為 add 時要新增的內容（純文字）；工作經歷（Company）填公司或店名（不知道時的寫法見提示中的工作經歷）；"
+        "op 為 end 時空字串"
+    ))
     job_title: str = Field("", description="只有工作經歷（Company）用：職稱；其他欄位空字串")
     time_start: str = Field(
         "",
         description=(
-            "op 為 add 時這一筆的時間（YYYY、YYYY-MM 或 YYYY-MM-DD）：工作經歷是到職、學歷是入學、經歷與讚美素材是那件事的"
-            "時間、興趣是開始的時間、現居地是搬來的時間；文中沒提或其他欄位就空字串"
+            "op 為 add 時這一筆的第一個時間（YYYY、YYYY-MM 或 YYYY-MM-DD），意義見提示中各欄位的說明；"
+            "文中沒提或欄位沒有時間就空字串"
         ),
     )
     time_end: str = Field(
         "",
         description=(
-            "op 為 add 時的結束時間（YYYY、YYYY-MM 或 YYYY-MM-DD）：工作經歷是以前的工作的離職（已離職但時間不明填 ?；"
-            "現職空字串）、學歷是畢業（還在讀就空字串）；其他欄位空字串。這不是「劃掉」：劃掉一筆用 op=end"
+            "op 為 add 時這一筆的第二個時間（YYYY、YYYY-MM 或 YYYY-MM-DD），意義見提示中各欄位的說明；"
+            "欄位只有一個時間或沒有時間就空字串。這不是「劃掉」：劃掉一筆用 op=end"
         ),
     )
     note: str = Field("", description=(
-        "op 為 add 時這一筆的說明：工作經歷（Company）是這份工作做什麼、負責什麼、做了多久；學歷（Education）是科系、"
-        "研究；其他欄位與沒有時空字串"
+        "op 為 add 時這一筆的說明，只有提示中列了 note 的欄位用（意義見各欄位的說明）；其他欄位與沒有時空字串"
     ))
     entry: int = Field(0, description="op 為 end 時要劃掉的那一筆的編號（提示中「#」後面的數字）；op 為 add 時 0")
     reason: str = Field(description=REASON)

@@ -118,14 +118,15 @@ class TestProposals:
             {"field": "Residence", "op": "add", "value": " ", "reason": ""},  # 空的
         ])
         proposals = [p for p in ingest.proposals_from(result, {}, lists, TODAY) if p.kind.startswith("history")]
+        # 劃掉的排在前面（寫入時先劃掉、再新增）；「新增攝影」只重複同一批劃掉的那筆，略過
         assert [(p.kind, p.data["field"], p.data["text"]) for p in proposals] == [
-            ("history_add", "Interests", "釣魚"),
             ("history_end", "Interests", "攝影"),
             ("history_end", "Company", "Geekly・エンジニア"),
+            ("history_add", "Interests", "釣魚"),
             ("history_add", "Company", "Sony・PM"),
         ]
-        assert proposals[1].data["index"] == 0
-        assert proposals[1].data["fingerprint"] == item_fingerprint(lists["Interests"][0])
+        assert proposals[0].data["index"] == 0
+        assert proposals[0].data["fingerprint"] == item_fingerprint(lists["Interests"][0])
         assert proposals[3].data["item"] == {"company": "Sony", "title": "PM"}
 
     def test_introducer_is_not_suggested(self):
@@ -629,4 +630,4 @@ class TestPositionProposals:
 
     def test_prompt_explains_past_jobs(self):
         prompt = ingest.build_prompt({"Display_Name": "田中さん"}, {}, "x", TODAY)
-        assert "`time_end`：**以前的工作**" in prompt and "以前的工作" in prompt and '用 `op: "end"` 劃掉它' in prompt
+        assert "`time_end`：以前的工作才填離職年月" in prompt and '用 `op: "end"` 劃掉它' in prompt
