@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   browseNoteTypes,
+  createFormPath,
   restoreCardDepth,
   MAX_TRAIL,
   parseBrowseParams,
@@ -98,6 +99,26 @@ describe('searchToRemember', () => {
 
   it('does not remember the create form', () => {
     expect(searchToRemember(new URLSearchParams('deck=A&card=5&new=1'))).toBe(new URLSearchParams('deck=A&card=5').toString())
+  })
+})
+
+describe('createFormPath', () => {
+  const remembered = new URLSearchParams('deck=English::Vocabulary&card=7').toString()
+
+  it('returns to the remembered position from another page', () => {
+    expect(createFormPath('/', '', remembered)).toBe(`/cards?${remembered}&new=1`)
+  })
+
+  it('opens on all decks when nothing is remembered', () => {
+    expect(createFormPath('/graph', '?deck=X', '')).toBe('/cards?new=1')
+  })
+
+  it('stays at the current position on the card page', () => {
+    expect(createFormPath('/cards', '?deck=A&page=2', remembered)).toBe('/cards?deck=A&page=2&new=1')
+  })
+
+  it('does not add new twice', () => {
+    expect(createFormPath('/cards', '?deck=A&new=1', remembered)).toBe('/cards?deck=A&new=1')
   })
 })
 

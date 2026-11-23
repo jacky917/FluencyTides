@@ -1,7 +1,36 @@
 /**
- * 卡片瀏覽頁的網址參數：頁面狀態都放在網址，這裡集中定義什麼是合法值。
- * URL parameters of the card browsing page, parsed in one place.
+ * 卡片頁的網址參數：頁面狀態都放在網址，這裡集中定義什麼是合法值。
+ * URL parameters of the card page, parsed in one place.
  */
+
+/** 記住瀏覽位置的 localStorage 鍵。localStorage key of the remembered position. */
+export const REMEMBERED_SEARCH_KEY = 'cards_last_search'
+
+/**
+ * 讀出記住的瀏覽位置（`searchToRemember` 的字串）；讀不到時為空字串。
+ * Reads the remembered position, or '' when unavailable.
+ * @returns 參數字串。The query string.
+ */
+export function readRememberedSearch(): string {
+  try {
+    return window.localStorage.getItem(REMEMBERED_SEARCH_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 記下瀏覽位置（存不了時略過，只影響下次是否回到同一個位置）。
+ * Stores the position, ignoring failures.
+ * @param search - 參數字串。The query string.
+ */
+export function writeRememberedSearch(search: string): void {
+  try {
+    window.localStorage.setItem(REMEMBERED_SEARCH_KEY, search)
+  } catch {
+    // 只影響下次是否回到同一個位置
+  }
+}
 
 /** 清單每頁幾張（跳轉查詢筆記的卡片也用這個上限）。Cards per list page. */
 export const BROWSE_PAGE_SIZE = 50
@@ -123,6 +152,22 @@ export function searchToRemember(params: URLSearchParams): string {
     if (value) kept.set(key, value)
   }
   return kept.toString()
+}
+
+/**
+ * 從別處（草稿通知的「前往」等）打開卡片頁建卡畫面的網址（`docs/wip/retire_generate_page_FEAT_2026-11-23.md` D3）：
+ * 已經在卡片頁就留在目前的位置，否則回到上次在卡片頁看的位置（牌組在網址裡，草稿沒有記牌組），再加上 `new=1`。
+ * The URL that opens the card page's create form: the current position when on
+ * the card page, otherwise the remembered one, plus `new=1`.
+ * @param pathname - 目前的路徑。The current path.
+ * @param currentSearch - 目前的網址參數字串（可帶 `?`）。The current query string.
+ * @param remembered - 記住的瀏覽位置。The remembered position.
+ * @returns 路徑與參數。The path with its query.
+ */
+export function createFormPath(pathname: string, currentSearch: string, remembered: string): string {
+  const params = new URLSearchParams(pathname === '/cards' ? currentSearch : remembered)
+  params.set('new', '1')
+  return `/cards?${params.toString()}`
 }
 
 /** 卡片清單的層數選項的值（0＝全部子牌組）。The allowed list depths. */

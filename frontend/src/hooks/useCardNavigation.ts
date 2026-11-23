@@ -9,31 +9,12 @@ import {
   parseBrowseParams,
   pickNoteCard,
   pushTrail,
+  readRememberedSearch,
   searchToRemember,
+  writeRememberedSearch,
   type CardSide,
 } from '../lib/cardBrowse'
 import { isBackNavigation, type BackState } from '../lib/cardFaces'
-
-/** 記住瀏覽位置的 localStorage 鍵。localStorage key of the remembered position. */
-const REMEMBERED_SEARCH_KEY = 'cards_last_search'
-
-/** 讀出記住的位置；讀不到時為空字串。Reads the remembered position. */
-function readRemembered(): string {
-  try {
-    return window.localStorage.getItem(REMEMBERED_SEARCH_KEY) ?? ''
-  } catch {
-    return ''
-  }
-}
-
-/** 記下位置（存不了時略過）。Stores the position, ignoring failures. */
-function writeRemembered(search: string): void {
-  try {
-    window.localStorage.setItem(REMEMBERED_SEARCH_KEY, search)
-  } catch {
-    // 只影響下次是否回到同一個位置
-  }
-}
 
 /** 跳轉時放進瀏覽器歷史的狀態：從哪張卡片跳過來。History state of a jump. */
 interface JumpState {
@@ -52,7 +33,7 @@ const historyIndex = (): unknown => (window.history.state as { idx?: unknown } |
  * 卡片瀏覽頁的導覽：狀態都在網址（見 `lib/cardBrowse.ts`），這裡提供讀取與各種改變的方式。
  * Navigation of the card browsing page; all state lives in the URL.
  *
- * - 選牌組、搜尋、換頁、從清單選卡：清空跳轉紀錄；選牌組、搜尋、選卡也退出建卡畫面（`new`）。
+ * - 選牌組、搜尋、換頁、從清單選卡：清空跳轉紀錄；搜尋、選卡也退出建卡畫面（`new`），選牌組不退出。
  * - 建卡畫面（`toggleCreate`、`closeCreate`）：打開時新增一筆歷史，上一頁就退出。建卡成功後表單留在
  *   原地；按成功提示上的「查看新卡片」才由 `showCreated` 切過去（新增一筆歷史，上一頁回到表單）。
  * - 卡面按鈕打開其他筆記（`openNotes`）：查出卡片後切換過去，記下目前這張並新增一筆瀏覽器歷史，
@@ -86,7 +67,7 @@ export function useCardNavigation() {
   // 其他分頁同步——兩個分頁停在不同位置時才不會互相覆寫個沒完
   const pendingRestore = useRef<string | null>(null)
   if (pendingRestore.current === null) {
-    pendingRestore.current = params.toString() === '' ? readRemembered() : ''
+    pendingRestore.current = params.toString() === '' ? readRememberedSearch() : ''
   }
   useEffect(() => {
     if (pendingRestore.current) setParams(new URLSearchParams(pendingRestore.current), { replace: true })
@@ -99,7 +80,7 @@ export function useCardNavigation() {
       if (current !== pendingRestore.current) return
       pendingRestore.current = ''
     }
-    writeRemembered(current)
+    writeRememberedSearch(current)
   }, [current])
 
   /** 改網址參數；值為 null 或空字串時移除。Update URL params; null or '' removes one. */
@@ -270,8 +251,10 @@ export function useCardNavigation() {
   return {
     ...state,
     arrivedBack: arrival.key === location.key && arrival.back,
-    // 選牌組、搜尋、從清單選卡代表要看卡片：一併退出建卡畫面（換頁、翻面不退出）
-    selectDeck: (deck: string | null) => update({ deck, page: null, card: null, trail: null, new: null }),
+    // 搜尋、從清單選卡代表要看卡片：一併退出建卡畫面（換頁、翻面不退出）。選牌組不退出：建卡畫面開著時
+    // 換牌組是要改建在哪裡，填到一半的表單保持開著（`docs/wip/retire_generate_page_FEAT_2026-11-23.md` D4）
+    selectDeck: (deck: string | null) =>
+      update({ deck, page: null, card: null, trail: null, new: state.creating ? '1' : null }),
     submitSearch: (q: string) => update({ q, page: null, card: null, trail: null, new: null }),
     setPage: (page: number) => update({ page: page > 1 ? String(page) : null }),
     // 點目前這張卡片不算換卡，保留正反面

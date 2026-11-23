@@ -4,7 +4,6 @@ import {
   DECK_DEFAULT,
   DECK_MAX,
   DECK_MIN,
-  GENERATE_LAYOUT,
   GRAPH_LAYOUT,
   LIST_MIN,
   MAIN_MIN,
@@ -73,25 +72,25 @@ describe('card browsing page layout', () => {
   })
 })
 
-describe('generate and graph page layouts', () => {
-  it.each([GENERATE_LAYOUT, GRAPH_LAYOUT])('puts the deck tree beside the main area from TWO_COLUMN_MIN on ($id)', (layout) => {
-    expect(splitMode(TWO_COLUMN_MIN, layout.breakpoints)).toBe('full')
-    expect(splitMode(TWO_COLUMN_MIN - 1, layout.breakpoints)).toBe('stacked')
+describe('graph page layout', () => {
+  it('puts the deck tree beside the main area from TWO_COLUMN_MIN on', () => {
+    expect(splitMode(TWO_COLUMN_MIN, GRAPH_LAYOUT.breakpoints)).toBe('full')
+    expect(splitMode(TWO_COLUMN_MIN - 1, GRAPH_LAYOUT.breakpoints)).toBe('stacked')
   })
 
-  it.each([GENERATE_LAYOUT, GRAPH_LAYOUT])('fits the deck tree and the main area at their minimums ($id)', (layout) => {
-    expect(layout.fluidMin).toEqual({ main: MAIN_MIN })
-    expect(minRowWidth(layout.specs.deck.min, layout.fluidMin.main)).toBeLessThanOrEqual(layout.breakpoints.full)
+  it('fits the deck tree and the main area at their minimums', () => {
+    expect(GRAPH_LAYOUT.fluidMin).toEqual({ main: MAIN_MIN })
+    expect(minRowWidth(GRAPH_LAYOUT.specs.deck.min, GRAPH_LAYOUT.fluidMin.main)).toBeLessThanOrEqual(
+      GRAPH_LAYOUT.breakpoints.full,
+    )
   })
 
   it('gives the shared deck tree its usual width', () => {
-    expect(defaultWidths(1920, GENERATE_LAYOUT.specs)).toEqual({ deck: DECK_DEFAULT })
+    expect(defaultWidths(1920, GRAPH_LAYOUT.specs)).toEqual({ deck: DECK_DEFAULT })
   })
 
   it('stores each page under its own key', () => {
-    const keys = [CARD_LAYOUT, GENERATE_LAYOUT, GRAPH_LAYOUT].map((layout) => panelWidthsKey(layout))
-    expect(new Set(keys).size).toBe(3)
-    expect(panelWidthsKey(GENERATE_LAYOUT)).toBe('generate_panel_widths')
+    expect(panelWidthsKey(CARD_LAYOUT)).not.toBe(panelWidthsKey(GRAPH_LAYOUT))
     expect(panelWidthsKey(GRAPH_LAYOUT)).toBe('graph_panel_widths')
   })
 })

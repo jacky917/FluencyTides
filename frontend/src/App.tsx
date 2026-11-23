@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react'
 import { Routes, Route, Link, Navigate, useLocation } from 'react-router-dom'
-import { LayoutDashboard, PlusCircle, Network, Bot, Layers, SlidersHorizontal, GitBranch } from 'lucide-react'
+import { LayoutDashboard, Network, Bot, Layers, SlidersHorizontal, GitBranch } from 'lucide-react'
 import { Toaster } from './components/ui/sonner'
 import { DraftWatcher } from './components/shared/DraftWatcher'
 import { PersonFillDialog } from './components/person/PersonFillDialog'
@@ -19,9 +19,8 @@ import {
   useSidebar,
 } from './components/ui/sidebar'
 
-// Pages (will create these next)
+// Pages
 import Dashboard from './pages/Dashboard'
-import CardGenerator from './pages/CardGenerator'
 import KnowledgeGraph from './pages/KnowledgeGraph'
 import ToolSettings from './pages/ToolSettings'
 import Cards from './pages/Cards'
@@ -34,7 +33,6 @@ const StoryPlayground = import.meta.env.DEV ? lazy(() => import('./pages/StoryPl
 const navItems = [
   { name: 'Dashboard', path: '/', icon: LayoutDashboard },
   { name: 'Cards', path: '/cards', icon: Layers },
-  { name: 'Card Generator', path: '/generate', icon: PlusCircle },
   { name: 'Knowledge Graph', path: '/graph', icon: Network },
   { name: 'Story Flowchart', path: '/story', icon: GitBranch },
   { name: 'Tool Settings', path: '/tools', icon: Bot },
@@ -100,7 +98,6 @@ function App() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/cards" element={<Cards />} />
-            <Route path="/generate" element={<CardGenerator />} />
             <Route path="/graph" element={<KnowledgeGraph />} />
             <Route path="/story" element={<StoryIndex />} />
             {StoryPlayground && (
@@ -111,6 +108,8 @@ function App() {
             <Route path="/preferences" element={<Preferences />} />
             {/* 舊網址（LLM 模型設定頁）。The former LLM settings URL. */}
             <Route path="/llm-models" element={<Navigate to="/tools" replace />} />
+            {/* 不存在的網址（打錯、已移除的頁面）回到首頁，不留空白畫面。Unknown URLs go home. */}
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>
       </SidebarInset>

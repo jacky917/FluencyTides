@@ -14,8 +14,9 @@ import { useNavigate } from 'react-router-dom'
 import { Loader2, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../../api/client'
+import { useOpenCreateForm } from '../../hooks/useOpenCreateForm'
 import { useCurrentDraft, useDraftEditor, useSetCurrentDraft } from '../../hooks/useServerDraft'
-import { removeStored, writeStored } from '../../hooks/useStoredState'
+import { removeStored } from '../../hooks/useStoredState'
 import { describeApiError, retryTransient } from '../../lib/apiError'
 import {
   LIST_TITLES,
@@ -126,7 +127,7 @@ function DialogSubtitle({
 
 /** 槽位裡是別種卡片的草稿（共用全站一份）。Another kind of draft holds the slot. */
 function OtherDraftNotice({ draft }: { draft: ServerDraft }) {
-  const navigate = useNavigate()
+  const openCreateForm = useOpenCreateForm()
   if (draft.status === 'form_creating') {
     return <p className="text-sm text-muted-foreground">正在建立另一張卡片，請稍候再試。</p>
   }
@@ -137,9 +138,8 @@ function OtherDraftNotice({ draft }: { draft: ServerDraft }) {
         type="button"
         variant="outline"
         onClick={() => {
-          writeStored('local', 'generate_handler', draft.handler)
           closePersonFill()
-          navigate('/generate')
+          openCreateForm(draft.handler)
         }}
       >
         前往那份草稿
