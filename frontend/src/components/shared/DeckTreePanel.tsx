@@ -33,21 +33,36 @@ const CREATE_DECK_KEY = ['create-deck']
 
 /** 每一層的縮排（px）。Indentation per level. */
 const INDENT = 12
-/** 展開箭頭佔的寬度（px）；沒有子牌組的節點留同樣的空位。Width of the expand chevron. */
-const CHEVRON_WIDTH = 18
+
+/*
+ * 尺寸看輸入裝置（`pointer-coarse`，手機、平板，與卡片頁的欄位搜尋相同）：觸控時每一列與列上的按鈕都是
+ * 40px 高、好點，文字 16px（iOS Safari 在小於 16px 的輸入框聚焦時會放大整頁）；滑鼠時維持緊湊。
+ * Sizes follow the pointer: touch gets 40px rows and buttons, and 16px input text.
+ */
+
+/**
+ * 展開箭頭的寬度；沒有子牌組的節點、新增牌組的輸入列留同樣寬的空位，名稱才對齊。
+ * The width of the expand chevron, also used by the spacers that keep names aligned.
+ */
+const CHEVRON_SLOT = 'inline-block w-[18px] shrink-0 pointer-coarse:w-8'
 
 /** 分類節點（Anki 裡沒有這個牌組）的說明。The explanation of a category node. */
 const CATEGORY_HINT = 'Anki 裡沒有這個牌組，只是分類'
 
-/**
- * 節點旁的小按鈕（新增子牌組、建立這一層）：滑過或聚焦到那一列才出現，不佔平常的寬度；手機寬度與
- * 觸控裝置沒有「滑過」，一直顯示。24px 見方。
- * Row buttons: shown on hover or focus only, always shown on narrow or touch screens.
- */
-const ROW_BUTTON =
-  'hidden h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground ' +
+/** 小圖示按鈕的共用樣式：電腦 28px、觸控 40px 見方。Small icon buttons: 28px, or 40px on touch. */
+const ICON_BUTTON =
+  'h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground ' +
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 ' +
-  'group-hover:flex group-focus-within:flex max-md:flex pointer-coarse:flex'
+  'pointer-coarse:h-10 pointer-coarse:w-10'
+
+/**
+ * 節點旁的按鈕（新增子牌組、建立這一層）：電腦上滑過、聚焦到那一列，或那一列是選取的牌組時才出現，
+ * 不佔平常的寬度；手機寬度與觸控裝置沒有「滑過」，一直顯示。左邊留一點間隔，和牌組名稱分開，不會
+ * 按到旁邊的名稱（在手機上那會選取牌組、收起牌組樹）。
+ * Row buttons: shown on hover, focus or for the selected deck; always shown on narrow
+ * or touch screens. A small gap keeps them apart from the deck name.
+ */
+const ROW_BUTTON = cn(ICON_BUTTON, 'ml-1 hidden group-hover:flex group-focus-within:flex max-md:flex pointer-coarse:flex')
 
 /**
  * 新增牌組的輸入列開在哪裡（deck_create 計畫書 §6）；同一時間只有一列。
@@ -144,6 +159,8 @@ export function DeckTreePanel({
     <Panel
       ref={panelRef}
       scrollable={scrollable}
+      // 面板夠寬時「新增」按鈕帶文字（container query 看面板自己的寬度：電腦上牌組欄可以拖得很窄）
+      className="@container"
       title={
         <>
           <FolderTree className="h-4 w-4" />
@@ -151,10 +168,10 @@ export function DeckTreePanel({
         </>
       }
       actions={
-        <div className="flex items-center">
+        <div className="flex items-center gap-1">
           <Button
             variant="ghost"
-            size="icon"
+            className="h-10 min-w-10 gap-1.5 px-2.5"
             onClick={() => setAdding({ kind: 'top' })}
             disabled={data === undefined || creating}
             aria-label="新增最上層牌組"
@@ -162,6 +179,7 @@ export function DeckTreePanel({
             title="新增最上層牌組"
           >
             <Plus className="h-4 w-4" />
+            <span className="hidden @[15rem]:inline">新增</span>
           </Button>
           <Button
             variant="ghost"
@@ -189,7 +207,7 @@ export function DeckTreePanel({
         <ul role="tree" aria-label="牌組">
           <li role="treeitem" aria-selected={selected === null}>
             <div className="flex items-center">
-              <span className="inline-block" style={{ width: CHEVRON_WIDTH }} />
+              <span className={CHEVRON_SLOT} />
               <DeckButton label="全部牌組" active={selected === null} onClick={() => onSelect(null)} />
             </div>
           </li>
@@ -269,47 +287,45 @@ function DeckItem({
   // 正在這個節點底下新增時，即使沒有子牌組、或被收合，也要展開讓輸入列看得到
   const open = isOpen(node) || addingChild
   const showGroup = hasChildren || addingChild
+  const active = selected === node.fullName
 
   return (
     <Collapsible asChild open={showGroup && open} onOpenChange={(next) => onToggle(node.fullName, next)}>
-      <li role="treeitem" aria-selected={selected === node.fullName} aria-expanded={hasChildren ? open : undefined}>
+      <li role="treeitem" aria-selected={active} aria-expanded={hasChildren ? open : undefined}>
         <div className="group flex items-center">
           {hasChildren ? (
             <CollapsibleTrigger asChild>
               <button
                 type="button"
-                className="p-0.5 rounded hover:bg-accent"
+                className={cn(CHEVRON_SLOT, 'flex h-[18px] items-center justify-center rounded hover:bg-accent pointer-coarse:h-10')}
                 style={{ marginLeft: depth * INDENT }}
                 aria-label={open ? `收合 ${node.name}` : `展開 ${node.name}`}
               >
-                <ChevronRight className={cn('h-3.5 w-3.5 transition-transform duration-200', open && 'rotate-90')} />
+                <ChevronRight
+                  className={cn('h-3.5 w-3.5 transition-transform duration-200 pointer-coarse:h-4 pointer-coarse:w-4', open && 'rotate-90')}
+                />
               </button>
             </CollapsibleTrigger>
           ) : (
-            <span className="inline-block" style={{ width: CHEVRON_WIDTH, marginLeft: depth * INDENT }} />
+            <span className={CHEVRON_SLOT} style={{ marginLeft: depth * INDENT }} />
           )}
-          <DeckButton
-            label={node.name}
-            active={selected === node.fullName}
-            category={!node.exists}
-            onClick={() => onSelect(node.fullName)}
-          />
+          <DeckButton label={node.name} active={active} category={!node.exists} onClick={() => onSelect(node.fullName)} />
           {!node.exists && (
             <button
               type="button"
-              className={cn(ROW_BUTTON, addingSelf && 'flex')}
+              className={cn(ROW_BUTTON, (addingSelf || active) && 'flex')}
               disabled={locked}
               aria-label={`在 Anki 建立「${node.name}」這一層`}
               aria-pressed={addingSelf}
               title="建立這一層"
               onClick={() => onAdding({ kind: 'self', node: node.fullName })}
             >
-              <FolderPlus className="h-3.5 w-3.5" />
+              <FolderPlus className="h-4 w-4" />
             </button>
           )}
           <button
             type="button"
-            className={cn(ROW_BUTTON, addingChild && 'flex')}
+            className={cn(ROW_BUTTON, (addingChild || active) && 'flex')}
             disabled={locked}
             aria-label={`在「${node.name}」底下新增牌組`}
             aria-pressed={addingChild}
@@ -319,7 +335,7 @@ function DeckItem({
               onAdding({ kind: 'child', parent: node.fullName })
             }}
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Plus className="h-4 w-4" />
           </button>
         </div>
         {addingSelf && (
@@ -455,72 +471,81 @@ function DeckNameInput({
   }
 
   const label = parent === null ? '新的最上層牌組名稱' : `在「${parent}」底下的新牌組名稱`
-  const indent = depth * INDENT + CHEVRON_WIDTH
   return (
-    <div className="py-0.5" style={{ marginLeft: indent }}>
-      <div className="flex items-center gap-1">
-        <Input
-          ref={inputRef}
-          autoFocus
-          value={value}
-          disabled={create.isPending}
-          placeholder="牌組名稱（可用 :: 一次建多層）"
-          aria-label={label}
-          aria-invalid={error ? true : undefined}
-          aria-describedby={error ? errorId : undefined}
-          className={cn('h-7 min-w-0 flex-1 px-2 py-1 text-sm', error && 'border-destructive')}
-          onChange={(e) => {
-            setValue(e.target.value)
-            if (error) setError(null)
-          }}
-          // 預填名稱時（補建這一層）全選，直接按 Enter 或直接改都方便
-          onFocus={(e) => {
-            if (initial) e.currentTarget.select()
-          }}
-          onKeyDown={(e) => {
-            // 輸入法選字中的 Enter 不算
-            if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-              e.preventDefault()
-              submit()
-            } else if (e.key === 'Escape') {
-              e.preventDefault()
-              onCancel()
-            }
-          }}
-          onBlur={() => {
-            if (!value.trim() && !create.isPending) onCancel()
-          }}
-        />
-        {create.isPending ? (
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" role="status" aria-label="正在建立牌組" />
-        ) : (
-          <>
-            <button
-              type="button"
-              className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label="建立牌組"
-              title="建立（Enter）"
-              onClick={submit}
-            >
-              <Check className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label="取消新增牌組"
-              title="取消（Esc）"
-              onClick={onCancel}
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </>
+    // 前面留展開箭頭的空位，輸入框與這一層的牌組名稱對齊
+    <div className="flex py-0.5" style={{ marginLeft: depth * INDENT }}>
+      <span className={CHEVRON_SLOT} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1">
+          <Input
+            ref={inputRef}
+            autoFocus
+            value={value}
+            disabled={create.isPending}
+            placeholder="牌組名稱（可用 :: 一次建多層）"
+            aria-label={label}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? errorId : undefined}
+            className={cn(
+              'h-7 min-w-0 flex-1 px-2 py-1 text-sm pointer-coarse:h-10 pointer-coarse:text-base',
+              error && 'border-destructive',
+            )}
+            onChange={(e) => {
+              setValue(e.target.value)
+              if (error) setError(null)
+            }}
+            // 預填名稱時（補建這一層）全選，直接按 Enter 或直接改都方便
+            onFocus={(e) => {
+              if (initial) e.currentTarget.select()
+            }}
+            onKeyDown={(e) => {
+              // 輸入法選字中的 Enter 不算
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                e.preventDefault()
+                submit()
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                onCancel()
+              }
+            }}
+            onBlur={() => {
+              if (!value.trim() && !create.isPending) onCancel()
+            }}
+          />
+          {create.isPending ? (
+            // 佔兩顆按鈕的寬度，建立中輸入框不會變寬又縮回
+            <span className="flex h-7 w-[3.75rem] shrink-0 items-center justify-center pointer-coarse:h-10 pointer-coarse:w-[5.25rem]">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" role="status" aria-label="正在建立牌組" />
+            </span>
+          ) : (
+            <>
+              <button
+                type="button"
+                className={cn(ICON_BUTTON, 'flex')}
+                aria-label="建立牌組"
+                title="建立（Enter）"
+                onClick={submit}
+              >
+                <Check className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                className={cn(ICON_BUTTON, 'flex')}
+                aria-label="取消新增牌組"
+                title="取消（Esc）"
+                onClick={onCancel}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </>
+          )}
+        </div>
+        {error && (
+          <p id={errorId} role="alert" className="mt-0.5 text-xs text-destructive">
+            {error}
+          </p>
         )}
       </div>
-      {error && (
-        <p id={errorId} role="alert" className="mt-0.5 text-xs text-destructive">
-          {error}
-        </p>
-      )}
     </div>
   )
 }
@@ -548,7 +573,8 @@ function DeckButton({
       aria-current={active || undefined}
       onClick={onClick}
       className={cn(
-        'min-w-0 flex-1 truncate rounded-md px-2 py-1 text-left transition-colors',
+        // 觸控時加高到 40px，和列上的按鈕一樣好點
+        'min-w-0 flex-1 truncate rounded-md px-2 py-1 text-left transition-colors pointer-coarse:py-2.5',
         active ? 'bg-primary text-primary-foreground' : 'hover:bg-accent hover:text-accent-foreground',
         category && 'italic',
         category && !active && 'text-muted-foreground',
