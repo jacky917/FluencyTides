@@ -1,6 +1,28 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/*
+ * 新加入的列從高度 0 展開（卡片頁的欄位條件，`animate-expand-in`）。展開期間裁掉超出的部分，結束後恢復，
+ * 輸入框的焦點框不會被裁到；最大高度取一列條件在窄欄（欄位名與輸入框分兩行）也放得下的值。
+ * A newly added row expands from zero height; overflow is clipped only while it animates.
+ */
+@theme {
+  --animate-expand-in: expand-in 150ms ease-out;
+
+  @keyframes expand-in {
+    from {
+      max-height: 0;
+      opacity: 0;
+      overflow: hidden;
+    }
+    to {
+      max-height: 6rem;
+      opacity: 1;
+      overflow: hidden;
+    }
+  }
+}
+
 @theme inline {
   --font-sans: "Inter", "Outfit", "Segoe UI", sans-serif;
 

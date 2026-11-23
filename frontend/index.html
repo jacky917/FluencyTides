@@ -2,8 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      加到主畫面當 App 用（iPhone、Android）：manifest 的 scope 是整個網站，切換頁面時才不會被當成外部網頁、
+      多出帶 ✕ 的瀏覽列。網站在 Cloudflare Access 後面，manifest 要帶著登入的 cookie 去讀（use-credentials），
+      否則會被導到登入頁而讀不到。
+    -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="FluencyTides" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="theme-color" content="#ffffff" />
     <title>FluencyTides</title>
   </head>
   <body>

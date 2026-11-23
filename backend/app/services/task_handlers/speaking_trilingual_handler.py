@@ -241,10 +241,11 @@ class SpeakingTrilingualHandler(BaseHandler):
     CREATE_PARAMS = SpeakingTrilingualCreateParams
     DRAFT_PARAMS = SpeakingTrilingualDraftParams
     CREATE_TAGS = ("Speaking_Trilingual", "HandlerGenerated")
-    #: The web field-search buttons. References are JSON holding both sentences and notes, so a "contains"
-    #: match finds both.
-    #: 網頁欄位搜尋的按鈕。參考答案是 JSON，句子與說明都在裡面，「包含」比對會一起找到。
+    #: The web field-search buttons, the short title first. References are JSON holding both sentences and notes,
+    #: so a "contains" match finds both.
+    #: 網頁欄位搜尋的按鈕，短標題排第一個。參考答案是 JSON，句子與說明都在裡面，「包含」比對會一起找到。
     SEARCH_FIELDS = (
+        SearchField("title", "標題", (TITLE_FIELD,)),
         SearchField("prompt", "情境", ("Prompt",)),
         SearchField("context", "補充", ("Context",)),
         SearchField("refs", "說法（三語）", tuple(references_field(lang) for lang in LANG_CODES)),

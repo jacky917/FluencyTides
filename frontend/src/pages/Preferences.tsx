@@ -62,7 +62,7 @@ function CardAnimationSettings() {
       <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
         <div className="space-y-1.5">
           <CardTitle className="text-lg">卡片動畫</CardTitle>
-          <CardDescription>卡片瀏覽頁翻面與換卡時播放，可以分別選擇。點預覽區可以試看。</CardDescription>
+          <CardDescription>卡片頁翻面與換卡時播放，可以分別選擇。點預覽區可以試看。</CardDescription>
         </div>
         <Button variant="ghost" size="sm" disabled={isDefault} onClick={() => setSettings(DEFAULT_FACE_SETTINGS)}>
           <RotateCcw className="h-4 w-4" />
@@ -72,7 +72,7 @@ function CardAnimationSettings() {
       <CardContent className="space-y-6">
         {reducedMotion && (
           <p role="status" className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            系統開啟了「減少動態效果」，卡片瀏覽頁不會播放動畫；這裡的設定在關閉該選項後生效。
+            系統開啟了「減少動態效果」，卡片頁不會播放動畫；這裡的設定在關閉該選項後生效。
           </p>
         )}
 

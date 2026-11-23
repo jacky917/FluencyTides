@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- FluencyTides 的 App 圖示：深藍底、三道潮汐的浪與月亮。整張填滿（iOS 與 maskable 圖示由系統裁成圓角），
+       浪與月亮都在中央 80% 的安全範圍內。 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f172a"/>
+      <stop offset="1" stop-color="#1e3a8a"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <circle cx="352" cy="150" r="38" fill="#fde68a"/>
+  <g fill="none" stroke-linecap="round">
+    <path d="M56 246 q50 -42 100 0 t100 0 t100 0 t100 0" stroke="#e0f2fe" stroke-width="30"/>
+    <path d="M56 318 q50 -36 100 0 t100 0 t100 0 t100 0" stroke="#7dd3fc" stroke-width="28"/>
+    <path d="M56 386 q50 -30 100 0 t100 0 t100 0 t100 0" stroke="#38bdf8" stroke-width="26"/>
+  </g>
+</svg>

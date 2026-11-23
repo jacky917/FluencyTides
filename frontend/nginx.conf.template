@@ -16,6 +16,13 @@ server {
         # 關鍵：若找不到對應的路徑，一律回傳 index.html 交給前端 React 路由處理
         try_files $uri $uri/ /index.html;
     }
+    # 加到主畫面用的 Web App Manifest：nginx 內建的 mime.types 沒有 .webmanifest（會回 application/octet-stream），
+    # 這裡指定正確的類型；不快取，改了 scope 或圖示時重新加到主畫面就讀得到新的
+    location = /manifest.webmanifest {
+        root   /usr/share/nginx/FluencyTides;
+        default_type application/manifest+json;
+        add_header Cache-Control "no-cache";
+    }
     # 映像版本（Dockerfile 建置時寫入），CI 部署後輪詢用；禁止快取，才讀得到剛上線的值
     location = /version.json {
         root   /usr/share/nginx/FluencyTides;

@@ -613,7 +613,7 @@ function ReadyPreview<S extends DraftStateBase>({
         removeStored('local', draftBackupKey(draft.id))
         setCurrent(null)
         toast.warning('建立結果未知，草稿已不在', {
-          description: '卡片可能已經建立，請先到卡片瀏覽頁確認，再決定要不要重建。',
+          description: '卡片可能已經建立，請先到卡片頁確認，再決定要不要重建。',
         })
         return
       }
