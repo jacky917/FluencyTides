@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-11-24 |
 | **性質** | bug 修復（程式碼；正式庫目前沒有要清的資料） |
-| **狀態** | 🚧 實作中 |
+| **狀態** | 🚧 實作完成，待 PR |
 | **嚴重度** | 🟡 卡片本身正確；關係圖譜每組卡多兩條重複的邊 |
 | **影響範圍** | `backend/scripts/common/database/log_repository.py` 的 `_ensure_link`（建卡管線、刪卡工具的完整性修復會用到）；網站建卡不受影響 |
 | **分支** | `fix/rel-links-dup`（從 `origin/main`） |
@@ -64,15 +64,46 @@
 | 檔案 | 改動 |
 |---|---|
 | `backend/scripts/common/database/log_repository.py` | `_ensure_link`：MySQL 用 `FOR UPDATE` 查現成列；docstring 說明原因 |
-| `backend/tests/test_log_repository_state.py` 或新測試 | MySQL 方言時查詢帶 `FOR UPDATE`、SQLite 時不帶 |
+| `backend/tests/test_corpus_repository.py` | MySQL 方言時查詢帶 `FOR UPDATE`、其他方言時不帶（CI 會跑） |
 | `backend/tests/test_log_repository_mysql.py` | 跨連線的整合測試（`CORPUS_DB_TESTS=1` 才跑）：另一條連線先 commit handler 的列，原本的 session 已經有舊快照，呼叫後仍只有一列 |
 
 ## 5. 驗收
 
-- [ ] 新測試在修正前失敗、修正後通過。
-- [ ] `pytest tests -q` 通過（本機 `backend/.env` 多一個 `audio` 端點造成的 2 個既有失敗除外）。
-- [ ] `ruff check` 沒有新問題。
+- [x] 新測試在修正前失敗、修正後通過。
+- [x] `pytest tests -q` 通過（本機 `backend/.env` 多一個 `audio` 端點造成的 2 個既有失敗除外）。
+- [x] `ruff check` 沒有新問題。
 
-## 6. 實作紀錄
+## 6. 實作紀錄（2026-11-24）
 
-（實作後補）
+**程式碼**
+
+- `log_repository.py`：新增 `_locking_read_suffix(session)`，MySQL 回 `" FOR UPDATE"`，其他方言（SQLite）和沒有 `get_bind` 的測試替身回空字串。`_ensure_link` 查現成列時接上它。
+- 其他會呼叫 `_ensure_link` 的地方（完整性修復的 `repair_record`、`insert_repaired_record`）也一起受惠，不用另外改。
+- 建卡腳本在本機跑，不需要重新部署後端。
+
+**測試**
+
+- `tests/test_corpus_repository.py`：
+  - `test_link_lookup_is_a_locking_read_on_mysql`：MySQL 方言時，7 個關係查詢都以 `LIMIT 1 FOR UPDATE` 結尾。
+  - `test_link_lookup_has_no_lock_clause_elsewhere`：SQLite 方言時維持 `LIMIT 1`。
+- `tests/test_log_repository_mysql.py` 的 `test_handler_link_committed_after_the_snapshot_is_reused`（`CORPUS_DB_TESTS=1` 才跑）：
+  - 在語料庫建一張名稱不重複的一般表 `zz_test_rel_links_<亂數>`，把 `log_repository.REL_LINKS` 換成它，測完就 `DROP`。暫存表只有建立它的連線看得到，所以這裡不能用暫存表。
+  - 「腳本」連線先讀一次定下快照，「handler」連線寫入並 commit 一列 `has_context`，接著腳本呼叫 `_ensure_link`。
+  - 結果：關掉修正（把 `_locking_read_suffix` 換成回空字串）時表裡有 **2 列**，測試失敗；修正後只有 **1 列**，`attrs` 補上了 `card_type`。這也實際證實了 §2 的原因。
+  - 跑完查過語料庫沒有留下 `zz_test_%` 表。
+
+跑法：
+
+```powershell
+cd backend
+```
+
+```powershell
+$env:CORPUS_DB_TESTS = '1'; python -m pytest tests/test_log_repository_mysql.py -q
+```
+
+```powershell
+python -m pytest tests -q
+```
+
+結果：MySQL 整合測試 5 passed；全部測試 2618 passed、8 skipped、2 failed，2 個失敗是本機 `.env` 多一個 `audio` 端點造成的（`test_llm_endpoints::test_list_endpoints_only_selectable_ones`、`test_models_menu::…[effort-token-mismatch]`），和這次無關。

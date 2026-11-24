@@ -571,7 +571,7 @@ python scripts\fastapi_client\JP_CoreVerb\generate_child_cards.py --game SenrenB
   - 比對條件不是問題：兩邊的 `relation_type`、`src_type`／`dst_type`（`note`）、note id（都存字串）、`status`（`active`）都一樣。
   - 測試沒抓到：`tests/test_log_repository_mysql.py` 的 `test_existing_handler_link_is_reused` 在同一條連線、同一個 session 裡先寫 handler 的列再呼叫，看得到自己寫的資料。而且它用連線專屬的 `TEMPORARY` 表，模擬不了跨連線的情況。
   - 影響範圍：只有建卡管線（腳本）會重複，網站建卡不會。語料庫重建後，這次是第一次跑管線，所以正式庫沒有其他重複（2026-11-24 還原後查：四種 active 關係的筆數都等於不重複的關係數）。
-- 修正方向：讓 `_ensure_link` 讀到最新已 commit 的資料。可以把那個查詢改成鎖定讀取（MySQL 5.7 用 `LOCK IN SHARE MODE` 或 `FOR UPDATE`，會讀最新資料，不受快照影響），或在 `create_or_restore_record` 開頭先結束舊交易。前者範圍最小。
+- 修正：`_ensure_link` 在 MySQL 上改用鎖定讀取（`FOR UPDATE`），並用跨連線的整合測試重現、確認修好。見 `docs/wip/rel_links_dup_FIX_2026-11-24.md`。
 
 **還原**
 

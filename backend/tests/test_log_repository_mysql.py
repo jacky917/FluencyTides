@@ -166,3 +166,80 @@ def test_existing_handler_link_is_reused():
         assert len(rows) == 1 and "jp_verb_pair" in str(rows[0][0])
 
     _run(body)
+
+
+def _scratch_rel_links_ddl(table: str) -> str:
+    """schema.sql 的 ``rel_links`` 建表 SQL 改成名稱不重複的一般表、拿掉外鍵。
+
+    The ``rel_links`` DDL as a uniquely named regular table without foreign keys.
+    """
+    import re
+
+    from scripts.common.database.init_db import SCHEMA_PATH, table_ddl
+
+    ddl = table_ddl(SCHEMA_PATH.read_text(encoding="utf-8"), "rel_links")
+    ddl = ddl.replace("CREATE TABLE IF NOT EXISTS rel_links ", f"CREATE TABLE {table} ", 1)
+    lines = [line for line in ddl.splitlines() if not line.strip().startswith("CONSTRAINT ")]
+    ddl = re.sub(r",\s*\n\)", "\n)", "\n".join(lines))
+    assert ddl.startswith(f"CREATE TABLE {table} ") and "FOREIGN KEY" not in ddl
+    return ddl
+
+
+def test_handler_link_committed_after_the_snapshot_is_reused(monkeypatch):
+    """handler 在另一條連線 commit 的關係，即使本交易的快照比它早，也要沿用、不重複新增。
+
+    重現建卡管線的情況：腳本的交易在呼叫建卡 API 之前就讀過資料庫，REPEATABLE READ 讓之後的一般
+    SELECT 都讀那份快照。暫存表只有建立它的連線看得到，所以這裡用一張名稱不重複的一般表，測完就刪
+    （真的 ``rel_links`` 不會被碰到）。docs/wip/rel_links_dup_FIX_2026-11-24.md。
+    A relation the handler committed on another connection after this
+    transaction's snapshot must still be found, not inserted again.
+    """
+    import uuid
+
+    import scripts.common.env  # noqa: F401  # 載入 .env
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from app.core.config import settings
+    from scripts.common.database import log_repository as lr
+
+    table = f"zz_test_rel_links_{uuid.uuid4().hex[:12]}"
+    monkeypatch.setattr(lr, "REL_LINKS", table)
+    link = lr._Link("core.has_context", "note", "1", "見る", "note", "2", "見る_context")
+
+    async def main():
+        engine = create_async_engine(settings.mysql_async_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as setup:
+                await setup.execute(text(_scratch_rel_links_ddl(table)))
+                await setup.commit()
+            try:
+                async with engine.connect() as pipeline, engine.connect() as handler:
+                    session = AsyncSession(bind=pipeline, expire_on_commit=False)
+                    try:
+                        # 腳本的交易先讀過資料庫，快照定在這裡 / the pipeline's snapshot starts here
+                        assert (await session.execute(text(f"SELECT COUNT(*) FROM {table}"))).scalar() == 0
+                        await handler.execute(text(
+                            f"INSERT INTO {table} (relation_type, src_type, src_id, src_label, dst_type, dst_id, "
+                            "dst_label, attrs, status, created_by) VALUES ('core.has_context', 'note', '1', '見る', "
+                            "'note', '2', '見る_context', NULL, 'active', 'jp_verb_pair')"
+                        ))
+                        await handler.commit()
+                        await lr._ensure_link(session, link, VP)
+                        await session.commit()
+                    finally:
+                        await session.close()
+                    rows = (await handler.execute(text(f"SELECT attrs FROM {table}"))).all()
+                    await handler.commit()
+                    return rows
+            finally:
+                async with engine.connect() as cleanup:
+                    await cleanup.execute(text(f"DROP TABLE IF EXISTS {table}"))
+                    await cleanup.commit()
+        finally:
+            await engine.dispose()
+
+    rows = asyncio.run(main())
+    assert len(rows) == 1 and "jp_verb_pair" in str(rows[0][0])
