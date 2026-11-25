@@ -233,10 +233,10 @@ DELETE FROM scripts WHERE source = '千恋＊万花';
 - [ ] 新庫魔女的夜宴的列數與內容沒有變動：匯入前後各表依 `game_id` 做 CHECKSUM 比對。
 - [ ] `game_lines` 中 `SenrenBanka` 有 55,770 列，`story_order` 0～55,769 連續，`(scene, point)` 不重複。
 - [ ] 每句台詞的日文、繁中、說話者、語音和素材 `script_lines.jsonl` 一致（沿用 `check_material.py` 的比對）。
-- [ ] 每個有語音的列，`Y:\…\voice\<voice_file>.mp3` 都存在；有頭像的說話者，`avatar_file` 都存在。
+- [x] 每個有語音的列，`Y:\…\voice\<voice_file>.mp3` 都存在；有頭像的說話者，`avatar_file` 都存在。（2026-11-24 對本機複本 `build\game-assets` 查：需要 24,861 個語音，缺 0；12 個頭像，缺 0。見 §9.14）
 - [ ] 匯入重跑結果相同；已有卡片紀錄引用時拒絕重跑。
 - [x] ES 中 `千恋＊万花` 的文件數＝`in_corpus=1` 的台詞數，魔女的夜宴的文件數不變。（2026-11-14：55,726／53,196，逐筆比對沒有缺、多或內容不同）
-- [ ] `--game SenrenBanka` 建出的卡片語音、頭像、前後文正確。
+- [x] `--game SenrenBanka` 建出的卡片語音、頭像、前後文正確。（2026-11-24 兩種卡各建 10 張驗收，驗完已刪除。見 §9.14）
 - [ ] 流程圖：分頁、官方標題、選項分歧和遊戲內流程圖一致；推定的連線有標示。
 - [ ] 下載的存檔在遊戲內讀得到，停在指定的句子。
 
@@ -474,3 +474,118 @@ tar -C build/story-assets -cf - story/SenrenBanka | ssh jacky917@192.168.50.172 
 ```
 
 - ~~**ES 同步還沒跑**：千戀＊萬花的台詞還搜尋不到。跑法見 §9.4。~~ 2026-11-14 已同步，搜尋得到。
+
+### 9.14 本機素材改用複本、讀音判讀、建卡試跑（2026-11-24）
+
+**素材改放本機**
+
+- 把 NAS 的 `Y:\material` 整份複製到 `build\game-assets`（結構不變，`build/` 不進版控）：87,266 個檔案、5.1 GB，沒有失敗。
+- 本機 `backend/.env` 的 `GAME_ASSETS_ROOT` 改成 `C:\Users\forip\Desktop\WorkSpace\Python\FluencyTides\build\game-assets`，舊值 `Y:\material` 留成註解；改之前已備份成 `backend/.env.bak-20261124083018-local-game-assets`。
+- `game_profiles` 存的是相對路徑，所以沒有改資料庫。正式機不跑建卡管線，不需要這個設定。
+- `.env.example` 的說明補上「可以指向 NAS，或複製到 `build\game-assets`」。
+- 素材檢查（只讀）：
+  - 千戀＊萬花：需要 24,861 個語音，缺 0；12 位說話者有頭像，缺 0。
+  - 魔女的夜宴：需要 23,493 個語音，缺 2 個（`nen002_039_bgv`、`nen020_112`）；沒有說話者設 `avatar_file`，頭像沿用 `<說話者>.jpg`。
+
+**讀音判讀**
+
+先看規模：
+
+```powershell
+python scripts\fastapi_client\JP_Common\judge_verb_readings.py --project jp_verb_pair --game SenrenBanka --dry-run
+```
+
+自他動詞有 14 個同表層多讀的表層、596 句待判、38 次呼叫；核心動詞沒有同表層多讀的動詞。正式執行：
+
+```powershell
+python scripts\fastapi_client\JP_Common\judge_verb_readings.py --project jp_verb_pair --game SenrenBanka --yes
+```
+
+- 寫入 `nlp_line_readings` 596 筆。
+- 歸屬對帳列出 29 筆既有卡片（魔女的夜宴的存量紀錄）的判定讀音和母卡不同：止める 20 筆（母卡 とめる，判定 やめる）、開く 8 筆（母卡 ひらく，判定 あく）、汚す 1 筆（母卡 よごす，判定 けがす）。要人工複核，不在本次範圍。
+
+**建卡試跑（不寫入）**
+
+```powershell
+python scripts\fastapi_client\JP_VerbPair\generate_child_cards.py --game SenrenBanka --limit 0 --dry-run
+```
+
+```powershell
+python scripts\fastapi_client\JP_CoreVerb\generate_child_cards.py --game SenrenBanka --limit 0 --dry-run
+```
+
+| 卡片類型 | 預計子卡 | 備註 |
+|---|---|---|
+| 自他動詞 | 2,271 張 | 讀音不符跳過 304 句，未判讀放行 0 句（判讀前是 2,272 張、放行 558 句） |
+| 核心動詞 | 1,707 張 | |
+
+兩支都結束碼 0，素材資料夾檢查通過，沒有呼叫建卡 API、沒有寫入。開頭各觸發一次 Anki 同步。
+
+**實際建一張卡（寫入正式 Anki）**
+
+```powershell
+python scripts\fastapi_client\JP_VerbPair\generate_child_cards.py --game SenrenBanka --limit 1
+```
+
+- 建出 広まる（自動詞）一組，例句是台詞 53286（`sb:001` 第 43 句，`chapter　1-1`）：
+  - 克漏字卡 `1795532596285`（`日本語::自他動詞::Cloze`）
+  - 前後文卡 `1795532596158`（`日本語::自他動詞::Context`）
+  - 兩張的 `Master_Note_ID` 都是母卡 `1782042908417`，克漏字卡的 `Context_Note_ID` 指向前後文卡。
+- 克漏字、翻譯、摘要、`Verb_Pair_JSON`（`used: intransitive`）都正確；前後文 11 句依劇情順序。
+- `rel_links` 寫入兩筆 `core.example_from`（兩張卡 → 台詞 53286），`card_gen_log` 寫入去重紀錄。
+- 流程圖：`GET /story/games/SenrenBanka/locate?note_id=1795532596158` 回 `sb:001`、seq 43；這句台詞的註記有 `jp_verb_pair`（広まる，兩張卡）；`annotations` 的 `sb:001` 計數 `jp_verb_pair: 1`。
+- 這組卡的前後文只有旁白和主角將臣（兩者都沒有語音和頭像），所以 `Audio` 是空的、`Avatar` 是 `none`。這是正確結果，但語音和頭像的上傳還沒有被實測到。
+
+**各建 10 張驗收（寫入正式 Anki，驗完已還原）**
+
+```powershell
+python scripts\fastapi_client\JP_VerbPair\generate_child_cards.py --game SenrenBanka --limit 10
+```
+
+```powershell
+python scripts\fastapi_client\JP_CoreVerb\generate_child_cards.py --game SenrenBanka --limit 10
+```
+
+加上前面那一組，共 21 組、42 張卡：自他動詞 11 組（広まる 10、強まる 1），核心動詞 10 組（見上げる 9、見つめる 1）。驗收（只讀查詢）：
+
+| 項目 | 結果 |
+|---|---|
+| Anki 筆記 | 42／42 張都在 |
+| 前後文 | 每組 11～19 句，都有一句是例句（`is_target`）；有配音的台詞都帶語音 |
+| 媒體 | 卡片引用 117 個（語音和 11 位角色的頭像），Anki 裡都有，而且和 `build\game-assets` 的檔案逐位元組相同 |
+| 克漏字卡 `Audio`／`Avatar` | 例句有配音的 8 組有值（例 `SenrenBanka_rok001_035.mp3`、`SenrenBanka_芦花.png`），格式和魔女的夜宴的卡相同；其餘 13 組的例句是旁白或將臣，語料庫裡本來就沒有語音，所以是空的 |
+| 沒有頭像的說話者 | 例 `芦花の父親`：有語音、頭像 `none` |
+| 流程圖 | 42 張卡的 `locate` 都回到各自的台詞；`annotations` 共 17 個節點，`jp_verb_pair` 11、`jp_core_verb` 10 |
+
+**發現的問題：`rel_links` 每組多寫兩列**
+
+每組卡寫了 8 列 `rel_links`，其中 `core.has_context` 和 `core.has_cloze` 各兩列，21 組共 42 列重複。舊的魔女的夜宴卡每種關係都只有一列。
+
+- 第一列是網站的卡片 handler（`jp_verb_pair_handler.py`／`jp_core_verb_handler.py` 的 `batch_create_relations`）建卡時寫的。
+- 第二列是建卡腳本寫 `card_gen_log` 時，`log_repository._ensure_link` 寫的。`_ensure_link` 會先查有沒有現成的 active 列，查不到才新增。
+- 原因（2026-11-24 查證程式碼與資料庫設定，還沒修）：
+  - 正式 MySQL 5.7.31 的隔離等級是 `REPEATABLE-READ`，連線 `autocommit=0`。同一個交易從第一次讀取起，之後的一般 `SELECT` 都讀同一份快照。
+  - 建卡腳本整個流程共用一個語料庫 session（`generate_child_cards.py` 的 `async with corpus_async_session_factory() as session`）。上一組卡的 `create_or_restore_record` commit 之後，下一組卡在呼叫建卡 API 之前就先讀資料庫（自他動詞：`reading_filter.apply`、`get_lines`；核心動詞：`get_lines`），這時就開了新交易、定了快照。
+  - 後端 handler 在另一條連線寫入並 commit `has_context`／`has_cloze`（`relation_service.batch_create_relations`），然後才回應。
+  - 腳本收到回應後呼叫 `create_or_restore_record`，它還在同一個交易裡，所以 `_ensure_link` 的 `SELECT … status = 'active'` 讀的是舊快照，查不到 handler 剛寫的列，就又新增一列。`example_from`、`teaches` 只有腳本會寫，所以沒有重複。
+  - 比對條件不是問題：兩邊的 `relation_type`、`src_type`／`dst_type`（`note`）、note id（都存字串）、`status`（`active`）都一樣。
+  - 測試沒抓到：`tests/test_log_repository_mysql.py` 的 `test_existing_handler_link_is_reused` 在同一條連線、同一個 session 裡先寫 handler 的列再呼叫，看得到自己寫的資料。而且它用連線專屬的 `TEMPORARY` 表，模擬不了跨連線的情況。
+  - 影響範圍：只有建卡管線（腳本）會重複，網站建卡不會。語料庫重建後，這次是第一次跑管線，所以正式庫沒有其他重複（2026-11-24 還原後查：四種 active 關係的筆數都等於不重複的關係數）。
+- 修正：`_ensure_link` 在 MySQL 上改用鎖定讀取（`FOR UPDATE`），並用跨連線的整合測試重現、確認修好。見 `docs/wip/rel_links_dup_FIX_2026-11-24.md`。
+
+**還原**
+
+依使用者要求，驗收完把 21 組（含最早那一組）全部刪掉：
+
+1. 用刪卡核心 `child_deleter.run_child_deletion`（`allow_regen=True`）刪掉 42 張子卡、從母卡 JSON 移除 21 筆紀錄、硬刪除 `card_gen_log` 21 筆，並把 `AUTO_INCREMENT` 收回 6468。
+2. 刪卡核心只會把 `rel_links` 標成 deleted，所以另外硬刪除這 21 組的 168 列（relation_id 50170～50337，都只連到這 42 張卡），`AUTO_INCREMENT` 收回 49746。
+3. 刪掉 Anki 裡 117 個 `SenrenBanka_*` 媒體檔，然後同步 Anki。
+
+還原後比對（建 10 張前先做了一份快照）：
+
+- 兩個資料庫 19 張表，只有 `card_gen_log` 少 1 列、`rel_links` 少 8 列，正好是最早那一組。
+- 592 張母卡只有 `1782042908417`（広まる）的 `Intransitive_Data_JSON` 不同，也就是少了最早那一組的紀錄，回到原本的 8 筆。除此之外逐字相同。
+- `SenrenBanka_*` 媒體 0 個；千戀＊萬花的流程圖沒有卡片註記；舊筆記 `locate` 回 404。
+- 讀音判讀寫入 `nlp_line_readings` 的 596 筆是正式建卡要用的資料，沒有刪。
+
+刪卡後的完整性檢查列出 82 個「沒有卡片引用的 `SabbatOfTheWitch_*` 媒體」（例 `SabbatOfTheWitch_aka308_001.mp3`）。這些是原本就有的，和這次測試無關，沒有動。

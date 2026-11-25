@@ -16,6 +16,7 @@ upserts on MySQL when opted in.
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import event, text
@@ -348,6 +349,26 @@ class TestLedgerRelations:
         _run(GeneratedLogRepository().create_or_restore_record(session, dict(_RECORD), project=PROJECT_JP_CORE_VERB))
         assert session.sql("INSERT INTO rel_links") == []
         assert len(session.sql("UPDATE rel_links SET attrs")) == 7
+
+    def test_link_lookup_is_a_locking_read_on_mysql(self):
+        """MySQL 上查現成關係要用鎖定讀取，才看得到 handler 在另一條連線剛 commit 的列。
+
+        建卡腳本的交易在 handler commit 之前就讀過資料庫；REPEATABLE READ 下一般 SELECT 讀舊快照，
+        會查不到而重複新增（docs/wip/rel_links_dup_FIX_2026-11-24.md）。
+        """
+        session = RecordingSession()
+        session.get_bind = lambda: SimpleNamespace(dialect=SimpleNamespace(name="mysql"))
+        _run(GeneratedLogRepository().create_or_restore_record(session, dict(_RECORD), project=PROJECT_JP_CORE_VERB))
+        lookups = session.sql("SELECT relation_id, attrs FROM rel_links")
+        assert len(lookups) == 7 and all(sql.endswith("LIMIT 1 FOR UPDATE") for sql, _ in lookups)
+
+    def test_link_lookup_has_no_lock_clause_elsewhere(self):
+        """SQLite 不支援 FOR UPDATE，也沒有快照問題：查詢維持原樣。"""
+        session = RecordingSession()
+        session.get_bind = lambda: SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+        _run(GeneratedLogRepository().create_or_restore_record(session, dict(_RECORD), project=PROJECT_JP_CORE_VERB))
+        lookups = session.sql("SELECT relation_id, attrs FROM rel_links")
+        assert lookups and all(sql.endswith("LIMIT 1") for sql, _ in lookups)
 
     def test_regenerated_record_retires_the_old_children(self):
         """軟刪除後重新生成（note id 換了）：舊子卡的關係先標成 deleted。"""

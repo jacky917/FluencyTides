@@ -195,24 +195,72 @@ def _link_params(link: _Link) -> dict:
     }
 
 
-async def _ensure_link(session: AsyncSession, link: _Link, card_type: str) -> None:
-    """確保一條關係是 active（已有就補上 ``attrs.card_type``，沒有就新增）。
+def _locking_read_suffix(session: AsyncSession) -> str:
+    """Return the clause that makes a ``SELECT`` read the latest committed rows.
 
-    Make sure one relation exists and is active.
+    回傳讓 ``SELECT`` 讀到最新已 commit 資料的子句。
 
-    網站的卡片 handler 建卡時已經寫了母卡→子卡（``core.has_context`` 等），所以這裡先找現有的
-    active 列，不重複新增；``rel_links`` 沒有唯一鍵，靠這個查詢維持一條關係一列。
-    The card handler may already have written master → child; an existing
-    active row is reused, never duplicated.
+    On MySQL this is ``FOR UPDATE``: under ``REPEATABLE READ`` a plain
+    ``SELECT`` reads the snapshot taken at the transaction's first read,
+    while a locking read sees rows other connections committed since.
+    Other databases (SQLite in the unit tests) get an empty string; a
+    session without ``get_bind`` (a test double) counts as non-MySQL.
+
+    MySQL 回傳 ``FOR UPDATE``：在 ``REPEATABLE READ`` 下，一般 ``SELECT``
+    讀的是交易第一次讀取時的快照，鎖定讀取才看得到其他連線之後
+    commit 的列。其他資料庫（單元測試的 SQLite）回傳空字串；沒有
+    ``get_bind`` 的 session（測試替身）視為不是 MySQL。
 
     Args:
-        session: 語料庫 async session。Corpus async session.
-        link: 關係。The relation.
-        card_type: 卡片類型（寫進 ``attrs``）。Card type stored in ``attrs``.
+        session: the corpus async session
+            語料庫 async session
+
+    Returns:
+        ``" FOR UPDATE"`` on MySQL, otherwise ``""``
+        MySQL 時為 ``" FOR UPDATE"``，否則為 ``""``
+    """
+    get_bind = getattr(session, "get_bind", None)
+    if get_bind is None:
+        return ""
+    return " FOR UPDATE" if get_bind().dialect.name == "mysql" else ""
+
+
+async def _ensure_link(session: AsyncSession, link: _Link, card_type: str) -> None:
+    """Make sure one relation exists and is active.
+
+    確保一條關係是 active：已有就補上 ``attrs.card_type``，沒有就新增。
+
+    The website's card handler may already have written master → child
+    (``core.has_context`` and so on) on its own connection, so an existing
+    active row is reused, never duplicated; ``rel_links`` has no unique
+    key, and this lookup is what keeps one row per relation.
+
+    網站的卡片 handler 建卡時可能已經在它自己的連線寫了母卡→子卡
+    （``core.has_context`` 等），所以這裡先找現有的 active 列沿用，不重複新增；
+    ``rel_links`` 沒有唯一鍵，靠這個查詢維持一條關係一列。
+
+    The lookup is a locking read on MySQL (see
+    :func:`_locking_read_suffix`). The pipelines call this in a
+    transaction that already read the database before the handler
+    committed its rows; a plain ``SELECT`` would miss them and insert a
+    second copy. The lock is held until the caller commits.
+
+    查詢在 MySQL 上是鎖定讀取（見 ``_locking_read_suffix``）。建卡管線呼叫這裡時，
+    所在的交易在 handler commit 之前就讀過資料庫；一般 ``SELECT`` 會看不到
+    handler 寫的列而再新增一份。鎖會持有到呼叫端 commit。
+
+    Args:
+        session: the corpus async session
+            語料庫 async session
+        link: the relation
+            關係
+        card_type: the card type stored in ``attrs``
+            寫進 ``attrs`` 的卡片類型
     """
     params = _link_params(link)
     row = (await session.execute(text(
         f"SELECT relation_id, attrs FROM {REL_LINKS} WHERE {_LINK_MATCH} AND status = :active LIMIT 1"
+        + _locking_read_suffix(session)
     ), {**params, "active": REL_STATUS_ACTIVE})).fetchone()
     attrs = {"card_type": card_type}
     if row is not None:
