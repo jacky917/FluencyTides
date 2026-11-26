@@ -34,19 +34,34 @@ _REAL_FETCH_CHOICES = _routing._fetch_choices
 
 @pytest.fixture(autouse=True)
 def _no_local_llm_endpoints():
-    """忽略開發機 .env 裡的自訂端點與 CLI 白名單；需要的測試自行覆寫。
+    """Ignore the developer's endpoint settings so results never depend on the local .env.
 
-    ``create_llm_client()`` 會先看 ``LLM_PROVIDER`` 是否指向 ``LLM_ENDPOINTS``；不隔離的話，
-    本機 .env 多寫一組端點就會讓只 patch 了 ``LLM_PROVIDER`` 的測試改走端點路徑。
+    忽略開發機 .env 裡的端點設定，讓結果不受本機 .env 影響。
 
-    Ignore the developer's own endpoint settings so results never depend on
-    the local .env.
+    Custom endpoints and the CLI allowlists are emptied, and every
+    ``AUDIO_*`` / ``STT_*`` setting goes back to its declared default, the
+    same as CI, which has no .env. ``create_llm_client()`` first checks
+    whether ``LLM_PROVIDER`` names an entry in ``LLM_ENDPOINTS``, so one
+    extra local endpoint would send tests that patch only ``LLM_PROVIDER``
+    down the endpoint path. The built-in ``audio`` endpoint is built from
+    ``AUDIO_*`` and becomes selectable once ``AUDIO_API_KEY`` is set, so a
+    local key would add it to every endpoint list and model menu. Tests
+    that need these settings patch them themselves.
+
+    自訂端點與 CLI 白名單清空，所有 ``AUDIO_*`` / ``STT_*`` 設定還原成宣告的預設值，和沒有
+    .env 的 CI 相同。``create_llm_client()`` 會先看 ``LLM_PROVIDER`` 是否指向
+    ``LLM_ENDPOINTS``，本機 .env 多寫一組端點，就會讓只 patch 了 ``LLM_PROVIDER`` 的測試改走
+    端點路徑。內建的 ``audio`` 端點由 ``AUDIO_*`` 組成，填了 ``AUDIO_API_KEY`` 就變成可選，
+    本機的金鑰會讓它出現在每份端點清單與模型選單裡。需要這些設定的測試自行 patch。
     """
-    from app.core.config import settings
+    from app.core.config import Settings, settings
 
-    with mock.patch.object(settings, "LLM_ENDPOINTS", {}), \
-         mock.patch.object(settings, "LLM_CLAUDE_CODE_MODELS", ()), \
-         mock.patch.object(settings, "LLM_ANTIGRAVITY_MODELS", ()):
+    with ExitStack() as stack:
+        for name, value in {"LLM_ENDPOINTS": {}, "LLM_CLAUDE_CODE_MODELS": (), "LLM_ANTIGRAVITY_MODELS": ()}.items():
+            stack.enter_context(mock.patch.object(settings, name, value))
+        for name, field in Settings.model_fields.items():
+            if name.startswith(("AUDIO_", "STT_")):
+                stack.enter_context(mock.patch.object(settings, name, field.default))
         yield
 
 
