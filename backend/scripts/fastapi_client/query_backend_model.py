@@ -175,11 +175,15 @@ def _print_capability_routes(runtime: dict) -> None:
         return
     if block.get("db_unavailable"):
         print("🚨 後端讀不到資料庫:以下皆為 .env 預設,實際存的設定未知")
-    source_names = {"route": "用途", "parent": "流程", "global": "全域", "env": ".env"}
+    source_names = {"route": "用途", "env": ".env"}
+    global_names = {"*": "全域(文字)", "*voice": "全域(語音)"}
     for route in block.get("routes", []):
         for capability, state in (route.get("capabilities") or {}).items():
             marker = "⚠️ " if state.get("rejected") or state.get("problem") or not route.get("declared") else ""
-            source = source_names.get(state.get("source"), state.get("source"))
+            if state.get("source") == "global":
+                source = global_names.get(state.get("global_key"), "全域") + (",全局生效" if state.get("forced") else "")
+            else:
+                source = source_names.get(state.get("source"), state.get("source"))
             print(f"  {marker}{route['route_key']} [{capability}]: {state['label']} [{source}]")
             for layer in state.get("rejected") or []:
                 print(f"      已略過 {layer['route_key']}:{layer['reason']}")

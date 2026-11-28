@@ -696,7 +696,7 @@ class Settings(BaseSettings):
         default="gemini-2.5-flash",
         description=(
             "stt_llm 模式專用的純文字評分模型 (與多模態 AUDIO_MODEL_NAME 脫鉤)；"
-            "錄音評分 recording_eval 的 llm 能力在 .env 那一層用 audio 端點加上這個模型"
+            "錄音評分（語音用途與語音全域 *voice）的 llm 能力在 .env 那一層用 audio 端點加上這個模型"
         ),
     )
 

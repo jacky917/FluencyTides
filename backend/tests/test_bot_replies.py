@@ -103,11 +103,17 @@ def _note_service(**overrides):
     return service
 
 
+def _reference_fields():
+    """兩種口說卡宣告的參考答案欄位（空的）：錄音評分要求宣告的欄位在筆記上。"""
+    return {name: {"value": "[]"} for name in ("References", "References_ZH", "References_JA", "References_EN")}
+
+
 def _anki(**overrides):
     client = mock.MagicMock()
     client.sync = mock.AsyncMock()
     client.find_notes = mock.AsyncMock(return_value=[1])
-    note = mock.MagicMock(noteId=1, fields={})
+    # 對話卡：錄音評分依筆記類型找 handler（voice.py 讀 handler 的 RECORDING_EVAL），參考答案欄位要在筆記上
+    note = mock.MagicMock(noteId=1, fields=_reference_fields(), modelName="Speaking_Coach_Dark")
     client.get_notes_info = mock.AsyncMock(return_value=[note])
     client.store_media_file = mock.AsyncMock()
     for name, value in overrides.items():
@@ -470,15 +476,23 @@ def test_crash_alert_is_escaped_and_bounded():
 # ----------------------------------------------------------------------
 
 
+def _plan():
+    """真的評分計畫：.env 那一層的 listen，沒有其他能力（``evaluation_metadata`` 讀的是實際的欄位）。"""
+    from app.infrastructure.audio_evaluator.factory import EvaluatorPlan
+    from app.infrastructure.llm.routing import ResolvedRoute, RouteChoice
+
+    strategy = ResolvedRoute(
+        "recording_eval.speaking_coach", "env", None, capability="audio_eval", env_choice=RouteChoice("listen", "", None)
+    )
+    return EvaluatorPlan("recording_eval.speaking_coach", strategy, {})
+
+
 def _evaluator_patch(evaluator):
-    """讓 voice 依 handler 取得的評分器是 ``evaluator``；None＝依設定建不出評分器。"""
+    """讓 voice 依 handler 的用途鍵取得的評分器是 ``evaluator``；None＝依設定建不出評分器。"""
     if evaluator is None:
         side_effect = AudioEvaluatorUnavailableError("錄音評分器無法建立：AUDIO_API_KEY 未設定")
-        return mock.patch.object(voice.recording_eval, "evaluator_for_handler", mock.AsyncMock(side_effect=side_effect))
-    plan = mock.MagicMock(strategy_name="listen")
-    return mock.patch.object(
-        voice.recording_eval, "evaluator_for_handler", mock.AsyncMock(return_value=(evaluator, plan))
-    )
+        return mock.patch.object(voice, "evaluator_for", mock.AsyncMock(side_effect=side_effect))
+    return mock.patch.object(voice, "evaluator_for", mock.AsyncMock(return_value=(evaluator, _plan())))
 
 
 def _voice(manager, evaluator=None, anki=None, note_service=None):
@@ -525,28 +539,118 @@ def test_unexpected_error_while_building_the_evaluator_is_reported():
     message.bot.get_file = mock.AsyncMock(return_value=mock.MagicMock(file_path="p"))
     message.bot.download_file = mock.AsyncMock()
     lookup = mock.AsyncMock(side_effect=RuntimeError("boom"))
-    with mock.patch.object(voice.recording_eval, "evaluator_for_handler", lookup):
+    with mock.patch.object(voice, "evaluator_for", lookup):
         _run(voice.process_voice_handler(message, _anki(), _note_service(), manager))
     assert "語音評分服務發生錯誤" in _sent(status.edit_text)[-1]
     assert manager.get_state(CHAT_ID) is not None
 
 
+def _voice_on(note_type: str, field_name: str, fields=None):
+    """對某種筆記類型的某個欄位錄音（評分器在評分時拋錯，到此為止）；回傳評分器的取得方式與狀態訊息。"""
+    manager = UserStateManager()
+    manager.set_state(CHAT_ID, UserState(action="recording", card_id="SC_1", extra={"field_name": field_name}))
+    evaluator = mock.MagicMock()
+    evaluator.evaluate_audio = mock.AsyncMock(side_effect=FluencyTidesError("boom"))
+    lookup = mock.AsyncMock(return_value=(evaluator, _plan()))
+    message, status = _message()
+    message.voice = mock.MagicMock(file_id="f")
+    message.bot = mock.MagicMock()
+    message.bot.get_file = mock.AsyncMock(return_value=mock.MagicMock(file_path="p"))
+    message.bot.download_file = mock.AsyncMock()
+    note = mock.MagicMock(noteId=1, fields=_reference_fields() if fields is None else fields, modelName=note_type)
+    anki = _anki(get_notes_info=mock.AsyncMock(return_value=[note]))
+    with mock.patch.object(voice, "evaluator_for", lookup):
+        _run(voice.process_voice_handler(message, anki, _note_service(), manager))
+    _ANKIS.append(anki)
+    return lookup, status, evaluator, manager
+
+
+# _voice_on 用過的假 Anki（最後一個是剛才那次），讓測試檢查音檔有沒有被存進去
+_ANKIS: list = []
+
+
 def test_voice_builds_the_evaluator_from_the_cards_handler():
-    """三語卡與對話卡各依自己的 handler 取評分器（可以設不同策略）。"""
-    for field_name, handler in (("Recordings", "speaking_coach"), ("Recordings_JA", "speaking_trilingual")):
-        manager = UserStateManager()
-        manager.set_state(CHAT_ID, UserState(action="recording", card_id="SC_1", extra={"field_name": field_name}))
-        evaluator = mock.MagicMock()
-        evaluator.evaluate_audio = mock.AsyncMock(side_effect=FluencyTidesError("boom"))
-        lookup = mock.AsyncMock(return_value=(evaluator, mock.MagicMock(strategy_name="listen")))
-        message, _ = _message()
-        message.voice = mock.MagicMock(file_id="f")
-        message.bot = mock.MagicMock()
-        message.bot.get_file = mock.AsyncMock(return_value=mock.MagicMock(file_path="p"))
-        message.bot.download_file = mock.AsyncMock()
-        with mock.patch.object(voice.recording_eval, "evaluator_for_handler", lookup):
-            _run(voice.process_voice_handler(message, _anki(), _note_service(), manager))
-        lookup.assert_awaited_once_with(handler)
+    """依筆記類型找到 handler，用它宣告的用途鍵取評分器（三語卡與對話卡可以設不同策略）。"""
+    for note_type, field_name, route_key in (
+        ("Speaking_Coach_Dark", "Recordings", "recording_eval.speaking_coach"),
+        ("Speaking_Trilingual_Dark", "Recordings_JA", "recording_eval.speaking_trilingual"),
+    ):
+        lookup, _, evaluator, _ = _voice_on(note_type, field_name)
+        lookup.assert_awaited_once_with(route_key)
+        assert evaluator.evaluate_audio.await_count == 1
+
+
+def test_trilingual_target_comes_from_the_handler_declaration():
+    """三語卡的錄音欄位決定語言、評分提示詞與參考答案欄位（由 handler 宣告，不在 voice.py 猜）。"""
+    _, _, evaluator, _ = _voice_on("Speaking_Trilingual_Dark", "Recordings_EN")
+    kwargs = evaluator.evaluate_audio.await_args.kwargs
+    assert kwargs["target_language"] == "en-US"
+    assert kwargs["template_name"] == "prompts/anki/Speaking_Trilingual_EN.j2"
+
+
+@pytest.mark.parametrize(
+    ("note_type", "field_name", "fragment"),
+    [
+        ("Unknown_Type", "Recordings", "後端不認得這種卡片"),  # 沒有 handler（筆記類型改名、沒註冊）
+        ("Person_Profile_Dark", "Recordings", "這種卡片不支援錄音評分"),  # handler 沒宣告錄音評分
+        ("Speaking_Trilingual_Dark", "Recordings", "欄位 Recordings 不支援錄音評分"),  # 欄位不能錄音
+    ],
+)
+def test_card_that_cannot_be_recorded_is_rejected_before_uploading(note_type, field_name, fragment):
+    """不能錄音評分的三種原因各自說明；都清掉狀態、不取評分器，也還沒把音檔存進 Anki。"""
+    lookup, status, _, manager = _voice_on(note_type, field_name)
+    lookup.assert_not_awaited()
+    _ANKIS[-1].store_media_file.assert_not_awaited()
+    last = _sent(status.edit_text)[-1]
+    _assert_tg_html(last)
+    assert fragment in last
+    assert manager.get_state(CHAT_ID) is None
+
+
+def test_declared_reference_field_missing_is_an_error_not_an_empty_list(caplog):
+    """handler 宣告的參考答案欄位不在筆記上：是宣告錯誤，記 ERROR 並拒絕評分，不當成「沒有參考答案」照樣評。"""
+    lookup, status, evaluator, manager = _voice_on("Speaking_Coach_Dark", "Recordings", fields={})
+    lookup.assert_not_awaited()
+    evaluator.evaluate_audio.assert_not_awaited()
+    assert "找不到參考答案欄位" in _sent(status.edit_text)[-1]
+    assert "'References'" in caplog.text and manager.get_state(CHAT_ID) is None
+
+
+def test_target_resolver_crash_is_reported_and_clears_the_state():
+    """handler 的 target_for 回調拋錯：不能停在「讀取卡片中…」，也不留錄音狀態。"""
+    from app.services.task_handlers.shared.recording_spec import RecordingEvaluation
+
+    handler = handler_registry.handler_for_note_type("Speaking_Coach_Dark")
+    broken = RecordingEvaluation(handler.RECORDING_EVAL.route, mock.MagicMock(side_effect=KeyError("x")))
+    with mock.patch.object(type(handler), "RECORDING_EVAL", broken):
+        lookup, status, _, manager = _voice_on("Speaking_Coach_Dark", "Recordings")
+    lookup.assert_not_awaited()
+    assert "讀取這張卡片的錄音設定失敗" in _sent(status.edit_text)[-1]
+    assert manager.get_state(CHAT_ID) is None
+
+
+def test_evaluation_info_that_does_not_fit_the_format_stops_before_upload(caplog):
+    """評分資訊不符合存進卡片的格式（例如新策略忘了加進 RecordingStrategy）：在上傳音檔之前就停下、清掉狀態，
+    不會評完分才說「寫回 Anki 失敗」，也不會在 Anki 留下沒有紀錄引用的音檔。"""
+    with mock.patch.object(voice, "evaluation_metadata", side_effect=ValueError("strategy 不在可記的策略裡")):
+        _, status, evaluator, manager = _voice_on("Speaking_Coach_Dark", "Recordings")
+    evaluator.evaluate_audio.assert_not_awaited()
+    _ANKIS[-1].store_media_file.assert_not_awaited()
+    assert "錄音評分發生程式錯誤" in _sent(status.edit_text)[-1]
+    assert "組錄音評分資訊失敗" in caplog.text and manager.get_state(CHAT_ID) is None
+
+
+def test_coach_card_scores_with_its_language_prompt_and_references():
+    """對話卡：目標語言取 Target_Language、用共用的評分提示詞、參考答案讀 References（與改之前相同）。"""
+    fields = {
+        "Target_Language": {"value": "ja-JP"},
+        "References": {"value": '[{"content": "よろしく", "status": 1}, {"content": "停用", "status": 0}]'},
+    }
+    _, _, evaluator, _ = _voice_on("Speaking_Coach_Dark", "Recordings", fields=fields)
+    kwargs = evaluator.evaluate_audio.await_args.kwargs
+    assert kwargs["template_name"] == "prompts/audio_evaluator.j2"
+    assert kwargs["target_language"] == "ja-JP"
+    assert kwargs["reference_answers"] == ["よろしく"]
 
 
 def test_ai_busy_says_to_click_the_record_button_again():
@@ -1023,8 +1127,11 @@ def test_vocabulary_blank_word_keeps_waiting():
 
 
 def test_voice_writes_the_recording_through_the_service_layer():
-    """錄音評分後經服務層的 add_recording 動作寫回；三語卡帶語言，提醒取服務層的。"""
-    for field_name, extra in (("Recordings", {}), ("Recordings_JA", {"lang": "JA"})):
+    """錄音評分後經服務層的 add_recording 動作寫回；三語卡帶語言，提醒取服務層的；紀錄帶上評分方式（D5）。"""
+    for note_type, field_name, extra in (
+        ("Speaking_Coach_Dark", "Recordings", {}),
+        ("Speaking_Trilingual_Dark", "Recordings_JA", {"lang": "JA"}),
+    ):
         manager = UserStateManager()
         manager.set_state(CHAT_ID, UserState(action="recording", card_id="SC_1", extra={"field_name": field_name}))
         evaluator = mock.MagicMock()
@@ -1032,12 +1139,17 @@ def test_voice_writes_the_recording_through_the_service_layer():
             transcript="hi", feedback="ok", feedback_anki_html=None, score=95, evaluator_label="listen",
         ))
         service = _note_service(run_action=mock.AsyncMock(return_value="⚠️ 同步失敗"))
-        _, status = _voice(manager, evaluator=evaluator, note_service=service)
+        note = mock.MagicMock(noteId=1, fields=_reference_fields(), modelName=note_type)
+        anki = _anki(get_notes_info=mock.AsyncMock(return_value=[note]))
+        _, status = _voice(manager, evaluator=evaluator, anki=anki, note_service=service)
 
         note_id, action, params = service.run_action.await_args.args
         assert (note_id, action) == (1, "add_recording")
         assert {k: v for k, v in params.items() if k != "recording"} == extra
-        assert params["recording"]["score"] == 95
+        recording = params["recording"]
+        assert recording["score"] == 95
+        assert recording["strategy"] == "listen" and recording["evaluated_at"].endswith("Z")
+        assert recording["settings"] == {"audio_eval": ".env"} and recording["models"] == {}
         last = _sent(status.edit_text)[-1]
         _assert_tg_html(last)
         assert last.startswith("✅ <b>錄音評分完成！</b>") and last.endswith("\n\n⚠️ 同步失敗")

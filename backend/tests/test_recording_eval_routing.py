@@ -3,7 +3,7 @@
 Tests for capability routing R2: the ``audio_llm`` / ``stt`` / ``audio_eval``
 capabilities, their whitelists and ``.env`` defaults, the built-in ``audio``
 endpoint, building the recording evaluator from the routes of a route key
-(branch → flow → global → ``.env``), the evaluator cache, and validation of
+(the key → the voice global ``*voice`` → ``.env``, and the global switch), the evaluator cache, and validation of
 writes. Acceptance (plan §9): the three strategies can be switched through
 settings and persist across a restart; trilingual and dialog cards can use
 different strategies.
@@ -18,7 +18,7 @@ import pytest
 from pydantic import SecretStr
 
 from app.core.config import LLMEndpointSettings, settings
-from app.core.exceptions import AudioEvaluatorUnavailableError, InvalidRouteError
+from app.core.exceptions import AudioEvaluatorUnavailableError, InvalidRouteError, RouteNotFoundError
 from app.infrastructure.audio_evaluator import factory as audio_factory
 from app.infrastructure.audio_evaluator.gemini_client import GeminiNativeAudioEvaluator
 from app.infrastructure.audio_evaluator.openai_client import OpenAIAudioEvaluator
@@ -157,17 +157,28 @@ def test_stt_whitelist_and_strategies(audio_env):
 
 
 # ----------------------------------------------------------------------
-# 用途鍵宣告（§4.1、§8.1）
+# 用途鍵宣告（§4.1、§8.1；三層與語音全域見 recording_eval_settings_FEAT_2026-11-26.md）
 # ----------------------------------------------------------------------
+
+COACH = recording_eval.RECORDING_EVAL_COACH.key
+TRILINGUAL = recording_eval.RECORDING_EVAL_TRILINGUAL.key
+VOICE = routing.VOICE_GLOBAL_ROUTE_KEY
+
+
+def _evaluator(route_key):
+    return _run(audio_factory.evaluator_for(route_key))
 
 
 def test_recording_eval_routes_are_declared():
-    """recording_eval 與三語卡分支已宣告，宣告了錄音評分的四個能力；分支在流程鍵之後。"""
-    keys = [route.key for route in routing.list_route_keys()]
-    assert keys.index("recording_eval") + 1 == keys.index("recording_eval.speaking_trilingual")
-    assert recording_eval.RECORDING_EVAL.capabilities == {"audio_eval", "audio_llm", "stt", "llm"}
-    assert recording_eval.route_key_for_handler("speaking_trilingual") == "recording_eval.speaking_trilingual"
-    assert recording_eval.route_key_for_handler("speaking_coach") == "recording_eval"
+    """每種能錄音的卡片各宣告自己的語音用途鍵（四個能力）；沒有共用的流程鍵 recording_eval。"""
+    from app.services.task_handlers.speaking_coach_handler import SpeakingCoachHandler
+    from app.services.task_handlers.speaking_trilingual_handler import SpeakingTrilingualHandler
+
+    for declared in (recording_eval.RECORDING_EVAL_COACH, recording_eval.RECORDING_EVAL_TRILINGUAL):
+        assert declared.voice and declared.capabilities == {"audio_eval", "audio_llm", "stt", "llm"}
+    assert routing.get_route("recording_eval") is None
+    assert SpeakingCoachHandler.RECORDING_EVAL.route.key == COACH == "recording_eval.speaking_coach"
+    assert SpeakingTrilingualHandler.RECORDING_EVAL.route.key == TRILINGUAL == "recording_eval.speaking_trilingual"
 
 
 def test_strategy_restriction_requires_audio_eval():
@@ -175,23 +186,46 @@ def test_strategy_restriction_requires_audio_eval():
     with pytest.raises(ValueError, match="策略限縮"):
         Route("x", "測試", frozenset({"llm"}), frozenset({"stt_diff"}))
     with pytest.raises(ValueError, match="策略限縮"):
-        Route("x", "測試", frozenset({"audio_eval"}), frozenset({"bogus"}))
+        Route("x", "測試", frozenset({"audio_eval"}), frozenset({"bogus"}), voice=True)
 
 
-def test_branch_inherits_strategy_restriction_and_env_defaults(declare_route_key):
-    """分支沒有自己的限縮時沿用流程鍵的；流程鍵宣告的 .env 預設，分支也用得到。"""
+def test_global_keys_are_reserved():
+    """* 與 *voice 保留給兩個全域，不能宣告成用途鍵。"""
+    for key in ("*", "*voice"):
+        with pytest.raises(ValueError, match="保留給全域"):
+            Route(key, "測試", frozenset({"llm"}))
+
+
+def test_dotted_keys_do_not_inherit(declare_route_key):
+    """「.」只是命名：a.b 不沿用 a 的策略限縮與 .env 預設；語音用途的 llm 預設是 audio 端點。"""
     routing.route(
         "shadow_test", "跟讀", {"audio_eval", "llm"}, strategies={"stt_diff"},
-        env_defaults={"llm": lambda: RouteChoice("audio", "x", None)},
+        env_defaults={"llm": lambda: RouteChoice("audio", "x", None)}, voice=True,
     )
-    routing.route("shadow_test.branch", "分支", {"audio_eval", "llm"})
+    routing.route("shadow_test.branch", "分支", {"audio_eval", "llm"}, voice=True)
     try:
-        assert routing.allowed_strategies("shadow_test.branch") == {"stt_diff"}
-        assert routing.check_choice(RouteChoice("listen", "", None), "audio_eval", route_key="shadow_test.branch")
-        assert routing.declared_default_for("shadow_test.branch", "llm") == RouteChoice("audio", "x", None)
+        assert routing.allowed_strategies("shadow_test") == {"stt_diff"}
+        assert routing.allowed_strategies("shadow_test.branch") is None
+        assert routing.declared_default_for("shadow_test", "llm") == RouteChoice("audio", "x", None)
+        with _patched(AUDIO_API_KEY="google-key", STT_LLM_MODEL_NAME="gemini-2.5-flash"):
+            assert routing.declared_default_for("shadow_test.branch", "llm") == RouteChoice(
+                "audio", "gemini-2.5-flash", None
+            )
     finally:
         routing._DECLARED.pop("shadow_test", None)
         routing._DECLARED.pop("shadow_test.branch", None)
+
+
+def test_each_capability_belongs_to_one_global(declare_route_key):
+    """語音能力與語音用途的 llm 歸 *voice；其他文字用途的 llm 歸 *；全域鍵屬於自己。"""
+    declare_route_key("text_use")
+    assert routing.global_key_for("text_use", "llm") == "*"
+    assert routing.global_key_for(TRILINGUAL, "llm") == VOICE
+    assert routing.global_key_for(TRILINGUAL, "stt") == VOICE
+    assert routing.global_key_for("orphan.key", "audio_eval") == VOICE
+    assert routing.global_key_for("*", "llm") == "*"
+    assert routing.global_capabilities("*") == {"llm"}
+    assert routing.global_capabilities(VOICE) == {"llm", "audio_eval", "audio_llm", "stt"}
 
 
 # ----------------------------------------------------------------------
@@ -201,7 +235,7 @@ def test_branch_inherits_strategy_restriction_and_env_defaults(declare_route_key
 
 def test_env_defaults_keep_the_old_behaviour(audio_env):
     """沒有任何設定：gemini_native＋AUDIO_MODEL_NAME 直接聽音檔（與能力路由之前相同）。"""
-    evaluator, plan = _run(recording_eval.evaluator_for_handler("speaking_coach"))
+    evaluator, plan = _evaluator(COACH)
     assert isinstance(evaluator, GeminiNativeAudioEvaluator)
     assert evaluator._model_name == "gemini-3.5-flash"
     assert plan.strategy_name == "listen" and plan.strategy.source == "env"
@@ -213,32 +247,32 @@ def test_env_defaults_keep_the_old_behaviour(audio_env):
 )
 def test_env_openai_and_proxy(audio_env, provider, base_url, cls):
     with _patched(AUDIO_EVALUATOR_PROVIDER=provider, AUDIO_BASE_URL=base_url):
-        evaluator, _ = _run(recording_eval.evaluator_for_handler("speaking_coach"))
+        evaluator, _ = _evaluator(COACH)
     assert type(evaluator) is cls
 
 
-def test_global_llm_row_does_not_override_recording_eval(audio_env):
-    """全域 * 的 llm（建卡用，例如 Claude Code）不會連帶改掉錄音評分宣告的預設；設定錄音評分本身才會。"""
+def test_text_global_does_not_reach_recording_eval(audio_env):
+    """文字全域 * 的 llm（建卡用）不影響錄音評分；語音全域 *voice 的 llm 才會。"""
     with _rows(**{"GLOBAL|llm": RouteChoice("audio", "gemini-3.1-pro-preview", None)}):
-        resolved = _run(routing.resolve("recording_eval.speaking_trilingual", "llm"))
+        resolved = _run(routing.resolve(TRILINGUAL, "llm"))
         card = _run(routing.resolve("jp_verb_pair", "llm"))
     assert (resolved.source, resolved.model) == ("env", "gemini-2.5-flash")
-    assert (card.source, card.model) == ("global", "gemini-3.1-pro-preview")
+    assert (card.source, card.global_key, card.model) == ("global", "*", "gemini-3.1-pro-preview")
 
     with _rows(**{
         "GLOBAL|llm": RouteChoice("audio", "gemini-3.1-pro-preview", None),
-        "recording_eval|llm": RouteChoice("audio", "gemini-3.1-flash-lite", None),
+        f"{VOICE}|llm": RouteChoice("audio", "gemini-3.1-flash-lite", None),
     }):
-        resolved = _run(routing.resolve("recording_eval.speaking_trilingual", "llm"))
-    assert (resolved.source, resolved.model) == ("parent", "gemini-3.1-flash-lite")
+        resolved = _run(routing.resolve(TRILINGUAL, "llm"))
+    assert (resolved.source, resolved.global_key, resolved.model) == ("global", VOICE, "gemini-3.1-flash-lite")
 
 
 def test_stt_llm_text_model_defaults_to_the_audio_endpoint(audio_env):
-    """以設定切到 stt_llm（.env 仍是 gemini_native）：文字 LLM 在 .env 那一層用 audio 端點（gemini-native）
+    """語音全域切到 stt_llm（.env 仍是 gemini_native）：文字 LLM 在 .env 那一層用 audio 端點（gemini-native）
     ＋STT_LLM_MODEL_NAME，不跟著建卡的 LLM_PROVIDER。"""
     with _patched(LLM_PROVIDER="claude-code", LLM_MODEL_NAME="claude-opus-5"), \
-         _rows(**{"recording_eval|audio_eval": RouteChoice("stt_llm", "", None)}):
-        evaluator, plan = _run(recording_eval.evaluator_for_handler("speaking_trilingual"))
+         _rows(**{f"{VOICE}|audio_eval": RouteChoice("stt_llm", "", None)}):
+        evaluator, plan = _evaluator(TRILINGUAL)
     assert isinstance(evaluator, STTLLMEvaluator)
     assert isinstance(evaluator._llm, GeminiNativeLLMClient)
     assert (evaluator._llm.provider, evaluator._llm.model_name) == ("audio", "gemini-2.5-flash")
@@ -247,40 +281,79 @@ def test_stt_llm_text_model_defaults_to_the_audio_endpoint(audio_env):
 
 
 def test_trilingual_and_dialog_cards_use_different_strategies(audio_env):
-    """驗收：三語卡分支設 stt_llm、流程鍵設 listen——兩種卡片各用各的；分支沒設的能力往上找。"""
+    """驗收：三語卡設 stt_llm、對話卡設 listen——兩種卡片各用各的；自己沒設的能力用語音全域。"""
     with _rows(**{
-        "recording_eval|audio_eval": RouteChoice("listen", "", None),
-        "recording_eval|audio_llm": RouteChoice("audio", "gemini-3.1-pro-preview", None),
-        "recording_eval.speaking_trilingual|audio_eval": RouteChoice("stt_llm", "", None),
-        "recording_eval.speaking_trilingual|llm": RouteChoice("audio", "gemini-3.1-flash-lite", None),
-        "GLOBAL|stt": RouteChoice("whisper", "Systran/faster-whisper-small", None),
+        f"{COACH}|audio_eval": RouteChoice("listen", "", None),
+        f"{COACH}|audio_llm": RouteChoice("audio", "gemini-3.1-pro-preview", None),
+        f"{TRILINGUAL}|audio_eval": RouteChoice("stt_llm", "", None),
+        f"{TRILINGUAL}|llm": RouteChoice("audio", "gemini-3.1-flash-lite", None),
+        f"{VOICE}|stt": RouteChoice("whisper", "Systran/faster-whisper-small", None),
     }):
-        coach, coach_plan = _run(recording_eval.evaluator_for_handler("speaking_coach"))
-        trilingual, trilingual_plan = _run(recording_eval.evaluator_for_handler("speaking_trilingual"))
+        coach, coach_plan = _evaluator(COACH)
+        trilingual, trilingual_plan = _evaluator(TRILINGUAL)
 
     assert isinstance(coach, GeminiNativeAudioEvaluator) and coach._model_name == "gemini-3.1-pro-preview"
     assert coach_plan.strategy.source == "route"
     assert isinstance(trilingual, STTLLMEvaluator)
     assert trilingual._llm.model_name == "gemini-3.1-flash-lite"
     assert trilingual._whisper.model_name == "Systran/faster-whisper-small"
-    assert trilingual_plan.routes["stt"].source == "global"
+    assert (trilingual_plan.routes["stt"].source, trilingual_plan.routes["stt"].global_key) == ("global", VOICE)
+
+
+def test_voice_switch_makes_every_card_use_the_voice_global(audio_env):
+    """語音全域的全局生效開著：各卡片整組用語音全域（全域沒設的用 .env），自己的設定保留但不生效。"""
+    rows = {
+        f"{TRILINGUAL}|audio_eval": RouteChoice("listen", "", None),
+        f"{TRILINGUAL}|audio_llm": RouteChoice("audio", "gemini-3.1-pro-preview", None),
+        f"{VOICE}|audio_eval": RouteChoice("stt_diff", "", None),
+        f"{routing.VOICE_GLOBAL_ROUTE_KEY}|{routing.SWITCH_CAPABILITY}": RouteChoice(routing.SWITCH_ON, "", None),
+    }
+    with _rows(**rows):
+        evaluator, plan = _evaluator(TRILINGUAL)
+        audio_llm = _run(routing.resolve(TRILINGUAL, "audio_llm"))
+    assert isinstance(evaluator, STTDiffEvaluator)
+    assert (plan.strategy.source, plan.strategy.forced) == ("global", True)
+    # 全域沒設 audio_llm：用 .env，不回去拿三語卡自己的
+    assert (audio_llm.source, audio_llm.forced, audio_llm.model) == ("env", True, "gemini-3.5-flash")
+
+    del rows[f"{routing.VOICE_GLOBAL_ROUTE_KEY}|{routing.SWITCH_CAPABILITY}"]
+    with _rows(**rows):
+        evaluator, plan = _evaluator(TRILINGUAL)
+    assert isinstance(evaluator, GeminiNativeAudioEvaluator) and evaluator._model_name == "gemini-3.1-pro-preview"
+    assert (plan.strategy.source, plan.strategy.forced) == ("route", False)
+
+
+def test_text_switch_overrides_text_uses_only(audio_env, declare_route_key):
+    """文字全域的全局生效開著：文字用途改用 *；錄音評分不受影響。"""
+    declare_route_key("text_use")
+    rows = {
+        "text_use|llm": RouteChoice("audio", "gemini-3.1-flash-lite", None),
+        "GLOBAL|llm": RouteChoice("audio", "gemini-3.1-pro-preview", None),
+        f"GLOBAL|{routing.SWITCH_CAPABILITY}": RouteChoice(routing.SWITCH_ON, "", None),
+        f"{TRILINGUAL}|llm": RouteChoice("audio", "gemini-3.5-flash", None),
+    }
+    with _rows(**rows):
+        text = _run(routing.resolve("text_use", "llm"))
+        voice = _run(routing.resolve(TRILINGUAL, "llm"))
+    assert (text.source, text.forced, text.model) == ("global", True, "gemini-3.1-pro-preview")
+    assert (voice.source, voice.forced, voice.model) == ("route", False, "gemini-3.5-flash")
 
 
 @pytest.mark.parametrize("strategy", ["listen", "stt_diff", "stt_llm"])
 def test_each_strategy_switches_through_settings(audio_env, strategy):
     """驗收：三種策略都能經設定切換。"""
     expected = {"listen": GeminiNativeAudioEvaluator, "stt_diff": STTDiffEvaluator, "stt_llm": STTLLMEvaluator}
-    with _rows(**{"recording_eval|audio_eval": RouteChoice(strategy, "", None)}):
-        evaluator, _ = _run(recording_eval.evaluator_for_handler("speaking_coach"))
+    with _rows(**{f"{COACH}|audio_eval": RouteChoice(strategy, "", None)}):
+        evaluator, _ = _evaluator(COACH)
     assert type(evaluator) is expected[strategy]
 
 
 def test_evaluator_is_cached_until_a_setting_changes(audio_env):
     """同一組設定重用同一個評分器；寫入或刪除設定（快取世代改變）後重建。"""
-    first, _ = _run(recording_eval.evaluator_for_handler("speaking_coach"))
-    again, _ = _run(recording_eval.evaluator_for_handler("speaking_coach"))
+    first, _ = _evaluator(COACH)
+    again, _ = _evaluator(COACH)
     routing.invalidate_cache()
-    rebuilt, _ = _run(recording_eval.evaluator_for_handler("speaking_coach"))
+    rebuilt, _ = _evaluator(COACH)
     assert first is again
     assert rebuilt is not first
 
@@ -297,7 +370,7 @@ def test_evaluator_is_cached_until_a_setting_changes(audio_env):
 def test_unbuildable_evaluator_says_which_setting(audio_env, values, fragment):
     """建不出評分器：AudioEvaluatorUnavailableError 說明是哪個能力、哪一層、哪個設定。"""
     with _patched(**values), pytest.raises(AudioEvaluatorUnavailableError) as caught:
-        _run(recording_eval.evaluator_for_handler("speaking_coach"))
+        _evaluator(COACH)
     assert fragment in caught.value.message
     assert "/setconfig" in caught.value.message
 
@@ -325,29 +398,53 @@ def test_stt_llm_scores_with_the_routed_llm(audio_env):
 
 def test_strategy_persists_across_restart(llm_route_db, llm_whitelist, audio_env):
     """驗收：設定存在資料庫；清掉程序內的快取（等同重啟）後仍生效。"""
-    _run(capability_route_service.set_route(
-        "recording_eval", "stt_diff", None, None, updated_by="api", capability="audio_eval",
-    ))
+    _run(capability_route_service.set_route(VOICE, "stt_diff", None, None, updated_by="api", capability="audio_eval"))
     routing.invalidate_cache()
     audio_factory.clear_cache()
-    evaluator, plan = _run(recording_eval.evaluator_for_handler("speaking_trilingual"))
+    evaluator, plan = _evaluator(TRILINGUAL)
     assert isinstance(evaluator, STTDiffEvaluator)
-    assert (plan.strategy.source, plan.strategy.route_key) == ("parent", "recording_eval.speaking_trilingual")
+    assert (plan.strategy.source, plan.strategy.global_key, plan.strategy.route_key) == ("global", VOICE, TRILINGUAL)
+
+
+def test_switch_is_stored_and_keeps_route_settings(llm_route_db, llm_whitelist, audio_env):
+    """開關存在資料庫（重啟後仍在）；打開時存的值不動、寫入時回報「目前不生效」，關掉後回到自己的設定。"""
+    _run(capability_route_service.set_route(VOICE, "stt_diff", None, None, updated_by="api", capability="audio_eval"))
+    _run(capability_route_service.set_global_switch(VOICE, True, updated_by="api"))
+    view = _run(capability_route_service.set_route(
+        TRILINGUAL, "listen", None, None, updated_by="api", capability="audio_eval",
+    ))
+    assert (view.resolved.source, view.resolved.forced, view.stored.endpoint) == ("global", True, "listen")
+    routing.invalidate_cache()
+    key_views, _ = _run(capability_route_service.list_routes())
+    voice = next(item for item in key_views if item.route_key == VOICE)
+    assert voice.switch is True
+    assert next(item for item in key_views if item.route_key == TRILINGUAL).switch is None
+
+    _run(capability_route_service.set_global_switch(VOICE, False, updated_by="api"))
+    audio_factory.clear_cache()
+    evaluator, plan = _evaluator(TRILINGUAL)
+    assert isinstance(evaluator, GeminiNativeAudioEvaluator) and plan.strategy.source == "route"
+
+
+def test_switch_only_exists_on_globals(llm_route_db, llm_whitelist):
+    with pytest.raises(RouteNotFoundError):
+        _run(capability_route_service.set_global_switch(TRILINGUAL, True, updated_by="api"))
 
 
 @pytest.mark.parametrize(
     ("key", "capability", "provider", "model", "fragment"),
     [
-        ("recording_eval", "audio_eval", "gemini", None, "評分策略只能是"),
-        ("recording_eval", "audio_eval", "listen", "gemini-3.5-flash", "不選模型"),
+        (VOICE, "audio_eval", "gemini", None, "評分策略只能是"),
+        (VOICE, "audio_eval", "listen", "gemini-3.5-flash", "不選模型"),
         ("jp_verb_pair", "audio_eval", "listen", None, "沒有宣告能力"),
-        ("recording_eval", "audio_llm", "audio", "gemini-2.5-flash", "不在"),
-        ("recording_eval", "stt", "whisper", "unknown-model", "不在"),
-        ("recording_eval", "stt", "speaches", "Systran/faster-whisper-small", "只能是 'whisper'"),
+        ("*", "audio_eval", "listen", None, "沒有宣告能力"),
+        (VOICE, "audio_llm", "audio", "gemini-2.5-flash", "不在"),
+        (VOICE, "stt", "whisper", "unknown-model", "不在"),
+        (TRILINGUAL, "stt", "speaches", "Systran/faster-whisper-small", "只能是 'whisper'"),
     ],
 )
 def test_invalid_writes_are_rejected(llm_route_db, llm_whitelist, audio_env, key, capability, provider, model, fragment):
-    """寫入依能力檢查白名單；用途鍵沒有宣告的能力不能寫。"""
+    """寫入依能力檢查白名單；用途鍵（或全域）沒有宣告的能力不能寫——文字全域 * 只管 llm。"""
     import app.services.task_handlers.jp_verb_pair_handler  # noqa: F401 - 宣告 jp_verb_pair
 
     with pytest.raises(InvalidRouteError) as caught:
@@ -361,26 +458,64 @@ def test_audio_llm_write_is_trial_built(llm_route_db, llm_whitelist, audio_env):
     with mock.patch.object(audio_factory, "build_listen_evaluator", side_effect=error), \
          pytest.raises(InvalidRouteError, match="試建工具失敗"):
         _run(capability_route_service.set_route(
-            "recording_eval", "audio", "gemini-3.1-flash-lite", None, updated_by="api", capability="audio_llm",
+            VOICE, "audio", "gemini-3.1-flash-lite", None, updated_by="api", capability="audio_llm",
         ))
     view = _run(capability_route_service.set_route(
-        "recording_eval", "audio", "gemini-3.1-flash-lite", None, updated_by="api", capability="audio_llm",
+        VOICE, "audio", "gemini-3.1-flash-lite", None, updated_by="api", capability="audio_llm",
     ))
     assert view.label == "(audio)gemini-3.1-flash-lite"
 
 
 def test_listing_shows_every_capability_with_its_source(llm_route_db, llm_whitelist, audio_env):
-    """清單：錄音評分的鍵列出四個能力，.env 那一層的標籤與來源；分支沒設的能力標「流程」。"""
-    _run(capability_route_service.set_route(
-        "recording_eval", "stt_llm", None, None, updated_by="api", capability="audio_eval",
-    ))
+    """清單：錄音評分的鍵列出四個能力，.env 那一層的標籤與來源；自己沒設的能力標語音全域。"""
+    _run(capability_route_service.set_route(VOICE, "stt_llm", None, None, updated_by="api", capability="audio_eval"))
     key_views, _ = _run(capability_route_service.list_routes())
-    branch = next(view for view in key_views if view.route_key == "recording_eval.speaking_trilingual")
+    branch = next(view for view in key_views if view.route_key == TRILINGUAL)
     labels = {view.capability: (view.label, view.resolved.source) for view in branch.views}
     assert labels == {
         "llm": ("(audio)gemini-2.5-flash", "env"),
-        "audio_eval": ("stt_llm", "parent"),
+        "audio_eval": ("stt_llm", "global"),
         "audio_llm": ("(audio)gemini-3.5-flash", "env"),
         "stt": ("(whisper)Systran/faster-whisper-large-v3", "env"),
     }
     assert all(view.problem is None for view in branch.views)
+    assert [view.route_key for view in key_views[:2]] == ["*", VOICE]
+
+
+def test_evaluation_metadata_records_models_and_layers(audio_env):
+    """存進錄音紀錄的評分資訊（D5）：策略、各能力的 (端點)模型，以及各能力生效的是哪一層（用途、*voice、.env）。"""
+    from datetime import datetime, timedelta, timezone
+
+    from app.bot.handlers.voice import evaluation_metadata, utc_timestamp
+
+    with _rows(**{
+        f"{TRILINGUAL}|audio_eval": RouteChoice("stt_llm", "", None),
+        f"{VOICE}|stt": RouteChoice("whisper", "Systran/faster-whisper-small", None),
+    }):
+        plan = _run(audio_factory.plan_for(TRILINGUAL))
+    assert evaluation_metadata(plan) == {
+        "strategy": "stt_llm",
+        "models": {"stt": "(whisper)Systran/faster-whisper-small", "llm": "(audio)gemini-2.5-flash"},
+        "settings": {"audio_eval": TRILINGUAL, "stt": VOICE, "llm": ".env"},
+    }
+    taipei = datetime(2026, 11, 26, 14, 3, 12, tzinfo=timezone(timedelta(hours=8)))
+    assert utc_timestamp(taipei) == "2026-11-26T06:03:12Z"
+
+
+def test_evaluation_metadata_marks_layers_forced_by_the_switch(audio_env):
+    """語音全域開關開著時，錄音紀錄的 settings 標出「（全局生效）」：分得出是開關蓋過了卡片自己的設定。"""
+    from app.bot.handlers.voice import evaluation_metadata
+    from app.schemas.speaking import RecordingItem
+
+    with _rows(**{
+        f"{TRILINGUAL}|audio_eval": RouteChoice("listen", "", None),
+        f"{VOICE}|audio_eval": RouteChoice("stt_diff", "", None),
+        f"{VOICE}|{routing.SWITCH_CAPABILITY}": RouteChoice(routing.SWITCH_ON, "", None),
+    }):
+        plan = _run(audio_factory.plan_for(TRILINGUAL))
+    meta = evaluation_metadata(plan)
+    assert meta["strategy"] == "stt_diff"
+    assert meta["settings"] == {"audio_eval": f"{VOICE}（全局生效）", "stt": ".env（全局生效）"}
+    # 寫進卡片的格式由 RecordingItem 定義：評分資訊原樣保留
+    stored = RecordingItem.model_validate({"date": "2026-11-26", "score": 80, **meta}).model_dump()
+    assert stored["settings"] == meta["settings"] and stored["strategy"] == "stt_diff"

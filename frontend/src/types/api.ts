@@ -482,8 +482,11 @@ export interface RelationSyncResponse {
 // 能力路由 (Capability Routes)
 // ============================================================================
 
-/** 生效的層：用途自己的設定、分支沿用的流程鍵、全域 `*`、`.env` 預設。The winning layer. */
-export type RouteSource = 'route' | 'parent' | 'global' | 'env';
+/**
+ * 生效的層：用途自己的設定、它的全域（文字 `*` 或語音 `*voice`，見 `global_key`）、`.env` 預設。
+ * The winning layer: the key itself, its global (see `global_key`), or `.env`.
+ */
+export type RouteSource = 'route' | 'global' | 'env';
 
 /** 一組選擇。A choice of provider / model / effort. */
 export interface RouteChoice {
@@ -524,9 +527,13 @@ export interface CapabilityState {
   problem: string | null;
   /** 這個鍵是否宣告了這個能力；false＝孤兒設定，只能刪除。false rows can only be deleted. */
   declared: boolean;
+  /** 這個能力所屬的全域：`*`（文字）或 `*voice`（語音）。The global this capability falls back to. */
+  global_key: string;
+  /** 全域的全局生效開著，這個鍵自己的設定目前不生效。The global switch overrides this key. */
+  forced: boolean;
 }
 
-/** 一個用途鍵與它各能力的狀態（`*` 為全域）。One route key and its capabilities. */
+/** 一個用途鍵與它各能力的狀態（`*`、`*voice` 為文字與語音全域）。One route key and its capabilities. */
 export interface CapabilityRoute {
   route_key: string;
   description: string | null;
@@ -534,6 +541,11 @@ export interface CapabilityRoute {
   declared: boolean;
   /** 能力 → 狀態。Capability to state. */
   capabilities: Record<string, CapabilityState>;
+  /**
+   * 全域的「全局生效」開關是否開著；不是全域鍵、或讀不到設定（不知道）時為 null。
+   * The global switch; null for other keys, or while the settings cannot be read.
+   */
+  switch?: boolean | null;
 }
 
 /** 白名單中的模型；efforts 為空＝不使用 effort。A whitelisted model; empty efforts = no effort. */

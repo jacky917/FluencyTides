@@ -3,10 +3,27 @@
  * Pure helpers for the tool settings (capability routes) page.
  */
 
-import type { CapabilityRoute, ProviderOption, RouteChoice, RouteSource, RouteUpdate } from '../types/api'
+import type { CapabilityRoute, CapabilityState, ProviderOption, RouteChoice, RouteUpdate } from '../types/api'
 
-/** 全域設定的用途鍵。The route key of the global setting. */
+/** 文字全域的用途鍵。The route key of the text global. */
 export const GLOBAL_ROUTE_KEY = '*'
+/** 語音全域的用途鍵。The route key of the voice global. */
+export const VOICE_GLOBAL_ROUTE_KEY = '*voice'
+
+/** 兩個全域的顯示名稱（與 TG `/setconfig` 相同）。Display names of the two globals. */
+export const GLOBAL_TITLES: Record<string, string> = {
+  [GLOBAL_ROUTE_KEY]: '全域（文字）',
+  [VOICE_GLOBAL_ROUTE_KEY]: '全域（語音）',
+}
+
+/**
+ * 是否為全域鍵。Whether a key is one of the globals.
+ * @param routeKey - 用途鍵。Route key.
+ * @returns 是全域鍵時為 true。True for `*` and `*voice`.
+ */
+export function isGlobalKey(routeKey: string): boolean {
+  return Object.prototype.hasOwnProperty.call(GLOBAL_TITLES, routeKey)
+}
 
 /** 文字生成能力。The text-generation capability. */
 export const CAPABILITY_LLM = 'llm'
@@ -17,12 +34,23 @@ export const CAPABILITY_AUDIO_LLM = 'audio_llm'
 /** 語音轉文字。Speech-to-text. */
 export const CAPABILITY_STT = 'stt'
 
-/** 來源的顯示名稱（與 TG `/setconfig` 相同）。Source display names, same as TG `/setconfig`. */
-export const SOURCE_LABELS: Record<RouteSource, string> = {
-  route: '自己設定',
-  parent: '沿用流程',
-  global: '沿用全域',
-  env: '.env 預設',
+/**
+ * 生效那一層的顯示名稱：與 TG 的 `source_label` 同一套規則（同樣標出是哪個全域、是否全局生效），
+ * 但措辭不同（例如「自己設定」對 TG 的「用途」），而且全域鍵自己的設定顯示「自己設定」。
+ * The display name of the winning layer; same rules as TG's `source_label`, different wording.
+ * @param state - 能力的狀態。The capability state.
+ * @param routeKey - 這一列的用途鍵；全域鍵自己的設定顯示「自己設定」。The row's key.
+ * @returns 例如「自己設定」「沿用全域（語音）」「全域（語音，全局生效）」「.env 預設（全局生效）」。The label.
+ */
+export function sourceLabel(
+  state: Pick<CapabilityState, 'source' | 'global_key' | 'forced'>,
+  routeKey?: string,
+): string {
+  // 全域鍵自己的設定生效時，來源是 global（它就是全域），對它來說就是「自己設定」
+  if (state.source === 'route' || (state.source === 'global' && routeKey === state.global_key)) return '自己設定'
+  if (state.source === 'env') return state.forced ? '.env 預設（全局生效）' : '.env 預設'
+  const title = GLOBAL_TITLES[state.global_key] ?? '全域（？）'
+  return state.forced ? title.replace('）', '，全局生效）') : `沿用${title}`
 }
 
 /** 能力的顯示名稱（與 TG `/setconfig` 相同）；不在表中的能力直接顯示代號。Capability display names. */
@@ -68,17 +96,7 @@ export function emptyProviderHint(capability: string): string {
 }
 
 /**
- * 分支鍵的流程鍵（`a.b` → `a`）；不是分支時為 null。The flow key of a branch.
- * @param routeKey - 用途鍵。Route key.
- * @returns 流程鍵，或 null。The flow key, or null.
- */
-export function parentKey(routeKey: string): string | null {
-  const index = routeKey.indexOf('.')
-  return index > 0 ? routeKey.slice(0, index) : null
-}
-
-/**
- * 這個用途鍵在這個能力上可選的 provider：評分策略依鍵的限縮過濾（分支沒有限縮時沿用流程鍵的）。
+ * 這個用途鍵在這個能力上可選的 provider：評分策略依鍵自己的限縮過濾。
  * The providers selectable for a key and capability; strategies follow the key's restriction.
  * @param capability - 能力。Capability.
  * @param routeKey - 用途鍵。Route key.
@@ -94,8 +112,7 @@ export function providersFor(
 ): ProviderOption[] {
   const options = providers[capability] ?? []
   if (capability !== CAPABILITY_AUDIO_EVAL) return options
-  const parent = parentKey(routeKey)
-  const allowed = strategies[routeKey] ?? (parent ? strategies[parent] : undefined)
+  const allowed = strategies[routeKey]
   return allowed ? options.filter((option) => allowed.includes(option.id)) : options
 }
 
@@ -238,8 +255,8 @@ const STRATEGY_CAPABILITIES: Record<string, string[]> = {
 }
 
 /**
- * 目前會用到的能力（與 TG 清單的 ⚠️ 規則相同）：有評分策略的鍵只算策略本身與策略用到的能力（全域 `*`
- * 另算文字 LLM，它也是建卡的預設），其他鍵算全部；孤兒設定一律算。
+ * 目前會用到的能力（與 TG 清單的 ⚠️ 規則相同）：有評分策略的鍵（錄音評分各鍵與語音全域）只算策略本身與
+ * 策略用到的能力，其他鍵算全部；孤兒設定一律算。
  * The capabilities currently in use, as the TG list counts them.
  * @param route - 用途鍵的狀態。The route.
  * @returns 會用到的能力。The capabilities in use.
@@ -249,6 +266,5 @@ export function capabilitiesInUse(route: CapabilityRoute): Set<string> {
   const strategy = route.capabilities[CAPABILITY_AUDIO_EVAL]
   if (!strategy) return new Set(all)
   const used = new Set([CAPABILITY_AUDIO_EVAL, ...(STRATEGY_CAPABILITIES[strategy.effective.provider] ?? [])])
-  if (route.route_key === GLOBAL_ROUTE_KEY) used.add(CAPABILITY_LLM)
   return new Set(all.filter((capability) => used.has(capability) || route.capabilities[capability].declared === false))
 }

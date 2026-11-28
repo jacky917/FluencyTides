@@ -2,15 +2,16 @@
  * 工具設定頁面（能力路由）。
  * Tool settings page (capability routes).
  *
- * 網頁版的 TG `/setconfig`：列出每個用途鍵（含全域 `*`）在各能力上的生效設定（文字 LLM、錄音評分
- * 策略、聽音檔的模型、語音轉文字），可為某個用途的某個能力選 provider →（需要時）模型 →（有 effort
- * 時）effort 並儲存，或恢復預設。選項只來自後端回傳的白名單（`GET /api/v1/capability-routes` 的
- * `providers`；評分策略另依 `strategies` 的限縮過濾）。分支鍵（`<流程>.<分支>`）縮排在流程鍵之下。
+ * 網頁版的 TG `/setconfig`：列出每個用途鍵（含文字全域 `*` 與語音全域 `*voice`）在各能力上的生效設定
+ * （文字 LLM、錄音評分策略、聽音檔的模型、語音轉文字），可為某個用途的某個能力選 provider →（需要時）
+ * 模型 →（有 effort 時）effort 並儲存，或恢復預設。選項只來自後端回傳的白名單（`GET /api/v1/capability-routes`
+ * 的 `providers`；評分策略另依 `strategies` 的限縮過濾）。每個用途依「自己的設定 → 它的全域 → `.env`」解析；
+ * 兩個全域各有「全局生效」開關，打開時那一邊的用途都改用全域（自己的設定保留但不生效）。
  *
  * The web counterpart of TG `/setconfig`: each route key's per-capability
  * setting, with a provider → model → (effort) picker and a restore action.
- * Options come only from the backend's whitelist; branch keys are indented
- * under their flow key.
+ * Options come only from the backend's whitelist. Each key resolves to itself,
+ * then its global, then `.env`; each global has a "global switch".
  *
  * 頁面最下方另有唯讀的「Handler 能力」區塊（{@link HandlerCapabilitiesSection}），列出每種卡片開放到哪裡。
  */
@@ -29,8 +30,7 @@ import { describeApiError, failureTitle, isBackendError } from '../lib/apiError'
 import {
   CAPABILITY_AUDIO_EVAL,
   CAPABILITY_LLM,
-  GLOBAL_ROUTE_KEY,
-  SOURCE_LABELS,
+  GLOBAL_TITLES,
   buildChoice,
   capabilitiesInUse,
   capabilityLabel,
@@ -38,10 +38,11 @@ import {
   emptyProviderHint,
   formatChoice,
   initialSelection,
-  parentKey,
+  isGlobalKey,
   previewLabel,
   providerLabel,
   providersFor,
+  sourceLabel,
 } from '../lib/capabilityRoutes'
 import type { CapabilityRoute, CapabilityState, ProviderOption, RouteUpdate } from '../types/api'
 
@@ -102,7 +103,11 @@ const toastLines = (lines: string[]) => <span className="whitespace-pre-line">{l
  * @returns 說明文字。The lines.
  */
 function describeAfterWrite(routeKey: string, state: CapabilityState): string[] {
-  const lines = [`${routeKey}：${state.label}（${SOURCE_LABELS[state.source]}）`]
+  // 帶 routeKey：全域鍵自己的設定生效時要顯示「自己設定」，不是「沿用全域」
+  const lines = [`${routeKey}：${state.label}（${sourceLabel(state, routeKey)}）`]
+  if (state.forced && state.stored !== null) {
+    lines.push(`${GLOBAL_TITLES[state.global_key] ?? '全域'}的全局生效開著，這組設定已儲存，但目前不會生效。`)
+  }
   if (state.db_unavailable) {
     lines.push('讀不到資料庫，無法確認退回後的設定，上面顯示的是 .env 預設。')
   }
@@ -133,8 +138,6 @@ export default function ToolSettings() {
     })
 
   const readOnly = data?.db_unavailable ?? true
-  // 用途鍵 → 說明（分支顯示「沿用哪個用途」用）
-  const descriptions = new Map(data?.routes.map((route) => [route.route_key, route.description]) ?? [])
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -147,8 +150,9 @@ export default function ToolSettings() {
           </Button>
         </div>
         <p className="text-sm text-muted-foreground sm:text-base">
-          每個用途可以各自選要用的模型，儲存後下一次使用就生效。沒有自己設定的項目，依序沿用流程、全域預設，
-          最後是部署時 <code>.env</code> 的預設。
+          每個用途可以各自選要用的模型，儲存後下一次使用就生效。沒有自己設定的項目沿用它的全域（文字用途看「全域（文字）」、
+          錄音評分看「全域（語音）」），最後是部署時 <code>.env</code> 的預設。全域打開「全局生效」時，那一邊的用途都改用全域，
+          自己的設定保留但不生效。
         </p>
       </div>
 
@@ -182,7 +186,6 @@ export default function ToolSettings() {
               <RouteCard
                 key={route.route_key}
                 route={route}
-                parentTitle={branchParent(route.route_key, descriptions)}
                 providers={data.providers}
                 strategies={data.strategies ?? {}}
                 readOnly={readOnly}
@@ -226,8 +229,6 @@ function Warning({ title, lines }: { title: string; lines: string[] }) {
 /** {@link RouteCard} 的 props。Props of {@link RouteCard}. */
 interface RouteCardProps {
   route: CapabilityRoute
-  /** 分支鍵（流程鍵也在清單中）時是流程鍵的說明：縮排顯示。The flow's title when this is a listed branch. */
-  parentTitle: string | null
   providers: Record<string, ProviderOption[]>
   strategies: Record<string, string[]>
   readOnly: boolean
@@ -244,7 +245,6 @@ interface RouteCardProps {
  */
 function RouteCard({
   route,
-  parentTitle,
   providers,
   strategies,
   readOnly,
@@ -253,7 +253,7 @@ function RouteCard({
   notices,
   onNotice,
 }: RouteCardProps) {
-  const isGlobal = route.route_key === GLOBAL_ROUTE_KEY
+  const isGlobal = isGlobalKey(route.route_key)
   const states = Object.entries(route.capabilities)
   // 只標出會用到的能力的問題（例如策略是 listen 時，STT 沒設定不影響評分）；各能力自己的警示照常顯示
   const inUse = capabilitiesInUse(route)
@@ -264,25 +264,29 @@ function RouteCard({
         inUse.has(capability) && (!state.declared || state.rejected.length > 0 || state.problem !== null),
     )
 
-  const isBranch = parentTitle !== null
   // 標題用說明（人看得懂的用途），用途鍵放旁邊小字
-  const title = isGlobal ? '全域預設' : (route.description ?? '（程式裡已沒有這個用途）')
-  const subtitle = isGlobal
-    ? '各用途沒有自己設定時用這裡的'
-    : isBranch
-      ? `沒設定的項目沿用「${parentTitle}」`
-      : null
+  const title = isGlobal ? GLOBAL_TITLES[route.route_key] : (route.description ?? '（程式裡已沒有這個用途）')
+  const subtitle = isGlobal ? route.description : null
+  // 被全局生效蓋過的全域（這個用途自己的設定目前不生效）
+  const forcedBy = [...new Set(states.filter(([, state]) => state.forced).map(([, state]) => state.global_key))]
 
   return (
-    <Card className={cn(flagged && 'border-amber-500/60', isBranch && 'ml-4 sm:ml-8')}>
+    <Card className={cn(flagged && 'border-amber-500/60')}>
       <CardHeader className="space-y-1 px-4 pb-1 pt-4 sm:px-5">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
           {flagged && <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" aria-label="警示" />}
-          {isBranch && <span className="text-muted-foreground" aria-hidden>└</span>}
           <CardTitle className="text-base">{title}</CardTitle>
           <code className="text-xs text-muted-foreground">{route.route_key}</code>
+          {isGlobal && route.switch !== undefined && route.switch !== null && (
+            <GlobalSwitch globalKey={route.route_key} enabled={route.switch} readOnly={readOnly} />
+          )}
         </div>
         {subtitle && <CardDescription className="text-xs">{subtitle}</CardDescription>}
+        {forcedBy.map((globalKey) => (
+          <CardDescription key={globalKey} className="text-xs text-amber-700">
+            {GLOBAL_TITLES[globalKey] ?? globalKey}的全局生效開著：這個用途自己的設定目前不生效。
+          </CardDescription>
+        ))}
       </CardHeader>
       <CardContent className="divide-y p-0 text-sm">
         {!route.declared && (
@@ -377,7 +381,7 @@ function CapabilityPanel({
         <h3 className="font-medium">{capabilityLabel(capability)}</h3>
         <div className="col-span-2 row-start-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 sm:col-span-1 sm:col-start-2 sm:row-start-1">
           <code className="min-w-0 break-all rounded bg-muted px-2 py-0.5 text-xs sm:text-sm">{state.label}</code>
-          <SourceBadge source={state.source} />
+          <SourceBadge state={state} routeKey={routeKey} />
         </div>
         <div className="col-start-2 row-start-1 flex justify-end gap-2 sm:col-start-3">
           {declared && !readOnly && (
@@ -408,10 +412,11 @@ function CapabilityPanel({
           )}
         </div>
       </div>
-      {/* 自己有設定、但生效的不是它（例如被略過）時才另外列出；生效的就是它時上面已經看得到 */}
-      {state.stored !== null && state.source !== 'route' && (
+      {/* 自己有設定、但生效的不是它（被略過，或全局生效開著）時才另外列出；生效的就是它時上面已經看得到 */}
+      {state.stored !== null && sourceLabel(state, routeKey) !== '自己設定' && (
         <div className="text-muted-foreground">
-          自己的設定（沒有生效）：<code className="break-all">{formatChoice(state.stored)}</code>
+          自己的設定（{state.forced ? '全局生效開著，目前不生效' : '沒有生效'}）：
+          <code className="break-all">{formatChoice(state.stored)}</code>
         </div>
       )}
 
@@ -452,21 +457,64 @@ function CapabilityPanel({
 
 /**
  * 來源標記。Source badge.
- * @param props.source - 生效的層。The winning layer.
+ * @param props.state - 能力的狀態。The capability state.
+ * @param props.routeKey - 這一列的用途鍵。The row's key.
  * @returns 標記 JSX。Badge JSX.
  */
-function SourceBadge({ source }: { source: CapabilityState['source'] }) {
+function SourceBadge({ state, routeKey }: { state: CapabilityState; routeKey: string }) {
+  const { source, forced } = state
+  const own = source === 'route' || (source === 'global' && routeKey === state.global_key)
   return (
     <span
       className={cn(
         'shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium',
-        source === 'route' && 'bg-primary text-primary-foreground',
-        (source === 'global' || source === 'parent') && 'bg-secondary text-secondary-foreground border',
-        source === 'env' && 'bg-muted text-muted-foreground border',
+        own && 'bg-primary text-primary-foreground',
+        source === 'global' && !own && !forced && 'bg-secondary text-secondary-foreground border',
+        forced && 'border border-amber-500/60 bg-amber-500/10 text-amber-800',
+        source === 'env' && !forced && 'bg-muted text-muted-foreground border',
       )}
     >
-      {SOURCE_LABELS[source]}
+      {sourceLabel(state, routeKey)}
     </span>
+  )
+}
+
+/**
+ * 全域的「全局生效」開關：打開時那一邊的用途都改用全域，各用途自己的設定保留但不生效。
+ * A global's "global switch": while on, every route on that side uses the global.
+ * @param props.globalKey - 全域鍵（`*` 或 `*voice`）。The global key.
+ * @param props.enabled - 目前是否開著。Whether it is on.
+ * @param props.readOnly - 讀不到資料庫時不能切換。Disabled while the DB is unreadable.
+ * @returns 開關 JSX。Switch JSX.
+ */
+function GlobalSwitch({ globalKey, enabled, readOnly }: { globalKey: string; enabled: boolean; readOnly: boolean }) {
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationKey: ['capability-route-switch', globalKey],
+    mutationFn: (next: boolean) => FluencyTidesAPI.putGlobalSwitch(globalKey, next),
+    onSuccess: (_route, next) => {
+      toast.success(`${GLOBAL_TITLES[globalKey] ?? globalKey}：已${next ? '打開' : '關閉'}全局生效`, {
+        description: next ? '這一邊的用途都改用全域的設定，各自的設定保留但不生效。' : '各用途有自己的設定就用自己的。',
+      })
+    },
+    onError: (error) => {
+      if (!isBackendError(error)) console.error(`[ToolSettings] 切換 ${globalKey} 全局生效失敗`, error)
+      const { status, message } = describeApiError(error)
+      toast.error(failureTitle(status, '切換全局生效'), { description: message })
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+  })
+  return (
+    <label className="ml-auto flex items-center gap-2 text-xs font-medium">
+      <input
+        type="checkbox"
+        className="h-4 w-4 accent-amber-600"
+        checked={mutation.isPending ? mutation.variables : enabled}
+        disabled={readOnly || mutation.isPending}
+        onChange={(e) => mutation.mutate(e.target.checked)}
+      />
+      全局生效
+    </label>
   )
 }
 
@@ -684,19 +732,6 @@ function CapabilityEditor({
       </div>
     </form>
   )
-}
-
-/**
- * 分支鍵的流程鍵說明（流程鍵也在清單裡時）；不是分支時為 null。
- * The flow's title for a listed branch key, or null.
- * @param routeKey - 用途鍵。The route key.
- * @param descriptions - 清單裡各用途鍵的說明。Descriptions of the listed keys.
- * @returns 流程鍵的說明（沒有說明時用鍵本身），或 null。The flow's title, or null.
- */
-function branchParent(routeKey: string, descriptions: Map<string, string | null>): string | null {
-  const parent = parentKey(routeKey)
-  if (parent === null || !descriptions.has(parent)) return null
-  return descriptions.get(parent) ?? parent
 }
 
 /**

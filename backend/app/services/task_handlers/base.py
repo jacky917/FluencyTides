@@ -111,6 +111,7 @@ if TYPE_CHECKING:
 
     from app.services.card_service import CardService
     from app.services.relation_service import RelationService
+    from app.services.task_handlers.shared.recording_spec import RecordingEvaluation
 
 
 class BaseHandler(ABC):
@@ -168,6 +169,10 @@ class BaseHandler(ABC):
             :meth:`execute_draft`
             網頁預覽流程（``create.flow="preview"``）向 LLM 要草稿的輸入模型；服務層以它驗證輸入、產生網頁
             表單，再交給 ``execute_draft``
+        RECORDING_EVAL: how this handler's cards are recorded and scored (the route key, and per field the
+            prompt, reference answers and target language); ``None`` means the cards cannot be recorded
+            這個 handler 的卡片怎麼錄音評分（用途鍵，以及每個欄位的提示詞、參考答案與目標語言）；
+            ``None`` 表示卡片不能錄音評分
     """
 
     CAPABILITIES: ClassVar[HandlerCapabilities] = HandlerCapabilities()
@@ -180,6 +185,7 @@ class BaseHandler(ABC):
     CREATE_PARAMS: ClassVar[type[BaseModel] | None] = None
     SEARCH_FIELDS: ClassVar[tuple[SearchField, ...]] = ()
     DRAFT_PARAMS: ClassVar[type[BaseModel] | None] = None
+    RECORDING_EVAL: ClassVar[RecordingEvaluation | None] = None
 
     def search_fields(self) -> tuple[SearchField, ...]:
         """Return the field buttons of the web field search.

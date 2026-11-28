@@ -10,10 +10,11 @@ llm_model_routing_FEAT_2026-10-15.md D7 的 ``/models``。
 
 Flow::
 
-    /setconfig → route list (paged; the first row is the global *)
-                 └─ pick a route → pick a capability (only those the key declares)
+    /setconfig → route list (paged; the first rows are the text global * and the voice global *voice)
+                 └─ pick a route (or a global) → pick a capability (only those the key declares)
                                  └─ [Set] → pick provider → pick model → (with efforts) pick effort → confirm → save
                                  └ [Restore default] → delete that row and show the setting that takes effect instead
+                 (a global's screen also has [Global switch on/off]: every route on that side uses the global)
 
 Each level lists only whitelisted options: ``llm`` / ``audio_llm`` use the endpoint whitelists in ``.env``, ``stt``
 uses ``STT_MODELS``, and ``audio_eval`` uses the fixed strategy list (a route key may narrow it further). Strategies
@@ -36,10 +37,11 @@ think "nothing was set".
 
 流程::
 
-    /setconfig → 用途清單（可翻頁，第一列是全域 *）
-                 └─ 選一個用途 → 選能力（只列該鍵宣告的）
+    /setconfig → 用途清單（可翻頁，最前面是文字全域 * 與語音全域 *voice）
+                 └─ 選一個用途（或全域）→ 選能力（只列該鍵宣告的）
                                  └─ [設定] → 選 provider → 選模型 →（有 effort 時）選 effort → 確認 → 儲存
                                  └ [恢復預設] → 刪除該筆設定，顯示退回後生效的設定
+                 （全域的畫面另有 [全局生效 開／關]：那一邊的用途都用全域）
 
 每一層只列白名單允許的選項：``llm`` / ``audio_llm`` 為 ``.env`` 的端點白名單、``stt`` 為
 ``STT_MODELS``、``audio_eval`` 為固定的策略清單（用途鍵可再限縮）。策略不選模型，選完直接到確認；
@@ -94,7 +96,7 @@ from app.infrastructure.llm.capabilities import (
     list_providers,
 )
 from app.infrastructure.llm.endpoints import ModelOption
-from app.infrastructure.llm.routing import GLOBAL_ROUTE_KEY
+from app.infrastructure.llm.routing import GLOBAL_ROUTE_KEY, GLOBAL_ROUTE_KEYS, GLOBAL_TITLES, source_label
 from app.services import capability_route_service
 from app.services.capability_route_service import KeyView, RouteView
 
@@ -116,7 +118,6 @@ BUTTON_TEXT_LIMIT = 60
 # answerCallbackQuery 的提示文字上限為 200 字元，留一點餘裕
 ALERT_TEXT_LIMIT = 190
 
-_SOURCE_LABELS = {"route": "用途", "parent": "流程", "global": "全域", "env": ".env"}
 _STALE_ALERT = f"選單已過期，請重新輸入 /{COMMAND}。"
 # 讀不到 DB 時整個選單都拒絕操作（含翻頁、看詳情），不只是修改
 _DB_ALERT = f"⚠️ 讀不到資料庫，選單暫停使用，請稍後重新輸入 /{COMMAND}。"
@@ -145,13 +146,14 @@ class Action(StrEnum):
     CONFIRM = "c"     # 確認（用途, 能力, provider, 模型記號, effort 記號）
     SAVE = "s"        # 儲存（用途, 能力, provider, 模型記號, effort 記號）
     DELETE = "d"      # 恢復預設（用途, 能力）
+    SWITCH = "w"      # 全局生效開關（全域, 1＝開／0＝關）
 
 
 # 各動作的參數個數。_TOKEN_ARGS 中的動作，最後兩個參數是模型記號（序號或 NO_MODEL）與 effort 記號
 # （序號或 NO_EFFORT），由 resolve_selection 解析、不經 _index；其餘參數都是整數序號
 _ARITY: dict[Action, int] = {
     Action.LIST: 1, Action.DETAIL: 1, Action.CAPABILITY: 2, Action.PROVIDERS: 2, Action.MODELS: 3,
-    Action.EFFORTS: 4, Action.CONFIRM: 5, Action.SAVE: 5, Action.DELETE: 2,
+    Action.EFFORTS: 4, Action.CONFIRM: 5, Action.SAVE: 5, Action.DELETE: 2, Action.SWITCH: 2,
 }
 _TOKEN_ARGS = frozenset({Action.CONFIRM, Action.SAVE})
 
@@ -552,7 +554,7 @@ def _describe_effective(view: RouteView) -> str:
 
     回傳「(yinli)gemini-3.5-flash（來源：用途）」這樣的一行生效設定。
     """
-    return f"<code>{html.escape(view.label)}</code>（來源：{_SOURCE_LABELS[view.resolved.source]}）"
+    return f"<code>{html.escape(view.label)}</code>（來源：{source_label(view.resolved)}）"
 
 
 def _needs_attention(view: RouteView) -> bool:
@@ -572,21 +574,18 @@ def _in_use(view: KeyView) -> list[RouteView]:
 
     回傳目前會用到的能力。
 
-    For a key with a scoring strategy, only the strategy itself and the capabilities it uses count (the global
-    ``*`` also counts its ``llm``, the default of every card-building route); other keys count all. Orphan
-    capabilities are always included. The list's ⚠️ looks only at these: for example, with the listen strategy an
-    unset STT does not affect scoring and need not be marked.
+    For a key with a scoring strategy (the recording-evaluation keys and the voice global), only the strategy
+    itself and the capabilities it uses count; other keys count all. Orphan capabilities are always included. The
+    list's ⚠️ looks only at these: for example, with the listen strategy an unset STT does not affect scoring and
+    need not be marked.
 
-    有評分策略的鍵只算策略本身與策略用到的能力（全域 ``*`` 另外算 ``llm``，它也是各建卡用途的預設），
-    其他鍵算全部；孤兒能力一律算進來。清單的 ⚠️ 只看這些——例如策略是 listen 時，STT 沒設定不影響評分，
-    不必標出來。
+    有評分策略的鍵（錄音評分各鍵與語音全域）只算策略本身與策略用到的能力，其他鍵算全部；孤兒能力一律算進來。
+    清單的 ⚠️ 只看這些——例如策略是 listen 時，STT 沒設定不影響評分，不必標出來。
     """
     strategy = view.view(CAPABILITY_AUDIO_EVAL)
     if strategy is None:
         return list(view.views)
     used = {CAPABILITY_AUDIO_EVAL, *STRATEGY_CAPABILITIES.get(strategy.resolved.provider, ())}
-    if view.route_key == GLOBAL_ROUTE_KEY:
-        used.add(CAPABILITY_LLM)  # 全域的 llm 也是各建卡用途的預設
     return [item for item in view.views if item.capability in used or not item.capability_declared]
 
 
@@ -595,14 +594,33 @@ def _summary_view(view: KeyView) -> RouteView | None:
 
     回傳清單一列要顯示的能力。
 
-    Recording-scoring keys show their scoring strategy; other keys (including the global ``*``) show their first
-    capability, or ``None`` when they have none.
+    Keys with a scoring strategy (recording evaluation and the voice global) show it; other keys (including the
+    text global ``*``) show their first capability, or ``None`` when they have none.
 
-    錄音評分類的鍵顯示評分策略；其他鍵（含全域 ``*``）顯示第一個能力，沒有能力時為 ``None``。
+    有評分策略的鍵（錄音評分與語音全域）顯示評分策略；其他鍵（含文字全域 ``*``）顯示第一個能力，
+    沒有能力時為 ``None``。
     """
-    if view.route_key != GLOBAL_ROUTE_KEY and view.view(CAPABILITY_AUDIO_EVAL) is not None:
-        return view.view(CAPABILITY_AUDIO_EVAL)
+    strategy = view.view(CAPABILITY_AUDIO_EVAL)
+    if strategy is not None:
+        return strategy
     return view.views[0] if view.views else None
+
+
+def _key_title(route_key: str) -> str:
+    """Return how a route key is shown: a global's Chinese name with its key, otherwise the key itself.
+
+    回傳用途鍵的顯示方式：全域為中文名稱加鍵，其他為鍵本身。
+    """
+    title = GLOBAL_TITLES.get(route_key)
+    return f"{title} {route_key}" if title is not None else route_key
+
+
+def _forced_globals(view: KeyView) -> list[str]:
+    """Return the globals whose switch currently overrides this key's own settings.
+
+    回傳目前以開關蓋過這個鍵自己設定的全域。
+    """
+    return sorted({item.resolved.global_key for item in view.views if item.resolved.forced})
 
 
 # ----------------------------------------------------------------------
@@ -616,10 +634,10 @@ def render_list(ctx: MenuContext, views: list[KeyView], page: int) -> tuple[str,
     產生用途清單畫面（每頁 ``PAGE_SIZE`` 個）。
 
     ``⚠️`` marks orphan settings, keys with a skipped layer, and keys whose effective setting is currently unusable.
-    The page number is clamped into the valid range. Branch keys are indented under their flow key.
+    The page number is clamped into the valid range. A global whose switch is on is marked ``🔒``.
 
     ``⚠️`` 標出孤兒設定、有被略過的層，以及生效設定目前無法使用的用途。頁碼夾在有效範圍內。
-    分支鍵縮排在流程鍵之下。
+    全局生效開關開著的全域標上 ``🔒``。
 
     Args:
         ctx: the menu snapshot used to build the buttons
@@ -636,17 +654,14 @@ def render_list(ctx: MenuContext, views: list[KeyView], page: int) -> tuple[str,
     pages = max(1, -(-len(views) // PAGE_SIZE))
     page = min(max(page, 0), pages - 1)
     rows: list[list[InlineKeyboardButton]] = []
-    listed = {view.route_key for view in views}
     for index in range(page * PAGE_SIZE, min(len(views), (page + 1) * PAGE_SIZE)):
         view = views[index]
         marker = "⚠️ " if not view.declared or any(_needs_attention(item) for item in _in_use(view)) else ""
-        indent = "　└ " if routing.parent_key(view.route_key) in listed else ""
+        lock = "🔒 " if view.switch else ""
         headline = _summary_view(view)
-        summary = (
-            f"{headline.label}［{_SOURCE_LABELS[headline.resolved.source]}］" if headline is not None else "（無）"
-        )
+        summary = f"{headline.label}［{source_label(headline.resolved)}］" if headline is not None else "（無）"
         more = f" 等 {len(view.views)} 項" if len(view.views) > 1 else ""
-        text = f"{indent}{marker}{view.route_key}：{summary}{more}"
+        text = f"{lock}{marker}{_key_title(view.route_key)}：{summary}{more}"
         rows.append([_button(text, callback(ctx, Action.DETAIL, index))])
     nav: list[InlineKeyboardButton] = []
     if page > 0:
@@ -661,8 +676,8 @@ def render_list(ctx: MenuContext, views: list[KeyView], page: int) -> tuple[str,
         "🛠️ <b>工具設定</b>\n"
         "選一個用途查看或修改它用的工具（文字 LLM、錄音評分策略、聽音檔的模型、語音轉文字）。"
         "設定存在資料庫，重啟後仍有效。\n"
-        "來源：<b>用途</b>＝該用途自己的設定、<b>流程</b>＝分支沿用流程鍵的設定、<b>全域</b>＝* 的設定、"
-        "<b>.env</b>＝部署預設。"
+        "每個用途依序看：<b>用途</b>自己的設定 → 它的<b>全域</b>（文字用途看 *、錄音評分看 *voice）→ "
+        "<b>.env</b> 部署預設。全域打開「全局生效」（🔒）時，那一邊的用途都改用全域，自己的設定保留但不生效。"
     )
     if not ctx.db_ok:
         text += "\n\n⚠️ 讀不到資料庫：以下為 .env 預設，實際設定未知，選單暫停使用。"
@@ -695,11 +710,19 @@ def render_detail(ctx: MenuContext, key_index: int, view: KeyView) -> tuple[str,
     menu_key = ctx.key_at(key_index)
     if view.capabilities != menu_key.capabilities:
         raise StaleMenuError
-    lines = [f"<b>{html.escape(view.route_key)}</b>"]
+    lines = [f"<b>{html.escape(_key_title(view.route_key))}</b>"]
     if view.description:
         lines.append(html.escape(view.description))
     if not view.declared:
         lines.append("⚠️ 程式中已沒有這個用途（孤兒設定），可恢復預設以刪除。")
+    if view.switch is not None:
+        lines.append(
+            "🔒 全局生效：<b>開</b>（這一邊的用途都整組用這裡的設定，各自的設定保留但不生效）"
+            if view.switch
+            else "全局生效：關（各用途有自己的設定就用自己的）"
+        )
+    for global_key in _forced_globals(view):
+        lines.append(f"🔒 {GLOBAL_TITLES[global_key]}的全局生效開著：這個用途自己的設定目前不生效。")
     lines.append("")
     for item in view.views:
         marker = "⚠️ " if _needs_attention(item) else ""
@@ -709,6 +732,9 @@ def render_detail(ctx: MenuContext, key_index: int, view: KeyView) -> tuple[str,
         [_button(f"{_title(capability)}（{capability}）", callback(ctx, Action.CAPABILITY, key_index, index))]
         for index, capability in enumerate(menu_key.capabilities)
     ]
+    if view.switch is not None:
+        toggle = "🔓 關閉全局生效" if view.switch else "🔒 打開全局生效"
+        rows.append([_button(toggle, callback(ctx, Action.SWITCH, key_index, 0 if view.switch else 1))])
     rows.append([_button("⬅️ 返回清單", callback(ctx, Action.LIST, key_index // PAGE_SIZE)), _close_button()])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -750,7 +776,8 @@ def render_capability(
         stored = view.stored
         model = f" / {stored.model}" if stored.model else ""
         effort = f" @{stored.effort}" if stored.effort else ""
-        lines.append(f"本用途的設定：<code>{html.escape(f'{stored.endpoint}{model}{effort}')}</code>")
+        unused = "（全局生效開著，目前不生效）" if view.resolved.forced else ""
+        lines.append(f"本用途的設定：<code>{html.escape(f'{stored.endpoint}{model}{effort}')}</code>{unused}")
     for layer in view.resolved.rejected:
         lines.append(f"⚠️ 已略過 <code>{html.escape(layer.route_key)}</code>：{html.escape(layer.reason)}")
 
@@ -1065,15 +1092,22 @@ def render_result(
         訊息文字與鍵盤
     """
     lines = [title]
+    rows: list[list[InlineKeyboardButton]] = []
     if view is not None:
         lines.append(f"{html.escape(view.route_key)} → {_title(view.capability)}：{_describe_effective(view)}")
         if view.resolved.db_unavailable:
             lines.append("⚠️ 讀不到資料庫，無法確認退回後的設定，上面顯示的是 .env 預設。")
         if view.problem:
             lines.append(f"⚠️ {html.escape(view.problem)}")
+        if view.resolved.forced and view.stored is not None:
+            global_key = view.resolved.global_key
+            lines.append(f"🔒 {GLOBAL_TITLES[global_key]}的全局生效開著，這組設定已儲存，但目前不會生效。")
+            global_index = next((i for i, key in enumerate(ctx.keys) if key.key == global_key), None)
+            if global_index is not None:
+                rows.append([_button("🔓 關閉全局生效", callback(ctx, Action.SWITCH, global_index, 0))])
     elif view_unavailable:
         lines.append(f"⚠️ 無法顯示目前生效的設定（詳見後端 log），請重新輸入 /{COMMAND} 查看。")
-    rows = [[_button("⬅️ 返回清單", callback(ctx, Action.LIST, key_index // PAGE_SIZE)), _close_button()]]
+    rows.append([_button("⬅️ 返回清單", callback(ctx, Action.LIST, key_index // PAGE_SIZE)), _close_button()])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1363,6 +1397,8 @@ async def _dispatch(
         await _save(callback_query, ctx, n[0], n[1], n[2], args[3], args[4], app)
     elif action is Action.DELETE:
         await _delete(callback_query, ctx, n[0], n[1], app)
+    elif action is Action.SWITCH:
+        await _switch(callback_query, ctx, n[0], n[1])
 
 
 async def _show_after_write(
@@ -1502,3 +1538,26 @@ async def _delete(
         )
 
     await _show_after_write(callback_query, screen, "恢復預設", key)
+
+
+async def _switch(callback_query: CallbackQuery, ctx: MenuContext, key_index: int, enabled: int) -> None:
+    """Turn a global's "global switch" on or off and show that global's screen again.
+
+    打開或關掉全域的「全局生效」開關，再顯示該全域的畫面。
+
+    Raises:
+        StaleMenuError: if the key is not a global or ``enabled`` is neither 0 nor 1
+            若該鍵不是全域，或 ``enabled`` 不是 0 或 1
+    """
+    key = ctx.key_at(key_index).key
+    if key not in GLOBAL_ROUTE_KEYS or enabled not in (0, 1):
+        raise StaleMenuError
+    view = await capability_route_service.set_global_switch(
+        key, bool(enabled), updated_by=f"tg:{callback_query.from_user.id}"
+    )
+
+    async def screen() -> tuple[str, InlineKeyboardMarkup]:
+        # 開關不改變清單與白名單，沿用同一個選單版本；狀態用寫入前組好的，不再讀 DB
+        return render_detail(ctx, key_index, view)
+
+    await _show_after_write(callback_query, screen, "打開全局生效" if enabled else "關閉全局生效", key)

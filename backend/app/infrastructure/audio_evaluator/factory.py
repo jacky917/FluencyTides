@@ -7,7 +7,7 @@ See the capability routing plan capability_routing_FEAT_2026-10-19.md §3.2 and 
 見能力路由計畫 capability_routing_FEAT_2026-10-19.md §3.2、§8.3。
 
 Evaluators no longer read the global settings; instead they are composed of the capabilities
-resolved for a route key (for example ``recording_eval`` or ``recording_eval.speaking_trilingual``):
+resolved for a route key (for example ``recording_eval.speaking_trilingual`` or the voice global ``*voice``):
 
 | ``audio_eval`` strategy | capabilities used | evaluator |
 |---|---|---|
@@ -17,8 +17,8 @@ resolved for a route key (for example ``recording_eval`` or ``recording_eval.spe
 | ``stt_diff`` | ``stt`` | :class:`STTDiffEvaluator` |
 | ``stt_llm`` | ``stt``, ``llm`` | :class:`STTLLMEvaluator` |
 
-評分器不再讀全域 settings，而是依用途鍵（例如 ``recording_eval`` 或
-``recording_eval.speaking_trilingual``）解析出的能力組成：
+評分器不再讀全域 settings，而是依用途鍵（例如 ``recording_eval.speaking_trilingual`` 或
+語音全域 ``*voice``）解析出的能力組成：
 
 | ``audio_eval`` 策略 | 用到的能力 | 評分器 |
 |---|---|---|
@@ -27,11 +27,13 @@ resolved for a route key (for example ``recording_eval`` or ``recording_eval.spe
 | ``stt_diff`` | ``stt`` | ``STTDiffEvaluator`` |
 | ``stt_llm`` | ``stt``、``llm`` | ``STTLLMEvaluator`` |
 
-Each capability is resolved on its own along "branch → flow → global → .env" (see
+Each capability is resolved on its own along "the key itself → its global (``*voice`` for the voice
+capabilities) → .env"; while the voice global's switch is on, the key's own layer is skipped (see
 :mod:`app.infrastructure.llm.routing`). Built evaluators are cached per "setting combination";
 any write or delete of a setting (a change of the route cache generation) clears the whole cache.
 
-每個能力各自沿「分支 → 流程 → 全域 → .env」解析（見 ``app.infrastructure.llm.routing``）。
+每個能力各自沿「用途鍵本身 → 它的全域（語音能力為 ``*voice``）→ .env」解析；語音全域的開關開著時，
+跳過用途鍵自己那一層（見 ``app.infrastructure.llm.routing``）。
 建好的評分器依「設定組合」快取；設定一有寫入或刪除（路由快取世代改變）就整個清掉。
 
 Concrete implementations are imported lazily, so an SDK that is not installed does not affect the
@@ -69,13 +71,10 @@ from app.infrastructure.llm.endpoints import (
     TYPE_OPENAI,
     get_endpoint,
 )
-from app.infrastructure.llm.routing import ResolvedRoute, describe_import_error, is_internal_import
+from app.infrastructure.llm.routing import ResolvedRoute, describe_import_error, is_internal_import, source_label
 from app.infrastructure.stt.whisper_client import WhisperClient
 
 logger = logging.getLogger(__name__)
-
-_SOURCE_NAMES = {"route": "用途", "parent": "流程", "global": "全域", "env": ".env"}
-
 
 @dataclass(frozen=True)
 class EvaluatorPlan:
@@ -140,8 +139,8 @@ async def plan_for(route_key: str) -> EvaluatorPlan:
     交給 ``build_evaluator`` 報錯。
 
     Args:
-        route_key: the route key, for example ``recording_eval``
-            用途鍵，例如 ``recording_eval``
+        route_key: the route key, for example ``recording_eval.speaking_trilingual``
+            用途鍵，例如 ``recording_eval.speaking_trilingual``
 
     Returns:
         the strategy and capabilities, all resolved from the same snapshot of stored settings
@@ -158,11 +157,11 @@ async def plan_for(route_key: str) -> EvaluatorPlan:
 
 
 def _where(resolved: ResolvedRoute) -> str:
-    """Describe where a setting came from, like "recording_eval's audio_llm (source: global)".
+    """Describe where a setting came from, like "recording_eval.speaking_trilingual's audio_llm (source: voice global)".
 
-    產生「recording_eval 的 audio_llm（來源：全域）」這樣的說明。
+    產生「recording_eval.speaking_trilingual 的 audio_llm（來源：全域（語音））」這樣的說明。
     """
-    return f"'{resolved.route_key}' 的 {resolved.capability}（來源：{_SOURCE_NAMES[resolved.source]}）"
+    return f"'{resolved.route_key}' 的 {resolved.capability}（來源：{source_label(resolved)}）"
 
 
 def _unavailable(resolved: ResolvedRoute, reason: str) -> AudioEvaluatorUnavailableError:
@@ -351,9 +350,9 @@ async def evaluator_for(route_key: str) -> tuple[BaseAudioEvaluator, EvaluatorPl
     依用途鍵目前的設定取得評分器（依設定組合快取）。
 
     Args:
-        route_key: the route key (for example ``recording_eval`` or
-            ``recording_eval.speaking_trilingual``)
-            用途鍵（例如 ``recording_eval`` 或 ``recording_eval.speaking_trilingual``）
+        route_key: the route key (for example ``recording_eval.speaking_trilingual``, or the voice
+            global ``*voice``)
+            用途鍵（例如 ``recording_eval.speaking_trilingual``，或語音全域 ``*voice``）
 
     Returns:
         ``(evaluator, evaluator composition)``

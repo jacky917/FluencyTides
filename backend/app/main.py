@@ -56,7 +56,12 @@ from app.api.story import router as story_router
 from app.api.jp_verb_readings import router as jp_verb_readings_router
 from app.bot.dispatcher import create_bot, setup_dispatcher
 from app.core.config import settings
-from app.core.exceptions import DraftStateError, DuplicateFoundError, FluencyTidesError
+from app.core.exceptions import (
+    AudioEvaluatorUnavailableError,
+    DraftStateError,
+    DuplicateFoundError,
+    FluencyTidesError,
+)
 from app.infrastructure.anki.client import AnkiClient
 from app.infrastructure.database.corpus_database import dispose_corpus_engine
 from app.infrastructure.database.corpus_schema import ensure_site_tables
@@ -146,15 +151,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # effort 設定錯誤）不阻止啟動：設為 None 並記 WARNING
     await capability_route_service.refresh_global_client(app.state)
 
-    # 錄音評分器每次評分時依能力路由建立（見 app/services/recording_eval.py）；這裡先試建一次
-    # 流程鍵的評分器，設定有誤時在啟動 log 就看得到，不阻止啟動
-    try:
-        from app.services import recording_eval
+    # 錄音評分器每次評分時依能力路由建立（見 app/services/recording_eval.py）；這裡先為每個宣告了
+    # 錄音評分的卡片類型試建一次，設定有誤時在啟動 log 就看得到，不阻止啟動
+    from app.infrastructure.audio_evaluator.factory import evaluator_for
+    from app.services.task_handlers.registry import handler_registry
 
-        _, plan = await recording_eval.evaluator_for(recording_eval.RECORDING_EVAL.key)
-        logger.info("✅ 錄音評分器可用（recording_eval → %s）。", plan.strategy_name)
-    except Exception as e:  # noqa: BLE001 - 不阻止啟動；評分時會再建一次並回報給使用者
-        logger.warning("⚠️ 錄音評分器目前無法建立（TG 錄音評分會失敗，改設定後即可）：%s", e)
+    for handler in handler_registry.all_handlers():
+        spec = handler.RECORDING_EVAL
+        if spec is None:
+            continue
+        try:
+            _, plan = await evaluator_for(spec.route.key)
+            logger.info("✅ 錄音評分器可用（%s → %s）。", spec.route.key, plan.strategy_name)
+        except AudioEvaluatorUnavailableError as e:
+            logger.warning("⚠️ %s 的錄音評分器目前無法建立（改設定後即可）：%s", spec.route.key, e.message)
+        except Exception:  # noqa: BLE001 - 不阻止啟動；評分時會再建一次並回報給使用者
+            logger.exception("⚠️ 試建 %s 的錄音評分器時發生非預期錯誤", spec.route.key)
 
     # MinioClient 初始化同理，不應阻止應用啟動。
     try:

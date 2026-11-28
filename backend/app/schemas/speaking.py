@@ -20,6 +20,8 @@ Field mapping (Anki model field → JSON structure):
 - References     → list[ReferenceItem]
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -47,6 +49,37 @@ class PromptAudioItem(BaseModel):
     avatar: str = ""
 
 
+#: The scoring strategies a recording can record (the same as ``capabilities.STRATEGIES``).
+#: 錄音紀錄可記的評分策略（與 ``capabilities.STRATEGIES`` 相同）。
+RecordingStrategy = Literal["listen", "stt_llm", "stt_diff"]
+
+
+class RecordingEvaluationInfo(BaseModel):
+    """How a recording was scored, without the time (built before the audio is uploaded).
+
+    錄音的評分方式，不含時間（在上傳音檔之前就組好）。
+
+    ``voice.py`` validates these fields with this model when it obtains the evaluator, so a mismatch stops before
+    the audio is uploaded instead of after scoring; :class:`RecordingItem` declares the same fields for the stored
+    format.
+
+    ``voice.py`` 取得評分器時就以這個模型檢查這些欄位：不符時在上傳音檔之前就停下，不會評完分才失敗；
+    ``RecordingItem`` 以同樣的欄位定義存進卡片的格式。
+
+    Attributes:
+        strategy: the scoring strategy
+            評分策略
+        models: capability → the model used (see :class:`RecordingItem`)
+            能力 → 用到的模型（見 ``RecordingItem``）
+        settings: capability → the settings layer that took effect (see :class:`RecordingItem`)
+            能力 → 生效的設定層（見 ``RecordingItem``）
+    """
+
+    strategy: RecordingStrategy
+    models: dict[str, str]
+    settings: dict[str, str]
+
+
 class RecordingItem(BaseModel):
     """A historical user recording item.
 
@@ -70,6 +103,23 @@ class RecordingItem(BaseModel):
             AI 產出的評語回饋
         audio: the recording filename, stored in Anki ``collection.media``
             錄音檔檔名（存於 Anki ``collection.media`` 中）
+        evaluated_at: when scoring finished, UTC ISO 8601 such as ``'2026-11-26T06:03:12Z'``; absent on recordings
+            saved before this was recorded
+            評分完成的時間，UTC、ISO 8601（例如 ``'2026-11-26T06:03:12Z'``）；開始記錄之前存的錄音沒有
+        strategy: the scoring strategy (``listen`` / ``stt_llm`` / ``stt_diff``)
+            評分策略（``listen`` / ``stt_llm`` / ``stt_diff``）
+        models: capability → the model used, written ``(endpoint)model`` (only the endpoint when the capability has
+            no model); a display string, not meant to be parsed back
+            能力 → 用到的模型，寫成 ``(端點)模型``（能力沒有模型時只寫端點）；給人看的字串，不保證能拆回去
+        settings: ``audio_eval`` and each capability the strategy used → the settings layer that took effect (the
+            route key, ``*voice``, or ``.env``; ``（全局生效）`` is appended while the voice global's switch was on)
+            ``audio_eval`` 與策略用到的各能力 → 生效的設定層（用途鍵、``*voice`` 或 ``.env``；語音全域的開關開著時
+            另加「（全局生效）」）
+
+    The four evaluation fields are written together on new recordings (``voice.py`` builds every new recording
+    through this model) and are all absent on older ones.
+
+    四個評分欄位在新錄音上一起寫入（``voice.py`` 一律經這個模型產生新錄音），舊錄音全都沒有。
     """
 
     date: str
@@ -77,6 +127,10 @@ class RecordingItem(BaseModel):
     transcript: str = ""
     comment: str = ""
     audio: str = ""
+    evaluated_at: str | None = None
+    strategy: RecordingStrategy | None = None
+    models: dict[str, str] = Field(default_factory=dict)
+    settings: dict[str, str] = Field(default_factory=dict)
 
 
 class ReferenceAudioItem(BaseModel):

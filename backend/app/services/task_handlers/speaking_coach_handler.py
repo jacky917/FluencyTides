@@ -12,8 +12,9 @@ Recordings, References, and Prompt_Audios.
 import json
 import logging
 import uuid
+from collections.abc import Mapping
 from datetime import date
-from typing import TYPE_CHECKING, Annotated, override
+from typing import TYPE_CHECKING, Annotated, Any, override
 
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
@@ -27,7 +28,9 @@ from app.services.task_handlers.capabilities import (
     HandlerCapabilities,
     Operation,
 )
+from app.services.recording_eval import RECORDING_EVAL_COACH
 from app.services.task_handlers.registry import register_handler
+from app.services.task_handlers.shared.recording_spec import RecordingEvaluation, RecordingTarget
 
 if TYPE_CHECKING:
     from app.services.card_service import CardService
@@ -107,6 +110,34 @@ class SpeakingCoachCreateParams(BaseModel):
         return normalized
 
 
+def _recording_target(field_name: str, fields: Mapping[str, Any]) -> RecordingTarget | None:
+    """Return how to score a recording for a speaking-coach card (only ``Recordings`` can be recorded).
+
+    回傳對話卡錄音的評分方式（只有 ``Recordings`` 能錄音）。
+
+    The target language comes from the card's ``Target_Language`` field; the shared evaluation prompt is used and
+    the reference answers are in ``References``.
+
+    目標語言取自卡片的 ``Target_Language`` 欄位；用共用的評分提示詞，參考答案在 ``References``。
+
+    Args:
+        field_name: the field the recording goes into
+            錄音要寫進的欄位
+        fields: the note's fields
+            筆記的欄位
+
+    Returns:
+        the target, or ``None`` for any other field
+        評分方式；其他欄位為 ``None``
+    """
+    if field_name != "Recordings":
+        return None
+    language = str(fields.get("Target_Language", {}).get("value", "")).strip()
+    return RecordingTarget(
+        template="prompts/audio_evaluator.j2", reference_field="References", target_language=language or None
+    )
+
+
 @register_handler
 class SpeakingCoachHandler(BaseHandler):
     """Speaking coach task handler.
@@ -135,6 +166,7 @@ class SpeakingCoachHandler(BaseHandler):
     )
     CREATE_PARAMS = SpeakingCoachCreateParams
     CREATE_TAGS = ("Speaking_Coach", "HandlerGenerated")
+    RECORDING_EVAL = RecordingEvaluation(RECORDING_EVAL_COACH, _recording_target)
 
     @property
     @override

@@ -157,6 +157,26 @@
             parent.appendChild(wrap);
         }
 
+
+        // 錄音的評分資訊（評分方式、模型、時間）：舊紀錄沒有這些欄位時不顯示
+        function recEvalMeta(r) {
+            if (!r || !r.strategy) return '';
+            var parts = [String(r.strategy)];
+            var models = r.models || {};
+            var order = ['audio_llm', 'stt', 'llm'];
+            for (var k = 0; k < order.length; k++) {
+                if (models[order[k]]) parts.push(String(models[order[k]]).replace(/^\([^)]*\)/, ''));
+            }
+            if (r.evaluated_at) {
+                var d = new Date(r.evaluated_at);
+                if (!isNaN(d.getTime())) {
+                    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+                    parts.push((d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()));
+                }
+            }
+            return parts.join(' · ');
+        }
+
         // ============================
         // 單筆錄音 (手風琴，沿用 Speaking_Coach_Dark 結構)
         // ============================
@@ -187,6 +207,14 @@
                 };
             })(detail, summary);
 
+            var metaText = recEvalMeta(r);
+            if (metaText) {
+                var metaDiv = document.createElement('div');
+                metaDiv.className = 'rec-meta';
+                metaDiv.style.cssText = 'font-size:12px;color:#9aa4ad;margin-bottom:6px;';
+                metaDiv.textContent = '⚙️ ' + metaText;
+                detail.appendChild(metaDiv);
+            }
             if (r.audio) {
                 var audioRow = document.createElement('div');
                 audioRow.className = 'rec-audio';

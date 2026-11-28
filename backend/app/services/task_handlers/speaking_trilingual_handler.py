@@ -30,7 +30,7 @@ import logging
 import uuid
 from datetime import date
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Literal, override
+from typing import TYPE_CHECKING, Any, Literal, override
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -47,7 +47,9 @@ from app.services.task_handlers.capabilities import (
     Operation,
     SearchField,
 )
+from app.services.recording_eval import RECORDING_EVAL_TRILINGUAL
 from app.services.task_handlers.registry import register_handler
+from app.services.task_handlers.shared.recording_spec import RecordingEvaluation, RecordingTarget
 from app.services.task_handlers.shared.trilingual_familiarity import parse_familiarity
 from app.services.task_handlers.shared.trilingual_title import (
     TITLE_FIELD,
@@ -57,6 +59,9 @@ from app.services.task_handlers.shared.trilingual_title import (
 )
 from app.services.task_handlers.shared.trilingual_lang import (
     LANG_CODES,
+    LANG_TEMPLATE_MAP,
+    LANG_TO_LOCALE,
+    lang_from_field,
     recordings_field,
     references_field,
 )
@@ -210,6 +215,36 @@ def _parent_id(value: object) -> int | None:
     return int(text) if text.isdigit() else None
 
 
+def _recording_target(field_name: str, fields: Mapping[str, Any]) -> RecordingTarget | None:
+    """Return how to score a recording for a trilingual card, from the language suffix of the field.
+
+    依欄位的語言後綴，回傳三語卡錄音的評分方式。
+
+    ``Recordings_JA`` is scored in Japanese with ``Speaking_Trilingual_JA.j2`` against ``References_JA``, and so on.
+
+    ``Recordings_JA`` 以日文、``Speaking_Trilingual_JA.j2`` 評分，對照 ``References_JA``，其他語言同理。
+
+    Args:
+        field_name: the field the recording goes into
+            錄音要寫進的欄位
+        fields: the note's fields (unused: everything follows from the field name)
+            筆記的欄位（用不到：全部由欄位名決定）
+
+    Returns:
+        the target, or ``None`` when the field is not a ``Recordings_*`` field
+        評分方式；不是 ``Recordings_*`` 欄位時為 ``None``
+    """
+    lang = lang_from_field(field_name)
+    if lang is None or field_name != recordings_field(lang):
+        return None
+    return RecordingTarget(
+        template=f"prompts/anki/{LANG_TEMPLATE_MAP[lang]}",
+        reference_field=references_field(lang),
+        target_language=LANG_TO_LOCALE[lang],
+        action_params={"lang": lang},
+    )
+
+
 @register_handler
 class SpeakingTrilingualHandler(BaseHandler):
     """Trilingual speaking practice task handler.
@@ -241,6 +276,7 @@ class SpeakingTrilingualHandler(BaseHandler):
     CREATE_PARAMS = SpeakingTrilingualCreateParams
     DRAFT_PARAMS = SpeakingTrilingualDraftParams
     CREATE_TAGS = ("Speaking_Trilingual", "HandlerGenerated")
+    RECORDING_EVAL = RecordingEvaluation(RECORDING_EVAL_TRILINGUAL, _recording_target)
     #: The web field-search buttons, the short title first. References are JSON holding both sentences and notes,
     #: so a "contains" match finds both.
     #: 網頁欄位搜尋的按鈕，短標題排第一個。參考答案是 JSON，句子與說明都在裡面，「包含」比對會一起找到。

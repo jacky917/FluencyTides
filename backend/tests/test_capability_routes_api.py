@@ -346,15 +346,84 @@ def test_unknown_capability_is_422(client, method):
 
 
 def test_listing_groups_states_by_capability(client):
-    """GET 的每個用途鍵以能力分組：全域列出所有能力、宣告的鍵只列它宣告的；可選項目依能力分開。"""
+    """GET 的每個用途鍵以能力分組：文字全域只有 llm、語音全域有錄音評分的四個能力、宣告的鍵只列它宣告的；
+    全域帶開關狀態；可選項目依能力分開。"""
     body = client.get("/api/v1/capability-routes").json()
 
     capabilities = {"llm", "audio_eval", "audio_llm", "stt"}
     assert set(body["providers"]) == capabilities
     routes = {route["route_key"]: route for route in body["routes"]}
-    assert set(routes["*"]["capabilities"]) == capabilities
-    assert set(routes["recording_eval"]["capabilities"]) == capabilities
+    assert set(routes["*"]["capabilities"]) == {"llm"}
+    assert set(routes["*voice"]["capabilities"]) == capabilities
+    assert routes["*"]["switch"] is False and routes["*voice"]["switch"] is False
+    assert "recording_eval" not in routes
     assert set(routes["recording_eval.speaking_trilingual"]["capabilities"]) == capabilities
+    assert routes["recording_eval.speaking_trilingual"]["switch"] is None
+    assert routes["recording_eval.speaking_trilingual"]["capabilities"]["stt"]["global_key"] == "*voice"
     assert set(routes["jp_verb_pair"]["capabilities"]) == {"llm"}
     assert [option["id"] for option in body["providers"]["audio_eval"]] == ["listen", "stt_diff", "stt_llm"]
     assert all(option["models"] == [] for option in body["providers"]["audio_eval"])
+
+
+def test_global_switch_endpoint_turns_the_switch_on_and_off(client):
+    """PUT /{全域}/switch 打開或關掉全局生效（不會被當成能力 switch）；不是全域的鍵是 404。"""
+    on = client.put("/api/v1/capability-routes/%2Avoice/switch", json={"enabled": True})
+    assert on.status_code == 200 and on.json()["switch"] is True
+    listed = {route["route_key"]: route for route in client.get("/api/v1/capability-routes").json()["routes"]}
+    stt = listed["recording_eval.speaking_trilingual"]["capabilities"]["stt"]
+    assert stt["forced"] is True and listed["*"]["switch"] is False
+
+    off = client.put("/api/v1/capability-routes/%2Avoice/switch", json={"enabled": False})
+    assert off.status_code == 200 and off.json()["switch"] is False
+
+    missing = client.put("/api/v1/capability-routes/jp_verb_pair/switch", json={"enabled": True})
+    assert missing.status_code == 404 and missing.json()["error_code"] == "ROUTE_NOT_FOUND"
+
+
+def test_switch_row_is_not_an_orphan_capability_and_cannot_be_deleted_directly(client):
+    """開關那一列不會出現在任何鍵的能力裡，也不能從一般的「恢復預設」繞過開關刪掉。"""
+    assert client.put("/api/v1/capability-routes/%2Avoice/switch", json={"enabled": True}).status_code == 200
+    routes = {route["route_key"]: route for route in client.get("/api/v1/capability-routes").json()["routes"]}
+    assert set(routes["*voice"]["capabilities"]) == {"llm", "audio_eval", "audio_llm", "stt"}
+    assert not any("global_switch" in route["capabilities"] for route in routes.values())
+    deleted = client.delete("/api/v1/capability-routes/%2Avoice/global_switch")
+    assert (deleted.status_code, deleted.json()["error_code"]) == (422, "INVALID_ROUTE")
+
+
+def test_switch_is_idempotent(client, llm_route_db):
+    """連按兩次打開只有一列；本來就關著再關一次也不出錯。"""
+    from sqlalchemy import select
+
+    from app.infrastructure.database.models import CapabilityRouteSetting
+
+    for _ in range(2):
+        assert client.put("/api/v1/capability-routes/%2A/switch", json={"enabled": True}).json()["switch"] is True
+
+    async def rows():
+        async with llm_route_db() as session:
+            return list((await session.execute(select(CapabilityRouteSetting))).scalars())
+
+    assert [row.capability for row in asyncio.run(rows())] == ["global_switch"]
+    for _ in range(2):
+        assert client.put("/api/v1/capability-routes/%2A/switch", json={"enabled": False}).json()["switch"] is False
+    assert asyncio.run(rows()) == []
+
+
+def test_switch_write_failure_is_503(client):
+    """切換開關時資料庫寫入失敗：503（結果未知），不是 500。"""
+    from app.services import capability_route_service
+
+    error = OperationalError("INSERT ...", {}, Exception("database is locked"))
+    with mock.patch.object(capability_route_service, "_session_factory", side_effect=error):
+        response = client.put("/api/v1/capability-routes/%2Avoice/switch", json={"enabled": True})
+    assert (response.status_code, response.json()["error_code"]) == (503, "ROUTE_STORE_UNAVAILABLE")
+
+
+def test_text_switch_forces_text_uses_only(client):
+    """文字全域打開全局生效：存文字用途的設定時回報目前不生效；錄音評分鍵不受影響。"""
+    assert client.put("/api/v1/capability-routes/%2A/switch", json={"enabled": True}).status_code == 200
+    saved = client.put(f"/api/v1/capability-routes/{KEY}/llm", json={"provider": "yinli", "model": "m1"}).json()
+    state = saved["capabilities"]["llm"]
+    assert (state["forced"], state["global_key"]) == (True, "*")
+    routes = {route["route_key"]: route for route in client.get("/api/v1/capability-routes").json()["routes"]}
+    assert routes["recording_eval.speaking_trilingual"]["capabilities"]["llm"]["forced"] is False

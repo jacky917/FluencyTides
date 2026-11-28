@@ -16,8 +16,10 @@
 - When "person card" is chosen in ``/newcard``, :func:`start_person_create` creates a new person.
 - "AI insight and topics": the LLM analyzes the person from a counselor's perspective and suggests topics;
   names are masked before sending (:mod:`app.services.person_profile_topics`).
-- "Record in a paragraph": a text or voice message is organized by the LLM into interaction, follow-up and
-  field proposals, which are written only after being checked (:mod:`app.services.person_profile_ingest`).
+- "Record in a paragraph": a typed paragraph is organized by the LLM into interaction, follow-up and field
+  proposals, which are written only after being checked (:mod:`app.services.person_profile_ingest`). Only text is
+  accepted: voice is only for language practice (recording evaluation), so a voice message here gets a request to
+  type instead.
 
 - ``/p 名字``：找人，回覆「見面前必看」摘要與操作按鈕。
 - 摘要的按鈕：記一筆互動、待追蹤（標成完成、刪除）、改資料（文字欄位）、各清單（新增、刪除；
@@ -29,8 +31,8 @@
   「改資料」也有同樣的隱藏開關與修改，不必回卡片長按。
 - ``/newcard`` 選「人脈卡」時由 :func:`start_person_create` 建立新的人。
 - 「AI 分析與話題」：LLM 以諮商師的角度分析這個人並推薦話題，名字遮起來送出（:mod:`app.services.person_profile_topics`）。
-- 「用一段話記錄」：一段文字或語音經 LLM 整理成互動、待追蹤與欄位建議，勾選後才寫入
-  （:mod:`app.services.person_profile_ingest`）。
+- 「用一段話記錄」：打一段文字，經 LLM 整理成互動、待追蹤與欄位建議，勾選後才寫入
+  （:mod:`app.services.person_profile_ingest`）。只收文字：語音只用來練語言（錄音評分），這裡傳語音會請使用者改用打字。
 
 All writes go through ``NoteService`` (named actions or ``update_fields``); the handler validates and syncs
 after writing. Callback data starts with ``pp:``; a person is referred to by note ID (only card-face deep links
@@ -219,7 +221,7 @@ def summary_keyboard(note_id: int) -> InlineKeyboardMarkup:
         按鈕鍵盤
     """
     return InlineKeyboardMarkup(inline_keyboard=[
-        [_button("用一段話記錄（文字或語音）", f"pp:ing:{note_id}")],
+        [_button("用一段話記錄", f"pp:ing:{note_id}")],
         [_button("AI 分析與話題", f"pp:topic:{note_id}")],
         [_button("+ 記一筆互動", f"pp:add:{note_id}:I"), _button("待追蹤", f"pp:ls:{note_id}:F")],
         [_button("改資料", f"pp:edit:{note_id}"), _button("清單", f"pp:lists:{note_id}")],
@@ -2210,7 +2212,7 @@ async def _start_ingest(message: types.Message, state: FSMContext, card_service:
     await state.update_data(nid=note_id)
     name = escape_tg(ingest_service.plain_text(loaded[0].get("Display_Name", ""), 40)) or "他"
     await message.answer(
-        f"剛剛和 <b>{name}</b> 聊了什麼？打一段話或傳語音，隨意說就好：\n"
+        f"剛剛和 <b>{name}</b> 聊了什麼？打一段話，隨意寫就好：\n"
         "聊了哪些話題、他的近況、答應了什麼、下次要問什麼、新知道的興趣或家人…\n\n"
         "<i>整理好會先給你看，勾選後才會寫入。</i>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[CANCEL_ROW]),
@@ -2234,57 +2236,29 @@ async def process_ingest_text(message: types.Message, state: FSMContext, card_se
     """
     text = (message.text or "").strip()
     if not text:
-        await message.answer("請輸入一段話，或傳語音。")
+        await message.answer("請輸入一段話。")
         return
     status = await message.reply("⏳ 整理中…")
     await _run_ingest(message, status, state, card_service, text)
 
 
 @router.message(PersonStates.ingest_text, F.voice)
-async def process_ingest_voice(message: types.Message, state: FSMContext, card_service: CardService) -> None:
-    """Handle the voice message of "record in a paragraph", transcribing it first.
+async def reject_ingest_voice(message: types.Message) -> None:
+    """Ask for typed text when a voice message arrives while recording in a paragraph.
 
-    用一段話記錄：收到語音，先轉成文字。
+    用一段話記錄時收到語音：請使用者改用打字。
 
-    Download and transcription failures are reported and keep the state, so the user can resend or type.
+    Voice is only used for language practice (recording evaluation), not as an input method
+    (docs/wip/recording_eval_settings_FEAT_2026-11-26.md D6). The state is kept, so the user can type right away.
 
-    下載與轉文字失敗時說明並保留狀態，使用者可以再傳或改用打字。
+    語音只用來練語言（錄音評分），不當成輸入方式（docs/wip/recording_eval_settings_FEAT_2026-11-26.md D6）。
+    狀態保留，使用者可以直接改用打字。
 
     Args:
         message: the voice message
             語音訊息
-        state: the FSM context holding the person
-            記著是哪個人的 FSM 狀態
-        card_service: the card service
-            卡片服務
     """
-    status = await message.reply("⏳ 下載語音中…")
-    try:
-        bot, voice = message.bot, message.voice
-        file = await bot.get_file(voice.file_id) if bot and voice else None
-        if not bot or not file or not file.file_path:
-            await status.edit_text("❌ 語音下載失敗，請再傳一次。")
-            return
-        buffer = BytesIO()
-        await bot.download_file(file.file_path, buffer)
-    except (TelegramAPIError, IOError) as e:
-        logger.error("人脈卡語音下載失敗: %s", e)
-        await status.edit_text(f"❌ 語音下載失敗：{error_detail(e)}\n請再傳一次。", parse_mode="HTML")
-        return
-    await status.edit_text("⏳ 語音轉文字中…")
-    try:
-        text = (await ingest_service.transcribe(buffer.getvalue(), "person_ingest.ogg")).strip()
-    except FluencyTidesError as e:
-        logger.warning("人脈卡語音轉文字失敗: %s", e)
-        await status.edit_text(
-            f"❌ 語音轉文字失敗：{error_detail(e.message)}\n可以改用打字，或稍後再傳一次。", parse_mode="HTML"
-        )
-        return
-    if not text:
-        await status.edit_text("❌ 沒有聽到內容，請再傳一次（或改用打字）。")
-        return
-    await status.edit_text(f"聽到：{escape_tg(text, 1500)}\n\n⏳ 整理中…", parse_mode="HTML")
-    await _run_ingest(message, status, state, card_service, text)
+    await message.reply("這裡只收文字，請用打字輸入剛剛聊了什麼。")
 
 
 async def _run_ingest(

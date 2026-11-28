@@ -163,9 +163,10 @@ class TestPrompt:
             assert f"`{name}`" in prompt
         assert "`Display_Name`" not in prompt and "`Title`" not in prompt
 
-    def test_route_declares_llm_and_stt(self):
+    def test_route_declares_only_llm(self):
+        """只收文字：用途鍵只用文字模型（語音只用來練語言，recording_eval_settings 計畫書 D6）。"""
         assert ingest.INGEST_ROUTE.key == "person_profile"
-        assert ingest.INGEST_ROUTE.capabilities == {"llm", "stt"}
+        assert ingest.INGEST_ROUTE.capabilities == {"llm"}
 
 
 class TestPreview:
@@ -307,35 +308,18 @@ class TestIngestFlow:
         assert "沒有整理出" in _sent(status.edit_text)[0]
         assert _run(state.get_state()) == PersonStates.ingest_text.state
 
-    def test_voice_is_transcribed_then_ingested(self):
+    def test_voice_is_not_accepted(self):
+        """記錄時傳語音：請改用打字，不下載、不轉文字、不呼叫 LLM，狀態保留可以直接打字。"""
         state, card_service = _fsm(), _card_service()
         _press("pp:ing:5", state, card_service=card_service)
-        message, status = _message()
+        message, _ = _message()
         message.bot = mock.MagicMock()
-        message.bot.get_file = mock.AsyncMock(return_value=mock.MagicMock(file_path="voice/1.oga"))
-        message.bot.download_file = mock.AsyncMock()
-        with (
-            mock.patch.object(ingest, "transcribe", mock.AsyncMock(return_value="今天聊了轉職")) as stt,
-            mock.patch.object(ingest, "ingest", mock.AsyncMock(return_value=_result())) as llm,
-        ):
-            _run(person_profile.process_ingest_voice(message, state, card_service))
-        stt.assert_awaited_once()
-        assert llm.await_args.args[2] == "今天聊了轉職"
-        assert any("聽到：今天聊了轉職" in t for t in _sent(status.edit_text))
-        assert _run(state.get_state()) == PersonStates.ingest_confirm.state
-
-    def test_voice_transcription_failure(self):
-        state, card_service = _fsm(), _card_service()
-        _press("pp:ing:5", state, card_service=card_service)
-        message, status = _message()
-        message.bot = mock.MagicMock()
-        message.bot.get_file = mock.AsyncMock(return_value=mock.MagicMock(file_path="voice/1.oga"))
-        message.bot.download_file = mock.AsyncMock()
-        from app.core.exceptions import STTServiceError
-
-        with mock.patch.object(ingest, "transcribe", mock.AsyncMock(side_effect=STTServiceError("沒有設定"))):
-            _run(person_profile.process_ingest_voice(message, state, card_service))
-        assert "語音轉文字失敗" in _sent(status.edit_text)[-1]
+        message.bot.get_file = mock.AsyncMock()
+        with mock.patch.object(ingest, "ingest", mock.AsyncMock(return_value=_result())) as llm:
+            _run(person_profile.reject_ingest_voice(message))
+        message.bot.get_file.assert_not_awaited()
+        llm.assert_not_awaited()
+        assert "請用打字" in _sent(message.reply)[-1]
         assert _run(state.get_state()) == PersonStates.ingest_text.state
 
     def test_summary_has_ingest_button(self):
