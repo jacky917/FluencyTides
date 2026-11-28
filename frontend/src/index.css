@@ -8,6 +8,40 @@
  */
 @theme {
   --animate-expand-in: expand-in 150ms ease-out;
+  --animate-deck-input-in: deck-input-in 320ms cubic-bezier(0.34, 1.4, 0.64, 1);
+  --animate-deck-input-out: deck-input-out 180ms ease-in;
+
+  /*
+   * 牌組樹新增牌組的輸入列（DeckTreePanel 的 InputReveal）：展開時長高到稍微超過一列再回彈（曲線的
+   * 控制點超過 1），收起時縮回 0。高度取自 Radix 量到的 `--radix-collapsible-content-height`；只在播放
+   * 期間裁掉超出的部分，輸入框的焦點框平常不會被裁到。
+   * The deck tree's new-deck input: grows with an overshoot, shrinks back on close.
+   */
+  @keyframes deck-input-in {
+    from {
+      height: 0;
+      opacity: 0;
+      overflow: hidden;
+    }
+    to {
+      height: var(--radix-collapsible-content-height);
+      opacity: 1;
+      overflow: hidden;
+    }
+  }
+
+  @keyframes deck-input-out {
+    from {
+      height: var(--radix-collapsible-content-height);
+      opacity: 1;
+      overflow: hidden;
+    }
+    to {
+      height: 0;
+      opacity: 0;
+      overflow: hidden;
+    }
+  }
 
   @keyframes expand-in {
     from {

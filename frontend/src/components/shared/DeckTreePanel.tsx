@@ -1,6 +1,7 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import * as CollapsiblePrimitive from '@radix-ui/react-collapsible'
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronRight, FolderPlus, FolderTree, Loader2, Plus, RefreshCw, X } from 'lucide-react'
+import { Check, ChevronRight, FolderCheck, FolderPlus, FolderTree, Loader2, Plus, RefreshCw, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { FluencyTidesAPI } from '../../api/client'
 import { useRevealSelected } from '../../hooks/useRevealSelected'
@@ -58,11 +59,26 @@ const ICON_BUTTON =
 /**
  * 節點旁的按鈕（新增子牌組、建立這一層）：電腦上滑過、聚焦到那一列，或那一列是選取的牌組時才出現，
  * 不佔平常的寬度；手機寬度與觸控裝置沒有「滑過」，一直顯示。左邊留一點間隔，和牌組名稱分開，不會
- * 按到旁邊的名稱（在手機上那會選取牌組、收起牌組樹）。
+ * 按到旁邊的名稱（在手機上那會選取牌組、收起牌組樹）。滑過與輸入列開著（`aria-pressed`）時是淡藍底，
+ * 和選取牌組的深色底分開。不加 `dark:`：網頁只有淺色主題，而 `dark:` 跟著系統的深色模式，會在白底上
+ * 變成深藍底。
  * Row buttons: shown on hover, focus or for the selected deck; always shown on narrow
- * or touch screens. A small gap keeps them apart from the deck name.
+ * or touch screens. A small gap keeps them apart from the deck name; hover and the
+ * pressed state (input row open) use a light blue tint, distinct from the selection.
  */
-const ROW_BUTTON = cn(ICON_BUTTON, 'ml-1 hidden group-hover:flex group-focus-within:flex max-md:flex pointer-coarse:flex')
+const ROW_BUTTON = cn(
+  ICON_BUTTON,
+  'ml-1 hidden group-hover:flex group-focus-within:flex max-md:flex pointer-coarse:flex',
+  'hover:bg-blue-50 hover:text-blue-600 aria-pressed:bg-blue-50 aria-pressed:text-blue-600',
+)
+
+/**
+ * 新增牌組輸入列的展開與收起（`index.css` 的 `deck-input-in`／`deck-input-out`）：展開時長高到稍微超過
+ * 一列再回彈，收起時縮回去；系統設定減少動態效果時不播。
+ * The input row grows with a small overshoot when it opens and shrinks back when it closes.
+ */
+const INPUT_REVEAL =
+  'data-[state=open]:animate-deck-input-in data-[state=closed]:animate-deck-input-out motion-reduce:animate-none'
 
 /**
  * 新增牌組的輸入列開在哪裡（deck_create 計畫書 §6）；同一時間只有一列。
@@ -211,18 +227,17 @@ export function DeckTreePanel({
               <DeckButton label="全部牌組" active={selected === null} onClick={() => onSelect(null)} />
             </div>
           </li>
-          {adding?.kind === 'top' && (
-            <li role="none">
+          <li role="none">
+            <InputReveal open={adding?.kind === 'top'}>
               <DeckNameInput
-                key="top"
                 depth={0}
                 parent={null}
                 initial=""
                 onCreated={handleCreated}
                 onCancel={() => setAdding(null)}
               />
-            </li>
-          )}
+            </InputReveal>
+          </li>
           {tree.map((node) => (
             <DeckItem
               key={node.fullName}
@@ -284,13 +299,12 @@ function DeckItem({
   const hasChildren = node.children.length > 0
   const addingChild = adding?.kind === 'child' && adding.parent === node.fullName
   const addingSelf = adding?.kind === 'self' && adding.node === node.fullName
-  // 正在這個節點底下新增時，即使沒有子牌組、或被收合，也要展開讓輸入列看得到
+  // 正在這個節點底下新增時，被收合的子牌組也展開，看得到新牌組會排在哪裡
   const open = isOpen(node) || addingChild
-  const showGroup = hasChildren || addingChild
   const active = selected === node.fullName
 
   return (
-    <Collapsible asChild open={showGroup && open} onOpenChange={(next) => onToggle(node.fullName, next)}>
+    <Collapsible asChild open={hasChildren && open} onOpenChange={(next) => onToggle(node.fullName, next)}>
       <li role="treeitem" aria-selected={active} aria-expanded={hasChildren ? open : undefined}>
         <div className="group flex items-center">
           {hasChildren ? (
@@ -320,7 +334,7 @@ function DeckItem({
               title="建立這一層"
               onClick={() => onAdding({ kind: 'self', node: node.fullName })}
             >
-              <FolderPlus className="h-4 w-4" />
+              <FolderCheck className="h-4 w-4" />
             </button>
           )}
           <button
@@ -335,12 +349,11 @@ function DeckItem({
               onAdding({ kind: 'child', parent: node.fullName })
             }}
           >
-            <Plus className="h-4 w-4" />
+            <FolderPlus className="h-4 w-4" />
           </button>
         </div>
-        {addingSelf && (
+        <InputReveal open={addingSelf}>
           <DeckNameInput
-            key={`self:${node.fullName}`}
             depth={depth}
             // 補建這一層：建在它的上層底下，預填它這一層的名稱，按 Enter 就是建立它自己
             parent={deckAncestors(node.fullName).at(-2) ?? null}
@@ -348,22 +361,20 @@ function DeckItem({
             onCreated={onCreated}
             onCancel={() => onAdding(null)}
           />
-        )}
-        {showGroup && (
+        </InputReveal>
+        {/* 在子層最前面新增：放在子牌組清單外面，沒有子牌組的節點也不必先掛上清單（掛上時不會播展開動畫） */}
+        <InputReveal open={addingChild}>
+          <DeckNameInput
+            depth={depth + 1}
+            parent={node.fullName}
+            initial=""
+            onCreated={onCreated}
+            onCancel={() => onAdding(null)}
+          />
+        </InputReveal>
+        {hasChildren && (
           <CollapsibleContent asChild>
             <ul role="group">
-              {addingChild && (
-                <li role="none">
-                  <DeckNameInput
-                    key={`child:${node.fullName}`}
-                    depth={depth + 1}
-                    parent={node.fullName}
-                    initial=""
-                    onCreated={onCreated}
-                    onCancel={() => onAdding(null)}
-                  />
-                </li>
-              )}
               {node.children.map((child) => (
                 <DeckItem
                   key={child.fullName}
@@ -384,6 +395,23 @@ function DeckItem({
         )}
       </li>
     </Collapsible>
+  )
+}
+
+/**
+ * 輸入列的展開容器：一直掛著、只切換 `open`，展開與收起才都有動畫（Radix 在一開始就是打開的狀態下掛上時
+ * 不播動畫；收起時等動畫播完才拿掉內容）。收起後內容會拿掉，下次打開是新的輸入列。
+ * Wraps an input row so it animates both ways: the wrapper stays mounted and only `open`
+ * changes, since Radix skips the animation for content mounted already open.
+ * @param props.open - 輸入列是否開著。Whether the input row is open.
+ * @param props.children - 輸入列。The input row.
+ * @returns 展開容器 JSX。The reveal JSX.
+ */
+function InputReveal({ open, children }: { open: boolean; children: ReactNode }) {
+  return (
+    <CollapsiblePrimitive.Root open={open}>
+      <CollapsiblePrimitive.Content className={INPUT_REVEAL}>{children}</CollapsiblePrimitive.Content>
+    </CollapsiblePrimitive.Root>
   )
 }
 
