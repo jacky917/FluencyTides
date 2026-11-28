@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-11-28（同日依討論過的方向改寫：`Handler` 沿用現名代表卡片類型、新增 `Creator`） |
 | **性質** | 重構設計（行為大致不變，改 handler 的分層與註冊表）＋實作工作項；只有 `JP_Context_Dark` 的歸屬會讓畫面上看得到變化（D3） |
-| **狀態** | 🚧 實作完成、未開 PR（2026-11-28；S0–S3 完成，多面向審查的 8 項 Important 已修正，見 D11；S4 本機實測與前端建置尚未做） |
+| **狀態** | 🚧 實作完成、未開 PR（2026-11-28；S0–S4 完成，多面向審查的 8 項 Important 已修正，見 D11；TG 流程待部署後實測，見 §5 S4） |
 | **範圍** | `BaseHandler` 拿掉建卡的部分，只代表「卡片類型」（建好之後的行為，每種筆記類型恰好一個）；新增 `creator.py` 的 `BaseCreator` 代表「建卡流程」（同一種筆記類型可以有好幾個）；`HandlerRegistry` 的 handler 依筆記類型一對一登記、creator 依名稱登記；jp 兩組改成 `jp_verbs/` 資料夾，新增 handler `jp_context`；建卡相關的呼叫端改找 creator。建卡端點改成 `/creators/...` 的第二階段這次不做（D7） |
 | **不動** | Anki 的筆記類型、欄位與既有卡片（不改名、不搬資料）；資料庫（用途鍵 `recording_eval.<名稱>`、`jp_verb_pair` 等 LLM 用途鍵、`card_gen_log.card_type`、`rel_links.created_by` 的值都不變）；正式機設定；各 handler 建卡、改欄位、動作的實際行為 |
 | **PR / 進度** | 分支 `feat/handler-creator-split`，接在 `feat/routing-three-layers`（PR #62，`RECORDING_EVAL` 宣告，2026-11-28 尚未合併）之後開出，PR 等 #62 合併後再開；`speaking_monologue` 開工之前做完（§6） |
@@ -404,7 +404,7 @@ class SpeakingCoachHandler(BaseHandler, BaseCreator):
 
 ### Frontend
 
-**第一階段**：程式不用改。看得到的變化只有資料驅動的部分：卡片頁、工具設定頁的「Handler 能力」多出「日文語境卡」，兩種 jp 卡的 `note_types` 少了 `JP_Context_Dark`。
+**第一階段**：程式不用改。看得到的變化只有資料驅動的部分：卡片頁、工具設定頁的「Handler 能力」、建卡頁的卡片類型清單（不能選，附原因）多出「日文語境卡」，兩種 jp 卡的 `note_types` 少了 `JP_Context_Dark`。
 
 **第二階段**（這次不做；日後做時的範圍）：
 
@@ -458,6 +458,18 @@ git grep -nE "handlers_for_note_type|existing_note_ops|_check_shared_note_types|
 預期只剩文件字串裡提到舊檔名的歷史說明（若有，一併改掉後應該沒有輸出）。
 
 **S4 本機實測**：起本機後端與前端，確認：卡片頁的七種卡加上「日文語境卡」都列得出來，各自只列自己的筆記類型；點一張核心動詞的 Context 卡，刪除的說明提到兩個刪除工具；網頁建卡（單字卡、對話卡、三語卡、人脈卡）與預覽流程正常；TG 錄音評分（對話卡、三語卡）、TG 具名動作（人脈卡）正常。
+
+S4 結果（2026-11-28）：本機後端（這條分支，`TG_BOT_TOKEN` 設空，不碰正式機的 webhook）連 `192.168.50.172` 的 Anki 與 MySQL，前端用 vite 開發伺服器。
+
+- 卡片頁：卡片類型清單有「日文語境卡」；選它只列 `JP_Context_Dark`，選自他動詞、核心動詞只列各自的母卡與 Cloze，筆記類型子選單也只剩兩種。
+- 核心動詞的 Context 卡打開「筆記欄位」：刪除說明列出 `JP_VerbPair` 與 `JP_CoreVerb` 兩個刪除工具（拆分前只寫 `JP_VerbPair`）。
+- 建卡頁：單字卡、外語糾錯、對話卡、三語對話卡、人脈卡的表單都正常出現（人脈卡有「用一段話建立」）；自他動詞、核心動詞、日文語境卡不能選並附原因。
+- 工具設定頁的「Handler 能力」有日文語境卡與兩個刪除工具的說明；知識圖譜的單字卡關聯圖、三語卡主題樹照常回傳。
+- 與這條分支的基底（`feat/routing-three-layers`）同時起在另一個埠比對真實 Anki 的 `GET /handlers`：只差 jp 兩筆的 `note_types` 與新增的 `jp_context`。單字卡關聯圖在兩邊都沒有連線，是既有狀態。
+- `POST /handlers/jp_context/notes` 回 400 `HANDLER_OPERATION_UNSUPPORTED` 與原因。
+- 寫入：經使用者同意，在「測試」牌組各建一張單字卡（標準建立）與人脈卡（覆寫建立），欄位、系統標籤（`VocabularyMining`／`PersonProfile`＋`HandlerGenerated`）與使用者標籤、人脈卡的系統欄位都正確，隨即從 `DELETE /handlers/{name}/notes/{id}` 刪掉，之後讀取回 404；同步沒有提醒。沒有跑 LLM 的預覽流程。
+- 沒測到：TG 的錄音評分與具名動作（本機開機器人會搶走正式機的 webhook），留到部署後實測。
+- 前端：`npm run lint` 0 個錯誤（18 個既有的 `no-explicit-any` 警告）、`npm test` 439 個通過、`npm run build` 成功（前端程式這次沒改）。
 
 ```powershell
 cd frontend
