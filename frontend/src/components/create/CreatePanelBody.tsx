@@ -1,6 +1,6 @@
 /**
- * 建卡面板的內容：卡片類型選單，加上依建卡流程切換的表單（填表或預覽）。Card Generator 頁與卡片
- * 瀏覽頁的建卡畫面共用（`docs/archive/card_list_create_FEAT_2026-10-30.md` D3）。
+ * 建卡面板的內容：卡片類型選單，加上依建卡流程切換的表單（填表或預覽），用在卡片頁的建卡畫面
+ * （`docs/archive/card_list_create_FEAT_2026-10-30.md` D3）。
  *
  * - 卡片類型依 `capabilities.create.channels` 呈現：含 web 可選；只能在 TG、本機腳本建立的反灰並
  *   顯示原因；沒有任何管道的不顯示。前端不自行判斷，只看宣告（`lib/handlerCapabilities.ts`）。
@@ -8,15 +8,14 @@
  *   （`x-ui: audio`、`image`）是上傳／錄音元件：上傳只暫存在後端，建卡成功時才存進 Anki、失敗時 Anki 不變
  *   （`docs/wip/media_upload_FEAT_2026-10-20.md`）；上傳中、等待麥克風授權、錄音中、錄好還沒決定時不能送出。
  * - 預覽流程（`flow="preview"`，三語對話卡與外語糾錯）：見 `PreviewCreate.tsx`。
- * - 選的卡片類型、選單是否展開、填到一半的內容都記在 localStorage（關掉分頁再開還在）；鍵與頁面無關，
- *   兩個入口看到的是同一份。
+ * - 選的卡片類型、選單是否展開、填到一半的內容都記在 localStorage（關掉分頁再開還在；鍵在
+ *   `lib/createStorage.ts`）。草稿通知的「前往」先寫入卡片類型，再打開建卡畫面（`useOpenCreateForm`）。
  * - 全站同一時間只有一份建卡草稿（`docs/wip/server_drafts_FEAT_2026-11-04.md`）：有別種卡片的草稿時，
  *   不顯示表單，改顯示那份草稿的提示（前往、廢棄）；填表建卡也要等那份處理完。
  * - 後端寫入後會同步 AnkiWeb 並等它完成，所以送出期間顯示「建立中、同步中」；422 的欄位錯誤標在欄位旁。
  *
  * The body of a create panel: the card type picker and the form for the
- * handler's create flow. Shared by the Card Generator page and the card
- * browsing page.
+ * handler's create flow, used by the card page's create screen.
  */
 
 import { useId, useMemo, useState } from 'react'
@@ -45,6 +44,7 @@ import {
   type RowsValue,
   type FormErrors,
 } from '../../lib/createForm'
+import { CREATE_HANDLER_KEY, CREATE_PICKER_OPEN_KEY, createFormKey, createTagsKey } from '../../lib/createStorage'
 import { createAvailability, type CreateAvailability } from '../../lib/handlerCapabilities'
 import { mediaFieldState } from '../../lib/mediaUpload'
 import { CURRENT_DRAFT_QUERY_KEY, draftFromError, timeLabel } from '../../lib/serverDraft'
@@ -72,14 +72,12 @@ export interface CreatePanelBodyProps {
   /** 所選牌組的狀態（見 `useDeckStatus`）。The selected deck's status. */
   deckStatus: DeckStatus
   /**
-   * 建立成功的提示上「查看新卡片」按下時；省略時提示改顯示到 Cards 頁的連結。建卡成功後表單一律留在
-   * 原地、清空回預設值，方便接著建下一張。有傳時提示存在 sessionStorage（見 `useCreatedNotice`），
-   * 面板重新掛載也還在。
-   * Views a created note from the success notice; without it the notice links
-   * to the Cards page. The form always stays, reset, after creating. When given,
-   * the notice survives remounts.
+   * 建立成功的提示上「查看新卡片」按下時。建卡成功後表單一律留在原地、清空回預設值，方便接著建下一張；
+   * 提示存在 sessionStorage（見 `useCreatedNotice`），面板重新掛載也還在。
+   * Views a created note from the success notice. The form always stays, reset,
+   * after creating, and the notice survives remounts.
    */
-  onViewCreated?: (result: CreateNoteResponse) => void
+  onViewCreated: (result: CreateNoteResponse) => void
 }
 
 /**
@@ -87,9 +85,9 @@ export interface CreatePanelBodyProps {
  * @returns 面板內容 JSX。The panel body JSX.
  */
 export function CreatePanelBody({ selectedDeck, deckStatus, onViewCreated }: CreatePanelBodyProps) {
-  const [storedHandler, setStoredHandler] = useLocalStorage<string | null>('generate_handler', null)
+  const [storedHandler, setStoredHandler] = useLocalStorage<string | null>(CREATE_HANDLER_KEY, null)
   // 卡片類型選單是否展開；選好類型後自動收起，標題列仍看得到選了哪一種
-  const [pickerOpen, setPickerOpen] = useLocalStorage<boolean>('generate_picker_open', true)
+  const [pickerOpen, setPickerOpen] = useLocalStorage<boolean>(CREATE_PICKER_OPEN_KEY, true)
   const {
     data: handlers,
     isPending: handlersPending,
@@ -337,15 +335,15 @@ function CreateForm({
   handler: HandlerInfo
   selectedDeck: string | null
   deckStatus: DeckStatus
-  onViewCreated?: (result: CreateNoteResponse) => void
+  onViewCreated: (result: CreateNoteResponse) => void
 }) {
   const formId = useId()
   const queryClient = useQueryClient()
   const create = handler.capabilities.create
   const { fields, skipped } = schemaFields(handler.create_schema)
   // 填到一半的內容存在 localStorage：關掉分頁再開還在，建立成功或按「清除」才清掉
-  const formKey = `generate_form:${handler.name}`
-  const tagsKey = `generate_tags:${handler.name}`
+  const formKey = createFormKey(handler.name)
+  const tagsKey = createTagsKey(handler.name)
   const [storedValues, setStoredValues] = useLocalStorage<Record<string, FormValue>>(formKey, {})
   const [tags, setTags] = useLocalStorage<string[]>(tagsKey, [])
   const setCurrentDraft = useSetCurrentDraft()
@@ -355,7 +353,7 @@ function CreateForm({
     [storedValues],
   )
   const [errors, setErrors] = useState<FormErrors | null>(null)
-  const [result, setResult] = useCreatedNotice(handler.name, onViewCreated !== undefined)
+  const [result, setResult] = useCreatedNotice(handler.name)
   // 媒體欄位還沒做完的事（上傳中、等待麥克風授權、錄音中、錄好還沒決定）：欄位名 → 原因；有任何一個就先不能送出
   const [mediaBusy, setMediaBusy] = useState<Record<string, string>>({})
   const mediaBusyReason = Object.values(mediaBusy)[0] ?? null
@@ -399,7 +397,7 @@ function CreateForm({
         return
       }
       setErrors(null)
-      if (!isBackendError(err)) console.error('[CardGenerator] 建立失敗', err)
+      if (!isBackendError(err)) console.error('[CreateForm] 建立失敗', err)
       const info = describeApiError(err)
       toast.error(failureTitle(info.status, '建立'), { description: info.message })
     },
@@ -559,7 +557,7 @@ function CreateForm({
         </p>
       )}
 
-      {result && <CreatedNotice result={result} onView={onViewCreated && (() => onViewCreated(result))} />}
+      {result && <CreatedNotice result={result} onView={() => onViewCreated(result)} />}
     </form>
   )
 }

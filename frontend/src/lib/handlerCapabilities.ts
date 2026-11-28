@@ -15,16 +15,16 @@ export const CHANNEL_LABELS: Record<CreateChannel, string> = {
   script: '本機腳本',
 }
 
-/** Generate 頁上一個 handler 的呈現。How a handler appears on the Generate page. */
+/** 建卡畫面的卡片類型選單上一個 handler 的呈現。How a handler appears on the card type picker. */
 export type CreateAvailability =
   | { kind: 'selectable' }
   | { kind: 'disabled'; reason: string }
   | { kind: 'hidden' }
 
 /**
- * 依 `create.channels` 決定 Generate 頁的呈現（§6）：含 web 可選；非空但不含 web 反灰並顯示原因；
+ * 依 `create.channels` 決定卡片類型選單上的呈現（handlers 計畫書 §6）：含 web 可選；非空但不含 web 反灰並顯示原因；
  * 空陣列不顯示。
- * How the Generate page shows a handler, from `create.channels`.
+ * How the card type picker shows a handler, from `create.channels`.
  * @param create - 建卡能力。The create capability.
  * @returns 可選、反灰（附原因）或不顯示。The availability.
  */

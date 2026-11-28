@@ -2,7 +2,7 @@ import { useEffect, useRef, type MutableRefObject } from 'react'
 import { PlusCircle, X } from 'lucide-react'
 import { useDeckStatus } from '../../hooks/useDeckStatus'
 import { cn } from '../../lib/utils'
-import { CreatePanelBody } from '../generate/CreatePanelBody'
+import { CreatePanelBody } from '../create/CreatePanelBody'
 import { Panel } from '../shared/Panel'
 import { STACKED_VIEWER_MAX_WIDTH } from '../shared/panelStyles'
 import { Button } from '../ui/button'
@@ -29,14 +29,14 @@ interface CardCreatePanelProps {
 }
 
 /**
- * 卡片瀏覽頁右欄的建卡面板（`docs/archive/card_list_create_FEAT_2026-10-30.md` D2、D5）：外框、關閉按鈕
- * 與捲動，內容是與 Card Generator 共用的 `CreatePanelBody`。卡片類型與草稿存在瀏覽器儲存空間，
+ * 卡片頁右欄的建卡面板（`docs/archive/card_list_create_FEAT_2026-10-30.md` D2、D5），網頁唯一的建卡畫面：
+ * 外框、關閉按鈕與捲動，內容是 `components/create/CreatePanelBody`。卡片類型與草稿存在瀏覽器儲存空間，
  * 切換版面而重新掛載時都還在。
  *
  * 建卡成功後留在這裡、表單清空回預設值，可以接著建下一張；要看新卡片時按成功提示上的「查看新卡片」。
  *
- * The create panel in the viewer column of the card browsing page; its body
- * is shared with the Card Generator page.
+ * The create panel in the viewer column of the card page, the web's only
+ * create screen; its body is `CreatePanelBody`.
  * @returns 面板 JSX。Panel JSX.
  */
 export function CardCreatePanel({ sideBySide, className, scrolledRef, deck, onClose, onViewCreated }: CardCreatePanelProps) {

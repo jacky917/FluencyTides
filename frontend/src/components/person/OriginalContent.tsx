@@ -13,7 +13,7 @@ import { keyLabel } from '../../lib/personFill'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
-import { TEXTAREA_CLASS } from '../generate/formParts'
+import { TEXTAREA_CLASS } from '../create/formParts'
 
 const FIELD_CLASS = 'h-9 pointer-coarse:h-10 pointer-coarse:text-base'
 const AREA_CLASS = cn(TEXTAREA_CLASS, 'min-h-16 pointer-coarse:text-base')

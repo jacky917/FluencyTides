@@ -2,8 +2,8 @@
  * 全站的建卡草稿通知（`docs/wip/server_drafts_FEAT_2026-11-04.md` D9、D11），掛在版面層級、不畫任何東西。
  *
  * - 讀目前的草稿：打開網站、回到分頁時各讀一次，進行中（生成中、建立中）時每 10 秒讀一次；在建卡畫面時
- *   那邊每 3 秒讀一次，共用同一份快取。從生成中變成可建立或失敗時跳通知，附「前往」（到 Card Generator
- *   並選好那種卡片）。
+ *   那邊每 3 秒讀一次，共用同一份快取。從生成中變成可建立或失敗時跳通知，附「前往」（打開卡片頁的建卡畫面
+ *   並選好那種卡片，見 `useOpenCreateForm`）。
  * - 記住看過的生成草稿 ID（localStorage，同一個瀏覽器的分頁共用）。後端說沒有草稿、這裡卻還記得時，表示
  *   草稿在別處建立或廢棄，或伺服器重新啟動過（草稿只存在記憶體），提示一次並忘掉。這個瀏覽器自己建立、
  *   廢棄時已先忘掉；填表建卡的佔用不記。判斷在 `draftNotice`（`lib/serverDraft.ts`）。
@@ -13,8 +13,8 @@
 
 import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { useOpenCreateForm } from '../../hooks/useOpenCreateForm'
 import { useCurrentDraft } from '../../hooks/useServerDraft'
 import { readStored, removeStored, writeStored } from '../../hooks/useStoredState'
 import { isFillDraft, openPersonFill } from '../../lib/personFill'
@@ -30,7 +30,7 @@ const WATCH_POLL_MS = 10_000
  */
 export function DraftWatcher() {
   const { data } = useCurrentDraft(WATCH_POLL_MS)
-  const navigate = useNavigate()
+  const openCreateForm = useOpenCreateForm()
   const queryClient = useQueryClient()
   const previous = useRef<Pick<ServerDraft, 'id' | 'status'> | null>(null)
 
@@ -57,12 +57,7 @@ export function DraftWatcher() {
     // AI 整理的對話框掛在版面上，任何一頁都能直接打開；其他草稿到建卡畫面
     const action = {
       label: '前往',
-      onClick: fill
-        ? () => openPersonFill()
-        : () => {
-            writeStored('local', 'generate_handler', data.handler)
-            navigate('/generate')
-          },
+      onClick: fill ? () => openPersonFill() : () => openCreateForm(data.handler),
     }
     if (notify === 'ready' && fill) {
       toast.success(`${title}已整理好`, { description: '打開對話框確認後寫入', action })
@@ -71,7 +66,7 @@ export function DraftWatcher() {
     } else {
       toast.error(`${title}草稿生成失敗`, { description: data.error?.message, action })
     }
-  }, [data, navigate, queryClient])
+  }, [data, openCreateForm, queryClient])
 
   return null
 }

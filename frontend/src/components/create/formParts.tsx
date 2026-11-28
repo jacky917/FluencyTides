@@ -1,10 +1,9 @@
 /**
- * Card Generator 兩種建卡流程（填表、預覽）共用的表單零件：牌組說明、由 schema 產生的欄位、建立成功的提示。
+ * 兩種建卡流程（填表、預覽）共用的表單零件：牌組說明、由 schema 產生的欄位、建立成功的提示。
  * Form parts shared by the form and preview create flows.
  */
 
 import { useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
 import { ChevronRight, Plus, X } from 'lucide-react'
 import { Button } from '../ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible'
@@ -472,14 +471,13 @@ export function DeckRequiredNotice({ reason, kept }: { reason: string; kept?: st
 }
 
 /**
- * 建立成功的提示：筆記數、牌組、同步提醒，加上查看新卡片的方式——有 `onView` 時是按鈕（卡片瀏覽頁的
- * 建卡畫面：在右欄打開新卡片），否則是到 Cards 頁這個牌組的連結（Card Generator）。
- * The success notice after creating notes, with a way to view them.
+ * 建立成功的提示：筆記數、牌組、同步提醒，加上「查看新卡片」（在卡片頁右欄打開新卡片）。
+ * The success notice after creating notes, with a button to view them.
  * @param props.result - 建卡結果。The create result.
- * @param props.onView - 查看新卡片；省略時改顯示到 Cards 頁的連結。Views the new card.
+ * @param props.onView - 查看新卡片。Views the new card.
  * @returns 提示 JSX。The notice JSX.
  */
-export function CreatedNotice({ result, onView }: { result: CreateNoteResponse; onView?: () => void }) {
+export function CreatedNotice({ result, onView }: { result: CreateNoteResponse; onView: () => void }) {
   return (
     <div role="status" className="space-y-1 rounded-md border border-emerald-500/50 bg-emerald-500/10 px-3 py-2 text-sm">
       <p className="font-medium">
@@ -487,15 +485,9 @@ export function CreatedNotice({ result, onView }: { result: CreateNoteResponse; 
       </p>
       {/* 加標籤、建立後的後續處理（例如刪舊卡）、同步的提醒可能同時發生，後端以換行分開 */}
       {result.sync_warning && <p className="whitespace-pre-line text-amber-900">{result.sync_warning}</p>}
-      {onView ? (
-        <button type="button" className="text-primary underline" onClick={onView}>
-          {result.note_ids.length > 1 ? '查看新卡片（第一張）' : '查看新卡片'}
-        </button>
-      ) : (
-        <Link className="text-primary underline" to={`/cards?deck=${encodeURIComponent(result.deck)}`}>
-          到 Cards 頁查看這個牌組
-        </Link>
-      )}
+      <button type="button" className="text-primary underline" onClick={onView}>
+        {result.note_ids.length > 1 ? '查看新卡片（第一張）' : '查看新卡片'}
+      </button>
     </div>
   )
 }

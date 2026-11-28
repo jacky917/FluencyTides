@@ -60,13 +60,13 @@ const ROW_BUTTON =
 type AddingTarget = { kind: 'top' } | { kind: 'child'; parent: string } | { kind: 'self'; node: string }
 
 /**
- * 牌組樹面板（Anki 牌組名以 `::` 分層，可展開），Cards、Generate、Graph 三頁共用。展開狀態由
+ * 牌組樹面板（Anki 牌組名以 `::` 分層，可展開），Cards、Graph 兩頁共用。展開狀態由
  * 呼叫端保存（各頁分開記）：版面模式改變時面板會重新掛載，狀態才不會遺失。
  *
  * 也在這裡新增牌組（deck_create 計畫書）：標題列的「＋」新增最上層牌組，節點的「＋」新增子牌組；
  * Anki 裡不存在的中間節點（分類節點）以淡色斜體顯示，可以按「建立這一層」補建。
  *
- * The deck tree panel shared by the three pages; the expansion state is owned
+ * The deck tree panel shared by the card and graph pages; the expansion state is owned
  * by the caller. Decks are created here too: the header "+" adds a top-level
  * deck, a node's "+" adds a child, and a category node can be created in place.
  * @param props.scrollable - 面板自己捲動（標題列固定）。The panel scrolls itself.
@@ -136,7 +136,7 @@ export function DeckTreePanel({
     onSelect(result.deck_name)
     toast.success(`已建立牌組「${result.deck_name}」`)
     if (result.sync_warning) toast.warning(result.sync_warning)
-    // 清單沒重抓成功：樹上還看不到新牌組，建卡頁也會以為它不存在，要講清楚不是沒建成
+    // 清單沒重抓成功：樹上還看不到新牌組，建卡畫面也會以為它不存在，要講清楚不是沒建成
     if (!listReloaded) toast.warning('牌組清單重新載入失敗，畫面上還看不到新牌組；請按牌組旁的重新整理。')
   }
 
@@ -415,7 +415,7 @@ function DeckNameInput({
     mutationKey: CREATE_DECK_KEY,
     mutationFn: async (fullName: string) => {
       const result = await FluencyTidesAPI.createDeck(fullName)
-      // 等牌組清單重抓完才算結束：之後選取新牌組時它已經在清單裡，建卡頁不會閃一下錯誤提示。
+      // 等牌組清單重抓完才算結束：之後選取新牌組時它已經在清單裡，建卡畫面不會閃一下錯誤提示。
       // 重抓失敗不是建立失敗（牌組已經建好），另外回報，不讓它掉進 onError 變成「無法新增」
       let listReloaded = true
       try {

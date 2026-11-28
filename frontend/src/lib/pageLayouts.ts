@@ -1,8 +1,8 @@
 /**
- * 各頁的分欄版面設定：卡片瀏覽頁三欄（牌組、清單、卡面），Generate、Graph 兩欄（牌組、主區塊）。
+ * 各頁的分欄版面設定：卡片頁三欄（牌組、清單、卡面），Graph 兩欄（牌組、主區塊）。
  * 計算本身在 `lib/splitLayout.ts`。
  * The split layouts of the pages: three columns on the card browsing page,
- * two (deck tree and main area) on Generate and Graph.
+ * two (deck tree and main area) on Graph.
  */
 
 import type { PanelSpec, SplitPageConfig } from './splitLayout'
@@ -20,7 +20,7 @@ export const DECK_MIN = 180
 export const DECK_MAX = 560
 /** 清單最窄的寬度。Narrowest card list. */
 export const LIST_MIN = 240
-/** Generate 的表單、Graph 的圖最窄的寬度。Narrowest main area of Generate and Graph. */
+/** Graph 的圖最窄的寬度。Narrowest main area of Graph. */
 export const MAIN_MIN = 320
 
 /** 內容區至少這麼寬才三欄並排。Content width needed for three columns. */
@@ -28,14 +28,14 @@ export const THREE_COLUMN_MIN = 1200
 /** 內容區至少這麼寬才讓牌組與旁邊的區塊並排。Content width needed for two columns. */
 export const TWO_COLUMN_MIN = 640
 
-/** 牌組樹面板（三頁共用）。The deck tree panel, shared by the three pages. */
+/** 牌組樹面板（卡片頁、Graph 共用）。The deck tree panel, shared by the card and graph pages. */
 export const DECK_PANEL: Readonly<PanelSpec> = Object.freeze({
   min: DECK_MIN,
   max: DECK_MAX,
   defaultWidth: () => DECK_DEFAULT,
 })
 
-/** 卡片瀏覽頁：牌組、清單、卡面三欄；卡面寬度依視窗而定。The card browsing page. */
+/** 卡片頁：牌組、清單、卡面三欄；卡面寬度依視窗而定。The card page. */
 export const CARD_LAYOUT: SplitPageConfig<'deck' | 'viewer'> = Object.freeze({
   id: 'cards',
   // 沿用改版前的鍵，使用者調過的寬度不會被重設
@@ -53,17 +53,12 @@ export const CARD_LAYOUT: SplitPageConfig<'deck' | 'viewer'> = Object.freeze({
 })
 
 /**
- * Generate、Graph 頁共用的面板與斷點：牌組樹＋主區塊（欄 ID 為 `main`）。
- * Panels and breakpoints of the two-column pages; the main column's ID is `main`.
+ * Knowledge Graph 頁：牌組樹＋主區塊（欄 ID 為 `main`）。
+ * The knowledge graph page: the deck tree and the main area, whose column ID is `main`.
  */
-const SIDE_LAYOUT = {
+export const GRAPH_LAYOUT: SplitPageConfig<'deck'> = Object.freeze({
+  id: 'graph',
   specs: Object.freeze({ deck: DECK_PANEL }),
   fluidMin: Object.freeze({ main: MAIN_MIN }),
   breakpoints: Object.freeze({ full: TWO_COLUMN_MIN }),
-} as const
-
-/** Card Generator 頁。The card generator page. */
-export const GENERATE_LAYOUT: SplitPageConfig<'deck'> = Object.freeze({ id: 'generate', ...SIDE_LAYOUT })
-
-/** Knowledge Graph 頁。The knowledge graph page. */
-export const GRAPH_LAYOUT: SplitPageConfig<'deck'> = Object.freeze({ id: 'graph', ...SIDE_LAYOUT })
+})

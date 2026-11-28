@@ -7,10 +7,8 @@
  * 避免 TS2339 ("Property 'env' does not exist on type 'ImportMeta'") 錯誤。
  */
 interface ImportMetaEnv {
-  /** 前端預設使用的 Anki 牌組名稱 */
+  /** 知識圖譜預設選中的 Anki 牌組名稱 */
   readonly VITE_DEFAULT_DECK: string
-  /** 前端預設使用的 Anki 模型檔案名稱 */
-  readonly VITE_DEFAULT_MODEL_FILE: string
 }
 
 interface ImportMeta {
