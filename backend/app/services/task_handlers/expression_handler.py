@@ -2,13 +2,13 @@
 
 外語糾錯任務處理器（Expression Correction Handler）模組。
 
-Generates and updates the master/micro card groups of foreign-language correction: calls the LLM to produce
-the correction result, creates Expression_Master_Dark master cards and Expression_Micro_Dark micro cards, and
-supports JSON updates of the audio fields.
+Generates and updates the master/micro card groups of foreign-language correction. The creator calls the LLM to
+produce the correction result and creates Expression_Master_Dark master cards and Expression_Micro_Dark micro
+cards; the handler supports JSON updates of the audio fields once the cards exist.
 
-負責「外語糾錯」母子卡片群組的生成與更新：呼叫 LLM 產生糾錯結果、
-建立 Expression_Master_Dark 母卡片與 Expression_Micro_Dark 子卡片，
-並支援音檔欄位的 JSON 更新。
+負責「外語糾錯」母子卡片群組的生成與更新：creator 呼叫 LLM 產生糾錯結果、
+建立 Expression_Master_Dark 母卡片與 Expression_Micro_Dark 子卡片；handler 在卡片建好之後
+支援音檔欄位的 JSON 更新。
 """
 
 import html
@@ -25,11 +25,13 @@ from app.infrastructure.anki.client import AnkiConnectError
 from app.services.task_handlers.base import BaseHandler, DuplicateResolution
 from app.services.task_handlers.capabilities import (
     CreateCapability,
+    CreatorCapabilities,
     GraphCapability,
     HandlerCapabilities,
     Operation,
 )
-from app.services.task_handlers.registry import register_handler
+from app.services.task_handlers.creator import BaseCreator
+from app.services.task_handlers.registry import register_creator, register_handler
 from app.infrastructure.utils.id_generator import generate_unique_card_id
 from app.core.dependencies import get_template_engine
 from app.infrastructure.llm.routing import route
@@ -196,13 +198,13 @@ class ExpressionCreateParams(BaseModel):
     TG passes only ``original_text``, ``context``, ``source_tag``, ``llm_result``, ``selected_indices``, and
     ``allow_duplicate`` (``_execute_card_creation`` in ``expression_fsm.py``), so everything but the original
     text is optional; the languages and the user's own corrections are used only when no ``llm_result`` is
-    given and the handler calls the LLM itself. The defaults match the handler's defaults when reading
+    given and the creator calls the LLM itself. The defaults match the creator's defaults when reading
     parameters. ``tg_bot`` is passed by the service layer.
 
     TG 只傳 ``original_text``、``context``、``source_tag``、``llm_result``、``selected_indices``、
     ``allow_duplicate``（``expression_fsm.py`` 的 ``_execute_card_creation``），所以除原文外都是選填；
-    語言與使用者自訂修正只在沒給 ``llm_result``、要由 handler 自己呼叫 LLM 時才用。
-    預設值與 handler 讀參數時的預設相同。``tg_bot`` 由服務層傳入。
+    語言與使用者自訂修正只在沒給 ``llm_result``、要由 creator 自己呼叫 LLM 時才用。
+    預設值與 creator 讀參數時的預設相同。``tg_bot`` 由服務層傳入。
     """
 
     original_text: str = Field(
@@ -220,7 +222,7 @@ class ExpressionCreateParams(BaseModel):
     user_grammar_correction: str = Field(default="", title="自己的文法修正（選填）")
     user_reorganization: str = Field(default="", title="自己的重新組織（選填）")
     llm_result: LLMExpressionCorrectionResult | None = Field(
-        default=None, description="已預覽的 LLM 結果；沒給時由 handler 呼叫 LLM"
+        default=None, description="已預覽的 LLM 結果；沒給時由後端呼叫 LLM"
     )
     selected_indices: list[int] | None = Field(
         default=None, description="要建立的子卡編號（1 起算）；None 表示全部"
@@ -236,25 +238,18 @@ class ExpressionCorrectionHandler(BaseHandler):
     """Handler for foreign-language correction and atomic knowledge points.
 
     外語糾錯與原子化知識點處理器。
+
+    Owns the master and micro cards once they exist (adding audio); creation is ``ExpressionCorrectionCreator``.
+
+    負責建好之後的母卡與子卡（新增音檔）；建立見 ``ExpressionCorrectionCreator``。
     """
 
     CAPABILITIES = HandlerCapabilities(
-        create=CreateCapability(
-            supported=True,
-            channels=("web", "tg"),
-            flow="preview",
-            deck="fixed",
-            fixed_deck=MASTER_DECK,
-            note_type=MASTER_MODEL,
-        ),
         update_fields=Operation(reason="目前只支援新增音檔"),
         delete=Operation(reason="外語糾錯的母子卡刪除尚未開放"),
         actions=("add_audio",),
         graph=GraphCapability(reason="尚未實作"),
     )
-    CREATE_PARAMS = ExpressionCreateParams
-    DRAFT_PARAMS = ExpressionDraftParams
-    CREATE_TAGS = ("Expression_Correction", "HandlerGenerated", "MicroPoint")
 
     @property
     @override
@@ -282,6 +277,97 @@ class ExpressionCorrectionHandler(BaseHandler):
         這個處理器負責的 Anki 筆記類型。
         """
         return ["Expression_Master_Dark", "Expression_Micro_Dark"]
+
+    @override
+    async def execute_update(
+        self,
+        card_service: "CardService",
+        relation_service: "RelationService",
+        note_id: int,
+        parameters: dict
+    ) -> None:
+        """Apply a task-specific update (currently only the ``add_audio`` action).
+
+        客製化更新（目前僅支援 add_audio 動作）。
+
+        ``add_audio`` replaces the audio of the first item when it is the AI's, and appends an AI item
+        otherwise.
+
+        ``add_audio`` 在第一筆是 AI 的音檔時替換它，否則新增一筆 AI 的音檔。
+
+        Args:
+            card_service: the card service
+                卡片服務
+            relation_service: the relation service (unused)
+                關聯服務（不使用）
+            note_id: the target note ID
+                目標 Note ID
+            parameters: must contain ``action``; ``add_audio`` also requires ``field_name`` and ``audio``
+                需含 ``action``，add_audio 時另需 ``field_name`` 與 ``audio``
+
+        Raises:
+            ValueError: if a parameter is missing or the action is not supported
+                若參數缺漏或 action 不支援
+        """
+        action = parameters.get("action")
+        if action == "add_audio":
+            field_name = parameters.get("field_name")
+            audio_filename = parameters.get("audio")
+
+            if not field_name or not audio_filename:
+                raise ValueError("add_audio 需要 field_name 和 audio 參數")
+
+            items = await AnkiJsonFieldManager.safe_read_list(card_service, note_id, field_name)
+
+            # 替換音檔
+            if items and isinstance(items[0], dict) and items[0].get("speaker") == "AI":
+                items[0]["audio"] = audio_filename
+            else:
+                items.append({"audio": audio_filename, "speaker": "AI", "avatar": "none"})
+
+            await AnkiJsonFieldManager.update_field(card_service, note_id, field_name, items)
+            logger.info("已新增音檔 %s 到 %s", audio_filename, field_name)
+            return
+
+        raise ValueError(f"不支援的更新操作: {action}")
+
+
+@register_creator
+class ExpressionCorrectionCreator(BaseCreator):
+    """Creates foreign-language correction card groups through the preview flow (web and TG).
+
+    以預覽流程建立外語糾錯的母子卡片群組（網頁與 TG）。
+
+    The LLM corrects the original text; the user reviews the result, then one master card and its micro cards are
+    created together in the fixed decks.
+
+    LLM 糾正原文；使用者看過結果後，一次在固定牌組建立一張母卡與它的子卡。
+    """
+
+    HANDLER = "expression_correction"
+    CAPABILITIES = CreatorCapabilities(
+        create=CreateCapability(
+            supported=True,
+            channels=("web", "tg"),
+            flow="preview",
+            deck="fixed",
+            fixed_deck=MASTER_DECK,
+            note_type=MASTER_MODEL,
+        ),
+    )
+    PRODUCES = (MASTER_MODEL, MICRO_MODEL)
+    CREATE_PARAMS = ExpressionCreateParams
+    DRAFT_PARAMS = ExpressionDraftParams
+    CREATE_TAGS = ("Expression_Correction", "HandlerGenerated", "MicroPoint")
+
+    @property
+    @override
+    def creator_name(self) -> str:
+        """The creator name used in create URLs.
+
+        creator 名稱，出現在建卡網址裡。
+        """
+        return "expression_correction"
 
     async def execute_generate(
         self,
@@ -681,56 +767,3 @@ class ExpressionCorrectionHandler(BaseHandler):
                 )
 
             return list(tx.created_ids)
-
-    @override
-    async def execute_update(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        note_id: int,
-        parameters: dict
-    ) -> None:
-        """Apply a task-specific update (currently only the ``add_audio`` action).
-
-        客製化更新（目前僅支援 add_audio 動作）。
-
-        ``add_audio`` replaces the audio of the first item when it is the AI's, and appends an AI item
-        otherwise.
-
-        ``add_audio`` 在第一筆是 AI 的音檔時替換它，否則新增一筆 AI 的音檔。
-
-        Args:
-            card_service: the card service
-                卡片服務
-            relation_service: the relation service (unused)
-                關聯服務（不使用）
-            note_id: the target note ID
-                目標 Note ID
-            parameters: must contain ``action``; ``add_audio`` also requires ``field_name`` and ``audio``
-                需含 ``action``，add_audio 時另需 ``field_name`` 與 ``audio``
-
-        Raises:
-            ValueError: if a parameter is missing or the action is not supported
-                若參數缺漏或 action 不支援
-        """
-        action = parameters.get("action")
-        if action == "add_audio":
-            field_name = parameters.get("field_name")
-            audio_filename = parameters.get("audio")
-
-            if not field_name or not audio_filename:
-                raise ValueError("add_audio 需要 field_name 和 audio 參數")
-
-            items = await AnkiJsonFieldManager.safe_read_list(card_service, note_id, field_name)
-
-            # 替換音檔
-            if items and isinstance(items[0], dict) and items[0].get("speaker") == "AI":
-                items[0]["audio"] = audio_filename
-            else:
-                items.append({"audio": audio_filename, "speaker": "AI", "avatar": "none"})
-
-            await AnkiJsonFieldManager.update_field(card_service, note_id, field_name, items)
-            logger.info("已新增音檔 %s 到 %s", audio_filename, field_name)
-            return
-
-        raise ValueError(f"不支援的更新操作: {action}")

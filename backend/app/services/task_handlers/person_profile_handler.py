@@ -55,12 +55,14 @@ from app.services.relation_service import RelationService
 from app.services.task_handlers.base import BaseHandler, field_text, note_field_values
 from app.services.task_handlers.capabilities import (
     CreateCapability,
+    CreatorCapabilities,
     HandlerCapabilities,
     JsonFieldSpec,
     Operation,
     SearchField,
 )
-from app.services.task_handlers.registry import register_handler
+from app.services.task_handlers.creator import BaseCreator
+from app.services.task_handlers.registry import register_creator, register_handler
 
 logger = logging.getLogger(__name__)
 
@@ -332,9 +334,7 @@ class PersonProfileHandler(BaseHandler):
 
     人脈卡任務處理器。
 
-    - Create (web, TG): the parameters are ``PersonCreateParams``; ``Card_ID`` is generated, ``TG_Bot`` and
-      ``Updated_At`` are written, and the six JSON fields are filled with ``[]`` (history fields left unfilled
-      stay empty, see below). Duplicate names are allowed (different people can all be called 「田中さん」).
+    - Create (web, TG) and the web "AI 整理": see ``PersonProfileCreator``.
     - Plain field updates: JSON fields and ``Card_ID`` cannot be changed directly, and retired fields
       (:data:`RETIRED_FIELDS`: title and work content, both merged into ``Company``) cannot be written with a
       non-empty value (clearing is allowed); the photo accepts only a file name obtained from a web upload
@@ -359,9 +359,7 @@ class PersonProfileHandler(BaseHandler):
       interactions get a later date, ``Last_Contact`` is updated too.
     - Delete: the standard delete.
 
-    - 建立（網頁、TG）：參數是 ``PersonCreateParams``；自動產生 ``Card_ID``、寫入 ``TG_Bot`` 與
-      ``Updated_At``、六個 JSON 欄位填 ``[]``（會變的欄位沒填時留空，見下）。允許稱呼重複（不同的人
-      可以都叫「田中さん」）。
+    - 建立（網頁、TG）與網頁的「AI 整理」：見 ``PersonProfileCreator``。
     - 修改一般欄位：JSON 與 ``Card_ID`` 不能直接改，停用的欄位（:data:`RETIRED_FIELDS`：職稱、工作內容，都已
       併進 ``Company``）也不能寫入非空的值（清空可以）；照片只能填網頁上傳取得的檔名（media_upload 計畫書 D3）；有改動時更新 ``Updated_At``。
     - 具名動作（``ACTIONS``）：追加互動紀錄（同時更新 ``Last_Contact``）、新增待追蹤、改待追蹤狀態、
@@ -382,11 +380,7 @@ class PersonProfileHandler(BaseHandler):
     """
 
     CAPABILITIES = HandlerCapabilities(
-        create=CreateCapability(
-            supported=True, channels=("web", "tg"), flow="form", deck="selected", note_type=PERSON_NOTE_TYPE
-        ),
         update_fields=Operation(supported=True),
-        fill=Operation(supported=True),
         update_json=Operation(supported=True),
         delete=Operation(supported=True),
         actions=ACTIONS,
@@ -398,8 +392,6 @@ class PersonProfileHandler(BaseHandler):
         **{name: JsonFieldSpec(item=spec.model, title=spec.title) for name, spec in PERSON_HISTORY_FIELDS.items()},
     }
     MEDIA_FIELDS = {"Photo": "image"}
-    CREATE_TAGS = ("PersonProfile", "HandlerGenerated")
-    CREATE_PARAMS = PersonCreateParams
     #: The web field-search buttons: "name" combines the names in each language, and related fields are grouped.
     #: 網頁欄位搜尋的按鈕：名字合併各語言的姓名，相近的欄位放在一起。
     SEARCH_FIELDS = (
@@ -451,69 +443,6 @@ class PersonProfileHandler(BaseHandler):
         這個處理器負責的 Anki 筆記類型。
         """
         return [PERSON_NOTE_TYPE]
-
-    @override
-    async def execute_create(
-        self,
-        card_service: CardService,
-        relation_service: RelationService,
-        deck_name: str,
-        model_name: str,
-        parameters: dict[str, object],
-    ) -> list[int]:
-        """Create a person, filling in the fields the user gave and the system fields.
-
-        建立一個人：填入使用者給的欄位與系統欄位。
-
-        Duplicates are allowed.
-
-        允許重複。
-
-        Args:
-            card_service: the card service
-                卡片服務
-            relation_service: the relation service (unused)
-                關聯服務（不用）
-            deck_name: the target deck
-                目標牌組
-            model_name: the note type (confirmed by the service layer)
-                筆記類型（服務層已確認）
-            parameters: the values validated by ``PersonCreateParams``, plus the ``tg_bot`` the service layer
-                adds. History fields are turned into lists here (text is split by the rules, a list gives one
-                entry per row; a position row is company plus title).
-                ``PersonCreateParams`` 驗證過的值，加上服務層補的 ``tg_bot``。會變的欄位在這裡轉成清單
-                （文字照規則切、清單每列一筆；職位一列是公司＋職稱）。
-
-        Returns:
-            the created note ID, as a one-element list
-            建立的 Note ID（單元素陣列）
-
-        Raises:
-            InvalidNoteFieldsError: if a history entry does not match its model
-                若會變的欄位有一筆不符模型
-        """
-        values = dict(parameters)
-        tg_bot = str(values.pop("tg_bot", "") or "")
-        today = today_iso()
-        fields = {
-            name: str(value)
-            for name, value in values.items()
-            if value not in (None, "") and name not in PERSON_HISTORY_FIELDS
-        }
-        for name in HISTORY_FIELDS:
-            items = history_from_input(name, values.get(name), today)
-            if items:
-                fields[name] = AnkiJsonFieldManager.serialize([_validate_item(name, item) for item in items])
-        fields.update({name: "[]" for name in PERSON_JSON_ITEMS})
-        fields.update({"Card_ID": new_card_id(), "TG_Bot": tg_bot, "Updated_At": today})
-        note_id = await card_service.create_note(
-            deck_name=deck_name,
-            model_name=model_name,
-            fields=fields,
-            tags=list(self.CREATE_TAGS),
-            allow_duplicate=True,
-        )
-        return [note_id]
 
     @override
     async def execute_update(
@@ -763,6 +692,106 @@ class PersonProfileHandler(BaseHandler):
         await super().execute_update(card_service, relation_service, note_id, parameters)
         if changed and isinstance(fields, dict) and "Updated_At" not in fields:
             await _write(card_service, note_id, {})
+
+
+@register_creator
+class PersonProfileCreator(BaseCreator):
+    """Creates person profile cards from a form (web and TG), and offers the web "AI 整理".
+
+    以表單建立人脈卡（網頁與 TG），並提供網頁的「AI 整理」。
+
+    The parameters are ``PersonCreateParams``; ``Card_ID`` is generated, ``TG_Bot`` and ``Updated_At`` are
+    written, and the six JSON fields are filled with ``[]`` (history fields left unfilled stay empty). Duplicate
+    names are allowed (different people can all be called 「田中さん」). "AI 整理" belongs here because it
+    produces drafts sharing the site-wide slot with the preview flow (handler/creator split plan D2); writing its
+    proposals into an existing card still goes through the handler's actions.
+
+    參數是 ``PersonCreateParams``；自動產生 ``Card_ID``、寫入 ``TG_Bot`` 與 ``Updated_At``、六個 JSON 欄位填
+    ``[]``（會變的欄位沒填時留空）。允許稱呼重複（不同的人可以都叫「田中さん」）。「AI 整理」歸這裡，因為它
+    產生的草稿和預覽流程共用全站一份槽位（handler 拆分計畫書 D2）；把建議寫進現有的卡仍經過 handler 的動作。
+    """
+
+    HANDLER = "person_profile"
+    CAPABILITIES = CreatorCapabilities(
+        create=CreateCapability(
+            supported=True, channels=("web", "tg"), flow="form", deck="selected", note_type=PERSON_NOTE_TYPE
+        ),
+        fill=Operation(supported=True),
+    )
+    CREATE_TAGS = ("PersonProfile", "HandlerGenerated")
+    CREATE_PARAMS = PersonCreateParams
+
+    @property
+    @override
+    def creator_name(self) -> str:
+        """The creator name used in create URLs.
+
+        creator 名稱，出現在建卡網址裡。
+        """
+        return "person_profile"
+
+    @override
+    async def execute_create(
+        self,
+        card_service: CardService,
+        relation_service: RelationService,
+        deck_name: str,
+        model_name: str,
+        parameters: dict[str, object],
+    ) -> list[int]:
+        """Create a person, filling in the fields the user gave and the system fields.
+
+        建立一個人：填入使用者給的欄位與系統欄位。
+
+        Duplicates are allowed.
+
+        允許重複。
+
+        Args:
+            card_service: the card service
+                卡片服務
+            relation_service: the relation service (unused)
+                關聯服務（不用）
+            deck_name: the target deck
+                目標牌組
+            model_name: the note type (confirmed by the service layer)
+                筆記類型（服務層已確認）
+            parameters: the values validated by ``PersonCreateParams``, plus the ``tg_bot`` the service layer
+                adds. History fields are turned into lists here (text is split by the rules, a list gives one
+                entry per row; a position row is company plus title).
+                ``PersonCreateParams`` 驗證過的值，加上服務層補的 ``tg_bot``。會變的欄位在這裡轉成清單
+                （文字照規則切、清單每列一筆；職位一列是公司＋職稱）。
+
+        Returns:
+            the created note ID, as a one-element list
+            建立的 Note ID（單元素陣列）
+
+        Raises:
+            InvalidNoteFieldsError: if a history entry does not match its model
+                若會變的欄位有一筆不符模型
+        """
+        values = dict(parameters)
+        tg_bot = str(values.pop("tg_bot", "") or "")
+        today = today_iso()
+        fields = {
+            name: str(value)
+            for name, value in values.items()
+            if value not in (None, "") and name not in PERSON_HISTORY_FIELDS
+        }
+        for name in HISTORY_FIELDS:
+            items = history_from_input(name, values.get(name), today)
+            if items:
+                fields[name] = AnkiJsonFieldManager.serialize([_validate_item(name, item) for item in items])
+        fields.update({name: "[]" for name in PERSON_JSON_ITEMS})
+        fields.update({"Card_ID": new_card_id(), "TG_Bot": tg_bot, "Updated_At": today})
+        note_id = await card_service.create_note(
+            deck_name=deck_name,
+            model_name=model_name,
+            fields=fields,
+            tags=list(self.CREATE_TAGS),
+            allow_duplicate=True,
+        )
+        return [note_id]
 
 
 async def _read(card_service: CardService, note_id: int) -> dict[str, str]:

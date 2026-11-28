@@ -20,8 +20,8 @@ from functools import cache
 from app.core.exceptions import TagInvalidError
 from app.schemas.person_profile import HIDDEN_TAG_PREFIX, TEXT_UNMASKED_TAG
 
-#: Tags added by code or Anki itself; each handler's ``CREATE_TAGS`` are collected separately from the registry.
-#: 程式或 Anki 自己加的標籤（各 handler 的 ``CREATE_TAGS`` 另外從註冊表收集）。
+#: Tags added by code or Anki itself; each creator's ``CREATE_TAGS`` are collected separately from the registry.
+#: 程式或 Anki 自己加的標籤（各 creator 的 ``CREATE_TAGS`` 另外從註冊表收集）。
 _FIXED_SYSTEM_TAGS = frozenset({
     "HandlerGenerated",
     "TelegramBot",
@@ -58,9 +58,9 @@ _WHITESPACE = re.compile(r"\s")
 
 @cache
 def _folded_system_tags() -> frozenset[str]:
-    """Return the fixed system tags plus every handler's creation tags, case-folded.
+    """Return the fixed system tags plus every creator's creation tags, case-folded.
 
-    回傳固定的系統標籤加上各 handler 建卡固定加的標籤，轉成小寫。
+    回傳固定的系統標籤加上各 creator 建卡固定加的標籤，轉成小寫。
 
     The registry is read only on first use, to avoid a circular import.
 
@@ -68,7 +68,7 @@ def _folded_system_tags() -> frozenset[str]:
     """
     from app.services.task_handlers.registry import handler_registry
 
-    create_tags = {tag for handler in handler_registry.all_handlers() for tag in handler.CREATE_TAGS}
+    create_tags = {tag for creator in handler_registry.all_creators() for tag in creator.CREATE_TAGS}
     return frozenset(tag.casefold() for tag in _FIXED_SYSTEM_TAGS | create_tags)
 
 

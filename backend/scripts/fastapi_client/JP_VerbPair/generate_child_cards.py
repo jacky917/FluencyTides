@@ -83,7 +83,7 @@ MASTER_DECK = "日本語::自他動詞::Master"
 # 純假名判定（讀音導出用）。Kana-only pattern for reading derivation.
 _KANA_ONLY = re.compile(r'^[ぁ-ゖー]+$')
 
-# base[ruby] → ruby 的替換（埋[う]まる → うまる），同 jp_core_verb_handler 的 to_pure_kana
+# base[ruby] → ruby 的替換（埋[う]まる → うまる），同 jp_verbs/core_verb.py 的 to_pure_kana
 _FURIGANA_TO_KANA = re.compile(r'[^\s\[\]]+\[([^\]]+)\]')
 _BRACKET = re.compile(r'\[.*?\]')
 

@@ -930,7 +930,7 @@ def test_preview_send_failure_keeps_result_and_shows_plain_text():
     })
     state = _fsm()
     _run(state.update_data(native_language="中文", target_language="日文", original_text="x"))
-    handler = mock.MagicMock(execute_generate=mock.AsyncMock(return_value=result))
+    creator = mock.MagicMock(execute_generate=mock.AsyncMock(return_value=result))
     message, _ = _message()
 
     async def answer(text, **kwargs):
@@ -939,7 +939,7 @@ def test_preview_send_failure_keeps_result_and_shows_plain_text():
         return mock.MagicMock(delete=mock.AsyncMock())
 
     message.answer = mock.AsyncMock(side_effect=answer)
-    with mock.patch.object(expression_fsm.handler_registry, "get_handler", return_value=handler):
+    with mock.patch.object(expression_fsm.handler_registry, "get_creator", return_value=creator):
         _run(expression_fsm._generate_and_preview(message, state, mock.MagicMock()))
 
     plain = [call for call in message.answer.await_args_list if call.kwargs.get("parse_mode") is None
@@ -999,9 +999,9 @@ def test_expression_language_step_escapes_input():
 def test_expression_generation_failure_is_escaped_and_says_restart():
     state = _fsm()
     _run(state.update_data(native_language="中文", target_language="日文", original_text="x"))
-    handler = mock.MagicMock(execute_generate=mock.AsyncMock(side_effect=ValueError("<u>bad</u> & worse")))
+    creator = mock.MagicMock(execute_generate=mock.AsyncMock(side_effect=ValueError("<u>bad</u> & worse")))
     message, _ = _message()
-    with mock.patch.object(expression_fsm.handler_registry, "get_handler", return_value=handler):
+    with mock.patch.object(expression_fsm.handler_registry, "get_creator", return_value=creator):
         _run(expression_fsm._generate_and_preview(message, state, mock.MagicMock()))
     failed = _sent(message.answer)[-1]
     _assert_tg_html(failed)

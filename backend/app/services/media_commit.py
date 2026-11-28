@@ -99,7 +99,7 @@ async def committed_media(
     Usage::
 
         async with committed_media(anki, staging, names):
-            await handler.execute_create(...)
+            await creator.execute_create(...)
 
     Args:
         anki_client: the AnkiConnect client

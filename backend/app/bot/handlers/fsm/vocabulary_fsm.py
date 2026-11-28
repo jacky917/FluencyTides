@@ -140,7 +140,7 @@ async def process_word(
     status_msg = await message.reply("⏳ 建立中…")
 
     try:
-        note_type = note_service.registry.get_handler(HANDLER_NAME).CAPABILITIES.create.note_type or ""
+        note_type = note_service.registry.get_creator(HANDLER_NAME).CAPABILITIES.create.note_type or ""
         result = await note_service.create(
             HANDLER_NAME,
             deck=DEFAULT_DECK,

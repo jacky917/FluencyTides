@@ -14,7 +14,7 @@ from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.schemas.llm.expression import LLMExpressionCorrectionResult, LLMMicroPoint
 from app.infrastructure.anki.search import deck_term, field_term, note_type_term
 from app.services.task_handlers.expression_handler import (
-    ExpressionCorrectionHandler,
+    ExpressionCorrectionCreator,
     _children_query,
     duplicate_query,
 )
@@ -51,7 +51,7 @@ RESULT = LLMExpressionCorrectionResult(
 @pytest.fixture
 def llm():
     """外語糾錯的 LLM：回傳固定的結果，並記下有沒有被呼叫。The expression LLM, mocked."""
-    with mock.patch.object(ExpressionCorrectionHandler, "execute_generate", mock.AsyncMock(return_value=RESULT)) as m:
+    with mock.patch.object(ExpressionCorrectionCreator, "execute_generate", mock.AsyncMock(return_value=RESULT)) as m:
         yield m
 
 
@@ -216,13 +216,13 @@ class TestExpressionDraft:
     def test_retry_with_new_input_rechecks_and_keeps_decision(self, client, draft_slot):
         _with_old_card(client)
         with mock.patch.object(
-            ExpressionCorrectionHandler, "execute_generate", mock.AsyncMock(side_effect=RuntimeError("x"))
+            ExpressionCorrectionCreator, "execute_generate", mock.AsyncMock(side_effect=RuntimeError("x"))
         ):
             assert _start(client, "overwrite").status_code == 202
             run_pending(draft_slot)
         failed = client.get("/api/v1/drafts/current").json()
         assert failed["status"] == "failed"
-        with mock.patch.object(ExpressionCorrectionHandler, "execute_generate", mock.AsyncMock(return_value=RESULT)):
+        with mock.patch.object(ExpressionCorrectionCreator, "execute_generate", mock.AsyncMock(return_value=RESULT)):
             response = client.post(f"/api/v1/drafts/{failed['id']}/retry", json={
                 "version": failed["version"], "params": {"original_text": TEXT, "context": "改了情境"},
             })
@@ -272,7 +272,7 @@ class TestExpressionDraft:
 
     def test_retry_with_new_text_that_duplicates_asks_again(self, client, draft_slot):
         with mock.patch.object(
-            ExpressionCorrectionHandler, "execute_generate", mock.AsyncMock(side_effect=RuntimeError("x"))
+            ExpressionCorrectionCreator, "execute_generate", mock.AsyncMock(side_effect=RuntimeError("x"))
         ):
             start_draft(client, draft_slot, {"original_text": "別の文"}, handler=EXPRESSION)
         failed = client.get("/api/v1/drafts/current").json()
@@ -344,7 +344,7 @@ class TestExpressionCreate:
         """建立後的後續處理有程式錯誤：卡已寫入，不能報成建立失敗（否則會再建一組）。"""
         draft = start_draft(client, draft_slot, {"original_text": TEXT}, handler=EXPRESSION)
         with mock.patch.object(
-            ExpressionCorrectionHandler, "after_create", mock.AsyncMock(side_effect=RuntimeError("bug"))
+            ExpressionCorrectionCreator, "after_create", mock.AsyncMock(side_effect=RuntimeError("bug"))
         ):
             response = _create(client, draft)
         assert response.status_code == 201

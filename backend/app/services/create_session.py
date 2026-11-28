@@ -96,8 +96,8 @@ class Draft:
     Attributes:
         id: a UUID4 hex string
             UUID4 hex
-        handler_name: the handler name
-            handler 名稱
+        handler_name: the creator name (the field keeps its old name; handler/creator split plan D6)
+            creator 名稱（欄位沿用舊名；handler 拆分計畫書 D6）
         status: the status
             狀態
         input: the generation input (after ``DRAFT_PARAMS`` validation); may also carry system keys (the duplicate
@@ -239,8 +239,8 @@ class CreateSession:
         開始生成（D4）：槽位必須是空的；建一份 ``generating`` 的草稿，背景生成。
 
         Args:
-            handler_name: the handler name
-                handler 名稱
+            handler_name: the creator name (handler/creator split plan D6)
+                creator 名稱（handler 拆分計畫書 D6）
             parameters: the validated draft input
                 已驗證的草稿輸入
             generate: the generation function; its result is written back to the draft when it returns
@@ -469,8 +469,8 @@ class CreateSession:
         - 填表建卡（都不帶）：槽位必須是空的，放進一份 ``form_creating`` 的佔用。
 
         Args:
-            handler_name: the handler creating the card
-                建卡的 handler
+            handler_name: the creator creating the card (handler/creator split plan D6)
+                建卡的 creator（handler 拆分計畫書 D6）
             draft_id: the draft ID; ``None`` for form-based creation
                 草稿 ID；填表建卡為 ``None``
             version: the draft version, required with ``draft_id`` (the API guarantees the pair via ``DraftRef``);

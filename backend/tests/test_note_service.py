@@ -28,10 +28,10 @@ from app.infrastructure.anki.client import AnkiConnectError
 from app.schemas.anki import AnkiNoteInfo
 from app.services.card_service import FieldMismatchError
 from app.services.note_service import ANKI_UNREACHABLE, NoteService, standard_params_model
-from app.services.task_handlers.capabilities import CreateCapability, HandlerCapabilities
+from app.services.task_handlers.capabilities import CreateCapability, CreatorCapabilities
 from app.services.task_handlers.model_fields import model_field_names
 from app.services.task_handlers.registry import HandlerNotFoundError, HandlerRegistry
-from tests.test_handler_base import V2, FakeAnki, _card_service, _note, _relations, make_handler
+from tests.test_handler_base import V2, FakeAnki, _card_service, _note, _relations, make_creator, make_handler
 
 
 def _run(coro):
@@ -81,21 +81,25 @@ class _Params(BaseModel):
     prompt: str
 
 
-def _param_handler(captured: list):
-    """宣告 CREATE_PARAMS、覆寫建立的 handler，記下收到的參數。"""
+def _param_registry(captured: list) -> HandlerRegistry:
+    """一個 handler 加上宣告 CREATE_PARAMS、覆寫建立的 creator，記下收到的參數。"""
 
     async def execute_create(self, card_service, relation_service, deck_name, model_name, parameters):
         captured.append((deck_name, model_name, parameters))
         return [42]
 
-    return make_handler(
+    registry = HandlerRegistry()
+    registry.register(make_handler("custom"))
+    registry.register_creator(make_creator(
         "custom",
-        CAPABILITIES=HandlerCapabilities(create=CreateCapability(
+        CAPABILITIES=CreatorCapabilities(create=CreateCapability(
             supported=True, channels=("web",), flow="form", deck="selected", note_type=V2
         )),
         CREATE_PARAMS=_Params,
         execute_create=execute_create,
-    )
+    ))
+    registry.check_creators()
+    return registry
 
 
 # =============================================================================
@@ -144,6 +148,17 @@ class TestCreate:
         with pytest.raises(HandlerNotFoundError):
             _run(_service(SyncingAnki()).create("nope", "D", V2, {}))
 
+    def test_handler_without_a_creator_is_unsupported_not_missing(self):
+        """jp_context 列在 GET /handlers 裡：建卡、草稿、AI 整理回不開放與原因，不說它不存在。"""
+        service = _service(SyncingAnki())
+        reason = "由「自他動詞」、「核心動詞」的本機批次腳本產生"
+        with pytest.raises(HandlerOperationUnsupportedError, match=reason):
+            _run(service.create("jp_context", "D", "JP_Context_Dark", {}))
+        with pytest.raises(HandlerOperationUnsupportedError, match=reason):
+            service.validate_draft_input("jp_context", {})
+        with pytest.raises(HandlerOperationUnsupportedError, match=reason):
+            service.require_fill("jp_context")
+
     def test_sync_failure_returns_warning_not_error(self):
         anki = SyncingAnki(sync_error=AnkiConnectError("timeout"))
         result = _run(_service(anki).create("vocabulary_mining", "D", V2, {"Expression": "x"}))
@@ -157,9 +172,7 @@ class TestCreate:
 
     def test_params_model_validated_and_tg_bot_added(self):
         captured: list = []
-        registry = HandlerRegistry()
-        registry.register(_param_handler(captured))
-        service = _service(SyncingAnki(), registry=registry)
+        service = _service(SyncingAnki(), registry=_param_registry(captured))
 
         with mock.patch.object(settings, "TG_BOT_USERNAME", "default_bot"):
             _run(service.create("custom", "D", V2, {"prompt": "hi"}))
@@ -173,11 +186,11 @@ class TestCreate:
 
     def test_expression_accepts_tg_params_and_uses_fixed_deck(self):
         """TG 只傳這些參數（沒有語言欄位）；母卡固定建在外語糾錯牌組。"""
-        from app.services.task_handlers.expression_handler import ExpressionCorrectionHandler
+        from app.services.task_handlers.expression_handler import ExpressionCorrectionCreator
 
         anki = SyncingAnki()
         create = mock.AsyncMock(return_value=[1, 2])
-        with mock.patch.object(ExpressionCorrectionHandler, "execute_create", create):
+        with mock.patch.object(ExpressionCorrectionCreator, "execute_create", create):
             result = _run(_service(anki).create(
                 "expression_correction", "Ignored::Deck", "Expression_Master_Dark",
                 {"original_text": "私は行くました", "context": "", "source_tag": "",
@@ -229,11 +242,14 @@ class TestOwnershipAndCapabilities:
             _run(service.delete("vocabulary_mining", 5))
         assert anki.updated == [] and anki.deleted == [] and anki.syncs == []
 
-    def test_shared_context_readable_from_both_jp_handlers(self):
+    def test_shared_context_belongs_to_jp_context_only(self):
+        """兩個 jp 共用的 Context 卡歸 jp_context，不再兩個網址都讀得到（handler 拆分計畫書 D3）。"""
         anki = SyncingAnki([_model_note(7, "JP_Context_Dark")])
         service = _service(anki)
+        assert _run(service.read("jp_context", 7))["note_type"] == "JP_Context_Dark"
         for name in ("jp_verb_pair", "jp_core_verb"):
-            assert _run(service.read(name, 7))["note_type"] == "JP_Context_Dark"
+            with pytest.raises(NoteNotOwnedByHandlerError):
+                _run(service.read(name, 7))
 
     def test_closed_operations_touch_nothing(self):
         anki = SyncingAnki([_model_note(5, "Speaking_Coach_Dark", Prompt="hi")])
@@ -351,8 +367,10 @@ class TestGet:
         speaking = _run(_service(anki).get(5))["permissions"]
         assert speaking["update_fields"] == {"allowed": False, "reason": "對話卡的欄位修改尚未開放"}
         jp = _run(_service(anki).get(7))
-        assert jp["handler"] == "jp_verb_pair"  # 第一個註冊的
-        assert "delete_child_cards.py" in jp["permissions"]["delete"]["reason"]
+        assert jp["handler"] == "jp_context"
+        # 不論母卡是哪個專案，都指出兩個專案的刪除工具（以前一律只寫自他動詞的）
+        reason = jp["permissions"]["delete"]["reason"]
+        assert "JP_VerbPair/delete_child_cards.py" in reason and "JP_CoreVerb/delete_child_cards.py" in reason
 
     def test_note_type_without_handler(self):
         anki = SyncingAnki([_model_note(3, "Notion_SRS_Dark")])
@@ -380,8 +398,20 @@ class TestListHandlers:
         handlers = {h["name"]: h for h in _run(_service(SyncingAnki()).list_handlers())}
         assert list(handlers) == [
             "vocabulary_mining", "expression_correction", "speaking_coach",
-            "speaking_trilingual", "jp_verb_pair", "jp_core_verb", "person_profile",
+            "speaking_trilingual", "jp_verb_pair", "jp_core_verb", "jp_context", "person_profile",
         ]
+        # 兩種 jp 卡只列自己的母卡與 Cloze；共用的 Context 卡另有 jp_context（handler 拆分計畫書 D3）
+        assert handlers["jp_verb_pair"]["note_types"] == ["JP_VerbPair_Master_Dark", "JP_VerbPair_Cloze_Dark"]
+        assert handlers["jp_core_verb"]["note_types"] == ["JP_CoreVerb_Master_Dark", "JP_CoreVerb_Cloze_Dark"]
+        context = handlers["jp_context"]
+        assert context["note_types"] == ["JP_Context_Dark"]
+        # 沒有自己的 creator：不開放建卡，原因說明是哪些 creator 產出它
+        assert context["capabilities"]["create"] == {
+            "supported": False, "channels": ["script"], "flow": None, "deck": None, "fixed_deck": None,
+            "note_type": None, "reason": "由「自他動詞」、「核心動詞」的本機批次腳本產生",
+        }
+        assert context["capabilities"]["fill"]["supported"] is False
+        assert context["create_schema"] is None and context["draft_schema"] is None
         vocab = handlers["vocabulary_mining"]
         assert vocab["title"] == "單字卡" and vocab["note_types"] == [V2]
         schema = vocab["create_schema"]
@@ -398,6 +428,26 @@ class TestListHandlers:
         # 對話卡是填表流程（D10.1）；預覽流程的改給 draft_schema
         assert handlers["speaking_coach"]["create_schema"]["required"] == ["prompt"]
         assert handlers["expression_correction"]["draft_schema"]["required"] == ["original_text"]
+
+    def test_creation_capabilities_come_from_the_creator(self):
+        """每一筆的能力是 handler 的加上 creator 的 create、fill，前端的 HandlerCapabilities 靠這組鍵。"""
+        from app.services.task_handlers.registry import handler_registry
+
+        handlers = {h["name"]: h for h in _run(_service(SyncingAnki()).list_handlers())}
+        keys = {"create", "read", "update_fields", "update_json", "delete", "actions", "graph", "search", "fill"}
+        for name, entry in handlers.items():
+            capabilities = entry["capabilities"]
+            assert set(capabilities) == keys, name
+            assert {k: v for k, v in capabilities.items() if k not in ("create", "fill")} == (
+                handler_registry.get_handler(name).CAPABILITIES.to_dict()
+            ), name
+            creator = handler_registry.creator_for_handler(name)
+            if creator is not None:
+                expected = creator.CAPABILITIES.to_dict()
+                assert (capabilities["create"], capabilities["fill"]) == (expected["create"], expected["fill"]), name
+        # 網頁「AI 整理」按鈕看的就是這一項（CardViewPanel）
+        assert handlers["person_profile"]["capabilities"]["fill"] == {"supported": True, "reason": None}
+        assert all(not h["capabilities"]["fill"]["supported"] for n, h in handlers.items() if n != "person_profile")
 
     def test_anki_unreachable_keeps_other_capabilities(self):
         anki = SyncingAnki(fields_error=AnkiConnectError("connection refused"))

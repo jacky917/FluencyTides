@@ -31,6 +31,11 @@ Card creation and generation from the web page first go through the site-wide cr
 (``CreateSession``): only one draft or one card being created at a time. Telegram and local scripts
 do not go through here (server_drafts plan D2, D10).
 
+``{name}`` names a creator for ``/drafts``, ``/fill`` and ``POST /notes``, and a handler everywhere else
+(handler/creator split plan, ``handler_note_type_split_FEAT_2026-11-28.md``, D7). Every creator is named after the handler it is
+listed under, so one name serves both; ``GET /handlers`` lists one entry per handler with its creator's
+creation capabilities merged in.
+
 handlers 計畫書 D5、§4。
 
 - ``GET    /handlers``                             所有 handler、能力與建卡表單
@@ -52,6 +57,10 @@ handler 轉成 ``{"error_code", "message"}``（D6）；建立參數驗證失敗�
 
 網頁的建卡與生成先經過全站的建卡槽位（``CreateSession``）：同一時間只有一份草稿或一張建立中的卡片。
 TG 與本機腳本不經過這裡（server_drafts 計畫書 D2、D10）。
+
+``/drafts``、``/fill`` 與 ``POST /notes`` 的 ``{name}`` 是 creator 名稱，其他端點是 handler 名稱
+（handler 拆分計畫書 ``handler_note_type_split_FEAT_2026-11-28.md`` D7）。每個 creator 都和它列在底下的 handler 同名，
+所以同一個名稱兩邊通用；``GET /handlers`` 每個 handler 一筆，併入它的 creator 的建卡能力。
 """
 
 import asyncio

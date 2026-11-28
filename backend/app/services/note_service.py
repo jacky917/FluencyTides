@@ -2,12 +2,20 @@
 
 筆記服務層（handlers 計畫書 D1）：網頁與 TG 對 handler 的操作都經過這裡。
 
-It takes care of what handlers themselves do not: capability checks, create-parameter validation, the "this note
-belongs to this handler" check, and the sync after writes. Handlers only care about how to create, read, and update
-(the standard implementation in ``BaseHandler`` or their own overrides).
+It takes care of what handlers and creators themselves do not: capability checks, create-parameter validation, the
+"this note belongs to this handler" check, and the sync after writes. Creating cards goes through a creator
+(``BaseCreator``), and everything about existing cards through the handler of their note type (``BaseHandler``);
+each only cares about how to do its part (the standard implementation or its own overrides).
 
-負責 handler 本身不管的事：能力檢查、建立參數驗證、「筆記歸這個 handler」的檢查、寫入後同步。
-handler 只管怎麼建、怎麼讀、怎麼改（``BaseHandler`` 的標準實作或各自的覆寫）。
+負責 handler 與 creator 本身不管的事：能力檢查、建立參數驗證、「筆記歸這個 handler」的檢查、寫入後同步。
+建卡經過 creator（``BaseCreator``），既有卡片的一切經過它的筆記類型的 handler（``BaseHandler``）；兩者只管
+自己那部分怎麼做（標準實作或各自的覆寫）。
+
+Bare D and § numbers in this module refer to the handlers plan; the handler/creator split plan
+(``handler_note_type_split_FEAT_2026-11-28.md``) is always named.
+
+本模組裸寫的 D 與 § 編號指 handlers 計畫書；handler 拆分計畫書（``handler_note_type_split_FEAT_2026-11-28.md``）
+一律寫出名稱。
 """
 
 from __future__ import annotations
@@ -51,8 +59,13 @@ from app.services.task_handlers.base import (
     note_detail,
     note_field_values,
 )
-from app.services.task_handlers.capabilities import ANY_FIELD_KEY, TAG_SEARCH_KEY
-from app.services.task_handlers.registry import handler_registry
+from app.services.task_handlers.capabilities import (
+    ANY_FIELD_KEY,
+    TAG_SEARCH_KEY,
+    CreateCapability,
+    CreatorCapabilities,
+)
+from app.services.task_handlers.registry import CreatorNotFoundError, HandlerNotFoundError, handler_registry
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -62,7 +75,8 @@ if TYPE_CHECKING:
     from app.services.media_staging import MediaStaging
     from app.services.relation_service import RelationService
     from app.services.task_handlers.base import BaseHandler
-    from app.services.task_handlers.capabilities import Operation
+    from app.services.task_handlers.capabilities import Channel, Operation
+    from app.services.task_handlers.creator import BaseCreator
     from app.services.task_handlers.registry import HandlerRegistry
 
 logger = logging.getLogger(__name__)
@@ -132,12 +146,18 @@ class NoteService:
 
         回傳所有 handler 的名稱、標題、筆記類型、能力與建卡表單（§4.1）。
 
-        The standard create form is built on the fly from Anki's field list; when Anki is unreachable, that
-        handler's ``create_schema`` is null and ``create.reason`` explains why, and everything else is returned as
-        usual (R8).
+        One entry per handler, the shape the frontend expects: the creation part (``capabilities.create``,
+        ``capabilities.fill``, ``create_schema``, ``draft_schema``) is taken from the one creator listed under it
+        (at most one during the first stage of handler/creator split plan D7). A handler without a creator reports
+        creation as not offered, naming the creators that produce its cards. The standard create form is
+        built on the fly from Anki's field list; when Anki is unreachable, that handler's ``create_schema`` is null
+        and ``create.reason`` explains why, and everything else is returned as usual (R8).
 
-        標準建立的表單向 Anki 查欄位即時產生；Anki 連不上時該 handler 的 ``create_schema`` 為 null、
-        ``create.reason`` 註明原因，其餘照常回傳（R8）。
+        每個 handler 一筆，就是前端要的形狀：建卡的部分（``capabilities.create``、``capabilities.fill``、
+        ``create_schema``、``draft_schema``）取自列在它底下的那一個 creator（handler 拆分計畫書 D7 第一階段最多
+        一個）。沒有 creator 的 handler 回報不開放建卡，並說明是哪些 creator 產出它的卡。標準建立的表單向 Anki
+        查欄位即時產生；Anki 連不上時該 handler 的 ``create_schema`` 為 null、``create.reason`` 註明原因，
+        其餘照常回傳（R8）。
 
         Returns:
             the handlers, in registration order
@@ -145,9 +165,10 @@ class NoteService:
         """
         result = []
         for handler in self.registry.all_handlers():
-            capabilities = handler.CAPABILITIES.to_dict()
+            creator = self.registry.creator_for_handler(handler.handler_name)
+            capabilities = {**handler.CAPABILITIES.to_dict(), **self._creation_capabilities(handler, creator)}
             try:
-                create_schema = await self._create_schema(handler)
+                create_schema = await self._create_schema(creator) if creator else None
             except AnkiConnectError as exc:
                 logger.warning("無法取得 %s 的建卡欄位: %s", handler.handler_name, exc)
                 create_schema = None
@@ -160,7 +181,7 @@ class NoteService:
                 "note_types": list(handler.supported_models),
                 "capabilities": capabilities,
                 "create_schema": create_schema,
-                "draft_schema": _draft_schema(handler),
+                "draft_schema": _draft_schema(creator) if creator else None,
                 "json_fields": list(handler.JSON_FIELDS),
                 "json_field_specs": json_field_specs(handler),
                 "media_fields": dict(handler.MEDIA_FIELDS),
@@ -170,7 +191,83 @@ class NoteService:
             })
         return result
 
-    async def _create_schema(self, handler: BaseHandler) -> dict[str, object] | None:
+    def _creation_capabilities(self, handler: BaseHandler, creator: BaseCreator | None) -> dict[str, object]:
+        """Return the creation capabilities to list with a handler in ``GET /handlers``.
+
+        回傳 ``GET /handlers`` 裡和 handler 一起列出的建卡能力。
+
+        Args:
+            handler: the handler
+                handler
+            creator: the creator listed under it, or ``None`` when it has none
+                列在它底下的 creator；沒有時為 ``None``
+
+        Without a creator, the channels list ``script`` when a producing creator is a local batch script, so the
+        page shows where such cards come from; the reason says so too when every producer is a script.
+
+        沒有 creator 時，只要有產出它的 creator 是本機批次腳本，channels 就列 ``script``，讓網頁顯示這種卡從哪裡
+        來；產出者全是腳本時，原因也這樣說。
+
+        Returns:
+            ``{"create", "fill"}``; without a creator, creation is not offered and the reason names the creators
+            that produce the handler's cards (for example ``jp_verb_pair`` and ``jp_core_verb`` for Context cards)
+            ``{"create", "fill"}``；沒有 creator 時不開放建卡，原因說明是哪些 creator 產出它的卡（例如 Context 卡的
+            ``jp_verb_pair`` 與 ``jp_core_verb``）
+        """
+        if creator is not None:
+            return creator.CAPABILITIES.to_dict()
+        producers = list({
+            c.creator_name: c for note_type in handler.supported_models for c in self.registry.producers_of(note_type)
+        }.values())
+        script_only = bool(producers) and all(c.CAPABILITIES.create.channels == ("script",) for c in producers)
+        by_script = any("script" in c.CAPABILITIES.create.channels for c in producers)
+        channels: tuple[Channel, ...] = ("script",) if by_script else ()
+        titles = "、".join(f"「{c.title}」" for c in producers)
+        if script_only:
+            reason: str | None = f"由{titles}的本機批次腳本產生"
+        elif producers:
+            reason = f"由{titles}的建卡流程一併產生"
+        else:
+            reason = None
+        return CreatorCapabilities(create=CreateCapability(channels=channels, reason=reason)).to_dict()
+
+    def _creator(self, creator_name: str) -> BaseCreator:
+        """Return the creator for a create URL, explaining why a handler without one cannot create there.
+
+        回傳建卡網址的 creator；handler 存在卻沒有 creator 時，說明為什麼不能在這裡建卡。
+
+        Create URLs carry a creator name (handler/creator split plan D7). A handler listed in ``GET /handlers``
+        without a creator of the same name (for example ``jp_context``) answers like any other handler that does not
+        offer creation, with the reason shown there, rather than as if it did not exist.
+
+        建卡網址帶的是 creator 名稱（handler 拆分計畫書 D7）。``GET /handlers`` 列出、卻沒有同名 creator 的
+        handler（例如 ``jp_context``），回應和其他不開放建卡的 handler 一樣，附上那裡顯示的原因，而不是當成不存在。
+
+        Args:
+            creator_name: the creator name from the URL
+                網址上的 creator 名稱
+
+        Returns:
+            the creator
+            creator
+
+        Raises:
+            CreatorNotFoundError: if neither a creator nor a handler has this name (a ``HandlerNotFoundError``)
+                若沒有這個名稱的 creator，也沒有這個名稱的 handler（屬於 ``HandlerNotFoundError``）
+            HandlerOperationUnsupportedError: if a handler has this name but no creator does
+                若有這個名稱的 handler，但沒有這個名稱的 creator
+        """
+        try:
+            return self.registry.get_creator(creator_name)
+        except CreatorNotFoundError:
+            try:
+                handler = self.registry.get_handler(creator_name)
+            except HandlerNotFoundError:
+                raise CreatorNotFoundError(creator_name) from None
+            create = self._creation_capabilities(handler, None)["create"]
+            raise HandlerOperationUnsupportedError(str(create["reason"])) from None
+
+    async def _create_schema(self, creator: BaseCreator) -> dict[str, object] | None:
         """Return the JSON Schema of the web create form (D3).
 
         回傳網頁建卡表單的 JSON Schema（D3）。
@@ -183,24 +280,26 @@ class NoteService:
             AnkiConnectError: if looking up the fields for standard creation fails
                 若標準建立查欄位失敗
         """
-        create = handler.CAPABILITIES.create
+        create = creator.CAPABILITIES.create
         if not create.supported or create.flow != "form" or create.note_type is None:
             return None
-        if handler.CREATE_PARAMS is not None:
-            return handler.CREATE_PARAMS.model_json_schema()
-        model = await self._standard_params_model(handler, create.note_type)
+        if creator.CREATE_PARAMS is not None:
+            return creator.CREATE_PARAMS.model_json_schema()
+        model = await self._standard_params_model(creator, create.note_type)
         return model.model_json_schema(by_alias=True)
 
-    async def _standard_params_model(self, handler: BaseHandler, note_type: str) -> type[BaseModel]:
+    async def _standard_params_model(self, creator: BaseCreator, note_type: str) -> type[BaseModel]:
         """Return the standard create parameter model built from Anki's field list.
 
         回傳標準建立的參數模型。
 
-        JSON fields are left out and media fields are marked as upload widgets (D3, media_upload D3).
+        JSON fields are left out and media fields are marked as upload widgets, as declared by the creator's
+        handler (D3, media_upload D3).
 
-        向 Anki 查欄位，JSON 欄位不列，媒體欄位標成上傳元件（D3、media_upload D3）。
+        向 Anki 查欄位，依 creator 的 handler 的宣告：JSON 欄位不列，媒體欄位標成上傳元件（D3、media_upload D3）。
         """
         names = await self.anki_client.get_model_field_names(note_type)
+        handler = creator.handler
         media = tuple(sorted(handler.MEDIA_FIELDS.items()))
         return standard_params_model(note_type, tuple(names), frozenset(handler.JSON_FIELDS), media)
 
@@ -210,7 +309,7 @@ class NoteService:
 
     async def create(
         self,
-        handler_name: str,
+        creator_name: str,
         deck: str,
         note_type: str,
         params: Mapping[str, object],
@@ -238,8 +337,9 @@ class NoteService:
         送出前一樣，暫存檔留著可以直接重送（``media_commit``）。
 
         Args:
-            handler_name: the handler name
-                handler 名稱
+            creator_name: the creator name (during the first stage of handler/creator split plan D7, the same as
+                its handler's name)
+                creator 名稱（handler 拆分計畫書 D7 第一階段和它的 handler 同名）
             deck: the deck; ignored when ``create.deck`` is ``fixed``
                 牌組；``create.deck`` 為 ``fixed`` 時忽略
             note_type: must be ``create.note_type``
@@ -247,12 +347,12 @@ class NoteService:
             params: the create parameters (note fields for standard creation; otherwise ``CREATE_PARAMS``)
                 建立參數（標準建立是筆記欄位；否則是 ``CREATE_PARAMS``）
             tg_bot: the TG bot name written into the card; defaults to ``settings.TG_BOT_USERNAME``, and TG passes
-                its own to override it. Used only by handlers that declare ``CREATE_PARAMS``.
+                its own to override it. Used only by creators that declare ``CREATE_PARAMS``.
                 寫進卡片的 TG Bot 名稱；預設 ``settings.TG_BOT_USERNAME``，TG 傳入自己的覆寫。
-                只用於宣告了 ``CREATE_PARAMS`` 的 handler
+                只用於宣告了 ``CREATE_PARAMS`` 的 creator
             tags: the user's tags (cleaned by ``tag_rules.normalize_tags``); added separately after creation, so
-                handlers' create code need not care about them
-                使用者加的標籤（``tag_rules.normalize_tags`` 整理）；建卡後另外加上，各 handler 的
+                creators' create code need not care about them
+                使用者加的標籤（``tag_rules.normalize_tags`` 整理）；建卡後另外加上，各 creator 的
                 建卡程式不用管
 
         Returns:
@@ -267,10 +367,10 @@ class NoteService:
                 若欄位不屬於這個筆記類型
             FieldNotEditableError: if a JSON field was given
                 若填了 JSON 欄位
-            HandlerNotFoundError: if the handler does not exist
-                若 handler 不存在
-            HandlerOperationUnsupportedError: if creation is not offered
-                若不開放建卡
+            CreatorNotFoundError: if the creator does not exist (a ``HandlerNotFoundError``)
+                若 creator 不存在（屬於 ``HandlerNotFoundError``）
+            HandlerOperationUnsupportedError: if creation is not offered, or the name is a handler without a creator
+                若不開放建卡，或這個名稱是沒有 creator 的 handler
             MediaFieldInvalidError: if a media field does not hold an uploaded file name (checked before creating)
                 若媒體欄位填的不是上傳取得的檔名（建卡之前檢查）
             MediaUploadExpiredError: if an upload used is no longer in the staging area (nothing is written)
@@ -284,37 +384,37 @@ class NoteService:
             pydantic.ValidationError: if parameter validation fails (REST turns it into 422)
                 若參數驗證失敗（REST 轉成 422）
         """
-        handler = self.registry.get_handler(handler_name)
-        create = handler.CAPABILITIES.create
+        creator = self._creator(creator_name)
+        create = creator.CAPABILITIES.create
         if not create.supported:
             raise HandlerOperationUnsupportedError(create.reason or "")
         if note_type != create.note_type:
-            raise NoteTypeNotCreatableError(f"「{handler.title}」只能建立 {create.note_type}，不能建立 {note_type}")
+            raise NoteTypeNotCreatableError(f"「{creator.title}」只能建立 {create.note_type}，不能建立 {note_type}")
         if create.deck == "fixed" and create.fixed_deck:
             deck = create.fixed_deck
 
-        if handler.CREATE_PARAMS is not None:
-            parameters = handler.CREATE_PARAMS.model_validate(dict(params)).model_dump()
+        if creator.CREATE_PARAMS is not None:
+            parameters = creator.CREATE_PARAMS.model_validate(dict(params)).model_dump()
             parameters["tg_bot"] = tg_bot if tg_bot is not None else (settings.TG_BOT_USERNAME or "")
         else:
-            model = await self._standard_params_model(handler, note_type)
+            model = await self._standard_params_model(creator, note_type)
             parameters = model.model_validate(dict(params)).model_dump(by_alias=True)
 
         user_tags = normalize_tags(tags or [])
         # 例如三語卡的子卡：放進上層卡的同名子牌組（在加標籤、存媒體之前決定，失敗就什麼都沒寫）
-        deck = await handler.resolve_create_deck(self.card_service, deck, parameters)
+        deck = await creator.resolve_create_deck(self.card_service, deck, parameters)
 
-        media = staged_names(parameters, _create_media_fields(handler))
+        media = staged_names(parameters, _create_media_fields(creator))
         async with committed_media(self.anki_client, self.staging, media):
-            note_ids = await handler.execute_create(
+            note_ids = await creator.execute_create(
                 self.card_service, self.relation_service, deck, note_type, parameters
             )
         tag_warning = await self._add_tags(list(note_ids), user_tags)
         # 後續處理（例如覆蓋時刪舊卡）在同步之前：刪除也在這一次同步推上 AnkiWeb
         try:
-            after_warning = await handler.after_create(self.card_service, parameters, list(note_ids))
+            after_warning = await creator.after_create(self.card_service, parameters, list(note_ids))
         except Exception:  # noqa: BLE001 - 卡片已寫入：不能報成建立失敗，否則草稿退回可建立、使用者會再建一組
-            logger.exception("%s 建卡後的後續處理失敗（note_ids=%s）", handler_name, list(note_ids))
+            logger.exception("%s 建卡後的後續處理失敗（note_ids=%s）", creator_name, list(note_ids))
             after_warning = "⚠️ 卡片已建立，但建立後的後續處理失敗（例如沒刪掉要覆蓋的舊卡），請到 Cards 頁確認。"
         # 一次寫好幾筆的呼叫端（AI 整理）最後才同步一次
         sync_text = await self.sync_after_write() if sync else None
@@ -371,7 +471,7 @@ class NoteService:
         ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0].casefold()))
         return [{"tag": tag, "count": count} for tag, count in ranked]
 
-    def validate_draft_input(self, handler_name: str, params: Mapping[str, object]) -> dict[str, object]:
+    def validate_draft_input(self, creator_name: str, params: Mapping[str, object]) -> dict[str, object]:
         """Validate the draft input of the web preview flow (server_drafts plan D4).
 
         網頁預覽流程的草稿輸入：檢查能力 → 以 ``DRAFT_PARAMS`` 驗證（server_drafts 計畫書 D4）。
@@ -383,8 +483,8 @@ class NoteService:
         在請求裡呼叫，錯誤直接回給網頁；驗證過的輸入再交給背景的 ``generate_draft``。
 
         Args:
-            handler_name: the handler name
-                handler 名稱
+            creator_name: the creator name
+                creator 名稱
             params: the draft input (``DRAFT_PARAMS``)
                 草稿輸入（``DRAFT_PARAMS``）
 
@@ -393,40 +493,40 @@ class NoteService:
             驗證後的輸入
 
         Raises:
-            HandlerNotFoundError: if the handler does not exist
-                若 handler 不存在
+            CreatorNotFoundError: if the creator does not exist (a ``HandlerNotFoundError``)
+                若 creator 不存在（屬於 ``HandlerNotFoundError``）
             HandlerOperationUnsupportedError: if there is no web preview flow
                 若沒有網頁的預覽流程
             pydantic.ValidationError: if input validation fails (REST turns it into 422)
                 若輸入驗證失敗（REST 轉成 422）
         """
-        handler = self.registry.get_handler(handler_name)
-        if handler.DRAFT_PARAMS is None or _draft_schema(handler) is None:
-            raise HandlerOperationUnsupportedError(f"「{handler.title}」沒有網頁的預覽建卡流程")
-        return handler.DRAFT_PARAMS.model_validate(dict(params)).model_dump()
+        creator = self._creator(creator_name)
+        if creator.DRAFT_PARAMS is None or _draft_schema(creator) is None:
+            raise HandlerOperationUnsupportedError(f"「{creator.title}」沒有網頁的預覽建卡流程")
+        return creator.DRAFT_PARAMS.model_validate(dict(params)).model_dump()
 
-    def require_fill(self, handler_name: str) -> None:
-        """Check that the handler offers the web "AI 整理" (``person_llm_fill`` plan).
+    def require_fill(self, creator_name: str) -> None:
+        """Check that the creator offers the web "AI 整理" (``person_llm_fill`` plan).
 
-        確認 handler 開放網頁的「AI 整理」（``person_llm_fill`` 計畫書）。
+        確認 creator 開放網頁的「AI 整理」（``person_llm_fill`` 計畫書）。
 
         Args:
-            handler_name: the handler name
-                handler 名稱
+            creator_name: the creator name
+                creator 名稱
 
         Raises:
-            HandlerNotFoundError: if the handler does not exist
-                若 handler 不存在
+            CreatorNotFoundError: if the creator does not exist (a ``HandlerNotFoundError``)
+                若 creator 不存在（屬於 ``HandlerNotFoundError``）
             HandlerOperationUnsupportedError: if it does not offer "AI 整理"
                 若沒有開放「AI 整理」
         """
-        handler = self.registry.get_handler(handler_name)
-        if not handler.CAPABILITIES.fill.supported:
-            raise HandlerOperationUnsupportedError(f"「{handler.title}」沒有開放 AI 整理")
+        creator = self._creator(creator_name)
+        if not creator.CAPABILITIES.fill.supported:
+            raise HandlerOperationUnsupportedError(f"「{creator.title}」沒有開放 AI 整理")
 
     async def resolve_draft_duplicate(
         self,
-        handler_name: str,
+        creator_name: str,
         parameters: dict[str, object],
         decision: DuplicateDecision | None,
         *,
@@ -451,7 +551,7 @@ class NoteService:
           creation is stopped by Anki's first-field check (409 ``DUPLICATE_CARD``), and the web page can switch to
           allowing the duplicate and create again.
 
-        Currently only expression correction implements ``find_draft_duplicate``; every other handler never finds a
+        Currently only expression correction implements ``find_draft_duplicate``; every other creator never finds a
         duplicate.
 
         有重複又還沒決定時擋下，不呼叫 LLM。
@@ -464,11 +564,11 @@ class NoteService:
         - Anki 查詢失敗時略過檢查照常生成，並在輸入記下原因（``DUPLICATE_CHECK_SKIPPED_KEY``）讓網頁提醒；
           真的重複時，建卡會被 Anki 的首欄位檢查擋下（409 ``DUPLICATE_CARD``），網頁可以改成允許重複再建。
 
-        目前只有外語糾錯實作了 ``find_draft_duplicate``，其他 handler 一律查不到重複。
+        目前只有外語糾錯實作了 ``find_draft_duplicate``，其他 creator 一律查不到重複。
 
         Args:
-            handler_name: the handler name
-                handler 名稱
+            creator_name: the creator name
+                creator 名稱
             parameters: the input validated by ``validate_draft_input``
                 ``validate_draft_input`` 驗證過的輸入
             decision: the user's decision after seeing the old card this time; ``None`` on the first submission
@@ -484,12 +584,12 @@ class NoteService:
             DuplicateFoundError: if there is a duplicate and no decision yet (the response includes the old card)
                 若有重複、還沒決定（回應附上舊卡）
         """
-        handler = self.registry.get_handler(handler_name)
+        creator = self._creator(creator_name)
         clean = {k: v for k, v in parameters.items() if k not in DRAFT_SYSTEM_KEYS}
         try:
-            duplicate = await handler.find_draft_duplicate(self.card_service, clean)
+            duplicate = await creator.find_draft_duplicate(self.card_service, clean)
         except AnkiConnectError as exc:
-            logger.warning("生成草稿前查重複失敗，略過檢查（handler=%s, input=%r）：%s", handler_name, clean, exc)
+            logger.warning("生成草稿前查重複失敗，略過檢查（creator=%s, input=%r）：%s", creator_name, clean, exc)
             return {**clean, DUPLICATE_CHECK_SKIPPED_KEY: f"無法確認 Anki 是否已有同一張卡（{exc}）"}
         if duplicate is None:
             return clean
@@ -500,26 +600,26 @@ class NoteService:
             raise DuplicateFoundError("Anki 已有同一張卡：要覆蓋舊卡、另建新卡，還是取消？", duplicate)
         return DuplicateResolution(decision, note_id).into_input(clean)
 
-    async def generate_draft(self, handler_name: str, parameters: dict[str, object]) -> dict[str, object]:
+    async def generate_draft(self, creator_name: str, parameters: dict[str, object]) -> dict[str, object]:
         """Ask the LLM to generate a draft (nothing is written to Anki).
 
         請 LLM 生成草稿（不寫入 Anki）。
 
         The input must first go through :meth:`validate_draft_input`. This runs in the background
         (``CreateSession``) long after the request has ended: it uses only the AnkiConnect singleton (through
-        ``self.anki_client`` and ``card_service``, to look up existing tags and the handler's ``draft_context``) and
+        ``self.anki_client`` and ``card_service``, to look up existing tags and the creator's ``draft_context``) and
         the handler registry, and ``execute_draft`` takes no service. ``relation_service`` must not be used here: it
         is bound to the request's DB session, which is closed once the response is sent (server_drafts plan D4,
         §11.1). An Anki failure while reading the tags or the context only leaves them out.
 
         輸入要先經 ``validate_draft_input``。在背景執行（``CreateSession``），請求早已結束：只用到
-        AnkiConnect 單例（經 ``self.anki_client`` 與 ``card_service``，查既有標籤與 handler 的 ``draft_context``）
+        AnkiConnect 單例（經 ``self.anki_client`` 與 ``card_service``，查既有標籤與 creator 的 ``draft_context``）
         與 handler 註冊表，``execute_draft`` 不接任何服務。不能在這裡用 ``relation_service``：它綁著請求的 DB
         session，回應送出後就關閉了（server_drafts 計畫書 D4、§11.1）。讀標籤或情境時 Anki 失敗，只是不提供那部分。
 
         Args:
-            handler_name: the handler name
-                handler 名稱
+            creator_name: the creator name
+                creator 名稱
             parameters: the validated draft input
                 驗證過的草稿輸入
 
@@ -536,20 +636,21 @@ class NoteService:
             LLMServiceError: if the LLM call fails (or a related error)
                 若 LLM 呼叫失敗（或同類錯誤）
         """
-        handler = self.registry.get_handler(handler_name)
+        creator = self._creator(creator_name)
         try:
-            existing = [str(item["tag"]) for item in await self.tags(handler_name)]
+            # 既有標籤看的是它的 handler 負責的筆記類型（不是 PRODUCES）
+            existing = [str(item["tag"]) for item in await self.tags(creator.HANDLER)]
         except AnkiConnectError as exc:
             # 既有標籤只是給 LLM 參考：Anki 連不上時照樣生成草稿（建卡時才真的需要 Anki）
             logger.warning("生成草稿時查不到既有標籤，改為不提供：%s", exc)
             existing = []
         try:
-            context = await handler.draft_context(self.card_service, parameters)
+            context = await creator.draft_context(self.card_service, parameters)
         except AnkiConnectError as exc:
             # 情境（例如三語卡的牌組路徑）只是給 LLM 參考：Anki 連不上時照樣生成
-            logger.warning("生成草稿時讀不到 %s 的情境，改為不提供：%s", handler_name, exc)
+            logger.warning("生成草稿時讀不到 %s 的情境，改為不提供：%s", creator_name, exc)
             context = {}
-        draft = dict(await handler.execute_draft(parameters, existing[:MAX_PROMPT_TAGS], context))
+        draft = dict(await creator.execute_draft(parameters, existing[:MAX_PROMPT_TAGS], context))
         raw_tags = draft.pop("tags", None)
         return {"params": draft, "suggested_tags": _suggested_tags(raw_tags, existing)}
 
@@ -1121,37 +1222,37 @@ def _suggested_tags(raw: object, existing: list[str]) -> list[dict[str, object]]
     return result
 
 
-def _create_media_fields(handler: BaseHandler) -> list[str]:
+def _create_media_fields(creator: BaseCreator) -> list[str]:
     """Return the create parameters that hold media.
 
     回傳建卡參數裡的媒體欄位。
 
-    For standard creation these are ``MEDIA_FIELDS``; for handlers overriding ``CREATE_PARAMS`` they are the
-    parameters whose schema is marked ``x-ui: audio`` / ``image`` (the handler checks them and builds the fields
-    itself; this only commits the files to Anki).
+    For standard creation these are the handler's ``MEDIA_FIELDS``; for creators declaring ``CREATE_PARAMS`` they
+    are the parameters whose schema is marked ``x-ui: audio`` / ``image`` (the creator checks them and builds the
+    fields itself; this only commits the files to Anki).
 
-    標準建立就是 ``MEDIA_FIELDS``；覆寫 ``CREATE_PARAMS`` 的是 schema 標了
-    ``x-ui: audio``／``image`` 的參數（handler 自己檢查、組欄位，這裡只負責把檔案存進 Anki）。
+    標準建立就是 handler 的 ``MEDIA_FIELDS``；宣告 ``CREATE_PARAMS`` 的 creator 是 schema 標了
+    ``x-ui: audio``／``image`` 的參數（creator 自己檢查、組欄位，這裡只負責把檔案存進 Anki）。
     """
-    if handler.CREATE_PARAMS is None:
-        return list(handler.MEDIA_FIELDS)
-    properties = handler.CREATE_PARAMS.model_json_schema().get("properties", {})
+    if creator.CREATE_PARAMS is None:
+        return list(creator.handler.MEDIA_FIELDS)
+    properties = creator.CREATE_PARAMS.model_json_schema().get("properties", {})
     return [name for name, prop in properties.items() if isinstance(prop, dict) and prop.get("x-ui") in MEDIA_KINDS]
 
 
-def _draft_schema(handler: BaseHandler) -> dict[str, object] | None:
+def _draft_schema(creator: BaseCreator) -> dict[str, object] | None:
     """Return the draft form of the web preview flow (the JSON Schema of ``DRAFT_PARAMS``).
 
     回傳網頁預覽流程的草稿表單（``DRAFT_PARAMS`` 的 JSON Schema）。
 
-    Returns ``None`` when the handler has no such flow.
+    Returns ``None`` when the creator has no such flow.
 
     沒有這個流程時為 ``None``。
     """
-    create = handler.CAPABILITIES.create
-    if handler.DRAFT_PARAMS is None or not create.supported or create.flow != "preview" or "web" not in create.channels:
+    create = creator.CAPABILITIES.create
+    if creator.DRAFT_PARAMS is None or not create.supported or create.flow != "preview" or "web" not in create.channels:
         return None
-    return handler.DRAFT_PARAMS.model_json_schema()
+    return creator.DRAFT_PARAMS.model_json_schema()
 
 
 def _require(operation: Operation) -> None:

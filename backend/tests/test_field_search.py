@@ -40,37 +40,29 @@ class TestContainsTerm:
 # =============================================================================
 
 
-class Params(BaseModel):
-    Name: str = Field(title="名字")
-    Photo: str = Field("", title="照片")
-
-
 class Item(BaseModel):
     text: str
 
 
 class TestSearchFields:
-    def test_derived_from_create_params_and_json_specs(self):
+    def test_not_derived_from_other_declarations(self):
+        """按鈕只來自 SEARCH_FIELDS：建立參數屬於 creator，不再拿來產生按鈕（handler 拆分計畫書 D5）。"""
         handler = make_handler(
             "derived",
-            CREATE_PARAMS=Params,
             MEDIA_FIELDS={"Photo": "image"},
             JSON_FIELDS=("Notes_JSON",),
             JSON_FIELD_SPECS={"Notes_JSON": JsonFieldSpec(item=Item, title="筆記")},
         )
-        assert handler.search_fields() == (
-            SearchField("Name", "名字", ("Name",)),
-            SearchField("Notes_JSON", "筆記", ("Notes_JSON",)),
-        )
+        assert handler.search_fields() == ()
 
-    def test_declared_fields_win(self):
+    def test_declared_fields_are_the_buttons(self):
         declared = (SearchField("n", "名字", ("A", "B")),)
-        assert make_handler("declared", CREATE_PARAMS=Params, SEARCH_FIELDS=declared).search_fields() == declared
+        assert make_handler("declared", SEARCH_FIELDS=declared).search_fields() == declared
 
     @pytest.mark.parametrize(
         ("attrs", "message"),
         [
-            ({}, "沒有可搜尋的欄位"),
+            ({}, "沒有宣告 SEARCH_FIELDS"),
             ({"SEARCH_FIELDS": (SearchField("a", "A", ("X",)), SearchField("a", "B", ("Y",)))}, "鍵重複"),
             ({"SEARCH_FIELDS": (SearchField("*", "全部", ("X",)),)}, "保留"),
             ({"SEARCH_FIELDS": (SearchField("a", "A", ()),)}, "沒有對應的 Anki 欄位"),

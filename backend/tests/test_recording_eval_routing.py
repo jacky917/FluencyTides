@@ -445,7 +445,7 @@ def test_switch_only_exists_on_globals(llm_route_db, llm_whitelist):
 )
 def test_invalid_writes_are_rejected(llm_route_db, llm_whitelist, audio_env, key, capability, provider, model, fragment):
     """寫入依能力檢查白名單；用途鍵（或全域）沒有宣告的能力不能寫——文字全域 * 只管 llm。"""
-    import app.services.task_handlers.jp_verb_pair_handler  # noqa: F401 - 宣告 jp_verb_pair
+    import app.services.task_handlers.jp_verbs.verb_pair  # noqa: F401 - 宣告 jp_verb_pair
 
     with pytest.raises(InvalidRouteError) as caught:
         _run(capability_route_service.set_route(key, provider, model, None, updated_by="api", capability=capability))

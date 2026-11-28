@@ -18,9 +18,9 @@ from app.infrastructure.anki.client import AnkiConnectError
 from app.schemas.llm.speaking_trilingual import GeneratedSaying, LLMTrilingualDraft
 from app.services import speaking_trilingual_generate as generate_service
 from app.services.speaking_trilingual_generate import DraftPlacement
+from app.services.task_handlers.registry import handler_registry
 from app.services.task_handlers.speaking_trilingual_handler import (
     SpeakingTrilingualDraftParams,
-    SpeakingTrilingualHandler,
 )
 
 TRILINGUAL = "Speaking_Trilingual_Dark"
@@ -51,7 +51,8 @@ def _card_service(notes: list, decks: dict[int, str]):
 
 
 def _context(service, **params):
-    return asyncio.run(SpeakingTrilingualHandler().draft_context(service, {"deck": "", "parent_note_id": "", **params}))
+    creator = handler_registry.get_creator("speaking_trilingual")
+    return asyncio.run(creator.draft_context(service, {"deck": "", "parent_note_id": "", **params}))
 
 
 NOTES = [
@@ -119,7 +120,7 @@ class TestExecuteDraft:
         params = {"background": "b", "intent": "", "audience": "不指定", "audience_note": "", "deck": DECK,
                   "parent_note_id": "1"}
         with mock.patch.object(generate_service, "generate", generate):
-            result = asyncio.run(SpeakingTrilingualHandler().execute_draft(params, [], context))
+            result = asyncio.run(handler_registry.get_creator("speaking_trilingual").execute_draft(params, [], context))
         assert generate.await_args.args[4] == DraftPlacement(**context)
         assert result["parent_note_id"] == 1
 
@@ -128,7 +129,7 @@ class TestExecuteDraft:
         params = {"background": "b", "intent": "", "audience": "不指定", "audience_note": "", "deck": "",
                   "parent_note_id": ""}
         with mock.patch.object(generate_service, "generate", generate):
-            result = asyncio.run(SpeakingTrilingualHandler().execute_draft(params, [], {}))
+            result = asyncio.run(handler_registry.get_creator("speaking_trilingual").execute_draft(params, [], {}))
         assert generate.await_args.args[4] is None
         assert result["parent_note_id"] is None
 
@@ -157,14 +158,15 @@ def test_anki_failure_while_reading_the_context_still_generates():
     """讀情境時 Anki 連不上：照樣生成，只是不給位置資訊（與讀不到既有標籤相同）。"""
     from app.services.note_service import NoteService
 
-    handler = SimpleNamespace(
+    creator = SimpleNamespace(
+        HANDLER="speaking_trilingual",
         draft_context=mock.AsyncMock(side_effect=AnkiConnectError("down")),
         execute_draft=mock.AsyncMock(return_value={"title": "t", "tags": []}),
     )
     service = NoteService.__new__(NoteService)
-    service.registry = SimpleNamespace(get_handler=lambda name: handler)
+    service.registry = SimpleNamespace(get_creator=lambda name: creator)
     service.card_service = SimpleNamespace()
     service.tags = mock.AsyncMock(return_value=[])
     result = asyncio.run(service.generate_draft("speaking_trilingual", {"background": "b"}))
-    assert handler.execute_draft.await_args.args[2] == {}
+    assert creator.execute_draft.await_args.args[2] == {}
     assert result["params"] == {"title": "t"}
