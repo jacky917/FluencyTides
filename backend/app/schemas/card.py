@@ -3,11 +3,17 @@
 卡片生成輸入與 API 錯誤回應的 Pydantic V2 Schema 定義模組。
 
 Defines the card generation input read by the local batch script
-``scripts/local_anki/import_cards_with_llm.py`` and the project-wide
-error response format of every API router.
+``scripts/local_anki/import_cards_with_llm.py``, and the unified error
+format returned for ``FluencyTidesError`` (see ``main.py``) and declared
+in most routers' ``responses``. That script currently calls the removed
+``CardService.generate_card`` and cannot run (``docs/wip/backlog.md``
+H1), so ``CardGenerateRequest`` has no working caller.
 
 本模組定義本機批次腳本 ``scripts/local_anki/import_cards_with_llm.py``
-讀取的卡片生成輸入，以及所有 API 路由共用的錯誤回應格式。
+讀取的卡片生成輸入，以及 ``FluencyTidesError`` 回傳（見 ``main.py``）、
+多數路由在 ``responses`` 宣告的統一錯誤格式。該腳本目前呼叫已移除的
+``CardService.generate_card``，無法執行（``docs/wip/backlog.md`` H1），
+所以 ``CardGenerateRequest`` 沒有能用的呼叫端。
 
 All cross-boundary data structures are strongly validated with Pydantic V2;
 raw dicts and ``typing.Any`` are strictly forbidden.
@@ -19,21 +25,21 @@ Design decisions:
     - ``ErrorResponse`` follows the unified format required by
       03_Acceptance_Criteria.md §2, with the ``error_code``, ``message``, and
       ``details`` fields.
-    - ``CardGenerateRequest`` requires callers to supply every parameter
-      (``model_file_name``, ``model_name``, ``deck_name``, and so on) with no
-      defaults, so the caller always knows which model and deck it is
+    - The model and deck fields of ``CardGenerateRequest``
+      (``model_file_name``, ``model_name``, ``deck_name``, and so on) have
+      no defaults, so the caller always knows which model and deck it is
       operating on.
     - Web card creation does not use ``CardGenerateRequest``; it goes
-      through the handler API (``POST /api/v1/handlers/{handler}/notes``).
+      through the handler API (``POST /api/v1/handlers/{handler_name}/notes``).
 
 設計決策：
     - ``ErrorResponse`` 遵循 03_Acceptance_Criteria.md §2 的統一格式要求，
       包含 ``error_code``, ``message``, ``details`` 三個欄位。
-    - ``CardGenerateRequest`` 要求呼叫端完整傳入所有參數（``model_file_name``,
-      ``model_name``, ``deck_name`` 等），不提供預設值，確保呼叫端明確知道
+    - ``CardGenerateRequest`` 的模型與牌組欄位（``model_file_name``,
+      ``model_name``, ``deck_name`` 等）不提供預設值，確保呼叫端明確知道
       自己在操作哪個模型與牌組。
     - 網頁建卡不使用 ``CardGenerateRequest``，走 handler API
-      （``POST /api/v1/handlers/{handler}/notes``）。
+      （``POST /api/v1/handlers/{handler_name}/notes``）。
 """
 
 from pydantic import BaseModel, Field

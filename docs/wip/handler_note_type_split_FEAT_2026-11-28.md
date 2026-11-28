@@ -233,7 +233,7 @@ Creator 不複製 handler 的宣告，而是向它指向的 handler 拿：
 ### D6 名稱相容：creator 沿用現在的 `handler_name`
 
 - creator 沿用現在的 `handler_name`：`vocabulary_mining`、`expression_correction`、`speaking_coach`、`speaking_trilingual`、`person_profile`、`jp_verb_pair`、`jp_core_verb`。建卡 API 的網址、草稿的 `handler_name`、`card_gen_log.card_type` 都不變。
-- 一種建法的類型，handler 和 creator 同名，所以 handler 的名稱也不變：`recording_eval.speaking_coach`、`recording_eval.speaking_trilingual` 這類用途鍵、`GET /notes/{id}` 的 `handler`、前端 localStorage 的鍵都照舊。
+- 一種建法的類型，handler 和 creator 同名，所以 handler 的名稱也不變：`recording_eval.speaking_coach`、`recording_eval.speaking_trilingual` 這類用途鍵、`GET /notes/{id}` 的 `handler`、前端 localStorage 鍵裡的名稱都照舊。（鍵的前綴另外由 `feat/retire-generate` 從 `generate_*` 改成 `create_*`，見 `docs/wip/retire_generate_page_FEAT_2026-11-23.md` D5；與這次拆分無關。）
 - 唯一的新名稱是 handler `jp_context`，它沒有任何存量資料。
 
 | 存在哪裡 | 鍵 | 之後指的是 |
@@ -242,7 +242,7 @@ Creator 不複製 handler 的宣告，而是向它指向的 handler 拿：
 | 資料庫的能力路由 | `jp_verb_pair`、`jp_core_verb`（`CHILD_CARD_LLM`） | 模組層級的 `route(...)` 常數，跟著搬到 `jp_verbs/verb_pair.py`、`core_verb.py`，鍵不變 |
 | 資料庫 `card_gen_log.card_type`、語料庫 `rel_links.created_by` | `jp_verb_pair` 等（`jp_verb_pair_handler.py:44` 的 `CARD_TYPE`） | 模組自己的常數，與註冊表無關 |
 | 記憶體裡的草稿 | `Draft.handler_name`（`create_session.py:125`） | creator 名稱；草稿只在記憶體，重啟就清空（`create_session.py:21`） |
-| 前端 localStorage | `generate_handler`、`generate_created:<名稱>`、圖譜的 `<名稱>\|<筆記類型>\|<牌組>` | 第一階段名稱不變；第二階段也沿用同樣的值 |
+| 前端 localStorage | `create_handler`、`create_created:<名稱>`（原本是 `generate_*`，`feat/retire-generate` 改名）、圖譜的 `<名稱>\|<筆記類型>\|<牌組>` | 第一階段名稱不變；第二階段也沿用同樣的值 |
 | Anki | 筆記類型、欄位、標籤 | 完全不動 |
 
 ### D7 API：形狀不變；第二階段這次不做
@@ -404,7 +404,7 @@ class SpeakingCoachHandler(BaseHandler, BaseCreator):
 
 ### Frontend
 
-**第一階段**：程式不用改。看得到的變化只有資料驅動的部分：卡片頁、工具設定頁的「Handler 能力」、建卡頁的卡片類型清單（不能選，附原因）多出「日文語境卡」，兩種 jp 卡的 `note_types` 少了 `JP_Context_Dark`。
+**第一階段**：程式不用改。看得到的變化只有資料驅動的部分：卡片頁、工具設定頁的「Handler 能力」、卡片頁建卡畫面的卡片類型清單（不能選，附原因）多出「日文語境卡」，兩種 jp 卡的 `note_types` 少了 `JP_Context_Dark`。
 
 **第二階段**（這次不做；日後做時的範圍）：
 
@@ -412,7 +412,7 @@ class SpeakingCoachHandler(BaseHandler, BaseCreator):
 |---|---|
 | `src/types/api.ts:80` `HandlerInfo`、`:221` 草稿的 `handler` | `HandlerInfo` 拿掉 `create_schema`、`draft_schema` 與建卡能力；新增 `CreatorInfo`；草稿的 `handler` 改名 `creator` |
 | `src/api/client.ts:104-160` | 新增 `listCreators`；`createNote`、`startDraft`、`startFill` 走 `/creators/...`；讀、改、刪、搜尋、圖譜（`:243-320`）不變 |
-| `src/components/generate/CreatePanelBody.tsx`、`PreviewCreate.tsx`、`TagInput.tsx`、`src/hooks/useCreatedNotice.ts`、`src/components/shared/DraftWatcher.tsx`、`src/components/person/PersonFillDialog.tsx`、`src/components/cards/CardViewPanel.tsx:140` | 改用 creator 清單 |
+| `src/components/create/CreatePanelBody.tsx`、`PreviewCreate.tsx`、`TagInput.tsx`（原本在 `components/generate/`，`feat/retire-generate` 搬過來）、`src/hooks/useCreatedNotice.ts`、`src/hooks/useOpenCreateForm.ts`（寫入的是草稿的 `handler`）、`src/components/shared/DraftWatcher.tsx`、`src/components/person/PersonFillDialog.tsx`、`src/components/cards/CardViewPanel.tsx:140` | 改用 creator 清單 |
 | `src/components/settings/HandlerCapabilitiesSection.tsx`、`src/lib/handlerCapabilities.ts` | 每個 handler 底下列它的 creator |
 
 ### 測試
@@ -463,7 +463,7 @@ S4 結果（2026-11-28）：本機後端（這條分支，`TG_BOT_TOKEN` 設空�
 
 - 卡片頁：卡片類型清單有「日文語境卡」；選它只列 `JP_Context_Dark`，選自他動詞、核心動詞只列各自的母卡與 Cloze，筆記類型子選單也只剩兩種。
 - 核心動詞的 Context 卡打開「筆記欄位」：刪除說明列出 `JP_VerbPair` 與 `JP_CoreVerb` 兩個刪除工具（拆分前只寫 `JP_VerbPair`）。
-- 建卡頁：單字卡、外語糾錯、對話卡、三語對話卡、人脈卡的表單都正常出現（人脈卡有「用一段話建立」）；自他動詞、核心動詞、日文語境卡不能選並附原因。
+- 建卡畫面：單字卡、外語糾錯、對話卡、三語對話卡、人脈卡的表單都正常出現（人脈卡有「用一段話建立」）；自他動詞、核心動詞、日文語境卡不能選並附原因。
 - 工具設定頁的「Handler 能力」有日文語境卡與兩個刪除工具的說明；知識圖譜的單字卡關聯圖、三語卡主題樹照常回傳。
 - 與這條分支的基底（`feat/routing-three-layers`）同時起在另一個埠比對真實 Anki 的 `GET /handlers`：只差 jp 兩筆的 `note_types` 與新增的 `jp_context`。單字卡關聯圖在兩邊都沒有連線，是既有狀態。
 - `POST /handlers/jp_context/notes` 回 400 `HANDLER_OPERATION_UNSUPPORTED` 與原因。

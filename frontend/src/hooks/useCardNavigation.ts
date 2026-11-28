@@ -192,7 +192,7 @@ export function useCardNavigation() {
 
   /**
    * 關閉建卡表單，回到原本看的卡片：由 `openCreate` 打開的直接退回上一筆歷史（就是原本的卡片），
-   * 否則（重新整理或從連結打開）移除 `new`、取代目前這筆。
+   * 否則（重新整理、從連結或草稿通知的「前往」打開）移除 `new`、取代目前這筆。
    * Closes the create form, going back when `openCreate` opened it.
    */
   const closeCreate = () => {

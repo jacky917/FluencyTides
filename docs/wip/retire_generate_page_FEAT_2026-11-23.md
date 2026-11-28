@@ -6,8 +6,8 @@
 | **性質** | 前端頁面移除 + 程式碼／文檔清理 |
 | **狀態** | 🚧 實作完成（2026-11-23，§3 全部照建議 A，使用者確認），待 PR 與上線驗收；實作紀錄見 §8 |
 | **範圍** | 前端：`/generate` 頁、側欄項目、版面設定與測試、草稿通知的「前往」、只有 Generate 會走到的分支（成功提示的連結、不存的成功提示）、`components/generate/` 目錄名稱、`generate_*` 瀏覽器儲存鍵、`.env.example`；文檔：README 與仍描述現況的文件 |
-| **不動** | 建卡本身（`CreatePanelBody`、填表／預覽流程、人脈卡「用一段話建立」、伺服器草稿）；後端 API 與 handler 的 `create.channels`；牌組樹；Knowledge Graph 的 `VITE_DEFAULT_DECK`；已完成的歷史紀錄（`docs/archive/`、`docs/bk/` 的審查與實作紀錄） |
-| **PR / 進度** | 尚未開始 |
+| **不動** | 建卡本身（`CreatePanelBody`、填表／預覽流程、人脈卡「用一段話建立」、伺服器草稿）；後端 API 與 creator 的 `create.channels`（`GET /handlers` 經 handler 帶出）；牌組樹；Knowledge Graph 的 `VITE_DEFAULT_DECK`；已完成的歷史紀錄（`docs/archive/`、`docs/bk/` 的審查與實作紀錄） |
+| **PR / 進度** | 分支 `feat/retire-generate`，4 個 commit 已 rebase 到 `origin/main`（2026-11-28，含 PR #62、#63）；審查修正見 §8；尚未 push、未開 PR |
 | **關聯文件** | `docs/archive/card_list_create_FEAT_2026-10-30.md`（Cards 頁建卡，D1：選牌組會退出建卡畫面）、`docs/wip/server_drafts_FEAT_2026-11-04.md`（草稿通知「前往」）、`docs/wip/cards_page_revamp_FEAT_2026-11-23.md` |
 
 ---
@@ -37,7 +37,7 @@
 - G5 仍描述現況的文檔不再提到 Generate 頁；歷史紀錄照舊（見 D6）。
 
 **非目標**
-- 不改建卡流程、後端 API、handler 宣告（`create.channels` 的 `web` 指的是「從網頁建」，不是 Generate 頁）。
+- 不改建卡流程、後端 API、creator 宣告（`create.channels` 的 `web` 指的是「從網頁建」，不是 Generate 頁；PR #63 之後由 creator 宣告，`GET /handlers` 經 handler 帶出）。
 - 不整理 `docs/bk/` 整體過時的內容（例如早已不存在的 `POST /cards/generate`）：那是 2026-07 的審查快照，見 D6。
 
 ## 3. 設計決策（需要使用者確認的打 ❓）
@@ -114,7 +114,7 @@
 ### Backend
 | 檔案 | 改動 |
 |---|---|
-| `tests/test_handler_declarations.py:136` | docstring「Generate 頁可選」改成「網頁建卡可選」 |
+| `tests/test_handler_declarations.py` 的 `test_web_creatable_handlers` | docstring「Generate 頁可選」改成「網頁建卡可選」 |
 | （D7 選做）`app/schemas/card.py`、`README.md:17` | 說明改成現況，刪掉 `CardUpdateRequest` |
 
 ### 文檔
@@ -153,7 +153,7 @@
 
 ## 8. 實作紀錄（2026-11-23）
 
-分支 `feat/retire-generate`（從 `origin/main` 開），三個 commit：
+分支 `feat/retire-generate`（從 `origin/main` 開），計畫書之外三個 commit：
 
 - **P1**：頁面、路由、萬用路由、`GENERATE_LAYOUT`；D3 的「前往」改用 `hooks/useOpenCreateForm.ts` 與 `lib/cardBrowse.ts` 的 `createFormPath`。記住位置的讀寫（`readRememberedSearch`、`writeRememberedSearch`）從 `useCardNavigation` 搬到 `lib/cardBrowse.ts`，讓通知也讀得到。D4 的 `selectDeck` 在建卡畫面開著時保留 `new`。
 - **P2**：`git mv components/generate components/create`；儲存鍵集中到 `lib/createStorage.ts`；`onViewCreated` 改成必填，`CreatedNotice` 拿掉連結分支，`useCreatedNotice` 拿掉 `persist`。
@@ -176,3 +176,12 @@
     - 沒有橫向捲動。
   - PC 1280px：側欄沒有 Card Generator，沒有橫向捲動。
   - AI 整理對話框的「前往那份草稿」和通知共用 `useOpenCreateForm`，沒有另外在瀏覽器測。
+
+### Rebase 與審查修正（2026-11-28）
+
+rebase 到 `origin/main`（PR #62 模型設定三層、#63 handler 拆出 creator）沒有衝突；main 新加的程式沒有引用 `components/generate/` 或 `generate_*` 儲存鍵。多面向審查（code、errors、tests、comments）修了：
+
+- **「前往」蓋掉建卡畫面的歷史狀態**：用「＋」打開建卡畫面後再按草稿通知的「前往」，原本 `navigate(path, { replace: true })` 會換掉「＋」留下的 `createOpened`，之後按 ✕ 退不回原本的卡片。改成建卡畫面已經開著時不導頁（卡片類型已寫入，建卡畫面經 storage 通知切過去）；判斷抽成 `lib/cardBrowse.ts` 的 `isCreateFormOpen`（看參數內容，不比網址字串），加了測試。
+- **`docs/wip/handler_note_type_split_FEAT_2026-11-28.md`**：D6 的 localStorage 鍵改成 `create_*`、第二階段的前端清單改成 `components/create/` 並加上 `useOpenCreateForm.ts`。
+- **README「建立 Anki 卡片」那一列**與 **`schemas/card.py` 的模組說明**：寫成現況（填表直接寫入、三語對話卡與外語糾錯走預覽流程、TG 是 `/newcard`），註明 `import_cards_with_llm.py` 目前無法執行（backlog H1）；錯誤格式改說是 `FluencyTidesError` 回傳的格式。backlog H7 一併更新。
+- 本計畫書的 `create.channels` 用語改成 creator 宣告、測試改用函式名稱引用、進度欄。

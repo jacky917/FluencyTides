@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   browseNoteTypes,
   createFormPath,
+  isCreateFormOpen,
   restoreCardDepth,
   MAX_TRAIL,
   parseBrowseParams,
@@ -119,6 +120,18 @@ describe('createFormPath', () => {
 
   it('does not add new twice', () => {
     expect(createFormPath('/cards', '?deck=A&new=1', remembered)).toBe('/cards?deck=A&new=1')
+  })
+})
+
+describe('isCreateFormOpen', () => {
+  it('is open on the card page with new=1, however the deck is encoded', () => {
+    expect(isCreateFormOpen('/cards', '?deck=A::B&new=1')).toBe(true)
+    expect(isCreateFormOpen('/cards', '?deck=A%3A%3AB&new=1')).toBe(true)
+  })
+
+  it('is closed without new=1 or on another page', () => {
+    expect(isCreateFormOpen('/cards', '?deck=A')).toBe(false)
+    expect(isCreateFormOpen('/graph', '?new=1')).toBe(false)
   })
 })
 

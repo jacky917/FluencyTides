@@ -60,7 +60,7 @@
 | H4 | 低 | `verb-pair`、`core-verb`、`config`、`jp` 路由沒有 `X-API-Key` 驗證 | 若要補，本機腳本要同時改成送 `X-API-Key` |
 | H5 | 低 | 舊版 `TOEIC_Coach_Dark` | Anki 裡 0 張筆記，已從 handler 清單拿掉；定義檔 `backend/app/anki_models/TOEIC_Coach_Dark.json`（repo 內沒有它的 HTML、CSS 模板）與提示詞模板 `backend/app/templates/prompts/anki/TOEIC_Coach_Dark.j2` 要不要刪由使用者決定（Anki 裡的要自己操作）。H7 的通用 LLM 建卡殘骸以它當註解範例，一起處理 |
 | H6 | 低 | 沒有呼叫方的關聯 API | `GET /relations/graph`、前端 `getKnowledgeGraph`、`RelationService.get_graph_data` 與 handler 的標準圖譜重複；`DELETE /relations/by-note/{note_id}` 沒有呼叫方，`delete_relations_by_note_id` 與 `delete_relations_for_note` 是兩個一樣的方法 |
-| H7 | 低 | 通用 LLM 建卡的殘骸 | `AnkiModelManager` 的 `get_model_schema`、`create_note_from_llm_response`、`list_available_models`、`get_model_detail`、`can_add_note`、`sync_to_ankiweb`；`schemas/card.py` 的 `CardGenerateRequest`。沒有呼叫方；網頁不做自動化，本機腳本可能重用，先保留 |
+| H7 | 低 | 通用 LLM 建卡的殘骸 | `AnkiModelManager` 的 `get_model_schema`、`create_note_from_llm_response`、`list_available_models`、`get_model_detail`、`can_add_note`、`sync_to_ankiweb`；`schemas/card.py` 的 `CardGenerateRequest`（只剩 H1 那支無法執行的腳本用它；`CardGenerateResponse`、`CardUpdateRequest` 已在 `feat/retire-generate` 刪除）。沒有能用的呼叫方；網頁不做自動化，本機腳本可能重用，先保留 |
 | H8 | 低 | `/storage/*`（MinIO） | 上傳、列出、預簽、刪除，repo 內沒有呼叫方；網頁的媒體上傳不走這裡（見 `docs/wip/media_upload_FEAT_2026-10-20.md`） |
 
 ## 5. 已合併計畫的未實測驗收與後續（2026-11-03 歸檔時整理）

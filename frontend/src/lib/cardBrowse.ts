@@ -170,6 +170,17 @@ export function createFormPath(pathname: string, currentSearch: string, remember
   return `/cards?${params.toString()}`
 }
 
+/**
+ * 卡片頁的建卡畫面是否已經開著（看參數內容，不比網址字串，編碼不同也認得出來）。
+ * Whether the card page's create form is already open.
+ * @param pathname - 目前的路徑。The current path.
+ * @param currentSearch - 目前的網址參數字串（可帶 `?`）。The current query string.
+ * @returns 已經開著時為 `true`。Whether it is open.
+ */
+export function isCreateFormOpen(pathname: string, currentSearch: string): boolean {
+  return pathname === '/cards' && new URLSearchParams(currentSearch).get('new') === '1'
+}
+
 /** 卡片清單的層數選項的值（0＝全部子牌組）。The allowed list depths. */
 export const CARD_DEPTH_VALUES = [0, 1, 2, 3] as const
 

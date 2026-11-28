@@ -14,7 +14,7 @@ FluencyTides 是一套**個人語言學習自動化系統**，把「LLM 內容�
 
 | 功能 | 說明 | 主要入口 |
 |---|---|---|
-| **LLM 生成 Anki 卡片** | 依所選模型讀取 LLM JSON Schema 與 Jinja2 System Prompt，呼叫 OpenAI 相容 LLM（實務上為 Gemini 相容層）取得結構化 JSON，經 AnkiConnect 寫入本地 Anki | 網頁「Cards」頁的建卡畫面（`POST /api/v1/handlers/{handler}/notes`；預覽流程先 `POST /api/v1/handlers/{handler}/drafts` 生成草稿）、Telegram 任意文字訊息、CLI 批次腳本 |
+| **建立 Anki 卡片** | 每種卡片的欄位與建法由後端的 creator 宣告：填表的卡片直接經 AnkiConnect 寫入本地 Anki；三語對話卡、外語糾錯走預覽流程，先由 LLM 在背景生成草稿，預覽、勾選後再建立。本機批次腳本 `import_cards_with_llm.py` 目前無法執行（`docs/wip/backlog.md` H1） | 網頁「Cards」頁的建卡畫面（`POST /api/v1/handlers/{handler_name}/notes`；預覽流程先 `POST /api/v1/handlers/{handler_name}/drafts` 生成草稿；網址裡的名稱是 creator 名，目前與 handler 同名）、Telegram `/newcard` |
 | **知識圖譜** | LLM 生卡時同步輸出 `Graph_Relations` 關聯，寫入 MySQL 語料庫的 `rel_links`；前端以 react-force-graph-2d 力導向圖呈現，支援連線建立/刪除關聯與卡片詳情編輯 | `GET /api/v1/relations/graph`、前端 `KnowledgeGraph.tsx` |
 | **Telegram 語音影子跟讀評測** | 卡片內嵌 Deep Link（`rec_` 前綴），使用者錄音後依能力路由建立的評分器評分（模型直接聽音檔、Whisper 轉文字後逐字比對、或 Whisper＋文字 LLM；三語卡與對話卡可設不同策略），結果寫回 Anki 卡片的 Recordings 欄位 | `bot/handlers/voice.py`（依筆記類型找 handler，讀它的 `RECORDING_EVAL`）→ `audio_evaluator/factory.py` |
 | **依用途選工具（能力路由）** | 每個用途（自他動詞子卡、讀音判斷、錄音評分…）可各自指定文字 LLM（端點、模型、思考深度）、錄音評分策略、聽音檔的模型與語音轉文字，存在資料庫、重啟後仍在；選項只能來自 `.env` 的白名單（多家中轉站、Google 原生、claude-code / antigravity CLI、`AUDIO_MODELS`、`STT_MODELS`），沒設定時依序看：用途自己的設定 → 它的全域（文字用途看 `*`、錄音評分看 `*voice`）→ `.env`；全域可打開「全局生效」，讓那一邊的用途都改用全域。設定方式見 `backend/.env.example` 第 1、10、12、13 區 | Telegram `/setconfig`（管理員）、網頁「Tool Settings」、`/api/v1/capability-routes` |
