@@ -2,7 +2,7 @@
 
 Cloze 挖空定位與對話組裝的共用純函數模組。
 
-Extracted from ``jp_verb_pair_handler.py`` and shared by the JP_VerbPair and JP_CoreVerb handlers as a single
+Extracted from ``jp_verbs/verb_pair.py`` and shared by the JP_VerbPair and JP_CoreVerb creators as a single
 source of truth:
 
 1. ``assemble_dialog_turns``: deterministically assembles the LINE-style dialog structure in Python from the
@@ -12,8 +12,8 @@ source of truth:
    fast with ``ClozePositioningError`` when all of them fail; it also supports optional cross-validation
    against a verified span (to stop the LLM from blanking a contaminated position).
 
-本模組自 ``jp_verb_pair_handler.py`` 抽出，供 JP_VerbPair 與 JP_CoreVerb
-兩個 Handler 共用，維持單一事實來源：
+本模組自 ``jp_verbs/verb_pair.py`` 抽出，供 JP_VerbPair 與 JP_CoreVerb
+兩個 creator 共用，維持單一事實來源：
 
 1. ``assemble_dialog_turns``：依 LLM 回傳的翻譯映射，
    在 Python 端確定性地組裝 LINE 風格對話結構（含截斷與氣泡對齊）。

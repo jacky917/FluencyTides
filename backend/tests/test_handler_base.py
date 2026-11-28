@@ -36,12 +36,14 @@ from app.services.task_handlers.base import BaseHandler, note_detail
 from app.services.task_handlers.capabilities import (
     NOT_OFFERED,
     CreateCapability,
+    CreatorCapabilities,
     GraphCapability,
     GraphSpec,
     HandlerCapabilities,
     Operation,
 )
-from app.services.task_handlers.registry import HandlerRegistry
+from app.services.task_handlers.creator import BaseCreator
+from app.services.task_handlers.registry import CreatorNotFoundError, HandlerNotFoundError, HandlerRegistry
 from app.services.task_handlers.relation_graph import RelationGraphMixin
 
 V2 = "TOEIC_Coach_Dark_v2"
@@ -141,6 +143,18 @@ def make_handler(name: str = "demo", models=(V2,), base: type = BaseHandler, **a
     return type(f"Handler_{name}", (base,), namespace)()
 
 
+def make_creator(name: str = "demo", handler: BaseHandler | None = None, base: type = BaseCreator, **attrs) -> BaseCreator:
+    """建一個只實作抽象方法的 creator；``attrs`` 覆寫類別屬性或方法（``HANDLER`` 預設同名）。
+
+    給了 ``handler`` 就直接綁定，不經註冊表（測試建卡流程本身時用）。
+    """
+    namespace = {"creator_name": property(lambda self: name), "HANDLER": name, **attrs}
+    creator = type(f"Creator_{name}", (base,), namespace)()
+    if handler is not None:
+        creator.bind(handler)
+    return creator
+
+
 # =============================================================================
 # 能力宣告的形狀
 # =============================================================================
@@ -195,12 +209,9 @@ class TestCapabilityShapes:
             GraphCapability(supported=True, links=True, layout="tree")
 
     def test_defaults_offer_read_only(self):
+        """建好之後的能力預設只開放讀取；建卡不在 handler 上（handler 拆分計畫書 D2）。"""
         caps = HandlerCapabilities()
         assert caps.to_dict() == {
-            "create": {
-                "supported": False, "channels": [], "flow": None, "deck": None,
-                "fixed_deck": None, "note_type": None, "reason": "尚未開放",
-            },
             "read": {"supported": True, "reason": None},
             "update_fields": {"supported": False, "reason": "尚未開放"},
             "update_json": {"supported": False, "reason": "尚未開放"},
@@ -208,12 +219,20 @@ class TestCapabilityShapes:
             "actions": [],
             "graph": {"supported": False, "links": False, "layout": "force", "reason": "尚未開放"},
             "search": {"supported": False, "reason": "尚未開放"},
+        }
+
+    def test_creator_defaults_offer_nothing(self):
+        assert CreatorCapabilities().to_dict() == {
+            "create": {
+                "supported": False, "channels": [], "flow": None, "deck": None,
+                "fixed_deck": None, "note_type": None, "reason": "尚未開放",
+            },
             "fill": {"supported": False, "reason": "尚未開放"},
         }
 
 
 # =============================================================================
-# 註冊表檢查（D2、D4）
+# 註冊表檢查（D2；一種筆記類型一個 handler：handler 拆分計畫書 D4）
 # =============================================================================
 
 
@@ -224,21 +243,15 @@ def _web_create(note_type: str = V2) -> CreateCapability:
 class TestRegistryChecks:
     def test_registers_valid_handler_and_maps_note_types(self):
         registry = HandlerRegistry()
-        handler = make_handler(CAPABILITIES=HandlerCapabilities(create=_web_create()))
+        handler = make_handler()
         registry.register(handler)
         assert registry.get_handler("demo") is handler
         assert registry.handler_for_note_type(V2) is handler
         assert registry.handler_for_note_type("Notion_SRS_Dark") is None
-        assert registry.handlers_for_note_type("Notion_SRS_Dark") == []
 
     @pytest.mark.parametrize(
         ("attrs", "problem"),
         [
-            ({"CAPABILITIES": HandlerCapabilities(create=_web_create(OTHER))}, "create.note_type"),
-            (
-                {"CAPABILITIES": HandlerCapabilities(create=CreateCapability(channels=("script",), reason="腳本"))},
-                "execute_generate",
-            ),
             ({"CAPABILITIES": HandlerCapabilities(actions=("add_audio",))}, "execute_update"),
             ({"CAPABILITIES": HandlerCapabilities(graph=GraphCapability(supported=True, links=True))}, "RelationGraphMixin"),
             (
@@ -265,16 +278,6 @@ class TestRegistryChecks:
             HandlerRegistry().register(make_handler(models=("No_Such_Model",), JSON_FIELDS=("Data_JSON",)))
         # 沒宣告欄位時不需要定義檔
         HandlerRegistry().register(make_handler(models=("No_Such_Model",)))
-
-    def test_script_channel_with_execute_generate_passes(self):
-        async def execute_generate(self, card_service, relation_service, parameters):
-            return {}
-
-        registry = HandlerRegistry()
-        registry.register(make_handler(
-            CAPABILITIES=HandlerCapabilities(create=CreateCapability(channels=("script",), reason="腳本")),
-            execute_generate=execute_generate,
-        ))
 
     def test_actions_with_overridden_update_pass(self):
         async def execute_update(self, card_service, relation_service, note_id, parameters):
@@ -304,21 +307,162 @@ class TestRegistryChecks:
             CAPABILITIES=HandlerCapabilities(graph=graph),
         ))
 
-    def test_shared_note_type_requires_same_existing_note_ops(self):
+    def test_second_handler_for_a_note_type_rejected(self):
+        """一種筆記類型只能有一個 handler，第二個直接失敗，什麼都不留（handler 拆分計畫書 D4、D8）。"""
         registry = HandlerRegistry()
         first = make_handler("first")
         registry.register(first)
-        with pytest.raises(RuntimeError, match="共用筆記類型"):
-            registry.register(make_handler(
-                "second", CAPABILITIES=HandlerCapabilities(delete=Operation(supported=True))
-            ))
+        # 能力完全相同也一樣：不再比對能力，而是不允許共用
+        with pytest.raises(ValueError, match=r"Handler 'second' .*TOEIC_Coach_Dark_v2（已歸 'first'）"):
+            registry.register(make_handler("second", models=(V2, OTHER)))
         assert [h.handler_name for h in registry.all_handlers()] == ["first"]
-
-        # 建立能力不同不影響（建立不是對既有筆記的操作）
-        second = make_handler("second", CAPABILITIES=HandlerCapabilities(create=_web_create()))
-        registry.register(second)
-        assert registry.handlers_for_note_type(V2) == [first, second]
         assert registry.handler_for_note_type(V2) is first
+        assert registry.handler_for_note_type(OTHER) is None
+
+    def test_duplicate_handler_name_rejected(self):
+        registry = HandlerRegistry()
+        registry.register(make_handler("same"))
+        with pytest.raises(ValueError, match="已經被註冊過了"):
+            registry.register(make_handler("same", models=(OTHER,)))
+
+    def test_unknown_handler_raises_not_found(self):
+        with pytest.raises(HandlerNotFoundError, match="任務處理器"):
+            HandlerRegistry().get_handler("nope")
+
+
+# =============================================================================
+# creator 的註冊與檢查（handler 拆分計畫書 D4、D5、D7）
+# =============================================================================
+
+
+def _registry_with(*creators: BaseCreator, handlers: tuple = ()) -> HandlerRegistry:
+    registry = HandlerRegistry()
+    for handler in handlers or (make_handler(),):
+        registry.register(handler)
+    for creator in creators:
+        registry.register_creator(creator)
+    return registry
+
+
+class TestCreatorChecks:
+    def test_check_binds_each_creator_to_its_handler(self):
+        handler = make_handler()
+        creator = make_creator(CAPABILITIES=CreatorCapabilities(create=_web_create()))
+        registry = _registry_with(creator, handlers=(handler,))
+        with pytest.raises(RuntimeError, match="還沒綁定"):
+            creator.handler  # noqa: B018 - 綁定之前讀不到
+        registry.check_creators()
+        assert registry.get_creator("demo") is creator
+        assert creator.handler is handler
+        assert creator.title == handler.title  # 沒覆寫時沿用 handler 的名稱
+        assert registry.creators_for_handler("demo") == [creator]
+        assert registry.all_creators() == [creator]
+        registry.check_creators()  # 重複呼叫沒有副作用
+        assert creator.handler is handler
+
+    def test_unknown_creator_raises_not_found(self):
+        with pytest.raises(CreatorNotFoundError, match="建卡流程") as info:
+            HandlerRegistry().get_creator("nope")
+        assert isinstance(info.value, HandlerNotFoundError)  # 錯誤碼與拆分前相同
+        assert info.value.error_code == "HANDLER_NOT_FOUND"
+
+    @pytest.mark.parametrize(
+        ("attrs", "problem"),
+        [
+            ({"HANDLER": ""}, "HANDLER"),
+            ({"CAPABILITIES": CreatorCapabilities(create=CreateCapability(channels=("script",), reason="腳本"))},
+             "execute_generate"),
+        ],
+    )
+    def test_declaration_without_implementation_fails(self, attrs, problem):
+        registry = HandlerRegistry()
+        with pytest.raises(RuntimeError, match=problem):
+            registry.register_creator(make_creator(**attrs))
+        assert registry.all_creators() == []
+
+    def test_duplicate_creator_name_rejected(self):
+        registry = HandlerRegistry()
+        registry.register_creator(make_creator())
+        with pytest.raises(ValueError, match="已經被註冊過了"):
+            registry.register_creator(make_creator())
+
+    def test_script_channel_with_execute_generate_passes(self):
+        async def execute_generate(self, card_service, relation_service, parameters):
+            return {}
+
+        registry = _registry_with(make_creator(
+            CAPABILITIES=CreatorCapabilities(create=CreateCapability(channels=("script",), reason="腳本")),
+            execute_generate=execute_generate,
+        ))
+        registry.check_creators()
+
+    @pytest.mark.parametrize(
+        ("creator", "problem"),
+        [
+            (make_creator(HANDLER="nope"), "HANDLER='nope' 沒有註冊"),
+            (make_creator("other", HANDLER="demo"), "必須和它的 handler 'demo' 同名"),
+            (make_creator(CAPABILITIES=CreatorCapabilities(create=_web_create(OTHER))), "create.note_type"),
+            # 不開放建卡但寫了別人的 note_type 也要擋（D5：有值時就檢查）
+            (make_creator(CAPABILITIES=CreatorCapabilities(create=CreateCapability(
+                channels=("script",), note_type=OTHER, reason="腳本"
+            )), execute_generate=lambda self: None), "create.note_type"),
+            (make_creator(PRODUCES=(V2, "Notion_SRS_Dark")), "Notion_SRS_Dark"),
+            (
+                make_creator(CAPABILITIES=CreatorCapabilities(create=_web_create()), PRODUCES=(OTHER,)),
+                "沒有包含 create.note_type",
+            ),
+        ],
+    )
+    def test_check_against_handlers_fails(self, creator, problem):
+        registry = _registry_with(creator)
+        with pytest.raises(RuntimeError, match=problem):
+            registry.check_creators()
+        with pytest.raises(RuntimeError, match="還沒綁定"):
+            creator.handler  # noqa: B018 - 檢查不過時不綁定任何 creator
+
+    def test_first_stage_allows_one_creator_per_handler(self):
+        """第一階段的網址只有一個名稱，一個 handler 最多一個 creator（handler 拆分計畫書 D7）。"""
+        registry = _registry_with(make_creator(), make_creator("second", HANDLER="demo"))
+        with pytest.raises(RuntimeError, match="有多個 creator"):
+            registry.check_creators()
+        # GET /handlers 取 creator 的地方也不默默挑一個
+        with pytest.raises(RuntimeError, match="有多個 creator"):
+            registry.creator_for_handler("demo")
+
+    def test_creator_for_handler(self):
+        creator = make_creator()
+        registry = _registry_with(creator, handlers=(make_handler(), make_handler("bare", models=(OTHER,))))
+        assert registry.creator_for_handler("demo") is creator
+        assert registry.creator_for_handler("bare") is None
+
+    def test_creator_registered_after_the_check_is_bound_on_the_spot(self):
+        """check_creators 之後才註冊的 creator 當場檢查並綁定，不會留下沒綁定的。"""
+        other = make_handler("other", models=(OTHER,))
+        registry = _registry_with(make_creator(), handlers=(make_handler(), other))
+        registry.check_creators()
+        late = make_creator("other")
+        registry.register_creator(late)
+        assert late.handler is other
+
+    def test_creator_registered_after_the_check_is_rejected_when_inconsistent(self):
+        registry = _registry_with(make_creator())
+        registry.check_creators()
+        with pytest.raises(RuntimeError, match="HANDLER='nope' 沒有註冊"):
+            registry.register_creator(make_creator("late", HANDLER="nope"))
+        assert [c.creator_name for c in registry.all_creators()] == ["demo"]
+
+    def test_creator_may_produce_note_types_of_other_handlers(self):
+        """jp 的 creator 會寫出共用的 Context 卡，它歸另一個 handler。"""
+        context = make_handler("context", models=(OTHER,))
+        creator = make_creator(PRODUCES=(V2, OTHER))
+        registry = _registry_with(creator, handlers=(make_handler(), context))
+        registry.check_creators()
+        assert registry.producers_of(OTHER) == [creator]
+        assert creator.produced_note_types() == (V2, OTHER)
+
+    def test_produced_note_types_default_to_create_note_type(self):
+        assert make_creator(CAPABILITIES=CreatorCapabilities(create=_web_create())).produced_note_types() == (V2,)
+        assert make_creator().produced_note_types() == ()
 
 
 class TestProductionRegistry:
@@ -333,20 +477,44 @@ class TestProductionRegistry:
             ("speaking_trilingual", "三語對話卡"),
             ("jp_verb_pair", "自他動詞"),
             ("jp_core_verb", "核心動詞"),
+            ("jp_context", "日文語境卡"),
             ("person_profile", "人脈卡"),
         ]
-        assert [h.handler_name for h in handler_registry.handlers_for_note_type("JP_Context_Dark")] == [
-            "jp_verb_pair", "jp_core_verb",
-        ]
+        assert handler_registry.handler_for_note_type("JP_Context_Dark").handler_name == "jp_context"
         assert handler_registry.handler_for_note_type(V2).handler_name == "vocabulary_mining"
 
-    def test_jp_handlers_instantiate_without_args(self):
-        """腳本端點直接 new 這兩個 handler（D7），不能多出抽象方法。"""
-        from app.services.task_handlers.jp_core_verb_handler import JPCoreVerbHandler
-        from app.services.task_handlers.jp_verb_pair_handler import JPVerbPairHandler
+    def test_every_creator_is_named_after_and_bound_to_its_handler(self):
+        """一種建法的類型 handler 與 creator 同名，用途鍵、草稿、網址都不用改（handler 拆分計畫書 D6）。"""
+        from app.services.task_handlers.registry import handler_registry
 
-        assert JPVerbPairHandler().handler_name == "jp_verb_pair"
-        assert JPCoreVerbHandler().handler_name == "jp_core_verb"
+        creators = handler_registry.all_creators()
+        assert [c.creator_name for c in creators] == [
+            "vocabulary_mining", "expression_correction", "speaking_coach", "speaking_trilingual",
+            "jp_verb_pair", "jp_core_verb", "person_profile",
+        ]
+        for creator in creators:
+            assert creator.handler is handler_registry.get_handler(creator.creator_name)
+
+    def test_both_jp_creators_produce_the_shared_context_cards(self):
+        from app.services.task_handlers.registry import handler_registry
+
+        producers = [c.creator_name for c in handler_registry.producers_of("JP_Context_Dark")]
+        assert producers == ["jp_verb_pair", "jp_core_verb"]
+        assert handler_registry.creators_for_handler("jp_context") == []
+
+    def test_no_creator_declares_what_existing_cards_can_do(self):
+        """creator 只宣告怎麼建；建好之後的宣告只在 handler 上（handler 拆分計畫書 D2、D10）。"""
+        from app.services.task_handlers.registry import handler_registry
+
+        handler_only = (
+            "GRAPH", "RELATION_LABEL_FIELD", "JSON_FIELDS", "JSON_FIELD_SPECS", "MEDIA_FIELDS", "SEARCH_FIELDS",
+            "RECORDING_EVAL", "execute_read", "execute_update", "execute_delete", "query_notes",
+            "execute_read_graph", "after_json_update", "reject_locked_fields", "field_texts",
+        )
+        for creator in handler_registry.all_creators():
+            leaked = [name for name in handler_only if hasattr(creator, name)]
+            assert leaked == [], (creator.creator_name, leaked)
+            assert not isinstance(creator, BaseHandler)
 
 
 # =============================================================================
@@ -355,10 +523,12 @@ class TestProductionRegistry:
 
 
 class TestStandardCreate:
+    """標準建立在 creator 上，欄位的 JSON／媒體宣告由它的 handler 決定（handler 拆分計畫書 D5）。"""
+
     def test_writes_fields_to_note_type_and_deck(self):
         anki = FakeAnki()
-        handler = make_handler()
-        ids = _run(handler.execute_create(
+        creator = make_creator(handler=make_handler())
+        ids = _run(creator.execute_create(
             _card_service(anki), _relations(), "English::TOEIC", V2,
             {"Expression": "allocate", "Target_Translation": "分配", "Chunking": None},
         ))
@@ -372,9 +542,9 @@ class TestStandardCreate:
 
     def test_json_fields_rejected_before_writing(self):
         anki = FakeAnki()
-        handler = make_handler(JSON_FIELDS=("Synonyms_JSON",), MEDIA_FIELDS={"Word_Audio": "audio"})
+        creator = make_creator(handler=make_handler(JSON_FIELDS=("Synonyms_JSON",), MEDIA_FIELDS={"Word_Audio": "audio"}))
         with pytest.raises(FieldNotEditableError, match="Synonyms_JSON"):
-            _run(handler.execute_create(
+            _run(creator.execute_create(
                 _card_service(anki), _relations(), "D", V2, {"Expression": "x", "Synonyms_JSON": "y"}
             ))
         assert anki.added == []
@@ -382,8 +552,8 @@ class TestStandardCreate:
     def test_media_field_takes_an_uploaded_name_and_stores_anki_markup(self):
         """media_upload 計畫書 §4：填 /media 產生的檔名成功，欄位存成 [sound:檔名]。"""
         anki = FakeAnki()
-        handler = make_handler(MEDIA_FIELDS={"Word_Audio": "audio"})
-        _run(handler.execute_create(
+        creator = make_creator(handler=make_handler(MEDIA_FIELDS={"Word_Audio": "audio"}))
+        _run(creator.execute_create(
             _card_service(anki), _relations(), "D", V2, {"Expression": "x", "Word_Audio": "web_audio_20261114_010203_0a1b2c.mp3"}
         ))
         (note,) = anki.added
@@ -394,23 +564,23 @@ class TestStandardCreate:
     )
     def test_media_field_rejects_anything_else_before_writing(self, value):
         anki = FakeAnki()
-        handler = make_handler(MEDIA_FIELDS={"Word_Audio": "audio"})
+        creator = make_creator(handler=make_handler(MEDIA_FIELDS={"Word_Audio": "audio"}))
         with pytest.raises(MediaFieldInvalidError, match="Word_Audio"):
-            _run(handler.execute_create(
+            _run(creator.execute_create(
                 _card_service(anki), _relations(), "D", V2, {"Expression": "x", "Word_Audio": value}
             ))
         assert anki.added == []
 
     def test_empty_media_field_stays_empty(self):
         anki = FakeAnki()
-        handler = make_handler(MEDIA_FIELDS={"Word_Audio": "audio"})
-        _run(handler.execute_create(_card_service(anki), _relations(), "D", V2, {"Expression": "x", "Word_Audio": "  "}))
+        creator = make_creator(handler=make_handler(MEDIA_FIELDS={"Word_Audio": "audio"}))
+        _run(creator.execute_create(_card_service(anki), _relations(), "D", V2, {"Expression": "x", "Word_Audio": "  "}))
         assert anki.added[0].fields["Word_Audio"] == ""
 
     def test_unknown_field_is_field_mismatch(self):
         anki = FakeAnki()
         with pytest.raises(FieldMismatchError):
-            _run(make_handler().execute_create(_card_service(anki), _relations(), "D", V2, {"Meaning": "x"}))
+            _run(make_creator(handler=make_handler()).execute_create(_card_service(anki), _relations(), "D", V2, {"Meaning": "x"}))
         assert anki.added == []
 
 

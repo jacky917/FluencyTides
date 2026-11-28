@@ -4,7 +4,7 @@
 |---|---|
 | **創建日期** | 2026-11-28（同日依討論過的方向改寫：`Handler` 沿用現名代表卡片類型、新增 `Creator`） |
 | **性質** | 重構設計（行為大致不變，改 handler 的分層與註冊表）＋實作工作項；只有 `JP_Context_Dark` 的歸屬會讓畫面上看得到變化（D3） |
-| **狀態** | 🚧 實作中（§8 的事項 2026-11-28 都已決定） |
+| **狀態** | 🚧 實作完成、未開 PR（2026-11-28；S0–S3 完成，多面向審查的 8 項 Important 已修正，見 D11；S4 本機實測與前端建置尚未做） |
 | **範圍** | `BaseHandler` 拿掉建卡的部分，只代表「卡片類型」（建好之後的行為，每種筆記類型恰好一個）；新增 `creator.py` 的 `BaseCreator` 代表「建卡流程」（同一種筆記類型可以有好幾個）；`HandlerRegistry` 的 handler 依筆記類型一對一登記、creator 依名稱登記；jp 兩組改成 `jp_verbs/` 資料夾，新增 handler `jp_context`；建卡相關的呼叫端改找 creator。建卡端點改成 `/creators/...` 的第二階段這次不做（D7） |
 | **不動** | Anki 的筆記類型、欄位與既有卡片（不改名、不搬資料）；資料庫（用途鍵 `recording_eval.<名稱>`、`jp_verb_pair` 等 LLM 用途鍵、`card_gen_log.card_type`、`rel_links.created_by` 的值都不變）；正式機設定；各 handler 建卡、改欄位、動作的實際行為 |
 | **PR / 進度** | 分支 `feat/handler-creator-split`，接在 `feat/routing-three-layers`（PR #62，`RECORDING_EVAL` 宣告，2026-11-28 尚未合併）之後開出，PR 等 #62 合併後再開；`speaking_monologue` 開工之前做完（§6） |
@@ -258,8 +258,9 @@ Creator 不複製 handler 的宣告，而是向它指向的 handler 拿：
 
 **第一階段（這次做）**：`/handlers` 的網址與 `GET /handlers` 的回應形狀不變，前端不用改。
 
-- `GET /handlers`（`NoteService.list_handlers`，`note_service.py:130`）仍是「每個 handler 一筆」：`name`、`title`、`note_types`、`json_fields`、`json_field_specs`、`media_fields`、`search_fields` 取自 handler；`capabilities` 由 handler 的能力加上 `HANDLER` 指向它的 creator 的 `create`、`fill` 合併；`create_schema`、`draft_schema` 取自 creator。沒有 creator 的 handler（`jp_context`），`create` 為不開放，`reason`「由自他動詞、核心動詞的本機批次腳本產生」。
+- `GET /handlers`（`NoteService.list_handlers`，`note_service.py:130`）仍是「每個 handler 一筆」：`name`、`title`、`note_types`、`json_fields`、`json_field_specs`、`media_fields`、`search_fields` 取自 handler；`capabilities` 由 handler 的能力加上 `HANDLER` 指向它的 creator 的 `create`、`fill` 合併；`create_schema`、`draft_schema` 取自 creator。沒有 creator 的 handler（`jp_context`），`create` 為不開放，`channels` 為 `script`，`reason`「由「自他動詞」、「核心動詞」的本機批次腳本產生」（依產出它的 creator 組出來：產出者全是本機批次腳本時這樣寫，否則寫「…的建卡流程一併產生」）。
 - 為了維持「一個 handler 一筆」，第一階段限制**每個 handler 最多一個 creator，而且 creator 和它的 `HANDLER` 同名**（`check_creators()` 檢查；第一階段的網址只有一個名稱，要能同時當兩種用）。現在的 7 個 creator 都符合；要加同一筆記類型的第二種建法時，就必須先做第二階段。
+- 建卡端點帶的名稱是 handler、卻沒有同名 creator 時（`jp_context`），回 400 `HANDLER_OPERATION_UNSUPPORTED` 並附上上面的原因，和其他不開放建卡的類型一致；名稱既不是 creator 也不是 handler 才回 404 `HANDLER_NOT_FOUND`（D11 第 2 點）。
 - 各端點依用途找角色：
 
 | 端點 | 第一階段找誰 |
@@ -344,6 +345,21 @@ class SpeakingCoachHandler(BaseHandler, BaseCreator):
 - **之後加第二種建法**：寫法 B 必須先把類別拆成寫法 A 才能加；寫法 A 只要再新增一個 creator 類別，既有的不用動。
 
 放在同一個檔案的理由：兩個類別共用的輔助函式（三語卡的語言判斷、人脈卡的欄位定義等）現在大多已經是模組層級的函式，放同一個檔案不用多一層 import，打開一個檔案就看到這種卡的全貌。
+
+### D11 審查後的修正（2026-11-28，多面向審查：程式、測試、註解、錯誤處理、型別）
+
+審查沒有 Critical；以下 8 項 Important 已修正：
+
+1. **`fill` 沒有測試保護**：審查者把人脈卡的 `fill` 從 `GET /handlers` 拿掉，原本的測試照樣全過。新增 `test_creation_capabilities_come_from_the_creator`，逐筆比對合併後的能力鍵、handler 的能力與 creator 的 `create`／`fill`；`test_handler_declarations._caps()` 改走正式的 `NoteService.list_handlers()`，不再在測試裡重寫一次合併。
+2. **沒有 creator 的 handler 建卡回 404**：`POST /handlers/jp_context/notes`、`/drafts`、`/fill` 原本回「找不到建卡流程」。`NoteService._creator()` 改成：名稱是 handler 但沒有 creator 時，回 400 `HANDLER_OPERATION_UNSUPPORTED` 與 `GET /handlers` 顯示的原因（D7）。
+3. **晚註冊的 creator 不會被綁定**：`check_creators()` 通過之後再 `register_creator` 的 creator，原本永遠不會檢查也不會綁定。現在註冊當下就跑一次 `check_creators()`，不通過就撤回這筆註冊。
+4. **`execute_generate` 的檢查漏了 TG**：註冊表只在 `script` 通道時檢查，而 TG 的外語糾錯（`channels` 沒有 `script`）也呼叫它。以 `test_tg_expression_flow_has_execute_generate` 守住簽名，並修正 `BaseCreator` 的說明；沒有為此新增宣告欄位。
+5. **`create.note_type`／`PRODUCES` 的檢查太鬆**：`create.note_type` 有值就檢查它歸 `HANDLER`（原本只在開放建卡時）；宣告了 `PRODUCES` 時也必須包含 `create.note_type`。
+6. **`GET /handlers` 默默取第一個 creator**：新增 `HandlerRegistry.creator_for_handler()`，遇到多個時拋錯；`list_handlers` 改用它，第二階段解除限制時一定會回頭改這裡。
+7. **過時的註解**：搬到 creator 之後仍寫「handler」的地方（`tag_rules`、jp 的 `CARD_TYPE`、`ExpressionCreateParams`、`create_session` 的 `handler_name`、`cloze_positioning` 等）改成 creator；`CreatorNotFoundError` 改寫成「錯誤碼與狀態不變，訊息改說建卡流程」；`base.py` 的草稿輔助改寫成「不屬於任何一方」；各模組 docstring 補上「放 handler 與 creator」。
+8. **計畫書代號撞號**：程式裡指 handlers 計畫書的 D 編號補上「handlers 計畫書」，`base.py`、`note_service.py` 的模組 docstring 註明裸寫的 D 編號指 handlers 計畫書；本計畫一律寫成「handler 拆分計畫書」／「handler/creator split plan」，並改用檔名，不寫 `docs/wip/` 路徑（歸檔後路徑會變）。
+
+審查提到、這次沒做的建議：handler 身上不能有 creator 專屬成員的反向檢查、完整「筆記類型 → handler」對照表的測試、`bind()` 驗證傳入的 handler、`generate_expression_cards.py` 的寬 catch 與沒關連線、`CHANNELS` 改由 `Channel` 推導、jp 的 `JP_Context_Dark` 字串常數共用。
 
 ## 4. 改動清單
 

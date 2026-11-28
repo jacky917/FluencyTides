@@ -17,16 +17,17 @@ from app.core.dependencies import get_card_service, get_relation_service
 from app.core.exceptions import FieldNotEditableError, MediaFieldInvalidError
 from app.services.relation_service import RelationService
 from app.services.task_handlers.base import BaseHandler
-from app.services.task_handlers.capabilities import CreateCapability, HandlerCapabilities
+from app.services.task_handlers.capabilities import CreateCapability, CreatorCapabilities
 from app.schemas.person_profile import PersonCreateParams
+from app.services.task_handlers.creator import BaseCreator
 from app.services.task_handlers.expression_handler import ExpressionCreateParams
-from app.services.task_handlers.jp_core_verb_handler import JPCoreVerbHandler
-from app.services.task_handlers.jp_verb_pair_handler import JPVerbPairHandler
+from app.services.task_handlers.jp_verbs.core_verb import JPCoreVerbCreator
+from app.services.task_handlers.jp_verbs.verb_pair import JPVerbPairCreator
 from app.services.task_handlers.registry import HandlerRegistry, handler_registry
 from app.services.task_handlers.relation_graph import RelationGraphMixin
 from app.services.task_handlers.speaking_coach_handler import SpeakingCoachCreateParams
 from app.services.task_handlers.speaking_trilingual_handler import SpeakingTrilingualCreateParams
-from app.services.task_handlers.vocabulary_mining_handler import VocabularyMiningHandler
+from app.services.task_handlers.vocabulary_mining_handler import VocabularyMiningCreator, VocabularyMiningHandler
 from tests.test_handler_base import (
     V2,
     FakeAnki,
@@ -35,6 +36,7 @@ from tests.test_handler_base import (
     _note,
     _relations,
     _seed_relations,
+    make_creator,
     make_handler,
     session_factory,  # noqa: F401 - fixture
 )
@@ -45,7 +47,15 @@ def _run(coro):
 
 
 def _caps(name: str) -> dict:
-    return handler_registry.get_handler(name).CAPABILITIES.to_dict()
+    """``GET /handlers`` 回給前端的能力（handler 的加上它的 creator 的建卡能力），走正式的合併程式。"""
+    from tests.test_note_service import SyncingAnki, _service
+
+    handlers = {h["name"]: h for h in _run(_service(SyncingAnki()).list_handlers())}
+    return handlers[name]["capabilities"]
+
+
+def _creator(name: str) -> BaseCreator:
+    return handler_registry.get_creator(name)
 
 
 SPEAKING_ACTIONS = ["add_audio", "add_recording", "delete_recording"]
@@ -127,15 +137,26 @@ class TestInitialCapabilities:
         assert caps["actions"] == []
         assert caps["graph"]["supported"] is False
 
-    def test_jp_shared_context_type_same_ops(self):
-        """JP_Context_Dark 同屬兩個 jp handler，對既有筆記的能力必須相同（D4）。"""
-        verb_pair, core_verb = handler_registry.handlers_for_note_type("JP_Context_Dark")
-        assert verb_pair.CAPABILITIES.existing_note_ops() == core_verb.CAPABILITIES.existing_note_ops()
+    @pytest.mark.parametrize("name", ["jp_verb_pair", "jp_core_verb"])
+    def test_jp_handlers_no_longer_own_the_context_cards(self, name):
+        assert "JP_Context_Dark" not in handler_registry.get_handler(name).supported_models
+        assert "JP_Context_Dark" in _creator(name).produced_note_types()
+
+    def test_jp_context(self):
+        """兩個 jp 共用的 Context 卡有自己的 handler，刪除說明指出兩個刪除工具（handler 拆分計畫書 D3）。"""
+        handler = handler_registry.get_handler("jp_context")
+        assert (handler.title, handler.supported_models) == ("日文語境卡", ["JP_Context_Dark"])
+        caps = _caps("jp_context")
+        assert caps["update_fields"] == {"supported": False, "reason": "由本機批次腳本管理，網頁只能檢視"}
+        assert "scripts/local_anki/JP_VerbPair/delete_child_cards.py" in caps["delete"]["reason"]
+        assert "scripts/local_anki/JP_CoreVerb/delete_child_cards.py" in caps["delete"]["reason"]
+        assert caps["actions"] == [] and caps["graph"]["supported"] is False
+        assert handler_registry.creators_for_handler("jp_context") == []
 
     def test_web_creatable_handlers(self):
         """Generate 頁可選單字卡（§6）、人脈卡（人脈卡計畫書 §3.11）、三語對話卡（預覽流程），以及
         對話卡、外語糾錯（server_drafts 計畫書 D10）。"""
-        web = [h.handler_name for h in handler_registry.all_handlers() if "web" in h.CAPABILITIES.create.channels]
+        web = [c.creator_name for c in handler_registry.all_creators() if "web" in c.CAPABILITIES.create.channels]
         assert sorted(web) == [
             "expression_correction", "person_profile", "speaking_coach", "speaking_trilingual", "vocabulary_mining",
         ]
@@ -148,9 +169,10 @@ class TestInitialCapabilities:
 
 class TestVocabularyPilot:
     def test_no_crud_overrides(self):
-        """增刪改查全部用基底，圖譜用 RelationGraphMixin。"""
-        for name in ("execute_create", "execute_read", "execute_update", "execute_delete"):
+        """增刪改查全部用基底（建立在 creator），圖譜用 RelationGraphMixin。"""
+        for name in ("execute_read", "execute_update", "execute_delete"):
             assert getattr(VocabularyMiningHandler, name) is getattr(BaseHandler, name), name
+        assert VocabularyMiningCreator.execute_create is BaseCreator.execute_create
         assert VocabularyMiningHandler.execute_read_graph is RelationGraphMixin.execute_read_graph
         assert issubclass(VocabularyMiningHandler, RelationGraphMixin)
 
@@ -165,7 +187,7 @@ class TestVocabularyPilot:
     def test_create_from_expression_only(self):
         """TG 建單字卡傳的就是 {"Expression": 單字}（§7），建出 _v2、其餘欄位空白。"""
         anki = FakeAnki()
-        ids = _run(VocabularyMiningHandler().execute_create(
+        ids = _run(_creator("vocabulary_mining").execute_create(
             _card_service(anki), _relations(), "Default", V2, {"Expression": "allocate"}
         ))
         assert ids == [9001]
@@ -188,7 +210,7 @@ class TestVocabularyPilot:
     def test_audio_fields_take_uploaded_names(self):
         """media_upload 計畫書 D5：單字卡的兩個音檔欄位在網頁上傳，存成 [sound:檔名]。"""
         anki = FakeAnki()
-        _run(VocabularyMiningHandler().execute_create(
+        _run(_creator("vocabulary_mining").execute_create(
             _card_service(anki), _relations(), "Default", V2,
             {"Expression": "allocate", "Word_Audio": "web_audio_20261114_010203_0a1b2c.mp3", "Target_Example_Audio": ""},
         ))
@@ -224,8 +246,8 @@ class TestVocabularyPilot:
 
 
 class TestCreateParams:
-    def test_handlers_overriding_create_declare_params(self):
-        params = {h.handler_name: h.CREATE_PARAMS for h in handler_registry.all_handlers()}
+    def test_creators_overriding_create_declare_params(self):
+        params = {c.creator_name: c.CREATE_PARAMS for c in handler_registry.all_creators()}
         assert params == {
             "vocabulary_mining": None,
             "expression_correction": ExpressionCreateParams,
@@ -308,7 +330,7 @@ class TestCreateParams:
 
 class TestCreateParamsRegistryRule:
     def _open_create(self):
-        return HandlerCapabilities(create=CreateCapability(
+        return CreatorCapabilities(create=CreateCapability(
             supported=True, channels=("web",), flow="form", deck="selected", note_type=V2
         ))
 
@@ -317,11 +339,11 @@ class TestCreateParamsRegistryRule:
             return []
 
         with pytest.raises(RuntimeError, match="CREATE_PARAMS"):
-            HandlerRegistry().register(make_handler(CAPABILITIES=self._open_create(), execute_create=execute_create))
+            HandlerRegistry().register_creator(make_creator(CAPABILITIES=self._open_create(), execute_create=execute_create))
 
     def test_params_need_overridden_create(self):
         with pytest.raises(RuntimeError, match="標準建立"):
-            HandlerRegistry().register(make_handler(CREATE_PARAMS=SpeakingTrilingualCreateParams))
+            HandlerRegistry().register_creator(make_creator(CREATE_PARAMS=SpeakingTrilingualCreateParams))
 
 
 # =============================================================================
@@ -358,9 +380,9 @@ class TestScriptEndpoints:
     @pytest.mark.parametrize(
         ("url", "cls", "body"),
         [
-            ("/api/v1/verb-pair/generate-child-cards", JPVerbPairHandler, REQUEST),
-            ("/api/v1/core-verb/generate-child-cards", JPCoreVerbHandler, REQUEST),  # target_verb_span 可省略
-            ("/api/v1/core-verb/generate-child-cards", JPCoreVerbHandler, {**REQUEST, "target_verb_span": [0, 2]}),
+            ("/api/v1/verb-pair/generate-child-cards", JPVerbPairCreator, REQUEST),
+            ("/api/v1/core-verb/generate-child-cards", JPCoreVerbCreator, REQUEST),  # target_verb_span 可省略
+            ("/api/v1/core-verb/generate-child-cards", JPCoreVerbCreator, {**REQUEST, "target_verb_span": [0, 2]}),
         ],
     )
     def test_contract_without_api_key(self, script_client, url, cls, body):
@@ -379,17 +401,24 @@ class TestScriptEndpoints:
         missing = {k: v for k, v in REQUEST.items() if k != "target_verb"}
         assert script_client.post(url, json=missing).status_code == 422
 
-    @pytest.mark.parametrize("cls", [JPVerbPairHandler, JPCoreVerbHandler])
-    def test_handlers_instantiate_and_keep_generate_signature(self, cls):
-        handler = cls()
-        assert list(inspect.signature(handler.execute_generate).parameters) == [
+    def test_tg_expression_flow_has_execute_generate(self):
+        """TG 的外語糾錯（expression_fsm）呼叫 creator 的 execute_generate；它的 channels 沒有 script，
+        註冊表的檢查涵蓋不到，所以在這裡守住。"""
+        creator = _creator("expression_correction")
+        assert "script" not in creator.CAPABILITIES.create.channels
+        assert list(inspect.signature(creator.execute_generate).parameters) == ["parameters"]
+
+    @pytest.mark.parametrize("name", ["jp_verb_pair", "jp_core_verb"])
+    def test_creators_keep_generate_signature(self, name):
+        """腳本端點用註冊表裡的 creator（不再自己建實例），參數不變。"""
+        assert list(inspect.signature(_creator(name).execute_generate).parameters) == [
             "card_service", "relation_service", "parameters",
         ]
 
-    def test_script_channel_handlers_have_execute_generate(self):
-        for handler in handler_registry.all_handlers():
-            if "script" in handler.CAPABILITIES.create.channels:
-                assert callable(getattr(handler, "execute_generate", None)), handler.handler_name
+    def test_script_channel_creators_have_execute_generate(self):
+        for creator in handler_registry.all_creators():
+            if "script" in creator.CAPABILITIES.create.channels:
+                assert callable(getattr(creator, "execute_generate", None)), creator.creator_name
 
     @pytest.mark.parametrize(
         ("method", "url"),

@@ -2,12 +2,17 @@
 
 基礎任務處理器（Base Task Handler）模組。
 
-``BaseHandler`` provides the standard CRUD and the standard graph for single-note cards; handlers declare
+``BaseHandler`` provides the standard read, update, delete and graph for single-note cards; handlers declare
 capabilities and fields as class attributes and override only where they need different behavior (handlers
-plan D10, D12).
+plan D10, D12). Creating cards is the creators' job (``creator.BaseCreator``, handler/creator split plan D2).
+The draft helpers here (``DuplicateResolution`` and the system keys) belong to neither role: they are used by
+creators' draft code and by the service layer. Bare D numbers in this module refer to the handlers plan; the
+handler/creator split plan is always named.
 
-``BaseHandler`` 提供單一筆記卡片的標準 CRUD 與標準圖譜；各 handler 以類別屬性宣告能力與欄位，
-需要不同行為時才覆寫（handlers 計畫書 D10、D12）。
+``BaseHandler`` 提供單一筆記卡片的標準讀取、修改、刪除與標準圖譜；各 handler 以類別屬性宣告能力與欄位，
+需要不同行為時才覆寫（handlers 計畫書 D10、D12）。建卡是 creator 的事（``creator.BaseCreator``，handler
+handler 拆分計畫書 D2）。這裡的草稿輔助（``DuplicateResolution`` 與系統鍵）不屬於任何一方：creator 的草稿程式與
+服務層使用。本模組裸寫的 D 編號指 handlers 計畫書；handler 拆分計畫書一律寫出名稱。
 """
 
 from __future__ import annotations
@@ -107,28 +112,32 @@ class DuplicateResolution:
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
 
-    from pydantic import BaseModel
-
     from app.services.card_service import CardService
     from app.services.relation_service import RelationService
     from app.services.task_handlers.shared.recording_spec import RecordingEvaluation
 
 
 class BaseHandler(ABC):
-    """Base class for card task handlers.
+    """Base class for handlers: what a kind of card can do once it exists.
 
-    卡片任務處理器的基底類別。
+    handler 的基底類別：一種卡片建好之後能做什麼。
 
-    Each handler owns one kind of card (a card group is owned by one handler covering several note types). A
-    standard implementation being present does not mean it is offered: ``CAPABILITIES`` decides, and the
-    registry checks at registration time that the declaration is backed by an implementation.
+    Each handler owns one kind of card (a card group is owned by one handler covering several note types), and
+    each note type has exactly one handler, so the handler found from a note's ``modelName`` is unambiguous. How
+    cards are created is not declared here but by creators (``creator.BaseCreator``); a note type may have several
+    creators (handler/creator split plan D1, D2). A standard implementation being present does not mean it is
+    offered: ``CAPABILITIES`` decides, and the registry checks at registration time that the declaration is
+    backed by an implementation.
 
-    每個 Handler 負責一種卡片（成組的卡片由同一個 handler 負責多個筆記類型）。標準實作寫好不代表開放：
-    開不開放由 ``CAPABILITIES`` 決定，註冊表在註冊時檢查宣告是否有實作支撐。
+    每個 handler 負責一種卡片（成組的卡片由同一個 handler 負責多個筆記類型），每種筆記類型恰好一個
+    handler，所以從筆記的 ``modelName`` 找到的 handler 是唯一的。怎麼建卡不在這裡宣告，而是由 creator
+    （``creator.BaseCreator``）宣告；同一種筆記類型可以有好幾個 creator（handler 拆分計畫書 D1、D2）。
+    標準實作寫好不代表開放：開不開放由 ``CAPABILITIES`` 決定，註冊表在註冊時檢查宣告是否有實作支撐。
 
     Attributes:
-        CAPABILITIES: what the service layer may do with this handler (D2); reading only by default
-            服務層能對這個 handler 做什麼（D2）；預設只開放讀取
+        CAPABILITIES: what the service layer may do with this handler's cards once they exist (D2); reading only
+            by default
+            卡片建好之後服務層能對這個 handler 做什麼（D2）；預設只開放讀取
         GRAPH: which fields graph nodes use (D12)
             圖譜節點取哪些欄位（D12）
         RELATION_LABEL_FIELD: the text field relations use to identify a node. When declared, the standard
@@ -144,31 +153,18 @@ class BaseHandler(ABC):
             :meth:`field_texts` (standard create, ``update_fields``) accept only a file name in the
             ``POST /media`` naming format, the original value, or blank, and wrap it as ``[sound:name]`` or
             ``<img src="name">``; the web field dialog shows an upload widget, and the standard create form also
-            lists the field marked with ``x-ui``. It does not apply to a create that overrides
+            lists the field marked with ``x-ui``. It does not apply to a creator that declares
             ``CREATE_PARAMS`` (the parameters must carry ``x-ui`` and build the fields themselves, see plan
             §6.4), nor to a handler's own named actions (for example the person card's TG ``set_photo``, which
             has its own checks).
             媒體欄位 → 種類（``audio``、``image``；media_upload 計畫書 D3）。經 ``field_texts`` 的寫入（標準建立、
             ``update_fields``）只能填 ``POST /media`` 命名格式的檔名、原值或空白，寫入時包成 ``[sound:檔名]`` 或
             ``<img src="檔名">``；網頁的欄位彈窗顯示上傳元件，標準建立的表單也會列出並標 ``x-ui``。不套用的
-            地方：覆寫 ``CREATE_PARAMS`` 的建卡（要自己在參數標 ``x-ui``、組欄位，見計畫書 §6.4），以及
+            地方：宣告 ``CREATE_PARAMS`` 的 creator（要自己在參數標 ``x-ui``、組欄位，見計畫書 §6.4），以及
             handler 自己的具名動作（例如人脈卡 TG 用的 ``set_photo``，另有檢查）。
-        CREATE_TAGS: the tags the standard create adds
-            標準建立加上的標籤
-        CREATE_PARAMS: the create parameter model of a handler that overrides the create (D3); the service layer
-            validates parameters and builds the web form with it. The standard create does not use it (its
-            parameters are the note fields).
-            覆寫建立的 handler 的建立參數模型（D3）；服務層以它驗證參數、產生網頁表單。標準建立不用它
-            （參數就是筆記欄位）。
-        SEARCH_FIELDS: the field buttons of the web field search (must go with ``CAPABILITIES.search``); when
-            not declared, :meth:`search_fields` derives them from ``CREATE_PARAMS`` and ``JSON_FIELD_SPECS``
-            網頁欄位搜尋的欄位按鈕（要搭配 ``CAPABILITIES.search``）；不宣告時由 ``search_fields`` 從
-            ``CREATE_PARAMS`` 與 ``JSON_FIELD_SPECS`` 自動產生
-        DRAFT_PARAMS: the input model the web preview flow (``create.flow="preview"``) uses to ask the LLM for a
-            draft; the service layer validates the input and builds the web form with it, then passes it to
-            :meth:`execute_draft`
-            網頁預覽流程（``create.flow="preview"``）向 LLM 要草稿的輸入模型；服務層以它驗證輸入、產生網頁
-            表單，再交給 ``execute_draft``
+        SEARCH_FIELDS: the field buttons of the web field search; must be declared when ``CAPABILITIES.search``
+            is offered
+            網頁欄位搜尋的欄位按鈕；開放 ``CAPABILITIES.search`` 時必須宣告
         RECORDING_EVAL: how this handler's cards are recorded and scored (the route key, and per field the
             prompt, reference answers and target language); ``None`` means the cards cannot be recorded
             這個 handler 的卡片怎麼錄音評分（用途鍵，以及每個欄位的提示詞、參考答案與目標語言）；
@@ -181,10 +177,7 @@ class BaseHandler(ABC):
     JSON_FIELDS: ClassVar[tuple[str, ...]] = ()
     JSON_FIELD_SPECS: ClassVar[Mapping[str, JsonFieldSpec]] = {}
     MEDIA_FIELDS: ClassVar[Mapping[str, MediaKind]] = {}
-    CREATE_TAGS: ClassVar[tuple[str, ...]] = ("HandlerGenerated",)
-    CREATE_PARAMS: ClassVar[type[BaseModel] | None] = None
     SEARCH_FIELDS: ClassVar[tuple[SearchField, ...]] = ()
-    DRAFT_PARAMS: ClassVar[type[BaseModel] | None] = None
     RECORDING_EVAL: ClassVar[RecordingEvaluation | None] = None
 
     def search_fields(self) -> tuple[SearchField, ...]:
@@ -192,25 +185,16 @@ class BaseHandler(ABC):
 
         回傳網頁欄位搜尋的欄位按鈕。
 
-        ``SEARCH_FIELDS`` is used when declared; otherwise the buttons are derived from the create parameters
-        (media fields excluded) and the JSON fields editable through a form, one button per field.
+        These are exactly ``SEARCH_FIELDS``, never derived from create parameters, which belong to creators
+        (handler/creator split plan D5).
 
-        有宣告 ``SEARCH_FIELDS`` 就用它；否則依建立參數（媒體欄位除外）與能以表單編輯的 JSON 欄位自動產生，
-        一個欄位一顆按鈕。
+        就是 ``SEARCH_FIELDS``，不從建立參數產生；建立參數屬於 creator（handler 拆分計畫書 D5）。
 
         Returns:
-            the field buttons; empty when no field is available
-            欄位按鈕；沒有可用的欄位時為空
+            the field buttons; empty when none is declared
+            欄位按鈕；沒有宣告時為空
         """
-        if self.SEARCH_FIELDS:
-            return self.SEARCH_FIELDS
-        fields: list[SearchField] = []
-        if self.CREATE_PARAMS is not None:
-            for name, info in self.CREATE_PARAMS.model_fields.items():
-                if name not in self.MEDIA_FIELDS:
-                    fields.append(SearchField(name, info.title or name, (name,)))
-        fields.extend(SearchField(name, spec.title, (name,)) for name, spec in self.JSON_FIELD_SPECS.items())
-        return tuple(fields)
+        return self.SEARCH_FIELDS
 
     @property
     @abstractmethod
@@ -237,209 +221,9 @@ class BaseHandler(ABC):
         """
 
     # =========================================================================
-    # 標準 CRUD（單一筆記）
-    # Standard CRUD (single note)
+    # 標準讀取、修改、刪除（單一筆記）；建卡在 creator.BaseCreator
+    # Standard read, update and delete (single note); creation lives in creator.BaseCreator
     # =========================================================================
-
-    async def execute_create(
-        self,
-        card_service: CardService,
-        relation_service: RelationService,
-        deck_name: str,
-        model_name: str,
-        parameters: dict[str, object],
-    ) -> list[int]:
-        """Create a note from a manually filled form, where ``parameters`` maps field names to values (D3).
-
-        標準建立：手動填表，``parameters`` 就是 ``{欄位名: 值}``（D3）。
-
-        ``CardService.create_note`` checks that the fields exist and that the first field is not a duplicate;
-        fields left out stay empty. Media fields take the file name returned by ``POST /media`` and are wrapped
-        in Anki's syntax when written (see :meth:`field_texts`).
-
-        欄位是否存在、首欄位是否重複由 ``CardService.create_note`` 檢查；沒填的欄位留空。
-        媒體欄位填 ``POST /media`` 回傳的檔名，寫入時包成 Anki 的寫法（見 ``field_texts``）。
-
-        Args:
-            card_service: the card service
-                卡片服務
-            relation_service: the relation service (unused by the standard create)
-                關聯服務（標準建立不用）
-            deck_name: the target deck, created if missing
-                目標牌組，不存在時自動建立
-            model_name: the note type (the service layer has confirmed it is ``create.note_type``)
-                筆記類型（服務層已確認是 ``create.note_type``）
-            parameters: the field values
-                欄位值
-
-        Returns:
-            the created note IDs (always a list, since a card group creates several at once)
-            建立的 Note ID（一律是陣列，成組卡片一次會建多張）
-
-        Raises:
-            DuplicateCardError: if the first field is a duplicate
-                若首欄位重複
-            FieldMismatchError: if a field does not belong to this note type
-                若欄位不屬於這個筆記類型
-            FieldNotEditableError: if a JSON field is given
-                若填了 JSON 欄位
-            MediaFieldInvalidError: if a media field is not a file name obtained from an upload
-                若媒體欄位填的不是上傳取得的檔名
-        """
-        self.reject_locked_fields(parameters)
-        fields = self.field_texts(parameters)
-        note_id = await card_service.create_note(
-            deck_name=deck_name,
-            model_name=model_name,
-            fields=fields,
-            tags=list(self.CREATE_TAGS),
-        )
-        return [note_id]
-
-    async def draft_context(self, card_service: CardService, parameters: Mapping[str, object]) -> dict[str, object]:
-        """Read from Anki what the LLM should know besides the user's input, before generating a draft.
-
-        生成草稿之前，從 Anki 讀出使用者輸入以外、LLM 應該知道的資訊。
-
-        Runs in the background together with ``execute_draft`` (only Anki reads, no DB session). The trilingual
-        card uses it for where the new card will sit: the full deck path, the parent card, the titles already in
-        that deck. The base implementation returns nothing. The service layer treats an Anki failure here like a
-        missing context and still generates.
-
-        和 ``execute_draft`` 一起在背景執行（只讀 Anki，不用 DB session）。三語卡用它讀出新卡會放在哪裡：完整
-        牌組路徑、上層卡、那個牌組已有的標題。預設不回傳任何東西。這裡 Anki 失敗時，服務層當成沒有情境，照常生成。
-
-        Args:
-            card_service: the card service
-                卡片服務
-            parameters: the input validated by ``DRAFT_PARAMS``
-                ``DRAFT_PARAMS`` 驗證後的輸入
-
-        Returns:
-            the context passed to ``execute_draft`` as ``context``
-            以 ``context`` 傳給 ``execute_draft`` 的情境
-        """
-        return {}
-
-    async def execute_draft(
-        self,
-        parameters: dict[str, object],
-        existing_tags: list[str],
-        context: Mapping[str, object] | None = None,
-    ) -> dict[str, object]:
-        """Generate a draft for the web preview flow with the LLM, without writing to Anki.
-
-        網頁預覽流程的草稿：依使用者的輸入（已經 ``DRAFT_PARAMS`` 驗證）請 LLM 生成，不寫入 Anki。
-
-        The return value is prefilled create parameters (shaped like ``CREATE_PARAMS``): the web lets the user
-        tick and edit them, then sends them back unchanged to the create endpoint. It may also carry a ``tags``
-        key (suggested tags), which the service layer takes out and tidies into ``suggested_tags``. The base
-        implementation has no draft flow and raises ``NotImplementedError``.
-
-        回傳值是預先填好的建立參數（``CREATE_PARAMS`` 的形狀）：網頁讓使用者勾選、修改後，原樣送回
-        建卡端點。另可帶 ``tags`` 鍵（建議的標籤），服務層取出來整理成 ``suggested_tags``。基底實作沒有
-        草稿流程，會拋出 ``NotImplementedError``。
-
-        Args:
-            parameters: the input validated by ``DRAFT_PARAMS``
-                ``DRAFT_PARAMS`` 驗證後的輸入
-            existing_tags: tags this kind of card has used (sorted by count, system tags excluded), for the LLM
-                to prefer reusing
-                這種卡片用過的標籤（依次數排序、不含系統標籤），給 LLM 優先沿用
-            context: what ``draft_context`` read; ``None`` or empty when there is none
-                ``draft_context`` 讀到的情境；沒有時為 ``None`` 或空的
-
-        Returns:
-            the draft create parameters, optionally with ``tags``
-            建立參數的草稿（可帶 ``tags``）
-        """
-        raise NotImplementedError(f"{self.handler_name} 沒有草稿流程")
-
-    async def find_draft_duplicate(
-        self, card_service: CardService, parameters: Mapping[str, object]
-    ) -> dict[str, object] | None:
-        """Look up whether Anki already has the same card before generating a draft.
-
-        生成草稿之前查 Anki 有沒有建過同一張卡。
-
-        This runs before calling the LLM, to save unnecessary generation. The base implementation does not look
-        anything up.
-
-        在呼叫 LLM 之前執行，省下不必要的生成。預設不查。
-
-        Args:
-            card_service: the card service
-                卡片服務
-            parameters: the input validated by ``DRAFT_PARAMS``
-                ``DRAFT_PARAMS`` 驗證後的輸入
-
-        Returns:
-            a summary of the old card (at least ``note_id``, the rest for the web to display), or ``None`` when
-            there is no duplicate
-            舊卡的摘要（至少有 ``note_id``，其餘給網頁顯示）；沒有重複時為 ``None``
-
-        Raises:
-            AnkiConnectError: if the lookup fails (the caller decides whether to skip the check)
-                若查詢失敗（呼叫端決定要不要略過）
-        """
-        return None
-
-    async def resolve_create_deck(
-        self, card_service: CardService, deck: str, parameters: Mapping[str, object]
-    ) -> str:
-        """Return the deck the new card goes into; runs after parameter validation and before ``execute_create``.
-
-        回傳新卡要放的牌組；在參數驗證之後、``execute_create`` 之前執行。
-
-        The base implementation keeps the chosen deck. A handler can derive another one from the parameters (the
-        trilingual card puts a child card into ``<parent deck>::<parent title>``) and create it here; the create
-        response reports the deck returned.
-
-        預設沿用選的牌組。handler 可以依參數改成別的牌組（三語卡的子卡放進 ``<上層卡的牌組>::<上層卡的標題>``），
-        需要時在這裡建好牌組；建卡回應回報的就是這裡回傳的牌組。
-
-        Args:
-            card_service: the card service
-                卡片服務
-            deck: the chosen deck (the fixed deck already applied)
-                選的牌組（已套用固定牌組）
-            parameters: the create parameters (validated by ``CREATE_PARAMS``)
-                建立參數（``CREATE_PARAMS`` 驗證後）
-
-        Returns:
-            the deck to create the card in
-            要建卡的牌組
-        """
-        return deck
-
-    async def after_create(
-        self, card_service: CardService, parameters: Mapping[str, object], note_ids: list[int]
-    ) -> str | None:
-        """Run follow-up work after a successful create and before the sync.
-
-        建卡成功之後、同步之前的後續處理。
-
-        For example, deleting the old card on an overwrite; the deletion is pushed to AnkiWeb in the same sync.
-        The base implementation does nothing. The new card already exists, so a failure here must not raise
-        (the user would think nothing was created and create it again); return a warning instead, which is
-        appended to the create response's ``sync_warning``.
-
-        例如覆蓋時刪掉舊卡，刪除也會在同一次同步推上 AnkiWeb。預設不做事。新卡已經建立：這裡失敗時
-        不能拋錯（使用者會以為沒建成而重建），改回傳提醒，接在建卡回應的 ``sync_warning``。
-
-        Args:
-            card_service: the card service
-                卡片服務
-            parameters: the create parameters (validated by ``CREATE_PARAMS``)
-                建立參數（``CREATE_PARAMS`` 驗證後）
-            note_ids: the notes just created
-                剛建立的筆記
-
-        Returns:
-            a warning for the user, or ``None`` when there is none
-            給使用者的提醒；沒有時為 ``None``
-        """
-        return None
 
     async def execute_read(
         self,

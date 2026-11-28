@@ -684,10 +684,10 @@ async def _generate_and_preview(
     processing_msg = await message.answer("⏳ AI 糾錯中，請稍候…")
 
     try:
-        handler = handler_registry.get_handler("expression_correction")
+        creator = handler_registry.get_creator("expression_correction")
 
         # 僅呼叫 LLM，不寫入 Anki
-        correction_result = await handler.execute_generate(req.model_dump())
+        correction_result = await creator.execute_generate(req.model_dump())
 
         # 序列化 LLM 結果存入 FSM data，以便後續確認步驟使用
         await state.update_data(

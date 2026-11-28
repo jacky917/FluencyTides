@@ -2,12 +2,12 @@
 
 JP_CoreVerb（核心動詞）卡片 API 路由。
 
-Follows the same convention as ``verb_pair.py``: the handler is instantiated
-directly to execute the task. Generation constraints (quotas, per-chapter
+Follows the same convention as ``verb_pair.py``: the registered creator
+(``jp_verbs/core_verb.py``) executes the task. Generation constraints (quotas, per-chapter
 limits, diversity-based sentence selection) are all handled on the script
 side; this API only generates child cards for a single sentence.
 
-比照 ``verb_pair.py`` 的慣例：直接實例化 Handler 執行任務。
+比照 ``verb_pair.py`` 的慣例：由註冊的 creator（``jp_verbs/core_verb.py``）執行任務。
 生成約束（配額、章節上限、多樣性選句）全部在腳本側消化，
 本 API 僅負責單句的子卡片生成。
 """
@@ -22,7 +22,7 @@ from app.core.dependencies import get_card_service, get_relation_service
 from app.core.exceptions import FluencyTidesError
 from app.services.card_service import CardService
 from app.services.relation_service import RelationService
-from app.services.task_handlers.jp_core_verb_handler import JPCoreVerbHandler
+from app.services.task_handlers.registry import handler_registry
 
 logger = logging.getLogger(__name__)
 
@@ -85,12 +85,12 @@ async def generate_child_cards(
         HTTPException: if an unexpected error occurs (500)
             若發生未預期錯誤（500）
     """
-    handler = JPCoreVerbHandler()
+    creator = handler_registry.get_creator("jp_core_verb")
     parameters = request.model_dump()
     parameters["action"] = "generate_child_cards"
 
     try:
-        result = await handler.execute_generate(
+        result = await creator.execute_generate(
             card_service=card_service,
             relation_service=relation_service,
             parameters=parameters

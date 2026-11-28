@@ -124,7 +124,7 @@ def test_list_handlers(client):
     handlers = {h["name"]: h for h in response.json()}
     assert list(handlers) == [
         "vocabulary_mining", "expression_correction", "speaking_coach",
-        "speaking_trilingual", "jp_verb_pair", "jp_core_verb", "person_profile",
+        "speaking_trilingual", "jp_verb_pair", "jp_core_verb", "jp_context", "person_profile",
     ]
     vocab = handlers["vocabulary_mining"]
     assert vocab["capabilities"]["create"]["channels"] == ["web", "tg"]
@@ -132,6 +132,8 @@ def test_list_handlers(client):
     assert vocab["json_fields"] == ["Word_Family_JSON", "Synonyms_JSON", "Collocations_JSON"]
     assert "input_schema" not in vocab
     assert handlers["jp_verb_pair"]["create_schema"] is None
+    assert handlers["jp_context"]["note_types"] == ["JP_Context_Dark"]
+    assert handlers["jp_context"]["capabilities"]["create"]["supported"] is False
 
 
 def test_trailing_slash_still_works(client):
@@ -299,9 +301,20 @@ def test_handler_read(client):
     assert body["note_type"] == V2 and body["fields"][0] == {"name": "Expression", "value": "anyway"}
 
 
-def test_jp_context_readable_from_both_handlers(client):
+def test_creating_through_a_handler_without_a_creator_is_unsupported(client):
+    """和其他不開放建卡的類型一樣回 400 與原因，不是 404（handler 拆分計畫書 D7）。"""
+    body = {"deck": "D", "note_type": "JP_Context_Dark", "params": {}}
+    response = client.post("/api/v1/handlers/jp_context/notes", json=body)
+    assert _error(response) == (400, "HANDLER_OPERATION_UNSUPPORTED")
+    assert "本機批次腳本" in response.json()["message"]
+    assert _error(client.post("/api/v1/handlers/nope/notes", json=body)) == (404, "HANDLER_NOT_FOUND")
+
+
+def test_jp_context_readable_only_from_its_own_handler(client):
+    """共用的 Context 卡歸 jp_context，從兩個 jp 的網址讀會說不歸它們（handler 拆分計畫書 D3）。"""
+    assert client.get("/api/v1/handlers/jp_context/notes/7").status_code == 200
     for name in ("jp_verb_pair", "jp_core_verb"):
-        assert client.get(f"/api/v1/handlers/{name}/notes/7").status_code == 200
+        assert _error(client.get(f"/api/v1/handlers/{name}/notes/7")) == (400, "NOTE_NOT_OWNED_BY_HANDLER")
 
 
 @pytest.mark.parametrize(
@@ -318,7 +331,7 @@ def test_jp_context_readable_from_both_handlers(client):
         ("patch", "/api/v1/handlers/vocabulary_mining/notes/1", {"fields": {"Meaning": "x"}},
          (400, "FIELD_MISMATCH")),
         ("delete", "/api/v1/handlers/speaking_coach/notes/5", None, (400, "HANDLER_OPERATION_UNSUPPORTED")),
-        ("delete", "/api/v1/handlers/jp_verb_pair/notes/7", None, (400, "HANDLER_OPERATION_UNSUPPORTED")),
+        ("delete", "/api/v1/handlers/jp_context/notes/7", None, (400, "HANDLER_OPERATION_UNSUPPORTED")),
         ("delete", "/api/v1/handlers/vocabulary_mining/notes/404", None, (404, "NOTE_NOT_FOUND")),
     ],
 )

@@ -31,7 +31,7 @@ from app.infrastructure.anki.client import AnkiClient
 from app.services.anki_model_manager import AnkiModelManager
 from app.services.card_service import CardService
 from app.services.task_handlers.registry import handler_registry
-# 匯入以觸發 @register_handler 註冊
+# 匯入以觸發 @register_handler、@register_creator 註冊
 from app.services.task_handlers import expression_handler  # noqa
 
 logging.basicConfig(
@@ -66,11 +66,11 @@ async def generate() -> None:
         logger.error("初始化相依服務失敗: %s", e)
         return
 
-    # 2. 取得 Handler
+    # 2. 取得 creator（建卡流程）
     try:
-        handler = handler_registry.get_handler("expression_correction")
+        creator = handler_registry.get_creator("expression_correction")
     except Exception as e:
-        logger.error("無法取得 Handler: %s", e)
+        logger.error("無法取得 creator: %s", e)
         return
 
     # 3. 準備模擬輸入參數 (相當於從 Telegram 傳入的參數)
@@ -110,7 +110,7 @@ async def generate() -> None:
     # 5. 執行生成流程
     try:
         logger.info("⏳ 正在呼叫 LLM 進行分析與拆解... (可能需要幾秒鐘)")
-        created_ids = await handler.execute_create(
+        created_ids = await creator.execute_create(
             card_service=card_service,
             relation_service=None,  # 暫不使用 relation graph
             deck_name="日本語::外語糾錯::母卡片",

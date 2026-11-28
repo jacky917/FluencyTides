@@ -1,16 +1,18 @@
-"""Capability declarations of a task handler (handlers plan D2).
+"""Capability declarations of handlers and creators (handlers plan D2, handler/creator split plan D2).
 
-Handler 的能力宣告（handlers 計畫書 D2）。
+Handler 與 creator 的能力宣告（handlers 計畫書 D2、handler 拆分計畫書 D2）。
 
-Each handler declares, as the ``CAPABILITIES`` class attribute, what the service layer may do with it:
-create, read, update fields, delete, named actions, and the graph. Capabilities belong to the handler and apply
-to every note type it owns. A declaration checks its own shape on construction (for example, offering create
-without the web channel requires a reason); the registry checks at registration time that the declaration
-matches the implementation.
+A handler declares, as its ``CAPABILITIES`` class attribute (``HandlerCapabilities``), what the service layer may
+do with the cards it owns once they exist: read, update fields, delete, named actions, search, and the graph.
+These apply to every note type the handler owns. A creator declares, as its own ``CAPABILITIES``
+(``CreatorCapabilities``), how cards are created: the create flow and the web "AI 整理". A declaration checks its
+own shape on construction (for example, offering create without the web channel requires a reason); the
+registry checks at registration time that the declaration matches the implementation.
 
-每個 handler 以類別屬性 ``CAPABILITIES`` 宣告服務層能對它做什麼：建立、讀取、修改欄位、刪除、
-具名動作與圖譜。能力綁在 handler 上，對它負責的所有筆記類型一體適用。宣告本身在建立時就檢查
-形狀（例如開放建卡卻不能從網頁建時一定要寫原因）；宣告與實作是否一致由註冊表在註冊時檢查。
+handler 以類別屬性 ``CAPABILITIES``（``HandlerCapabilities``）宣告卡片建好之後服務層能做什麼：讀取、
+修改欄位、刪除、具名動作、搜尋與圖譜，對它負責的所有筆記類型一體適用。creator 以自己的 ``CAPABILITIES``
+（``CreatorCapabilities``）宣告怎麼建卡：建卡流程與網頁的「AI 整理」。宣告本身在建立時就檢查形狀
+（例如開放建卡卻不能從網頁建時一定要寫原因）；宣告與實作是否一致由註冊表在註冊時檢查。
 """
 
 from __future__ import annotations
@@ -182,17 +184,17 @@ class GraphCapability:
 
 @dataclass(frozen=True)
 class HandlerCapabilities:
-    """All capabilities of a handler.
+    """What the service layer may do with a handler's cards once they exist.
 
-    一個 handler 的全部能力。
+    卡片建好之後，服務層能對 handler 的卡片做什麼。
 
-    By default only reading is offered (the base class's standard read, which can read any note type).
+    By default only reading is offered (the base class's standard read, which can read any note type). How cards
+    are created is declared by creators (``CreatorCapabilities``), not here.
 
-    預設只開放讀取（基底的標準讀取，任何筆記類型都能讀）。
+    預設只開放讀取（基底的標準讀取，任何筆記類型都能讀）。怎麼建卡由 creator 宣告（``CreatorCapabilities``），
+    不在這裡。
 
     Attributes:
-        create: creating cards
-            建卡
         read: reading a note
             讀取筆記
         update_fields: updating fields as text
@@ -205,7 +207,6 @@ class HandlerCapabilities:
             圖譜
     """
 
-    create: CreateCapability = field(default_factory=CreateCapability)
     read: Operation = field(default_factory=lambda: Operation(supported=True))
     update_fields: Operation = field(default_factory=Operation)
     #: Editing JSON fields through a web form (json_field_editor plan D2); field formats: see ``JSON_FIELD_SPECS``.
@@ -217,12 +218,6 @@ class HandlerCapabilities:
     #: ``BaseHandler.search_fields``.
     #: 網頁卡片頁的欄位搜尋（點欄位、輸入關鍵字）；可搜尋的欄位見 ``BaseHandler.search_fields``。
     search: Operation = field(default_factory=Operation)
-    #: The web "AI 整理" dialog (``docs/wip/person_llm_fill_FEAT_2026-11-23.md``): a description is organized by the
-    #: LLM into proposals that are edited and ticked before writing, to an existing note or a new one. Only person
-    #: cards offer it; it shares the site-wide draft slot with the preview flow.
-    #: 網頁的「AI 整理」對話框（``docs/wip/person_llm_fill_FEAT_2026-11-23.md``）：一段描述經 LLM 整理成建議，編輯、
-    #: 勾選後寫進現有的筆記或建一張新的。目前只有人脈卡開放；和預覽流程共用全站一份草稿的槽位。
-    fill: Operation = field(default_factory=Operation)
     graph: GraphCapability = field(default_factory=GraphCapability)
 
     def to_dict(self) -> dict[str, object]:
@@ -236,22 +231,44 @@ class HandlerCapabilities:
         """
         return _lists(asdict(self))
 
-    def existing_note_ops(self) -> tuple[bool, bool, bool, bool, tuple[str, ...]]:
-        """Return the capabilities on existing notes, which must match across handlers sharing a note type (D4).
 
-        回傳對既有筆記的能力；同一筆記類型的多個 handler 必須一致（D4）。
+@dataclass(frozen=True)
+class CreatorCapabilities:
+    """How a creator creates cards.
+
+    creator 怎麼建卡。
+
+    By default nothing is offered.
+
+    預設都不開放。
+
+    Attributes:
+        create: creating cards
+            建卡
+        fill: the web "AI 整理" dialog
+            網頁的「AI 整理」對話框
+    """
+
+    create: CreateCapability = field(default_factory=CreateCapability)
+    #: The web "AI 整理" dialog (``docs/wip/person_llm_fill_FEAT_2026-11-23.md``): a description is organized by the
+    #: LLM into proposals that are edited and ticked before writing, to an existing note or a new one. Only person
+    #: cards offer it; it shares the site-wide draft slot with the preview flow, which is why it belongs to the
+    #: creator (handler/creator split plan D2).
+    #: 網頁的「AI 整理」對話框（``docs/wip/person_llm_fill_FEAT_2026-11-23.md``）：一段描述經 LLM 整理成建議，編輯、
+    #: 勾選後寫進現有的筆記或建一張新的。目前只有人脈卡開放；和預覽流程共用全站一份草稿的槽位，所以歸 creator
+    #: （handler 拆分計畫書 D2）。
+    fill: Operation = field(default_factory=Operation)
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the shape the API returns, with tuples turned into lists.
+
+        轉成 API 回傳的形狀（tuple 轉成 list）。
 
         Returns:
-            (can read, can update fields, can update JSON fields, can delete, the actions sorted by name)
-            （能否讀取, 能否改欄位, 能否改 JSON 欄位, 能否刪除, 依名稱排序的動作）
+            the capabilities as a dict
+            能力字典
         """
-        return (
-            self.read.supported,
-            self.update_fields.supported,
-            self.update_json.supported,
-            self.delete.supported,
-            tuple(sorted(self.actions)),
-        )
+        return _lists(asdict(self))
 
 
 @dataclass(frozen=True)

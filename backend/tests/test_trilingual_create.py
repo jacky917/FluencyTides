@@ -20,14 +20,13 @@ from pydantic import BaseModel, ValidationError
 from app.core.exceptions import LLMGenerationError
 from app.schemas.llm.speaking_trilingual import GeneratedSaying, LLMTrilingualDraft
 from app.services import speaking_trilingual_generate as generate_service
-from app.services.task_handlers.base import BaseHandler
-from app.services.task_handlers.capabilities import CreateCapability, HandlerCapabilities
-from app.services.task_handlers.registry import handler_registry, validate_handler
+from app.services.task_handlers.capabilities import CreateCapability, CreatorCapabilities
+from app.services.task_handlers.creator import BaseCreator
+from app.services.task_handlers.registry import handler_registry, validate_creator
 from app.services.task_handlers.speaking_trilingual_handler import (
     MAX_REFERENCES_PER_LANG,
     MAX_TEXT_LENGTH,
     SpeakingTrilingualCreateParams,
-    SpeakingTrilingualHandler,
 )
 from tests.test_handlers_api import _error, anki, client, relations  # noqa: F401 （pytest fixtures）
 
@@ -59,16 +58,15 @@ class _Params(BaseModel):
     text: str
 
 
-def _handler(create: CreateCapability, *, draft_params=None, with_draft=False, create_params=_Params):
-    """組一個最小的 handler 類別，用來測註冊表的檢查。"""
+def _creator(create: CreateCapability, *, draft_params=None, with_draft=False, create_params=_Params):
+    """組一個最小的 creator 類別，用來測註冊表的檢查。"""
 
-    class Probe(BaseHandler):
-        CAPABILITIES = HandlerCapabilities(create=create)
+    class Probe(BaseCreator):
+        CAPABILITIES = CreatorCapabilities(create=create)
         CREATE_PARAMS = create_params
         DRAFT_PARAMS = draft_params
-        handler_name = "probe"
-        title = "測試"
-        supported_models = [TRILINGUAL]
+        HANDLER = "probe"
+        creator_name = "probe"
 
         async def execute_create(self, *args, **kwargs):  # pragma: no cover - 不會被呼叫
             return []
@@ -88,21 +86,21 @@ WEB_FORM = CreateCapability(supported=True, channels=("web",), flow="form", deck
 class TestDeclarations:
     def test_web_preview_needs_draft(self):
         with pytest.raises(RuntimeError, match="DRAFT_PARAMS"):
-            validate_handler(_handler(WEB_PREVIEW))
+            validate_creator(_creator(WEB_PREVIEW))
         with pytest.raises(RuntimeError, match="DRAFT_PARAMS"):
-            validate_handler(_handler(WEB_PREVIEW, draft_params=_Params))  # 沒覆寫 execute_draft
+            validate_creator(_creator(WEB_PREVIEW, draft_params=_Params))  # 沒覆寫 execute_draft
 
     def test_draft_without_web_preview_is_rejected(self):
         with pytest.raises(RuntimeError, match="沒有開放網頁的預覽流程"):
-            validate_handler(_handler(WEB_FORM, draft_params=_Params, with_draft=True))
+            validate_creator(_creator(WEB_FORM, draft_params=_Params, with_draft=True))
 
     def test_complete_web_preview_passes(self):
-        validate_handler(_handler(WEB_PREVIEW, draft_params=_Params, with_draft=True))
+        validate_creator(_creator(WEB_PREVIEW, draft_params=_Params, with_draft=True))
 
     def test_trilingual_is_registered_with_web_preview(self):
-        handler = handler_registry.get_handler("speaking_trilingual")
-        validate_handler(handler)
-        assert handler.CAPABILITIES.create.flow == "preview"
+        creator = handler_registry.get_creator("speaking_trilingual")
+        validate_creator(creator)
+        assert creator.CAPABILITIES.create.flow == "preview"
 
 
 # =============================================================================
@@ -186,7 +184,7 @@ class TestExecuteDraft:
     def test_shapes_create_params(self):
         generate = mock.AsyncMock(return_value=_draft())
         with mock.patch.object(generate_service, "generate", generate):
-            result = asyncio.run(SpeakingTrilingualHandler().execute_draft(
+            result = asyncio.run(handler_registry.get_creator("speaking_trilingual").execute_draft(
                 {"background": "背景", "intent": "", "audience": "同事", "audience_note": "比我資深"},
                 ["Interview"],
             ))
@@ -337,7 +335,7 @@ class TestTitle:
         """LLM 沒給或給了不能當牌組名的標題：草稿標題留空，其餘照常，使用者送出前再補。"""
         generate = mock.AsyncMock(return_value=_draft(title=suggested))
         with mock.patch.object(generate_service, "generate", generate):
-            result = asyncio.run(SpeakingTrilingualHandler().execute_draft(
+            result = asyncio.run(handler_registry.get_creator("speaking_trilingual").execute_draft(
                 {"background": "背景", "intent": "", "audience": "同事", "audience_note": ""}, [],
             ))
         assert result["title"] == ""
@@ -347,7 +345,7 @@ class TestTitle:
     def test_suggested_title_is_kept(self):
         generate = mock.AsyncMock(return_value=_draft(title=" 婉拒週末爬山 "))
         with mock.patch.object(generate_service, "generate", generate):
-            result = asyncio.run(SpeakingTrilingualHandler().execute_draft(
+            result = asyncio.run(handler_registry.get_creator("speaking_trilingual").execute_draft(
                 {"background": "背景", "intent": "", "audience": "同事", "audience_note": ""}, [],
             ))
         assert result["title"] == "婉拒週末爬山"

@@ -68,7 +68,8 @@ def _create(anki: PersonAnki, **params) -> dict[str, str]:
     """經 CREATE_PARAMS 驗證後建立，回傳寫入的欄位。"""
     parameters = PersonCreateParams.model_validate(params).model_dump()
     parameters["tg_bot"] = "FluencyTidesBot"
-    _run(PersonProfileHandler().execute_create(_card_service(anki), _relations(), "人脈", PERSON_NOTE_TYPE, parameters))
+    creator = handler_registry.get_creator("person_profile")
+    _run(creator.execute_create(_card_service(anki), _relations(), "人脈", PERSON_NOTE_TYPE, parameters))
     (note,) = anki.added
     return note.fields
 
@@ -77,10 +78,13 @@ class TestDeclarations:
     def test_registered_with_capabilities(self):
         handler = handler_registry.get_handler("person_profile")
         caps = handler.CAPABILITIES.to_dict()
-        assert caps["create"]["supported"] and caps["create"]["channels"] == ["web", "tg"]
-        assert caps["create"]["note_type"] == PERSON_NOTE_TYPE
         assert caps["update_fields"]["supported"] and caps["delete"]["supported"]
         assert handler_registry.handler_for_note_type(PERSON_NOTE_TYPE) is handler
+        # 建卡與 AI 整理在 creator（handler 拆分計畫書 D2）
+        create = handler_registry.get_creator("person_profile").CAPABILITIES.to_dict()
+        assert create["create"]["supported"] and create["create"]["channels"] == ["web", "tg"]
+        assert create["create"]["note_type"] == PERSON_NOTE_TYPE
+        assert create["fill"]["supported"] is True
 
     def test_json_fields_are_locked_and_photo_is_an_image(self):
         handler = PersonProfileHandler()

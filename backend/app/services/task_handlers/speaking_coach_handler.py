@@ -24,12 +24,14 @@ from app.schemas.language import LANG_CODE_PATTERN, TargetLanguage, normalize_la
 from app.services.task_handlers.base import BaseHandler
 from app.services.task_handlers.capabilities import (
     CreateCapability,
+    CreatorCapabilities,
     GraphCapability,
     HandlerCapabilities,
     Operation,
 )
 from app.services.recording_eval import RECORDING_EVAL_COACH
-from app.services.task_handlers.registry import register_handler
+from app.services.task_handlers.creator import BaseCreator
+from app.services.task_handlers.registry import register_creator, register_handler
 from app.services.task_handlers.shared.recording_spec import RecordingEvaluation, RecordingTarget
 
 if TYPE_CHECKING:
@@ -144,28 +146,19 @@ class SpeakingCoachHandler(BaseHandler):
 
     口說教練任務處理器。
 
-    Supports speaking cards such as Speaking_Coach_Dark, managing scenario creation and updates of complex JSON
-    fields (Recordings).
+    Supports speaking cards such as Speaking_Coach_Dark, managing updates of complex JSON fields (Recordings);
+    creation is ``SpeakingCoachCreator``.
 
-    支援 Speaking_Coach_Dark 等口說卡片。
-    管理口說情境的建立、以及複雜 JSON 欄位（Recordings）的更新。
+    支援 Speaking_Coach_Dark 等口說卡片，管理複雜 JSON 欄位（Recordings）的更新；建立見
+    ``SpeakingCoachCreator``。
     """
 
     CAPABILITIES = HandlerCapabilities(
-        create=CreateCapability(
-            supported=True,
-            channels=("web", "tg"),
-            flow="form",
-            deck="selected",
-            note_type="Speaking_Coach_Dark",
-        ),
         update_fields=Operation(reason="對話卡的欄位修改尚未開放"),
         delete=Operation(reason="對話卡的刪除尚未開放"),
         actions=SPEAKING_ACTIONS,
         graph=GraphCapability(reason="口說卡沒有知識圖譜"),
     )
-    CREATE_PARAMS = SpeakingCoachCreateParams
-    CREATE_TAGS = ("Speaking_Coach", "HandlerGenerated")
     RECORDING_EVAL = RecordingEvaluation(RECORDING_EVAL_COACH, _recording_target)
 
     @property
@@ -194,79 +187,6 @@ class SpeakingCoachHandler(BaseHandler):
         這個處理器負責的 Anki 筆記類型。
         """
         return ["Speaking_Coach_Dark"]
-
-    @override
-    async def execute_create(
-        self,
-        card_service: "CardService",
-        relation_service: "RelationService",
-        deck_name: str,
-        model_name: str,
-        parameters: dict
-    ) -> list[int]:
-        """Create one speaking card with the given reference answers.
-
-        建立一張口說卡片。
-
-        Reference answers are written from the parameters (with today's date, enabled, and no audio); the
-        recordings and prompt audios start as empty lists.
-
-        參考回答依參數寫入（補上今天、啟用、沒有音檔），錄音與題目音檔為空陣列。
-
-        Args:
-            card_service: the card service
-                卡片服務
-            relation_service: the relation service (unused)
-                關聯服務（不使用）
-            deck_name: the target deck
-                目標牌組
-            model_name: the target note type
-                目標模型
-            parameters: the parameters validated by ``SpeakingCoachCreateParams``, plus ``tg_bot``
-                ``SpeakingCoachCreateParams`` 驗證後的參數與 ``tg_bot``
-
-        Returns:
-            the created note ID, as a one-element list
-            建立成功的 Note ID（單元素陣列）
-        """
-        prompt_text = parameters.get("prompt", "")
-        context_text = parameters.get("context", "")
-        target_language = parameters.get("target_language", "en-US")
-        tg_bot = parameters.get("tg_bot", settings.TG_BOT_USERNAME or "")
-        
-        # 產生唯一 UUID 作為卡片 ID
-        card_id = str(uuid.uuid4())
-
-        # 預設的空 JSON 陣列字串
-        empty_json_array = json.dumps([], ensure_ascii=False)
-        # 每筆的形狀與 TG 建卡相同（app/schemas/speaking.py 的 ReferenceItem）；寫入方式與三語對話卡相同，
-        # 經 HTML 轉義（內容可能含 <、&；TG 舊流程沒轉義，卡片與 TG 的讀取兩種都吃）
-        today = date.today().isoformat()
-        references = [
-            {"date": today, "content": content, "status": 1, "audios": []}
-            for content in parameters.get("references") or []
-        ]
-
-        fields = {
-            "Card_ID": card_id,
-            "Prompt": prompt_text,
-            "Context": context_text,
-            "Prompt_Audios": empty_json_array,
-            "Recordings": empty_json_array,
-            "References": AnkiJsonFieldManager.serialize(references),
-            "Target_Language": target_language,
-            "TG_Bot": tg_bot
-        }
-
-        # 將透過 CardService 的嚴格欄位檢查後寫入 Anki
-        logger.info("建立口說任務卡片 (Model: %s) -> Prompt: %s", model_name, prompt_text)
-        note_id = await card_service.create_note(
-            deck_name=deck_name,
-            model_name=model_name,
-            fields=fields,
-            tags=list(self.CREATE_TAGS),
-        )
-        return [note_id]
 
     @override
     async def execute_update(
@@ -384,3 +304,110 @@ class SpeakingCoachHandler(BaseHandler):
             return
 
         raise ValueError(f"不支援的更新操作: {action}")
+
+
+@register_creator
+class SpeakingCoachCreator(BaseCreator):
+    """Creates speaking cards from a form (web and TG).
+
+    以表單建立對話卡（網頁與 TG）。
+
+    The card's reference answers come from the form; the recordings and prompt audios start empty.
+
+    卡片的參考回答來自表單；錄音與題目音檔一開始是空的。
+    """
+
+    HANDLER = "speaking_coach"
+    CAPABILITIES = CreatorCapabilities(
+        create=CreateCapability(
+            supported=True,
+            channels=("web", "tg"),
+            flow="form",
+            deck="selected",
+            note_type="Speaking_Coach_Dark",
+        ),
+    )
+    CREATE_PARAMS = SpeakingCoachCreateParams
+    CREATE_TAGS = ("Speaking_Coach", "HandlerGenerated")
+
+    @property
+    @override
+    def creator_name(self) -> str:
+        """The creator name used in create URLs.
+
+        creator 名稱，出現在建卡網址裡。
+        """
+        return "speaking_coach"
+
+    @override
+    async def execute_create(
+        self,
+        card_service: "CardService",
+        relation_service: "RelationService",
+        deck_name: str,
+        model_name: str,
+        parameters: dict
+    ) -> list[int]:
+        """Create one speaking card with the given reference answers.
+
+        建立一張口說卡片。
+
+        Reference answers are written from the parameters (with today's date, enabled, and no audio); the
+        recordings and prompt audios start as empty lists.
+
+        參考回答依參數寫入（補上今天、啟用、沒有音檔），錄音與題目音檔為空陣列。
+
+        Args:
+            card_service: the card service
+                卡片服務
+            relation_service: the relation service (unused)
+                關聯服務（不使用）
+            deck_name: the target deck
+                目標牌組
+            model_name: the target note type
+                目標模型
+            parameters: the parameters validated by ``SpeakingCoachCreateParams``, plus ``tg_bot``
+                ``SpeakingCoachCreateParams`` 驗證後的參數與 ``tg_bot``
+
+        Returns:
+            the created note ID, as a one-element list
+            建立成功的 Note ID（單元素陣列）
+        """
+        prompt_text = parameters.get("prompt", "")
+        context_text = parameters.get("context", "")
+        target_language = parameters.get("target_language", "en-US")
+        tg_bot = parameters.get("tg_bot", settings.TG_BOT_USERNAME or "")
+        
+        # 產生唯一 UUID 作為卡片 ID
+        card_id = str(uuid.uuid4())
+
+        # 預設的空 JSON 陣列字串
+        empty_json_array = json.dumps([], ensure_ascii=False)
+        # 每筆的形狀與 TG 建卡相同（app/schemas/speaking.py 的 ReferenceItem）；寫入方式與三語對話卡相同，
+        # 經 HTML 轉義（內容可能含 <、&；TG 舊流程沒轉義，卡片與 TG 的讀取兩種都吃）
+        today = date.today().isoformat()
+        references = [
+            {"date": today, "content": content, "status": 1, "audios": []}
+            for content in parameters.get("references") or []
+        ]
+
+        fields = {
+            "Card_ID": card_id,
+            "Prompt": prompt_text,
+            "Context": context_text,
+            "Prompt_Audios": empty_json_array,
+            "Recordings": empty_json_array,
+            "References": AnkiJsonFieldManager.serialize(references),
+            "Target_Language": target_language,
+            "TG_Bot": tg_bot
+        }
+
+        # 將透過 CardService 的嚴格欄位檢查後寫入 Anki
+        logger.info("建立口說任務卡片 (Model: %s) -> Prompt: %s", model_name, prompt_text)
+        note_id = await card_service.create_note(
+            deck_name=deck_name,
+            model_name=model_name,
+            fields=fields,
+            tags=list(self.CREATE_TAGS),
+        )
+        return [note_id]
