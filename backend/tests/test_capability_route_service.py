@@ -40,13 +40,16 @@ def _run(coro):
 def _llm_list(result):
     """``list_routes`` 的結果只取各鍵的 ``llm`` 狀態（本檔的測試都針對 llm）。
 
-    錄音評分的鍵（recording_eval…）的 llm 在 .env 那一層另有預設（audio 端點），不在這些測試的範圍，略過。
+    錄音評分的鍵（recording_eval…）與語音全域（*voice）的 llm 在 .env 那一層另有預設（audio 端點），
+    不在這些測試的範圍，略過。
     """
     key_views, read_ok = result
     views = [
         view.view("llm")
         for view in key_views
-        if view.view("llm") is not None and not view.route_key.startswith("recording_eval")
+        if view.view("llm") is not None
+        and not view.route_key.startswith("recording_eval")
+        and view.route_key != routing.VOICE_GLOBAL_ROUTE_KEY
     ]
     return views, read_ok
 
@@ -338,6 +341,19 @@ def test_delete_unknown_key_is_not_found(llm_route_db, llm_whitelist):
         _run(capability_route_service.delete_route("never.existed", updated_by="api"))
 
 
+def test_delete_cannot_remove_the_global_switch(llm_route_db, llm_whitelist):
+    """恢復預設碰不到全局生效開關那一列：開關只能經 set_global_switch 切換，DELETE 回 422 且開關還開著。"""
+    _run(capability_route_service.set_global_switch(routing.VOICE_GLOBAL_ROUTE_KEY, True, updated_by="api"))
+    with pytest.raises(InvalidRouteError):
+        _run(
+            capability_route_service.delete_route(
+                routing.VOICE_GLOBAL_ROUTE_KEY, updated_by="api", capability=routing.SWITCH_CAPABILITY
+            )
+        )
+    view = _run(capability_route_service.describe(routing.VOICE_GLOBAL_ROUTE_KEY))
+    assert view.switch is True
+
+
 # ----------------------------------------------------------------------
 # 讀不到 DB（Database unreadable）
 # ----------------------------------------------------------------------
@@ -615,6 +631,9 @@ def test_read_in_flight_during_a_write_does_not_cache_stale_rows(llm_route_db, l
 
         async def slow_fetch():
             snapshot = await real_fetch()  # 寫入前的狀態：沒有設定
+            if fetched.is_set():
+                # set_route 寫入前也會讀一次（看全局生效開關），那次不卡住
+                return snapshot
             fetched.set()
             await release.wait()
             return snapshot

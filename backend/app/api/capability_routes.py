@@ -11,6 +11,8 @@ routing plan).
   choice (whitelist plus trial client construction check)
 - ``DELETE /api/v1/capability-routes/{route_key}/{capability}``: restore
   the default (fall back to the global setting, or ``.env``)
+- ``PUT    /api/v1/capability-routes/{global_key}/switch``: turn a global's
+  "global switch" on or off (``*`` text, ``*voice`` voice)
 
 Capabilities are defined in :mod:`app.infrastructure.llm.capabilities`.
 The global route key is ``*`` (written ``%2A`` in URLs); after writing or
@@ -34,6 +36,7 @@ fields in the wrong format get FastAPI's own 422 (``detail``).
 - ``GET    /api/v1/capability-routes``                          全部用途鍵各能力的生效設定與可選項目
 - ``PUT    /api/v1/capability-routes/{route_key}/{capability}``  寫入一組選擇（白名單＋試建客戶端檢查）
 - ``DELETE /api/v1/capability-routes/{route_key}/{capability}``  恢復預設（退回全域，或 ``.env``）
+- ``PUT    /api/v1/capability-routes/{global_key}/switch``         打開或關掉全域的「全局生效」開關（``*`` 文字、``*voice`` 語音）
 
 能力見 ``app.infrastructure.llm.capabilities``。全域設定的用途鍵是 ``*``（URL 中寫成 ``%2A``）；
 寫入或刪除它的 ``llm`` 之後（不論成敗）會重建 ``app.state.llm_client``（診斷端點用，模型路由計畫 D9）。
@@ -56,6 +59,7 @@ from app.infrastructure.llm.capabilities import CAPABILITY_AUDIO_EVAL, CAPABILIT
 from app.infrastructure.llm.routing import GLOBAL_ROUTE_KEY
 from app.schemas.capability_route import (
     CapabilityRoutesResponse,
+    GlobalSwitchUpdate,
     ModelOptionRead,
     ProviderOptionRead,
     RouteDeleteResponse,
@@ -146,6 +150,45 @@ async def list_capability_routes() -> CapabilityRoutesResponse:
         },
         db_unavailable=not read_ok,
     )
+
+
+@router.put(
+    "/{route_key}/switch",
+    response_model=RouteRead,
+    summary="打開或關掉全域的全局生效開關",
+    responses={**_NOT_FOUND, **_UNAVAILABLE},
+)
+async def put_global_switch(route_key: str, body: GlobalSwitchUpdate) -> RouteRead:
+    """Turn a global's "global switch" on or off.
+
+    打開或關掉全域的「全局生效」開關。
+
+    While it is on, every route on that side (text for ``*``, voice for ``*voice``) uses the global as a whole;
+    the routes' own settings are kept and come back when it is turned off. Registered before the generic
+    ``/{route_key}/{capability}`` route so that ``switch`` is not read as a capability.
+
+    開著時，那一邊的所有用途（``*`` 為文字、``*voice`` 為語音）都整組用全域；各用途自己的設定保留，
+    關掉後就回來。註冊在一般的 ``/{route_key}/{capability}`` 之前，``switch`` 才不會被當成能力。
+
+    Args:
+        route_key: the global key, ``*`` or ``*voice``
+            全域鍵，``*`` 或 ``*voice``
+        body: the new state of the switch
+            開關的新狀態
+
+    Returns:
+        the global's state after the change
+        改完之後該全域的狀態
+
+    Raises:
+        RouteNotFoundError: if ``route_key`` is not a global key (404)
+            若 ``route_key`` 不是全域鍵（404）
+        RouteStoreUnavailableError: if the database fails while writing; the result is unknown, GET again to
+            check (503)
+            若寫入時資料庫異常；結果未知，請重新 GET 查看（503）
+    """
+    view = await capability_route_service.set_global_switch(route_key, body.enabled, updated_by="api")
+    return capability_route_service.to_read(view)
 
 
 @router.put(

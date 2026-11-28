@@ -31,14 +31,20 @@ through ``NoteService.run_action`` instead of calling a HandlerRegistry handler 
 Phase 9 更新：不再呼叫已移除的 ``card_service.process_voice_evaluation()``。寫回現在經由
 ``NoteService.run_action``，不再直接呼叫 HandlerRegistry 的 handler。
 
-Capability routing R2: the evaluator is obtained for every message from the capability routes of the card's handler
-(``recording_eval`` or ``recording_eval.<handler>``, see :mod:`app.services.recording_eval`) instead of an injected
-global ``audio_evaluator``; a settings change (TG ``/setconfig`` or the web tool settings) takes effect on the next
-voice message.
+The card's handler is found by note type (``handler_registry.handler_for_note_type``), and everything about the
+evaluation comes from its ``RECORDING_EVAL`` declaration: the route key that decides the strategy and models, and,
+for the field being recorded, the prompt, the reference answers, the target language, and the extra parameters of
+``add_recording`` (docs/wip/recording_eval_settings_FEAT_2026-11-26.md D4). A card whose handler declares nothing
+cannot be recorded. The evaluator is obtained for every message from the current settings (cached per setting
+combination), so a settings change (TG ``/setconfig`` or the web tool settings) takes effect on the next voice
+message. Each saved recording also records when and how it was
+scored (D5).
 
-能力路由 R2：評分器每次依卡片的 handler 從能力路由取得（``recording_eval`` 或
-``recording_eval.<handler>``，見 ``app.services.recording_eval``），不再注入全域的
-``audio_evaluator``；改設定（TG ``/setconfig``、網頁工具設定）後下一則語音即生效。
+卡片的 handler 依筆記類型找到（``handler_registry.handler_for_note_type``），評分的一切都來自它的
+``RECORDING_EVAL`` 宣告：決定評分策略與模型的用途鍵，以及這個欄位的提示詞、參考答案、目標語言與
+``add_recording`` 要另外帶的參數（docs/wip/recording_eval_settings_FEAT_2026-11-26.md D4）。handler 沒有宣告的
+卡片不能錄音評分。評分器每則語音都依目前的設定取得（依設定組合快取），改設定（TG ``/setconfig``、網頁工具設定）後下一則語音即生效。
+每筆存下的錄音也記下評分的時間與方式（D5）。
 """
 
 import base64
@@ -61,7 +67,11 @@ from app.infrastructure.anki.client import AnkiClient, AnkiConnectError
 from app.infrastructure.anki.json_modifier import AnkiJsonFieldManager
 from app.infrastructure.audio_evaluator.base import AudioNotScoredError, BaseAudioEvaluator
 from app.infrastructure.audio_evaluator.factory import EvaluatorPlan
-from app.services import recording_eval
+from app.infrastructure.audio_evaluator.factory import evaluator_for
+from app.infrastructure.llm.routing import ResolvedRoute
+from app.schemas.speaking import RecordingEvaluationInfo, RecordingItem
+from app.services.task_handlers.registry import handler_registry
+from app.services.task_handlers.shared.recording_spec import RecordingTarget
 from app.services.task_handlers.shared.trilingual_familiarity import familiarity_or_none
 from app.services.note_service import NoteService
 
@@ -71,6 +81,76 @@ router = Router(name="voice_router")
 
 # 清掉狀態的失敗之後，重新進入的方式
 _RETRY_FROM_ANKI = "請回 Anki 卡片重新點按鈕。"
+_NOT_RECORDABLE = "❌ 這種卡片不支援錄音評分。"
+
+
+def _layer_of(resolved: ResolvedRoute) -> str:
+    """Return the settings layer that took effect: the route key, the global key, or ``.env``.
+
+    回傳生效的設定層：用途鍵、全域鍵，或 ``.env``。
+
+    While the global's switch is on, ``（全局生效）`` is appended, so a later reader can tell "the global (or
+    ``.env``) because nobody set this card type" from "because the switch overrode the card type's own setting".
+
+    全域的開關開著時另加「（全局生效）」：事後才分得出「這種卡片沒有自己設定，所以用全域（或 ``.env``）」與
+    「開關蓋過了這種卡片自己的設定」。
+    """
+    if resolved.source == "route":
+        return resolved.route_key
+    layer = resolved.global_key if resolved.source == "global" else ".env"
+    return f"{layer}（全局生效）" if resolved.forced else layer
+
+
+def utc_timestamp(moment: datetime) -> str:
+    """Return a timezone-aware time as UTC ISO 8601 such as ``2026-11-26T06:03:12Z``.
+
+    把帶時區的時間轉成 UTC 的 ISO 8601，例如 ``2026-11-26T06:03:12Z``。
+
+    Args:
+        moment: the time, timezone-aware
+            時間，帶時區
+
+    Returns:
+        the UTC timestamp, to the second
+        UTC 時間字串，精確到秒
+    """
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def evaluation_metadata(plan: EvaluatorPlan) -> dict[str, object]:
+    """Return what a saved recording records about how it was scored (the time is added when saving).
+
+    回傳存下的錄音要記錄的評分資訊（時間在存檔時另外加）。
+
+    The strategy, the model of every capability the strategy used (``(endpoint)model``, or only the endpoint when
+    the capability has no model), and which settings layer took effect for the strategy itself (``audio_eval``)
+    and for each of those capabilities, so scores from different settings can be told apart later
+    (recording_eval_settings_FEAT_2026-11-26.md D5).
+
+    評分策略、策略用到的各能力的模型（``(端點)模型``；能力沒有模型時只寫端點），以及策略本身（``audio_eval``）
+    與這些能力各自生效的設定層，事後才分得出不同設定評出的分數（recording_eval_settings_FEAT_2026-11-26.md D5）。
+
+    Args:
+        plan: the evaluator plan the evaluator was built from
+            建出評分器的計畫
+
+    Returns:
+        ``strategy``, ``models``, and ``settings``
+        ``strategy``、``models`` 與 ``settings``
+
+    Raises:
+        ValidationError: if the fields do not fit the stored format (``RecordingEvaluationInfo``)
+            若欄位不符合存進卡片的格式（``RecordingEvaluationInfo``）
+    """
+    settings_layers = {"audio_eval": _layer_of(plan.strategy)}
+    models: dict[str, str] = {}
+    for capability, resolved in sorted(plan.routes.items()):
+        models[capability] = f"({resolved.endpoint}){resolved.model}" if resolved.model else resolved.endpoint
+        settings_layers[capability] = _layer_of(resolved)
+    # 這裡就以存進卡片的格式檢查：不符時在上傳音檔之前就停下（呼叫端接住並說明）
+    return RecordingEvaluationInfo(
+        strategy=plan.strategy_name, models=models, settings=settings_layers
+    ).model_dump()
 
 
 @router.message(F.voice)
@@ -171,29 +251,61 @@ async def process_voice_handler(
 
         prompt_text = str(fields.get("Prompt", {}).get("value", ""))
         context_text = str(fields.get("Context", {}).get("value", ""))
+    except AnkiConnectError as e:
+        logger.error("讀取卡片資訊失敗: %s", e)
+        await status_msg.edit_text(f"❌ 讀取卡片失敗：{error_detail(e)}\n{_RETRY_FROM_ANKI}")
+        user_state_manager.clear_state(chat_id)
+        return
 
-        # 三語卡分流：目標欄位帶語言後綴 (Recordings_JA 等) 時，
-        # 語言/提示詞樣板/References 欄位由後綴決定 (無 Target_Language 欄位)
-        from app.services.task_handlers.shared.trilingual_lang import (
-            LANG_TEMPLATE_MAP,
-            LANG_TO_LOCALE,
-            lang_from_field,
-            references_field,
-        )
-
+    # ── Step 2.1: 錄音評分依卡片的 handler 宣告（RECORDING_EVAL）決定怎麼評 ──
+    target: RecordingTarget | None = None
+    route_key = ""
+    if state.action == "recording":
         state_field_name = str(state.extra.get("field_name", "") or "")
-        trilingual_lang = lang_from_field(state_field_name)
-        if trilingual_lang:
-            target_language = LANG_TO_LOCALE[trilingual_lang]
-            eval_template = f"prompts/anki/{LANG_TEMPLATE_MAP[trilingual_lang]}"
-            ref_field_name = references_field(trilingual_lang)
-            ref_json_str = str(fields.get(ref_field_name, {}).get("value", "[]"))
-        else:
-            # Speaking_Coach_Dark 既有路徑：讀 Target_Language 欄位與共用樣板
-            target_language = str(fields.get("Target_Language", {}).get("value", ""))
-            eval_template = "prompts/audio_evaluator.j2"
-            ref_field_name = "References"
-            ref_json_str = str(fields.get(ref_field_name, {}).get("value", "[]"))
+        handler = handler_registry.handler_for_note_type(note_info.modelName)
+        if handler is None:
+            # 卡面的錄音按鈕帶人進來，卻找不到 handler：筆記類型改了名，或 handler 沒有註冊——是設定或程式錯誤
+            logger.error("卡片 %s 的筆記類型 %r 沒有對應的 handler，無法錄音評分", card_id, note_info.modelName)
+            await status_msg.edit_text(
+                f"❌ 後端不認得這種卡片（筆記類型 {html.escape(note_info.modelName)}），無法錄音評分。"
+            )
+            user_state_manager.clear_state(chat_id)
+            return
+        spec = handler.RECORDING_EVAL
+        if spec is None:
+            logger.error("handler %s 沒有宣告 RECORDING_EVAL，卡片 %s 無法錄音評分", handler.handler_name, card_id)
+            await status_msg.edit_text(_NOT_RECORDABLE)
+            user_state_manager.clear_state(chat_id)
+            return
+        try:
+            target = spec.target_for(state_field_name, fields)
+        except Exception:
+            # target_for 是 handler 提供的回調：出錯時不能讓狀態訊息停在「讀取卡片中…」，也不要留著錄音狀態
+            logger.exception(
+                "handler %s 解析錄音欄位 %r 失敗（卡片 %s）", handler.handler_name, state_field_name, card_id
+            )
+            await status_msg.edit_text(f"❌ 讀取這張卡片的錄音設定失敗（詳見伺服器日誌）。\n{_RETRY_FROM_ANKI}")
+            user_state_manager.clear_state(chat_id)
+            return
+        if target is None:
+            logger.warning(
+                "卡片 %s（%s）的欄位 %r 不能錄音評分", card_id, handler.handler_name, state_field_name
+            )
+            await status_msg.edit_text(f"❌ 欄位 {html.escape(state_field_name)} 不支援錄音評分。")
+            user_state_manager.clear_state(chat_id)
+            return
+        route_key = spec.route.key
+        ref_field_name = target.reference_field
+        if ref_field_name not in fields:
+            # 宣告的欄位不在筆記上是宣告錯誤：不能當成「沒有參考答案」照樣評分（stt_diff 會誤報、LLM 失去比對基準）
+            logger.error(
+                "handler %s 宣告的參考答案欄位 %r 不在卡片 %s（%s）上",
+                handler.handler_name, ref_field_name, card_id, note_info.modelName,
+            )
+            await status_msg.edit_text("❌ 這種卡片的錄音評分設定有誤（找不到參考答案欄位），詳見伺服器日誌。")
+            user_state_manager.clear_state(chat_id)
+            return
+        ref_json_str = str(fields[ref_field_name].get("value", "[]"))
         # 以共用解析器讀取（S065）：References 欄位可能是未轉義的原始 JSON
         # （匯入腳本直寫），也可能是 HTML 轉義過的（經 AnkiJsonFieldManager
         # 寫入）。直接 json.loads 只對前者成立，後者會被 except 吞掉而導致
@@ -227,24 +339,19 @@ async def process_voice_handler(
                     card_id, ref_field_name, number, ref.get("familiarity"),
                 )
             reference_familiarity.append(familiarity)
-    except AnkiConnectError as e:
-        logger.error("讀取卡片資訊失敗: %s", e)
-        await status_msg.edit_text(f"❌ 讀取卡片失敗：{error_detail(e)}\n{_RETRY_FROM_ANKI}")
-        user_state_manager.clear_state(chat_id)
-        return
 
     # ── Step 2.5: 錄音評分先取得評分器（在上傳音檔之前）──
     # 設定有問題時在這裡就停下：不會先把音檔存進 Anki、留下沒有紀錄引用的檔案（重傳時也不會越存越多）
-    # 三語卡與對話卡各用自己的 handler，評分器依 handler 的用途鍵建立（可設不同策略）
-    handler_name = "speaking_trilingual" if trilingual_lang else "speaking_coach"
+    # 評分器依 handler 宣告的用途鍵建立（各卡片類型可設不同策略，語音全域的開關打開時整組用全域）
     audio_evaluator: BaseAudioEvaluator | None = None
     plan: EvaluatorPlan | None = None
+    eval_meta: dict[str, object] = {}
     if state.action == "recording":
         try:
-            audio_evaluator, plan = await recording_eval.evaluator_for_handler(handler_name)
+            audio_evaluator, plan = await evaluator_for(route_key)
         except AudioEvaluatorUnavailableError as e:
             # 狀態沒清（仍在錄音模式）：改好設定後可在時限內直接重傳
-            logger.error("錄音評分器無法建立（%s）：%s", handler_name, e.message)
+            logger.error("錄音評分器無法建立（%s）：%s", route_key, e.message)
             await status_msg.edit_text(
                 f"❌ 語音評分服務無法使用，這次沒有評分：{html.escape(e.message)}\n"
                 "改好設定後，在錄音模式內重傳語音即可。"
@@ -252,8 +359,17 @@ async def process_voice_handler(
             return
         except Exception as e:
             # 讀設定或建評分器時的非預期錯誤：不能讓狀態訊息停在「讀取卡片中…」沒有下文
-            logger.exception("建立錄音評分器時發生未處理的異常（%s）: %s", handler_name, e)
+            logger.exception("建立錄音評分器時發生未處理的異常（%s）: %s", route_key, e)
             await status_msg.edit_text("❌ 語音評分服務發生錯誤（詳見伺服器日誌），這次沒有評分。請稍後在錄音模式內重傳語音。")
+            return
+        # 評分資訊在這裡就組好：出錯時還沒上傳音檔，也不會在評分完成後被說成「寫回 Anki 失敗」。
+        # 和建評分器分開接：這裡出錯是程式錯誤，每次都會重現，重傳沒用，所以清掉狀態
+        try:
+            eval_meta = evaluation_metadata(plan)
+        except Exception:
+            logger.exception("組錄音評分資訊失敗（%s，策略 %s）", route_key, plan.strategy_name)
+            await status_msg.edit_text(f"❌ 錄音評分發生程式錯誤（詳見伺服器日誌），這次沒有評分。\n{_RETRY_FROM_ANKI}")
+            user_state_manager.clear_state(chat_id)
             return
 
     # ── Step 3: 共用邏輯：上傳音檔至 Anki Media ──
@@ -270,7 +386,7 @@ async def process_voice_handler(
 
     # ── Step 4: 分支處理 ──
     if state.action == "recording":
-        assert audio_evaluator is not None and plan is not None  # Step 2.5 已取得
+        assert audio_evaluator is not None and plan is not None and target is not None  # Step 2.1、2.5 已取得
         await status_msg.edit_text("⏳ 評分中…")
 
         try:
@@ -280,8 +396,8 @@ async def process_voice_handler(
                 prompt_text=prompt_text,
                 context_text=context_text,
                 reference_answers=reference_answers,
-                target_language=target_language if target_language else None,
-                template_name=eval_template,
+                target_language=target.target_language,
+                template_name=target.template,
                 reference_familiarity=reference_familiarity,
             )
         except AudioNotScoredError as e:
@@ -314,18 +430,20 @@ async def process_voice_handler(
         await status_msg.edit_text("⏳ 寫入 Anki 中…")
 
         try:
-            new_recording = {
-                "date": datetime.now(tz=timezone.utc).strftime("%Y-%m-%d"),
+            evaluated_at = datetime.now(tz=timezone.utc)
+            # 經 RecordingItem 產生：卡片上的錄音格式只由這個模型定義（D5）
+            new_recording = RecordingItem.model_validate({
+                "date": evaluated_at.strftime("%Y-%m-%d"),
                 "audio": audio_filename,
                 "transcript": result.transcript,
                 # stt_diff 提供 Anki 專用的紅綠標記版；其餘 provider 沿用 feedback
                 "comment": result.feedback_anki_html or result.feedback,
                 "score": result.score,
-            }
-            if trilingual_lang:
-                action_params = {"lang": trilingual_lang, "recording": new_recording}
-            else:
-                action_params = {"recording": new_recording}
+                # 這次怎麼評的（D5）：設定之後可能切換，事後才分得出不同設定評出的分數
+                "evaluated_at": utc_timestamp(evaluated_at),
+                **eval_meta,
+            }).model_dump()
+            action_params = {**target.action_params, "recording": new_recording}
             # 服務層依筆記類型找 handler，寫入後同步並回傳提醒
             sync_warning = sync_suffix(await note_service.run_action(note_id, "add_recording", action_params))
         except FluencyTidesError as e:

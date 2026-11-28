@@ -533,6 +533,16 @@ export const FluencyTidesAPI = {
   deleteCapabilityRoute: (routeKey: string, capability: string): Promise<RouteDeleteResponse> =>
     apiClient.delete(`/capability-routes/${encodeRouteKey(routeKey)}/${encodeURIComponent(capability)}`),
 
+  /**
+   * 打開或關掉全域（`*` 文字、`*voice` 語音）的「全局生效」開關。
+   * Turns a global's "global switch" on or off.
+   * @param globalKey - 全域鍵。The global key.
+   * @param enabled - true 為打開。true to turn it on.
+   * @returns 改完之後該全域的狀態。The global's state afterwards.
+   */
+  putGlobalSwitch: (globalKey: string, enabled: boolean): Promise<CapabilityRoute> =>
+    apiClient.put(`/capability-routes/${encodeRouteKey(globalKey)}/switch`, { enabled }),
+
   // ======================================================================
   // Health
   // ======================================================================

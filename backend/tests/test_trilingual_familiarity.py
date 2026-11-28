@@ -269,7 +269,9 @@ def test_stt_llm_puts_familiarity_into_the_prompt():
 
 
 def _voice_with_references(references_value):
-    note = mock.MagicMock(noteId=1, fields={"References_JA": {"value": references_value}})
+    note = mock.MagicMock(
+        noteId=1, fields={"References_JA": {"value": references_value}}, modelName="Speaking_Trilingual_Dark"
+    )
     manager = UserStateManager()
     manager.set_state(CHAT_ID, UserState(action="recording", card_id="ST_1", extra={"field_name": "Recordings_JA"}))
     evaluator = mock.MagicMock()
@@ -279,8 +281,13 @@ def _voice_with_references(references_value):
     message.bot = mock.MagicMock()
     message.bot.get_file = mock.AsyncMock(return_value=mock.MagicMock(file_path="p"))
     message.bot.download_file = mock.AsyncMock()
-    lookup = mock.AsyncMock(return_value=(evaluator, mock.MagicMock(strategy_name="listen")))
-    with mock.patch.object(voice.recording_eval, "evaluator_for_handler", lookup):
+    from app.infrastructure.audio_evaluator.factory import EvaluatorPlan
+    from app.infrastructure.llm.routing import ResolvedRoute, RouteChoice
+
+    key = "recording_eval.speaking_trilingual"
+    strategy = ResolvedRoute(key, "env", None, capability="audio_eval", env_choice=RouteChoice("listen", "", None))
+    lookup = mock.AsyncMock(return_value=(evaluator, EvaluatorPlan(key, strategy, {})))
+    with mock.patch.object(voice, "evaluator_for", lookup):
         _run(voice.process_voice_handler(message, _anki(get_notes_info=mock.AsyncMock(return_value=[note])),
                                          _note_service(), manager))
     return evaluator.evaluate_audio.await_args.kwargs

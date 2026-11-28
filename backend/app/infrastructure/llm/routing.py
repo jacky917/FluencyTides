@@ -10,25 +10,30 @@ A module that uses tools declares, at module level, its route key and the capabi
 client through it at call time (see the example in the Chinese section below).
 
 The naming rules for route keys are in §4 of the plan (alphanumerics and ``. _ -``, length ≤ 64, at most two
-levels ``<flow>.<branch>``). A key is registered when declared, so :func:`list_route_keys` is the admin UI's list of
-valid keys. Settings are stored in ``cfg_capability_routes``, each row being one route key's choice for one
-capability; capabilities and allowlists are in :mod:`app.infrastructure.llm.capabilities`.
+levels ``<flow>.<branch>``); the dot is only part of the name and no longer means a parent layer. A key is
+registered when declared, so :func:`list_route_keys` is the admin UI's list of valid keys. Settings are stored in
+``cfg_capability_routes``, each row being one route key's choice for one capability; capabilities and allowlists
+are in :mod:`app.infrastructure.llm.capabilities`.
 
-Each capability resolves **independently** in this order (plan §5)::
+There are two globals (plan docs/wip/recording_eval_settings_FEAT_2026-11-26.md D1–D3): the text global ``*``
+and the voice global ``*voice``. ``audio_eval``, ``audio_llm``, and ``stt`` belong to the voice global; ``llm``
+belongs to the text global, except on a route declared as a voice use (recording evaluation), whose ``llm`` is the
+model that scores transcripts and belongs to the voice global. Each capability resolves **independently** in
+three layers::
 
-    <flow>.<branch> (DB) → <flow> (DB) → global ``*`` (DB) → .env
+    the route key itself (DB) → its global (DB) → .env
+
+When a global's switch is on (:data:`SWITCH_CAPABILITY`), every route on that side skips its own layer and uses
+the global as a whole; a capability the global does not set falls to ``.env``. Stored values are kept either way.
 
 Every DB layer must be within the allowlist, otherwise it is skipped with a WARNING; the .env layer always
 applies. For ``llm``, the .env layer builds the client with ``create_llm_client()`` without any argument, exactly
 the same call as before routing was introduced. The .env defaults of the other capabilities are in
 :func:`~app.infrastructure.llm.capabilities.env_default`.
 
-A route key may give a capability its own default at declaration (``env_defaults``; branches inherit their flow
-key's), for example recording evaluation's ``llm`` defaults to the audio endpoint plus ``STT_LLM_MODEL_NAME``.
-**Such a default ranks before the global ``*``**: once it is reached, ``*`` is no longer consulted. The global
-``*`` ``llm`` is the card-building default (for example Claude Code) and should not also change the cheap model
-used for recording evaluation. To make this use switch to other settings, configure the key itself (or its flow
-key) directly.
+A route key may give a capability its own ``.env`` default at declaration (``env_defaults``). The ``llm`` of the
+voice side defaults to the audio endpoint plus ``STT_LLM_MODEL_NAME`` (``audio_text_default``), not the
+``LLM_PROVIDER`` used for card creation.
 
 The settings rows are cached in-process after being read; once the writer calls :func:`invalidate_cache`, the
 next call takes effect (the backend runs only one worker, so cross-process sync is not handled); clients are still
@@ -45,22 +50,27 @@ intercepted and propagate as usual.
     ...
     llm = await CHILD_CARD.client()
 
-用途鍵的命名規範見計畫書 §4（英數字與 ``. _ -``，長度 ≤ 64，最多兩層 ``<流程>.<分支>``）。
-宣告時即登記，``list_route_keys`` 就是管理介面的合法鍵清單。設定存在 ``cfg_capability_routes``，
-每列是一個用途鍵在一種能力上的選擇；能力與白名單見 ``app.infrastructure.llm.capabilities``。
+用途鍵的命名規範見計畫書 §4（英數字與 ``. _ -``，長度 ≤ 64，最多兩層 ``<流程>.<分支>``）；
+「.」只是名稱的一部分，不再代表上一層。宣告時即登記，``list_route_keys`` 就是管理介面的合法鍵清單。
+設定存在 ``cfg_capability_routes``，每列是一個用途鍵在一種能力上的選擇；能力與白名單見
+``app.infrastructure.llm.capabilities``。
 
-每個能力**各自**依下列順序解析（計畫書 §5）::
+全域有兩個（計畫書 docs/wip/recording_eval_settings_FEAT_2026-11-26.md D1–D3）：文字全域 ``*`` 與
+語音全域 ``*voice``。``audio_eval``、``audio_llm``、``stt`` 歸語音全域；``llm`` 歸文字全域，但宣告為
+語音用途的用途鍵（錄音評分）例外：它的 ``llm`` 是看逐字稿評分的模型，歸語音全域。每個能力**各自**
+依三層解析::
 
-    <流程>.<分支>（DB）→ <流程>（DB）→ 全域 ``*``（DB）→ .env
+    用途鍵本身（DB）→ 它的全域（DB）→ .env
+
+全域的開關（``SWITCH_CAPABILITY``）打開時，那一邊的用途都跳過自己那一層、整組用全域；全域沒設到的
+能力用 ``.env``。不論開關，存著的設定都保留。
 
 DB 的各層必須在白名單內，否則跳過並記 WARNING；.env 那一層一律生效。``llm`` 的 .env 那一層
 以不帶任何參數的 ``create_llm_client()`` 建立客戶端——與導入路由前的呼叫完全相同。其他能力的
 .env 預設見 ``capabilities.env_default``。
 
-用途鍵可在宣告時為某個能力另給預設（``env_defaults``，分支沿用流程鍵的），例如錄音評分的 ``llm``
-預設為 audio 端點加上 ``STT_LLM_MODEL_NAME``。**這種預設排在全域 ``*`` 之前**：解析到它時不再看
-``*``——全域 ``*`` 的 ``llm`` 是建卡用的預設（例如 Claude Code），不該連帶改掉錄音評分用的便宜
-模型。要讓這個用途改用別的設定，就直接設定它本身（或它的流程鍵）。
+用途鍵可在宣告時為某個能力另給 ``.env`` 預設（``env_defaults``）。語音那一邊的 ``llm`` 預設為
+audio 端點加上 ``STT_LLM_MODEL_NAME``（``audio_text_default``），不跟著建卡用的 ``LLM_PROVIDER``。
 
 設定列讀出後放在程序內快取，寫入方呼叫 ``invalidate_cache`` 後下一次呼叫即
 生效（後端只跑一個 worker，不處理跨程序同步）；客戶端仍每次呼叫才建立。資料庫
@@ -86,9 +96,12 @@ from app.infrastructure.llm.base import OMIT_EFFORT, BaseLLMClient
 from app.infrastructure.llm.capabilities import (
     CAPABILITIES,
     CAPABILITY_AUDIO_EVAL,
+    CAPABILITY_AUDIO_LLM,
     CAPABILITY_LLM,
+    CAPABILITY_STT,
     STRATEGIES,
     RouteChoice,
+    audio_text_default,
     env_default,
 )
 from app.infrastructure.llm.capabilities import check_choice as check_capability_choice
@@ -101,6 +114,9 @@ __all__ = [
     "CAPABILITY_LLM",
     "DATABASE_ERRORS",
     "GLOBAL_ROUTE_KEY",
+    "GLOBAL_ROUTE_KEYS",
+    "SWITCH_CAPABILITY",
+    "VOICE_GLOBAL_ROUTE_KEY",
     "RejectedLayer",
     "ResolvedRoute",
     "Route",
@@ -110,15 +126,30 @@ __all__ = [
     "route",
 ]
 
-# 全域設定的用途鍵
+# Route keys of the two globals: text (``*``) and voice (``*voice``).
+# 兩個全域的用途鍵：文字（``*``）與語音（``*voice``）。
 GLOBAL_ROUTE_KEY = "*"
+VOICE_GLOBAL_ROUTE_KEY = "*voice"
+GLOBAL_ROUTE_KEYS: tuple[str, ...] = (GLOBAL_ROUTE_KEY, VOICE_GLOBAL_ROUTE_KEY)
+
+# Capabilities that always belong to the voice global; ``llm`` does only on voice routes.
+# 一律歸語音全域的能力；``llm`` 只有在語音用途上才歸語音全域。
+VOICE_CAPABILITIES: frozenset[str] = frozenset({CAPABILITY_AUDIO_EVAL, CAPABILITY_AUDIO_LLM, CAPABILITY_STT})
+
+# The pseudo-capability of a global's "global switch" row: ``provider`` is ``on`` while the switch is on; turning
+# it off deletes the row. It is stored in the same table so no schema change is needed, and it is never resolved
+# as a capability.
+# 全域「全局生效」開關那一列的假能力：開著時 ``provider`` 為 ``on``；關掉就刪掉那一列。存在同一張表，
+# 不用改資料表；它不會被當成能力解析。
+SWITCH_CAPABILITY = "global_switch"
+SWITCH_ON = "on"
 
 # 用途鍵規則；長度與 cfg_capability_routes.route_key 欄位一致。最多兩層（<流程>.<分支>）
 ROUTE_KEY_MAX_LENGTH = 64
 _ROUTE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)?$")
 
-# 生效的層：route＝查詢的鍵本身、parent＝分支往上的流程鍵、global＝*、env＝.env
-RouteSource = Literal["route", "parent", "global", "env"]
+# 生效的層：route＝查詢的鍵本身、global＝它的全域（文字 * 或語音 *voice）、env＝.env
+RouteSource = Literal["route", "global", "env"]
 
 # 能力 → 用途鍵 → 選擇
 Snapshot = dict[str, dict[str, RouteChoice]]
@@ -162,9 +193,9 @@ class ResolvedRoute:
     Attributes:
         route_key: the queried route key
             查詢的用途鍵
-        source: the layer that took effect: ``route`` (the key itself) / ``parent`` (the flow key above a branch) /
-            ``global`` (global) / ``env``
-            生效的層：``route``（用途鍵本身）/ ``parent``（分支往上的流程鍵）/ ``global``（全域）/ ``env``
+        source: the layer that took effect: ``route`` (the key itself) / ``global`` (its global, see
+            ``global_key``) / ``env``
+            生效的層：``route``（用途鍵本身）/ ``global``（它的全域，見 ``global_key``）/ ``env``
         choice: the DB choice that took effect; ``None`` on the ``env`` layer
             生效的 DB 選擇；``env`` 層為 None
         rejected: the skipped layers and reasons (no longer in the allowlist), in the order tried
@@ -177,6 +208,10 @@ class ResolvedRoute:
         env_choice: the ``env`` layer's default choice; ``None`` when ``llm`` has no separate default (the client
             reads ``LLM_*``)
             ``env`` 層的預設選擇；``llm`` 沒有另給預設時為 None（客戶端讀 ``LLM_*``）
+        global_key: the global this capability of this key falls back to (``*`` or ``*voice``)
+            這個鍵的這個能力所屬的全域（``*`` 或 ``*voice``）
+        forced: the global's switch is on, so the key's own layer was skipped (always ``False`` for a global key)
+            全域的開關開著，用途鍵自己那一層被跳過（全域鍵本身一律為 ``False``）
     """
 
     route_key: str
@@ -186,20 +221,33 @@ class ResolvedRoute:
     db_unavailable: bool = False
     capability: str = CAPABILITY_LLM
     env_choice: RouteChoice | None = None
+    global_key: str = GLOBAL_ROUTE_KEY
+    forced: bool = False
 
     def __post_init__(self) -> None:
-        """Check that only the ``env`` layer lacks a DB choice and that DB layers carry no ``env_choice``.
+        """Check the layer, the choice, the global, and the switch flag fit together.
 
-        檢查只有 ``env`` 層沒有 DB 選擇，且 DB 層不帶 ``env_choice``。
+        檢查生效的層、選擇、所屬全域與開關旗標彼此一致。
+
+        Only the ``env`` layer lacks a DB choice and DB layers carry no ``env_choice``; ``global_key`` is one of the
+        two globals; ``forced`` means the key's own layer was skipped, so it never goes with ``source="route"`` or
+        with a global key itself.
+
+        只有 ``env`` 層沒有 DB 選擇，DB 層不帶 ``env_choice``；``global_key`` 是兩個全域之一；``forced`` 表示
+        用途鍵自己那一層被跳過，所以不會和 ``source="route"`` 或全域鍵本身同時出現。
 
         Raises:
-            ValueError: if either rule is broken
+            ValueError: if any rule is broken
                 若違反任一規則
         """
         if (self.source == "env") != (self.choice is None):
             raise ValueError("只有 env 層沒有 DB 選擇")
         if self.choice is not None and self.env_choice is not None:
             raise ValueError("DB 層不帶 env_choice")
+        if self.global_key not in GLOBAL_ROUTE_KEYS:
+            raise ValueError(f"global_key {self.global_key!r} 不是全域鍵")
+        if self.forced and (self.source == "route" or self.route_key in GLOBAL_ROUTE_KEYS):
+            raise ValueError("forced 表示用途鍵自己那一層被跳過：不會由它生效，全域鍵本身也不會被強制")
 
     @property
     def effective_choice(self) -> RouteChoice | None:
@@ -275,10 +323,12 @@ class Route:
         capabilities: the capabilities this use needs; settings accept only these capabilities
             這個用途會用到的能力；設定只接受這些能力
         strategies: the recording-evaluation strategies allowed when ``audio_eval`` is declared; ``None`` means all
-            (a branch without its own narrowing inherits its flow key's)
-            宣告 ``audio_eval`` 時允許的評分策略；None 為全部（分支沒有限縮時沿用流程鍵的）
-        env_defaults: capability → the ``.env``-layer default of this key (and its branches)
-            能力 → 這個鍵（與它的分支）在 ``.env`` 那一層的預設
+            宣告 ``audio_eval`` 時允許的評分策略；None 為全部
+        env_defaults: capability → the ``.env``-layer default of this key
+            能力 → 這個鍵在 ``.env`` 那一層的預設
+        voice: whether this is a voice use (recording evaluation): its ``llm`` belongs to the voice global and
+            defaults to ``audio_text_default``
+            是否為語音用途（錄音評分）：它的 ``llm`` 歸語音全域，預設為 ``audio_text_default``
     """
 
     key: str
@@ -286,6 +336,7 @@ class Route:
     capabilities: frozenset[str] = frozenset({CAPABILITY_LLM})
     strategies: frozenset[str] | None = None
     env_defaults: Mapping[str, EnvDefault] | None = field(default=None, compare=False)
+    voice: bool = False
 
     def __post_init__(self) -> None:
         """Validate the key, the capabilities, the strategy narrowing, and ``env_defaults``.
@@ -297,26 +348,31 @@ class Route:
         ``capabilities`` 與 ``strategies`` 會轉成 frozenset。
 
         Raises:
-            ValueError: if the key is invalid or ``*``, the capabilities are empty or unknown, the strategy narrowing
-                lacks ``audio_eval`` or is not a non-empty subset of the strategies, or ``env_defaults`` names an
-                undeclared capability
-                若鍵不合規或為 ``*``、能力為空或未知、策略限縮未宣告 ``audio_eval`` 或不是策略的非空子集，
-                或 ``env_defaults`` 含未宣告的能力
+            ValueError: if the key is invalid or a global key, the capabilities are empty or unknown, a voice
+                capability is declared without ``voice=True``, the strategy narrowing lacks ``audio_eval`` or is not a
+                non-empty subset of the strategies, or ``env_defaults`` names an undeclared capability
+                若鍵不合規或為全域鍵、能力為空或未知、宣告了語音能力卻沒標 ``voice=True``、策略限縮未宣告
+                ``audio_eval`` 或不是策略的非空子集，或 ``env_defaults`` 含未宣告的能力
         """
         if (
-            self.key == GLOBAL_ROUTE_KEY
+            self.key in GLOBAL_ROUTE_KEYS
             or len(self.key) > ROUTE_KEY_MAX_LENGTH
             or not _ROUTE_KEY_PATTERN.fullmatch(self.key)
         ):
             raise ValueError(
                 f"用途鍵 {self.key!r} 不合規：只能用英數字與 . _ -、長度 1–{ROUTE_KEY_MAX_LENGTH}、"
-                "最多兩層（<流程>.<分支>），且 * 保留給全域。"
+                "最多兩層（<流程>.<分支>），且 * 與 *voice 保留給全域。"
             )
         object.__setattr__(self, "capabilities", frozenset(self.capabilities))
         unknown = self.capabilities - CAPABILITIES
         if not self.capabilities or unknown:
             raise ValueError(
                 f"用途鍵 {self.key!r} 的能力不合規：{sorted(unknown) or '（空）'}；可用：{sorted(CAPABILITIES)}。"
+            )
+        # 用到語音能力的用途一定是語音用途：漏標時它的 llm 會改走文字全域（建卡用的模型），語音全域的開關也蓋不到
+        if self.capabilities & VOICE_CAPABILITIES and not self.voice:
+            raise ValueError(
+                f"用途鍵 {self.key!r} 宣告了語音能力 {sorted(self.capabilities & VOICE_CAPABILITIES)}，要加 voice=True。"
             )
         if self.strategies is not None:
             strategies = frozenset(self.strategies)
@@ -373,6 +429,7 @@ def route(
     *,
     strategies: set[str] | frozenset[str] | None = None,
     env_defaults: Mapping[str, EnvDefault] | None = None,
+    voice: bool = False,
 ) -> Route:
     """Declare and register a route key and the capabilities it uses.
 
@@ -388,16 +445,18 @@ def route(
     同一模組（如 ``importlib.reload``）也會因重複宣告拋錯。
 
     Args:
-        key: the route key (alphanumerics and ``. _ -``, length ≤ 64, at most two levels, not ``*``)
-            用途鍵（英數字與 ``. _ -``，長度 ≤ 64，最多兩層，不可為 ``*``）
+        key: the route key (alphanumerics and ``. _ -``, length ≤ 64, at most two levels, not a global key)
+            用途鍵（英數字與 ``. _ -``，長度 ≤ 64，最多兩層，不可為全域鍵）
         description: the human-readable description
             給人看的說明
         capabilities: the capabilities used (a non-empty subset of :data:`CAPABILITIES`)
             用到的能力（``CAPABILITIES`` 的非空子集）
         strategies: the recording-evaluation strategies allowed when ``audio_eval`` is declared (``None`` means all)
             宣告 ``audio_eval`` 時允許的評分策略（None 為全部）
-        env_defaults: capability → the ``.env``-layer default (branches inherit their flow key's)
-            能力 → ``.env`` 那一層的預設（分支沿用流程鍵的）
+        env_defaults: capability → the ``.env``-layer default
+            能力 → ``.env`` 那一層的預設
+        voice: whether this is a voice use (recording evaluation), whose ``llm`` belongs to the voice global
+            是否為語音用途（錄音評分），它的 ``llm`` 歸語音全域
 
     Returns:
         the route object
@@ -413,6 +472,7 @@ def route(
         frozenset(capabilities),
         frozenset(strategies) if strategies is not None else None,
         dict(env_defaults) if env_defaults is not None else None,
+        voice,
     )
     if key in _DECLARED:
         raise ValueError(f"用途鍵 {key!r} 重複宣告。")
@@ -421,9 +481,9 @@ def route(
 
 
 def list_route_keys() -> list[Route]:
-    """Return every declared route key, sorted by key (branches right after their flow key).
+    """Return every declared route key, sorted by key.
 
-    回傳所有已宣告的用途鍵，依鍵排序（分支緊跟在流程鍵之後）。
+    回傳所有已宣告的用途鍵，依鍵排序。
 
     Returns:
         the declared routes
@@ -448,57 +508,145 @@ def get_route(key: str) -> Route | None:
     return _DECLARED.get(key)
 
 
-def parent_key(key: str) -> str | None:
-    """Return the flow key of a branch key (``a.b`` → ``a``).
+def global_capabilities(global_key: str) -> frozenset[str]:
+    """Return the capabilities a global key can be set for.
 
-    回傳分支鍵的流程鍵（``a.b`` → ``a``）。
+    回傳全域鍵可設定的能力。
+
+    The text global sets only ``llm``; the voice global sets every voice capability plus the ``llm`` that scores
+    transcripts.
+
+    文字全域只設 ``llm``；語音全域設所有語音能力，加上看逐字稿評分的 ``llm``。
 
     Args:
-        key: the route key
-            用途鍵
+        global_key: ``*`` or ``*voice``
+            ``*`` 或 ``*voice``
 
     Returns:
-        the flow key; ``None`` when the key is not a branch
-        流程鍵；不是分支時為 None
+        the capabilities
+        可設定的能力
+
+    Raises:
+        ValueError: if ``global_key`` is not a global key
+            若 ``global_key`` 不是全域鍵
     """
-    head, separator, _ = key.partition(".")
-    return head if separator else None
+    if global_key == GLOBAL_ROUTE_KEY:
+        return frozenset({CAPABILITY_LLM})
+    if global_key == VOICE_GLOBAL_ROUTE_KEY:
+        return VOICE_CAPABILITIES | {CAPABILITY_LLM}
+    raise ValueError(f"{global_key!r} 不是全域鍵")
 
 
-def route_layers(route_key: str) -> list[tuple[str, RouteSource]]:
+def global_key_for(route_key: str, capability: str) -> str:
+    """Return the global a capability of a route key falls back to.
+
+    回傳用途鍵的某個能力所屬的全域。
+
+    Voice capabilities, and ``llm`` of a route declared as a voice use, belong to the voice global; everything else
+    belongs to the text global. A global key belongs to itself. An undeclared (orphan) key is treated as a text use.
+
+    語音能力，以及宣告為語音用途的鍵的 ``llm``，歸語音全域；其他都歸文字全域。全域鍵屬於自己。
+    未宣告（孤兒）的鍵當成文字用途。
+
+    Args:
+        route_key: the route key, or a global key
+            用途鍵，或全域鍵
+        capability: the capability
+            能力
+
+    Returns:
+        ``*`` or ``*voice``
+        ``*`` 或 ``*voice``
+    """
+    if route_key in GLOBAL_ROUTE_KEYS:
+        return route_key
+    declared = _DECLARED.get(route_key)
+    if capability in VOICE_CAPABILITIES or (declared is not None and declared.voice):
+        return VOICE_GLOBAL_ROUTE_KEY
+    return GLOBAL_ROUTE_KEY
+
+
+def switch_enabled(choices: Snapshot, global_key: str) -> bool:
+    """Return whether a global's "global switch" is on in a settings snapshot.
+
+    回傳設定快照中某個全域的「全局生效」開關是否開著。
+
+    Args:
+        choices: capability → route key → choice
+            能力 → 用途鍵 → 選擇
+        global_key: ``*`` or ``*voice``
+            ``*`` 或 ``*voice``
+
+    Returns:
+        ``True`` if the switch row exists and is on; an unrecognised value counts as off, with a warning
+        開關那一列存在而且是開著時為 ``True``；值無法辨識時視為關閉並記警告
+    """
+    row = choices.get(SWITCH_CAPABILITY, {}).get(global_key)
+    if row is None:
+        return False
+    if row.endpoint != SWITCH_ON:
+        # 只有程式寫的 on；其他值是手動改壞或格式改過，當成關掉但要看得到
+        warn_once(f"全局生效開關 '{global_key}' 的值 {row.endpoint!r} 無法辨識，視為關閉。")
+        return False
+    return True
+
+
+def route_layers(route_key: str, capability: str, choices: Snapshot) -> list[tuple[str, RouteSource]]:
     """Return the DB layers queried in order during resolution (excluding ``.env``).
 
     解析時依序查的 DB 層（不含 ``.env``）。
 
-    ``a.b`` → ``a.b``, ``a``, ``*``; ``a`` → ``a``, ``*``; ``*`` → ``*``.
+    A route key queries itself, then its global; while the global's switch is on, only the global. A global key
+    queries only itself.
 
-    ``a.b`` → ``a.b``、``a``、``*``；``a`` → ``a``、``*``；``*`` → ``*``。
+    用途鍵先查自己、再查它的全域；全域的開關開著時只查全域。全域鍵只查自己。
 
     Args:
-        route_key: the route key, or ``*``
-            用途鍵，或 ``*``
+        route_key: the route key, or a global key
+            用途鍵，或全域鍵
+        capability: the capability
+            能力
+        choices: the settings snapshot (read for the switch)
+            設定快照（用來看開關）
 
     Returns:
         ``(key, source)`` pairs in query order
         依查詢順序排列的 ``(鍵, 來源)``
     """
-    if route_key == GLOBAL_ROUTE_KEY:
-        return [(GLOBAL_ROUTE_KEY, "global")]
-    layers: list[tuple[str, RouteSource]] = [(route_key, "route")]
-    parent = parent_key(route_key)
-    if parent is not None:
-        layers.append((parent, "parent"))
-    layers.append((GLOBAL_ROUTE_KEY, "global"))
-    return layers
+    global_key = global_key_for(route_key, capability)
+    if route_key == global_key or switch_enabled(choices, global_key):
+        return [(global_key, "global")]
+    return [(route_key, "route"), (global_key, "global")]
 
 
-def _declared_chain(route_key: str) -> list[Route]:
-    """Return the declared ones among the route key itself and its flow key (in query order).
+GLOBAL_TITLES: dict[str, str] = {GLOBAL_ROUTE_KEY: "全域（文字）", VOICE_GLOBAL_ROUTE_KEY: "全域（語音）"}
 
-    用途鍵本身與它的流程鍵中已宣告的（依查詢順序）。
+
+def source_label(resolved: ResolvedRoute) -> str:
+    """Return a short human-readable name for the layer that took effect.
+
+    回傳生效那一層的簡短名稱。
+
+    For example ``用途``, ``全域（語音）``, ``全域（語音，全局生效）``, ``.env``, or ``.env（全局生效）`` (the
+    switch is on but the global does not set this capability).
+
+    例如 ``用途``、``全域（語音）``、``全域（語音，全局生效）``、``.env``，或 ``.env（全局生效）``（開關開著、
+    但全域沒有設這個能力）。
+
+    Args:
+        resolved: the resolution result
+            解析結果
+
+    Returns:
+        the name, in Chinese (shown to the user)
+        名稱（給使用者看的中文）
     """
-    keys = [key for key, _ in route_layers(route_key) if key != GLOBAL_ROUTE_KEY]
-    return [_DECLARED[key] for key in keys if key in _DECLARED]
+    if resolved.source == "route":
+        return "用途"
+    if resolved.source == "env":
+        return ".env（全局生效）" if resolved.forced else ".env"
+    title = GLOBAL_TITLES[resolved.global_key]
+    return title.replace("）", "，全局生效）") if resolved.forced else title
 
 
 def allowed_strategies(route_key: str) -> frozenset[str] | None:
@@ -506,50 +654,52 @@ def allowed_strategies(route_key: str) -> frozenset[str] | None:
 
     回傳用途鍵允許的評分策略。
 
-    The key's own narrowing is used if it has one, otherwise the flow key's.
+    Only the key's own narrowing counts; a global key and an undeclared key allow every strategy.
 
-    鍵本身有限縮就用它的，否則看流程鍵。
+    只看鍵本身的限縮；全域鍵與未宣告的鍵允許所有策略。
 
     Args:
         route_key: the route key
             用途鍵
 
     Returns:
-        the allowed strategies; ``None`` (all) when neither narrows them
-        允許的策略；都沒有限縮時為 None（全部）
+        the allowed strategies; ``None`` (all) when the key does not narrow them
+        允許的策略；鍵沒有限縮時為 None（全部）
     """
-    for declared in _declared_chain(route_key):
-        if declared.strategies is not None:
-            return declared.strategies
-    return None
+    declared = _DECLARED.get(route_key)
+    return declared.strategies if declared is not None else None
 
 
 def declared_default_for(route_key: str, capability: str) -> RouteChoice | None:
-    """Return the default declared for this capability by the route key (or its flow key).
+    """Return the ``.env``-layer default of a capability of a route key, when it differs from the general one.
 
-    回傳用途鍵（或它的流程鍵）為這個能力宣告的預設。
+    回傳用途鍵某個能力在 ``.env`` 那一層的預設（與一般預設不同時）。
 
-    The key's own default comes first; a declared default whose function returns ``None`` (not applicable right
-    now) is skipped.
+    The key's own ``env_defaults`` come first. Otherwise ``llm`` on the voice side (a voice route or the voice
+    global) defaults to ``audio_text_default``. A default function returning ``None`` (not applicable right now) is
+    skipped.
 
-    鍵本身的預設優先；宣告的預設函式回 None（目前不適用）時跳過。
+    鍵本身的 ``env_defaults`` 優先；沒有時，語音那一邊（語音用途或語音全域）的 ``llm`` 預設為
+    ``audio_text_default``。預設函式回 None（目前不適用）時跳過。
 
     Args:
-        route_key: the route key
-            用途鍵
+        route_key: the route key, or a global key
+            用途鍵，或全域鍵
         capability: the capability
             能力
 
     Returns:
-        the declared default; ``None`` when none is declared or the declared default does not currently apply
-        宣告的預設；沒有宣告、或宣告的預設目前不適用時為 None
+        the default; ``None`` when there is no special default or it does not currently apply
+        預設；沒有特別的預設、或目前不適用時為 None
     """
-    for declared in _declared_chain(route_key):
-        default = (declared.env_defaults or {}).get(capability)
-        if default is not None:
-            choice = default()
-            if choice is not None:
-                return choice
+    declared = _DECLARED.get(route_key)
+    default = (declared.env_defaults or {}).get(capability) if declared is not None else None
+    if default is not None:
+        choice = default()
+        if choice is not None:
+            return choice
+    if capability == CAPABILITY_LLM and global_key_for(route_key, capability) == VOICE_GLOBAL_ROUTE_KEY:
+        return audio_text_default()
     return None
 
 
@@ -853,18 +1003,18 @@ def check_choice(
 
 
 async def resolve(route_key: str, capability: str = CAPABILITY_LLM) -> ResolvedRoute:
-    """Resolve the setting in effect for one capability of a route key: branch → flow → global → .env.
+    """Resolve the setting in effect for one capability of a route key: the key → its global → .env.
 
-    依「分支 → 流程 → 全域 → .env」解析用途鍵某個能力實際生效的設定。
+    依「用途鍵 → 它的全域 → .env」解析用途鍵某個能力實際生效的設定。
 
-    Rows outside the allowlist are skipped with a warning. A default declared by the route key ranks before the
-    global layer.
+    Rows outside the allowlist are skipped with a warning. While the global's switch is on, the key's own layer is
+    skipped (see :func:`route_layers`).
 
-    不在白名單的列會被跳過並記警告。用途鍵宣告的預設排在全域層之前。
+    不在白名單的列會被跳過並記警告。全域的開關開著時，跳過用途鍵自己那一層（見 ``route_layers``）。
 
     Args:
-        route_key: the route key (``*`` queries the global layer)
-            用途鍵（``*`` 查全域）
+        route_key: the route key (a global key queries that global)
+            用途鍵（全域鍵查該全域）
         capability: the capability
             能力
 
@@ -889,8 +1039,8 @@ def resolve_with(
     管理介面一次列出所有用途時用同一份快照，DB 只讀一次，各列也不會來自不同次讀取。
 
     Args:
-        route_key: the route key (``*`` queries the global layer)
-            用途鍵（``*`` 查全域）
+        route_key: the route key (a global key queries that global)
+            用途鍵（全域鍵查該全域）
         choices: capability → route key → choice
             能力 → 用途鍵 → 選擇
         read_ok: whether the snapshot was read successfully (on failure the result is marked ``db_unavailable``)
@@ -904,11 +1054,9 @@ def resolve_with(
     """
     rows = choices.get(capability, {})
     rejected: list[RejectedLayer] = []
-    # 用途鍵宣告的預設排在全域 * 之前（見模組說明）：有宣告時不看 *
-    declared_default = declared_default_for(route_key, capability) if route_key != GLOBAL_ROUTE_KEY else None
-    for key, source in route_layers(route_key):
-        if source == "global" and declared_default is not None:
-            break
+    global_key = global_key_for(route_key, capability)
+    forced = route_key != global_key and switch_enabled(choices, global_key)
+    for key, source in route_layers(route_key, capability, choices):
         choice = rows.get(key)
         if choice is None:
             continue
@@ -917,8 +1065,11 @@ def resolve_with(
             warn_once(f"能力路由設定 '{key}' 的 {capability} 已不在白名單（{problem}），改用下一層。")
             rejected.append(RejectedLayer(key, problem))
             continue
-        return ResolvedRoute(route_key, source, choice, tuple(rejected), capability=capability)
+        return ResolvedRoute(
+            route_key, source, choice, tuple(rejected), capability=capability, global_key=global_key, forced=forced
+        )
 
+    declared_default = declared_default_for(route_key, capability)
     return ResolvedRoute(
         route_key,
         "env",
@@ -927,6 +1078,8 @@ def resolve_with(
         db_unavailable=not read_ok,
         capability=capability,
         env_choice=declared_default if declared_default is not None else env_default(capability),
+        global_key=global_key,
+        forced=forced,
     )
 
 

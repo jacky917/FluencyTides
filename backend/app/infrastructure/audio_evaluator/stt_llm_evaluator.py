@@ -14,7 +14,7 @@ chosen by the ``llm`` capability route.
 
 Design decisions:
 - The text LLM used for scoring comes from the ``llm`` capability (of the
-  same route key, for example ``recording_eval``) and Whisper from
+  same route key, for example ``recording_eval.speaking_trilingual``) and Whisper from
   ``stt``; both are built and passed in by ``audio_evaluator/factory.py``.
   On the ``.env`` layer the ``llm`` default is the ``audio`` endpoint
   synthesized from ``AUDIO_*`` plus ``STT_LLM_MODEL_NAME``, the same
@@ -27,7 +27,7 @@ Design decisions:
   would only echo its input).
 
 設計決策：
-- 評分用的文字 LLM 來自能力路由的 ``llm``（同一個用途鍵，例如 ``recording_eval``），
+- 評分用的文字 LLM 來自能力路由的 ``llm``（同一個用途鍵，例如 ``recording_eval.speaking_trilingual``），
   Whisper 來自 ``stt``；兩者都由 ``audio_evaluator/factory.py`` 建好傳入。
   ``.env`` 那一層的 ``llm`` 預設為 ``AUDIO_*`` 合成的 ``audio`` 端點加上
   ``STT_LLM_MODEL_NAME``，與能力路由之前的行為相同。

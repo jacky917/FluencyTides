@@ -2,21 +2,21 @@
 
 人脈卡「用一段話記錄」：一段文字經 LLM 整理成建議，使用者勾選後才寫入。
 
-A text (or text transcribed from speech) is structured by the LLM into suggestions for one interaction, follow-ups,
-and profile data; nothing is written until the user picks them (person card plan §3.13 P5).
+A typed text is structured by the LLM into suggestions for one interaction, follow-ups, and profile data; nothing
+is written until the user picks them (person card plan §3.13 P5). Only text is accepted: voice is used only for
+language practice (docs/wip/recording_eval_settings_FEAT_2026-11-26.md D6).
 
-一段文字（或語音轉成的文字）經 LLM 整理成一筆互動、待追蹤與人物資料的
-建議；使用者勾選後才寫入（人脈卡計畫書 §3.13 P5）。
+一段打字輸入的文字經 LLM 整理成一筆互動、待追蹤與人物資料的建議；使用者勾選後才寫入（人脈卡計畫書
+§3.13 P5）。只收文字：語音只用來練語言（docs/wip/recording_eval_settings_FEAT_2026-11-26.md D6）。
 
-- The LLM and speech-to-text use the capability routing route key ``person_profile`` (configurable through
-  ``/setconfig``).
+- The LLM uses the capability routing route key ``person_profile`` (configurable through ``/setconfig``).
 - The LLM's suggestions get a format check here first (invalid ones are dropped), and the handler validates them
   once more when writing.
 - A text field suggestion either replaces the field or is appended to it; a suggestion for a changing field
   (interests, position, and so on) either "adds an entry" or "strikes out an entry", and the dates are always
   filled in by the system (registration date plan §4.6).
 
-- LLM 與語音轉文字走能力路由的用途鍵 ``person_profile``（``/setconfig`` 可設定）。
+- LLM 走能力路由的用途鍵 ``person_profile``（``/setconfig`` 可設定）。
 - LLM 的建議在這裡先過一次格式檢查（不合格的丟掉），寫入時 handler 還會再驗證一次。
 - 文字欄位的建議是取代或接在後面；會變的欄位（興趣、職位等）的建議是「新增一筆」或「劃掉某筆」，
   日期都由系統填（登錄日計畫書 §4.6）。
@@ -79,7 +79,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-INGEST_ROUTE = route("person_profile", "人脈卡：TG 用一段話記錄（文字或語音）", capabilities={"llm", "stt"})
+INGEST_ROUTE = route("person_profile", "人脈卡：TG 用一段話記錄", capabilities={"llm"})
 
 #: ``update`` adds to an existing card (as in Telegram); ``create`` makes a new card from a description.
 #: ``update`` 補現有的卡（同 TG）；``create`` 從一段描述建新卡。
@@ -535,33 +535,6 @@ async def ingest(
             "人脈卡整理：%s 回傳的格式不對：%s；原始輸出：%.500s", result.model_name, e.errors()[:3], result.raw_content
         )
         raise LLMGenerationError(f"模型 {result.model_name} 回傳的格式不對，請再試一次。") from e
-
-
-async def transcribe(audio: bytes, filename: str) -> str:
-    """Transcribe speech to text (with the ``stt`` setting of route key ``person_profile``).
-
-    語音轉文字（用途鍵 ``person_profile`` 的 ``stt`` 設定）。
-
-    Args:
-        audio: the audio content
-            音檔內容
-        filename: the audio file name
-            音檔檔名
-
-    Returns:
-        the transcribed text
-        轉出的文字
-
-    Raises:
-        AudioEvaluatorUnavailableError: if speech-to-text is unavailable
-            若語音轉文字無法使用
-        STTServiceError: if speech-to-text is unavailable
-            若語音轉文字無法使用
-    """
-    from app.infrastructure.audio_evaluator.factory import build_whisper
-
-    resolved = await INGEST_ROUTE.resolve("stt")
-    return await build_whisper(resolved.provider, resolved.model).transcribe(audio, filename)
 
 
 def proposals_from(

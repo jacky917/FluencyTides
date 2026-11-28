@@ -201,11 +201,11 @@ def test_route_row_beats_global(whitelist):
     assert other.source == "global"
 
 
-def test_branch_falls_back_to_its_flow_key(whitelist):
-    """``scenario.ask`` 沒設定時往上找流程鍵 ``scenario``（計畫書 §5），再到全域。"""
+def test_dotted_key_does_not_fall_back_to_its_prefix(whitelist):
+    """三層：``scenario.ask`` 沒設定時直接用全域，不再先找 ``scenario``（「.」只是命名）。"""
     with _rows(scenario=RouteChoice("yinli", "m2", None), GLOBAL=RouteChoice("yinli", "m1", None)):
         resolved = _resolve("scenario.ask")
-    assert (resolved.source, resolved.model) == ("parent", "m2")
+    assert (resolved.source, resolved.model) == ("global", "m1")
 
     routing.invalidate_cache()
     with _rows(**{"scenario.ask": RouteChoice("yinli", "m1", None), "scenario": RouteChoice("yinli", "m2", None)}):
@@ -213,12 +213,12 @@ def test_branch_falls_back_to_its_flow_key(whitelist):
     assert (resolved.source, resolved.model) == ("route", "m1")
 
 
-def test_invalid_flow_row_is_skipped_for_the_branch(whitelist):
-    """流程鍵的設定不在白名單時，分支照樣跳過它往全域找，並記在 rejected。"""
-    with _rows(scenario=RouteChoice("gone", "m2", None), GLOBAL=RouteChoice("yinli", "m1", None)):
+def test_invalid_own_row_is_skipped_for_the_global(whitelist):
+    """用途自己的設定不在白名單時跳過它、改用全域，並記在 rejected。"""
+    with _rows(**{"scenario.ask": RouteChoice("gone", "m2", None)}, GLOBAL=RouteChoice("yinli", "m1", None)):
         resolved = _resolve("scenario.ask")
     assert resolved.source == "global"
-    assert [layer.route_key for layer in resolved.rejected] == ["scenario"]
+    assert [layer.route_key for layer in resolved.rejected] == ["scenario.ask"]
 
 
 def test_global_key_resolves_global_then_env(whitelist):

@@ -287,8 +287,8 @@ def test_full_flow_saves_choice(llm_route_db, llm_whitelist):
 
 
 def test_strategy_flow_saves_without_model(llm_route_db, llm_whitelist):
-    """錄音評分：選策略後直接確認、儲存；存的模型是 NULL，下一次評分即改用新策略。"""
-    _, markup = _to_capability("recording_eval：", "評分策略")
+    """語音全域：選策略後直接確認、儲存；存的模型是 NULL，下一次評分即改用新策略。"""
+    _, markup = _to_capability("全域（語音） *voice：", "評分策略")
     _, markup, _ = _click(_button_starting(markup, "⚙️ 設定"))
     text, markup, _ = _click(_button_starting(markup, "stt_diff"))
     assert "評分策略" in text and "stt_diff" in text
@@ -297,19 +297,55 @@ def test_strategy_flow_saves_without_model(llm_route_db, llm_whitelist):
     assert "已儲存" in text and "stt_diff" in text
     query.answer.assert_awaited_once_with()
     [row] = _stored_rows(llm_route_db)
-    assert (row.route_key, row.capability, row.provider, row.model) == ("recording_eval", "audio_eval", "stt_diff", None)
+    assert (row.route_key, row.capability, row.provider, row.model) == ("*voice", "audio_eval", "stt_diff", None)
     assert asyncio.run(routing.resolve("recording_eval.speaking_trilingual", "audio_eval")).provider == "stt_diff"
 
 
-def test_branch_keys_are_indented_and_list_their_capabilities(llm_route_db, llm_whitelist):
-    """分支鍵縮排在流程鍵之下；詳情列出它宣告的每個能力。"""
+def test_globals_come_first_and_recording_keys_list_their_capabilities(llm_route_db, llm_whitelist):
+    """清單先列文字全域、語音全域；三層之後沒有縮排的分支；詳情列出宣告的每個能力。"""
     _, markup = _open_menu()
     labels = list(_buttons(markup))
-    flow = next(index for index, label in enumerate(labels) if label.startswith("recording_eval："))
-    assert labels[flow + 1].startswith("　└ recording_eval.speaking_trilingual：")
-    text, markup, _ = _click(_button_starting(markup, "　└ recording_eval.speaking_trilingual："))
+    assert labels[0].startswith("全域（文字） *：") and labels[1].startswith("全域（語音） *voice：")
+    assert not any(label.startswith("　└") for label in labels)
+    markup = _menu_with("recording_eval.speaking_trilingual：")
+    text, markup, _ = _click(_button_starting(markup, "recording_eval.speaking_trilingual："))
     assert all(title in text for title in ("文字 LLM", "評分策略", "聽音檔的模型", "語音轉文字"))
     assert "（來源：.env）" in text
+
+
+def test_voice_switch_toggles_from_the_global_screen(llm_route_db, llm_whitelist):
+    """語音全域的畫面可以打開全局生效；打開後各錄音評分的鍵標出「自己的設定目前不生效」，關掉就恢復。"""
+    asyncio.run(capability_route_service.set_route(
+        "recording_eval.speaking_trilingual", "stt_diff", None, None, updated_by="api", capability="audio_eval",
+    ))
+    markup = _menu_with("全域（語音） *voice：")
+    text, markup, _ = _click(_button_starting(markup, "全域（語音） *voice："))
+    assert "全局生效：關" in text
+    text, markup, _ = _click(_button_starting(markup, "🔒 打開全局生效"))
+    assert "全局生效：<b>開</b>" in text
+    assert [row.capability for row in _stored_rows(llm_route_db)].count("global_switch") == 1
+
+    markup = _menu_with("recording_eval.speaking_trilingual：")
+    text, _, _ = _click(_button_starting(markup, "recording_eval.speaking_trilingual："))
+    # 語音全域只設了開關、沒有設策略：生效的是 .env，但標出是全局生效造成的
+    assert "自己的設定目前不生效" in text and "（來源：.env（全局生效））" in text
+
+    markup = _menu_with("🔒 全域（語音） *voice：")
+    _, markup, _ = _click(_button_starting(markup, "🔒 全域（語音） *voice："))
+    text, _, _ = _click(_button_starting(markup, "🔓 關閉全局生效"))
+    assert "全局生效：關" in text
+    assert "global_switch" not in [row.capability for row in _stored_rows(llm_route_db)]
+
+
+def test_saving_while_switch_is_on_says_it_does_not_take_effect(llm_route_db, llm_whitelist):
+    """全局生效開著時儲存用途的設定：照樣存，但結果畫面說明目前不會生效，並給關閉開關的按鈕。"""
+    asyncio.run(capability_route_service.set_global_switch("*voice", True, updated_by="api"))
+    _, markup = _to_capability("recording_eval.speaking_trilingual：", "評分策略")
+    _, markup, _ = _click(_button_starting(markup, "⚙️ 設定"))
+    _, markup, _ = _click(_button_starting(markup, "stt_diff"))
+    text, markup, _ = _click(_button_starting(markup, "✅ 儲存"))
+    assert "已儲存" in text and "目前不會生效" in text
+    assert any(label.startswith("🔓 關閉全局生效") for label in _buttons(markup))
 
 
 def test_single_effort_model_skips_effort_and_back_returns_to_models(llm_route_db, llm_whitelist):
@@ -687,7 +723,7 @@ def test_saving_the_global_key_rebuilds_the_global_client(llm_route_db, llm_whit
     from types import SimpleNamespace
 
     app = SimpleNamespace(state=SimpleNamespace(llm_client=None))
-    _, markup = _to_capability("*：")
+    _, markup = _to_capability("全域（文字） *：")
     _, markup, _ = _click(_button_starting(markup, "⚙️ 設定"))
     _, markup, _ = _click(_button_starting(markup, "yinli"))
     _, markup, _ = _click(_button_starting(markup, "m2"))
@@ -743,7 +779,7 @@ def test_restoring_the_global_key_rebuilds_the_global_client(llm_route_db, llm_w
 
     asyncio.run(capability_route_service.set_route("*", "yinli", "m2", None, updated_by="api"))
     app = SimpleNamespace(state=SimpleNamespace(llm_client=None))
-    _, markup = _to_capability("*：")
+    _, markup = _to_capability("全域（文字） *：")
     query = _callback_query(_button_starting(markup, "↩️ 恢復預設"))
     asyncio.run(models_menu.handle_menu(query, app=app))
 
@@ -753,7 +789,7 @@ def test_restoring_the_global_key_rebuilds_the_global_client(llm_route_db, llm_w
 
 def test_global_change_without_app_is_logged(llm_route_db, llm_whitelist, caplog):
     """改了全域 * 卻沒有注入 app（dispatcher 組法變了）：無法重建，但要記 WARNING，不是無聲略過。"""
-    _, markup = _to_capability("*：")
+    _, markup = _to_capability("全域（文字） *：")
     _, markup, _ = _click(_button_starting(markup, "⚙️ 設定"))
     _, markup, _ = _click(_button_starting(markup, "yinli"))
     _, markup, _ = _click(_button_starting(markup, "m2"))

@@ -100,6 +100,10 @@ class CapabilityStateRead(BaseModel):
             偵測到這些問題，不代表已驗證可用。
         declared: whether the key declares this capability; false means an orphan setting (can only be deleted)
             這個鍵是否宣告了這個能力；false＝孤兒設定（只能刪除）
+        global_key: the global this capability falls back to: ``*`` (text) or ``*voice`` (voice)
+            這個能力所屬的全域：``*``（文字）或 ``*voice``（語音）
+        forced: the global's switch is on, so this key's own setting (if any) does not take effect now
+            全域的開關開著，這個鍵自己的設定（如果有）目前不生效
     """
 
     source: RouteSource
@@ -110,6 +114,8 @@ class CapabilityStateRead(BaseModel):
     db_unavailable: bool
     problem: str | None
     declared: bool = True
+    global_key: str = "*"
+    forced: bool = False
 
 
 class RouteRead(BaseModel):
@@ -118,24 +124,43 @@ class RouteRead(BaseModel):
     一個用途鍵與它各能力的狀態。
 
     Attributes:
-        route_key: the route key; ``*`` is the global one
-            用途鍵；``*`` 為全域
+        route_key: the route key; ``*`` and ``*voice`` are the text and voice globals
+            用途鍵；``*`` 與 ``*voice`` 為文字與語音全域
         description: the description; null for orphan keys
             說明；孤兒鍵為 null
         declared: whether the key is declared in code (``False`` means an orphan row in the DB, which can only
             be deleted)
             是否為程式中宣告的鍵（False＝DB 裡的孤兒列，只能刪除）
         capabilities: capability mapped to state. A declared key lists the capabilities it declares (plus any
-            capability that has a stored value in the DB but is not declared); the global key lists all
+            capability that has a stored value in the DB but is not declared); a global key lists that global's
             capabilities; an orphan key lists the capabilities that have stored values in the DB.
             能力 → 狀態。宣告的鍵列出它宣告的能力（加上 DB 中存了值、但沒有宣告的
-            能力）；全域列出所有能力；孤兒鍵列出 DB 中存了值的能力。
+            能力）；全域鍵列出該全域的能力；孤兒鍵列出 DB 中存了值的能力。
+        switch: whether the global's "global switch" is on (every route on that side uses the global as a
+            whole); null for a key that is not a global, and for a global while the settings cannot be read; a
+            single-capability write response (``PUT``/``DELETE`` of a capability) does not carry it either
+            全域的「全局生效」開關是否開著（那一邊的用途都整組用全域）；不是全域鍵時為 null，讀不到設定時全域也是
+            null；只改一個能力的回應（能力的 ``PUT``／``DELETE``）也不帶它
     """
 
     route_key: str
     description: str | None
     declared: bool
     capabilities: dict[str, CapabilityStateRead]
+    switch: bool | None = None
+
+
+class GlobalSwitchUpdate(BaseModel):
+    """The new state of a global's "global switch".
+
+    全域「全局生效」開關的新狀態。
+
+    Attributes:
+        enabled: ``true`` to turn it on, ``false`` to turn it off
+            ``true`` 為打開，``false`` 為關掉
+    """
+
+    enabled: bool
 
 
 class ModelOptionRead(BaseModel):

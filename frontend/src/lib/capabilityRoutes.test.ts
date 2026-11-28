@@ -7,9 +7,10 @@ import {
   encodeRouteKey,
   formatChoice,
   initialSelection,
-  parentKey,
+  isGlobalKey,
   previewLabel,
   providersFor,
+  sourceLabel,
 } from './capabilityRoutes'
 import type { CapabilityRoute, CapabilityState, ProviderOption } from '../types/api'
 
@@ -158,21 +159,35 @@ describe('buildChoice', () => {
 describe('providersFor', () => {
   const all = { llm: WHITELIST, audio_eval: STRATEGIES }
 
-  it('filters strategies by the key, and a branch inherits its flow key', () => {
+  it('filters strategies by the key itself only (no inheritance from a flow key)', () => {
     const strategies = { shadowing: ['stt_diff'] }
     expect(providersFor('audio_eval', 'shadowing', all, strategies).map((item) => item.id)).toEqual(['stt_diff'])
-    expect(providersFor('audio_eval', 'shadowing.x', all, strategies).map((item) => item.id)).toEqual(['stt_diff'])
-    expect(providersFor('audio_eval', 'recording_eval', all, strategies)).toHaveLength(3)
+    expect(providersFor('audio_eval', 'shadowing.x', all, strategies)).toHaveLength(3)
+    expect(providersFor('audio_eval', 'recording_eval.speaking_coach', all, strategies)).toHaveLength(3)
     expect(providersFor('llm', 'shadowing', all, strategies)).toBe(WHITELIST)
     expect(providersFor('stt', 'shadowing', all, strategies)).toEqual([])
   })
 })
 
-describe('parentKey', () => {
-  it('finds the flow key of a branch', () => {
-    expect(parentKey('recording_eval.speaking_trilingual')).toBe('recording_eval')
-    expect(parentKey('recording_eval')).toBeNull()
-    expect(parentKey('*')).toBeNull()
+describe('isGlobalKey', () => {
+  it('recognizes the text and voice globals only', () => {
+    expect(isGlobalKey('*')).toBe(true)
+    expect(isGlobalKey('*voice')).toBe(true)
+    expect(isGlobalKey('recording_eval.speaking_trilingual')).toBe(false)
+    expect(isGlobalKey('constructor')).toBe(false)
+  })
+})
+
+describe('sourceLabel', () => {
+  it('names the winning layer, which global, and whether the switch forced it', () => {
+    expect(sourceLabel({ source: 'route', global_key: '*', forced: false })).toBe('自己設定')
+    expect(sourceLabel({ source: 'global', global_key: '*', forced: false })).toBe('沿用全域（文字）')
+    expect(sourceLabel({ source: 'global', global_key: '*voice', forced: false })).toBe('沿用全域（語音）')
+    expect(sourceLabel({ source: 'global', global_key: '*voice', forced: true })).toBe('全域（語音，全局生效）')
+    expect(sourceLabel({ source: 'env', global_key: '*voice', forced: true })).toBe('.env 預設（全局生效）')
+    expect(sourceLabel({ source: 'env', global_key: '*', forced: false })).toBe('.env 預設')
+    // 全域鍵自己的設定生效時就是「自己設定」
+    expect(sourceLabel({ source: 'global', global_key: '*voice', forced: false }, '*voice')).toBe('自己設定')
   })
 })
 
@@ -186,6 +201,8 @@ describe('capabilitiesInUse', () => {
     db_unavailable: false,
     problem: null,
     declared,
+    global_key: '*voice',
+    forced: false,
   })
   const route = (key: string, strategy: string, extra: Record<string, CapabilityState> = {}): CapabilityRoute => ({
     route_key: key,
@@ -201,15 +218,17 @@ describe('capabilitiesInUse', () => {
   })
 
   it('counts the strategy and what it uses', () => {
-    expect([...capabilitiesInUse(route('recording_eval', 'listen'))].sort()).toEqual(['audio_eval', 'audio_llm'])
-    expect([...capabilitiesInUse(route('recording_eval', 'stt_llm'))].sort()).toEqual(['audio_eval', 'llm', 'stt'])
-    expect([...capabilitiesInUse(route('*', 'stt_diff'))].sort()).toEqual(['audio_eval', 'llm', 'stt'])
+    const key = 'recording_eval.speaking_trilingual'
+    expect([...capabilitiesInUse(route(key, 'listen'))].sort()).toEqual(['audio_eval', 'audio_llm'])
+    expect([...capabilitiesInUse(route(key, 'stt_llm'))].sort()).toEqual(['audio_eval', 'llm', 'stt'])
+    // 語音全域和其他錄音評分鍵一樣，只算策略用到的（不再特別算文字 LLM）
+    expect([...capabilitiesInUse(route('*voice', 'stt_diff'))].sort()).toEqual(['audio_eval', 'stt'])
   })
 
   it('counts everything without a strategy, and orphan rows always', () => {
     const plain: CapabilityRoute = { route_key: 'jp', description: null, declared: true, capabilities: { llm: state('x') } }
     expect([...capabilitiesInUse(plain)]).toEqual(['llm'])
-    const orphan = route('recording_eval', 'listen', { tts: state('x', false) })
+    const orphan = route('recording_eval.speaking_trilingual', 'listen', { tts: state('x', false) })
     expect(capabilitiesInUse(orphan).has('tts')).toBe(true)
   })
 })

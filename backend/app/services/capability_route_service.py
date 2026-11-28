@@ -82,7 +82,7 @@ layer (endpoint skipped, key or STT server not set, invalid strategy name) are a
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, NamedTuple, cast
 
 from sqlalchemy import CursorResult, delete, select
@@ -126,6 +126,10 @@ from app.infrastructure.llm.labels import build_model_label
 from app.infrastructure.llm.routing import (
     DATABASE_ERRORS,
     GLOBAL_ROUTE_KEY,
+    GLOBAL_ROUTE_KEYS,
+    SWITCH_CAPABILITY,
+    SWITCH_ON,
+    VOICE_GLOBAL_ROUTE_KEY,
     ResolvedRoute,
     RouteChoice,
     Snapshot,
@@ -136,12 +140,16 @@ from app.schemas.capability_route import CapabilityStateRead, ChoiceRead, Reject
 
 logger = logging.getLogger(__name__)
 
-# 全域設定在清單中的說明
-GLOBAL_DESCRIPTION = "全域預設（各用途沒有設定時使用）"
+# 兩個全域在清單中的說明
+GLOBAL_DESCRIPTIONS: dict[str, str] = {
+    GLOBAL_ROUTE_KEY: "全域（文字）：文字用途沒有自己的設定時使用",
+    VOICE_GLOBAL_ROUTE_KEY: "全域（語音）：錄音評分沒有自己的設定時使用",
+}
 
 _STORE_UNAVAILABLE_MESSAGE = (
     "讀不到能力路由設定（cfg_capability_routes），無法判斷這個用途的設定；詳見後端 log 的 WARNING，DB 恢復後再試。"
 )
+_SWITCH_UNKNOWN_MESSAGE = "讀不到目前的設定，無法確認全局生效開關是否蓋過這組設定；請重新查看。"
 _WRITE_FAILED_MESSAGE = (
     "寫入能力路由設定（cfg_capability_routes）時資料庫異常，結果未知；請重新查看設定後再試，詳見後端 log。"
 )
@@ -153,16 +161,17 @@ class RouteKeyEntry(NamedTuple):
     清單中的一個用途鍵。
 
     Attributes:
-        key: the route key; ``*`` is the global one
-            用途鍵；``*`` 為全域
+        key: the route key; ``*`` and ``*voice`` are the text and voice globals
+            用途鍵；``*`` 與 ``*voice`` 為文字與語音全域
         description: the description; ``None`` for orphan keys
             說明；孤兒鍵為 ``None``
         declared: whether the key is declared in the code (or is the global one); ``False`` means an orphan row in
             the DB
             是否為程式中宣告的鍵（或全域）；``False``＝DB 裡的孤兒列
         capabilities: the capabilities that may be set for this key: a declared key's own declared capabilities,
-            every capability for the global key, and none for orphan keys
-            這個鍵可設定的能力：宣告的鍵為它宣告的能力，全域為所有能力，孤兒鍵為空
+            the global's capabilities for a global key (``routing.global_capabilities``), and none for orphan keys
+            這個鍵可設定的能力：宣告的鍵為它宣告的能力，全域鍵為該全域的能力（``routing.global_capabilities``），
+            孤兒鍵為空
     """
 
     key: str
@@ -272,10 +281,15 @@ class KeyView:
         views: the state of each capability: declared capabilities in display order, followed by capabilities the
             DB stores a value for but this key does not declare
             各能力的狀態：宣告的能力依顯示順序，之後是 DB 中存了值、但這個鍵沒有宣告的能力
+        switch: whether the global's "global switch" is on; ``None`` for a key that is not a global, and for a
+            global while the stored settings cannot be read (unknown, not "off")
+            全域的「全局生效」開關是否開著；不是全域鍵時為 ``None``，讀不到設定時全域也是 ``None``（不知道，
+            不是「關」）
     """
 
     entry: RouteKeyEntry
     views: tuple[RouteView, ...]
+    switch: bool | None = None
 
     @property
     def route_key(self) -> str:
@@ -443,12 +457,20 @@ def preview_label(
     return build_model_label(endpoint_id, model, shown_effort, strip_prefix=strip_prefix)
 
 
-def _stored_keys(stored: Snapshot) -> set[str]:
-    """Return the route keys that have a stored value in the DB for any capability.
+def _global_entry(global_key: str) -> RouteKeyEntry:
+    """Return the list entry of a global key.
 
-    回傳 DB 中存了任一能力的用途鍵。
+    回傳全域鍵的清單項目。
     """
-    return {key for rows in stored.values() for key in rows}
+    return RouteKeyEntry(global_key, GLOBAL_DESCRIPTIONS[global_key], True, routing.global_capabilities(global_key))
+
+
+def _stored_keys(stored: Snapshot) -> set[str]:
+    """Return the route keys that have a stored value in the DB for any capability (switch rows excluded).
+
+    回傳 DB 中存了任一能力的用途鍵（不含開關那一列）。
+    """
+    return {key for capability, rows in stored.items() if capability != SWITCH_CAPABILITY for key in rows}
 
 
 def ordered_route_keys(stored: Snapshot) -> list[RouteKeyEntry]:
@@ -456,10 +478,10 @@ def ordered_route_keys(stored: Snapshot) -> list[RouteKeyEntry]:
 
     依顯示順序列出所有用途鍵。
 
-    Display order: the global ``*``, the declared keys (sorted by key, so branches follow right after their flow
-    key), then orphan keys in the DB (sorted by key).
+    Display order: the text global ``*``, the voice global ``*voice``, the declared keys (sorted by key), then
+    orphan keys in the DB (sorted by key).
 
-    顯示順序：全域 ``*``、已宣告的鍵（依鍵排序，分支緊跟在流程鍵之後）、DB 中的孤兒鍵（依鍵排序）。
+    顯示順序：文字全域 ``*``、語音全域 ``*voice``、已宣告的鍵（依鍵排序）、DB 中的孤兒鍵（依鍵排序）。
 
     Args:
         stored: the snapshot of stored settings
@@ -470,14 +492,14 @@ def ordered_route_keys(stored: Snapshot) -> list[RouteKeyEntry]:
         依顯示順序的用途鍵項目
     """
     declared = {route.key: route for route in routing.list_route_keys()}
-    entries = [RouteKeyEntry(GLOBAL_ROUTE_KEY, GLOBAL_DESCRIPTION, True, CAPABILITIES)]
+    entries = [_global_entry(key) for key in GLOBAL_ROUTE_KEYS]
     entries += [
         RouteKeyEntry(key, declared[key].description, True, declared[key].capabilities) for key in sorted(declared)
     ]
     entries += [
         RouteKeyEntry(key, None, False)
         for key in sorted(_stored_keys(stored))
-        if key != GLOBAL_ROUTE_KEY and key not in declared
+        if key not in GLOBAL_ROUTE_KEYS and key not in declared
     ]
     return entries
 
@@ -504,7 +526,9 @@ def key_capabilities(entry: RouteKeyEntry, stored: Snapshot) -> tuple[str, ...]:
     """
     declared = [capability for capability in CAPABILITY_ORDER if capability in entry.capabilities]
     stored_caps = sorted(
-        capability for capability, rows in stored.items() if entry.key in rows and capability not in entry.capabilities
+        capability
+        for capability, rows in stored.items()
+        if entry.key in rows and capability not in entry.capabilities and capability != SWITCH_CAPABILITY
     )
     return tuple(declared + stored_caps)
 
@@ -620,9 +644,17 @@ def _key_view(entry: RouteKeyEntry, stored: Snapshot, read_ok: bool) -> KeyView:
     """Build the states of every capability of one route key from a snapshot.
 
     以一份快照組出一個用途鍵各能力的狀態。
+
+    When the snapshot could not be read, a global's switch is ``None`` (unknown): an empty snapshot would otherwise
+    read as "off".
+
+    快照讀不到時，全域的開關為 ``None``（不知道）：否則空快照會被讀成「關」。
     """
+    switch = routing.switch_enabled(stored, entry.key) if entry.key in GLOBAL_ROUTE_KEYS and read_ok else None
     return KeyView(
-        entry, tuple(_view(entry, stored, read_ok, capability) for capability in key_capabilities(entry, stored))
+        entry,
+        tuple(_view(entry, stored, read_ok, capability) for capability in key_capabilities(entry, stored)),
+        switch,
     )
 
 
@@ -720,8 +752,8 @@ def _declared_entry(route_key: str) -> RouteKeyEntry | None:
 
     回傳已宣告的鍵（或全域）的清單項目；未宣告時為 ``None``。
     """
-    if route_key == GLOBAL_ROUTE_KEY:
-        return RouteKeyEntry(GLOBAL_ROUTE_KEY, GLOBAL_DESCRIPTION, True, CAPABILITIES)
+    if route_key in GLOBAL_ROUTE_KEYS:
+        return _global_entry(route_key)
     declared = routing.get_route(route_key)
     if declared is None:
         return None
@@ -897,19 +929,20 @@ async def set_route(
 
     驗證並寫入一個用途鍵在一種能力上的選擇（有就更新、沒有就新增），寫入後立即生效。
 
-    The row is updated if it exists and inserted otherwise. The returned state is built from the value to write
-    **before** writing and the DB is not read again: after the commit only clearing the cache and logging remain,
-    so once the write is committed it is always reported as successful and never called "operation failed"
-    because reading back or building the state failed. The effective value of the route layer is exactly the value
-    written (which passed the whitelist).
+    The row is updated if it exists and inserted otherwise. The returned state is built **before** writing, from
+    the current settings with the value to write put in place, and the DB is not read again afterwards: after the
+    commit only clearing the cache and logging remain, so once the write is committed it is always reported as
+    successful and never called "operation failed" because reading back or building the state failed. While the
+    global's switch is on, the returned state shows that the global is in effect (``resolved.forced``), so the
+    caller can tell the user that the stored value does not take effect for now.
 
-    回傳的狀態在寫入**之前**就由要寫的值組好、不再讀 DB：提交之後只剩清快取與記 log，
-    寫入一旦提交就一定回報成功，不會因為讀回或組狀態失敗而被說成「操作失敗」。用途層的
-    生效值就是要寫的值（已通過白名單）。
+    回傳的狀態在寫入**之前**就組好：以目前的設定、換上要寫的值來解析，寫入後不再讀 DB。提交之後只剩清快取與
+    記 log，寫入一旦提交就一定回報成功，不會因為讀回或組狀態失敗而被說成「操作失敗」。全域的開關開著時，
+    回傳的狀態會顯示生效的是全域（``resolved.forced``），呼叫端可以提醒使用者存的值目前不生效。
 
     Args:
-        route_key: the route key or ``*``
-            用途鍵或 ``*``
+        route_key: the route key or a global key
+            用途鍵或全域鍵
         endpoint: the provider (trimmed, case-insensitive): the endpoint ID for ``llm`` / ``audio_llm``,
             ``whisper`` for ``stt``, and the strategy name for ``audio_eval``
             provider（去空白、不分大小寫）：``llm`` / ``audio_llm`` 為端點 ID、``stt`` 為
@@ -946,14 +979,13 @@ async def set_route(
         raise InvalidRouteError(f"用途鍵 '{route_key}' 沒有宣告能力 '{capability}'，不能設定")
     choice = RouteChoice(endpoint.strip().lower(), (model or "").strip(), (effort or "").strip().lower() or None)
     validate_choice(choice, capability=capability, route_key=route_key, updated_by=updated_by)
-    source: routing.RouteSource = "global" if route_key == GLOBAL_ROUTE_KEY else "route"
-    view = RouteView(
-        entry=entry,
-        resolved=ResolvedRoute(route_key, source, choice, capability=capability),
-        effective_effort=choice.effort,
-        label=preview_label(choice.endpoint, choice.model, choice.effort, capability=capability),
-        stored=choice,
-    )
+    # 以目前的設定換上要寫的值來組狀態（看得出全域開關是否蓋過它）
+    current, read_ok = await routing.stored_choices()
+    current.setdefault(capability, {})[route_key] = choice
+    view = _view(entry, current, read_ok, capability)
+    if not read_ok:
+        # 讀不到目前的設定：組出來的狀態只算了要寫的這一筆，看不出全局生效開關，要明說
+        view = replace(view, problem=_SWITCH_UNKNOWN_MESSAGE)
 
     try:
         try:
@@ -1019,6 +1051,89 @@ class DeleteResult:
             raise ValueError("view_unavailable 時不應有 view")
 
 
+async def set_global_switch(global_key: str, enabled: bool, *, updated_by: str) -> KeyView:
+    """Turn a global's "global switch" on or off; it takes effect immediately.
+
+    打開或關掉全域的「全局生效」開關，立即生效。
+
+    On stores a switch row for the global (``routing.SWITCH_CAPABILITY``); off deletes it. The settings of the
+    individual routes are never touched, so turning the switch off brings them back. As with :func:`set_route`,
+    the returned state is built **before** writing, so a committed write is never reported as failed because
+    reading back failed.
+
+    打開時存一列該全域的開關（``routing.SWITCH_CAPABILITY``）；關掉時刪除那一列。各用途自己的設定
+    完全不動，所以關掉開關後就回到各自的設定。和 ``set_route`` 一樣，回傳的狀態在寫入**之前**就組好，
+    寫入一旦提交，不會因為讀回失敗而被說成失敗。
+
+    Args:
+        global_key: ``*`` or ``*voice``
+            ``*`` 或 ``*voice``
+        enabled: ``True`` to turn it on, ``False`` to turn it off
+            ``True`` 為打開，``False`` 為關掉
+        updated_by: who made the change (``tg:<user id>`` or ``api``)
+            修改者（``tg:<user id>`` 或 ``api``）
+
+    Returns:
+        the global's state after the change
+        改完之後該全域的狀態
+
+    Raises:
+        RouteNotFoundError: if ``global_key`` is not a global key
+            若 ``global_key`` 不是全域鍵
+        RouteStoreUnavailableError: if the database fails while writing (outcome unknown; check again)
+            若寫入時資料庫異常（結果未知，請重新查看）
+    """
+    if global_key not in GLOBAL_ROUTE_KEYS:
+        raise RouteNotFoundError(f"'{global_key}' 不是全域，沒有全局生效開關")
+    switch = RouteChoice(SWITCH_ON, "", None)
+    current, read_ok = await routing.stored_choices()
+    rows = current.setdefault(SWITCH_CAPABILITY, {})
+    if enabled:
+        rows[global_key] = switch
+    else:
+        rows.pop(global_key, None)
+    view = _key_view(_global_entry(global_key), current, read_ok)
+    if not read_ok:
+        # 讀不到目前的設定：開關的狀態就是要寫的值，但各能力只看得到 .env，要明說
+        view = replace(
+            view,
+            switch=enabled,
+            views=tuple(replace(item, problem=item.problem or _STORE_UNAVAILABLE_MESSAGE) for item in view.views),
+        )
+    changed = True
+    try:
+        if enabled:
+            try:
+                await _upsert(global_key, SWITCH_CAPABILITY, switch, updated_by)
+            except IntegrityError as first_error:
+                # 同時打開兩次：另一筆剛插入。那一列已存在，改走更新
+                if not await _row_exists(global_key, SWITCH_CAPABILITY):
+                    raise
+                logger.info(
+                    "全局生效開關 %s 剛被另一筆寫入建立，改為更新該列（%s）：%s", global_key, updated_by, first_error.orig
+                )
+                await _upsert(global_key, SWITCH_CAPABILITY, switch, updated_by)
+        else:
+            async with _session_factory()() as session:
+                result = cast(
+                    CursorResult[Any],
+                    await session.execute(
+                        delete(CapabilityRouteSetting).where(_row_filter(global_key, SWITCH_CAPABILITY))
+                    ),
+                )
+                await session.commit()
+            changed = bool(result.rowcount)
+    except DATABASE_ERRORS as error:
+        logger.exception("寫入 cfg_capability_routes 的全局生效開關失敗：%s → %s（%s）", global_key, enabled, updated_by)
+        raise RouteStoreUnavailableError(_WRITE_FAILED_MESSAGE) from error
+    finally:
+        routing.invalidate_cache()  # 理由同 set_route
+    logger.info(
+        "全局生效開關：%s → %s（%s%s）", global_key, "開" if enabled else "關", updated_by, "" if changed else "，原本就是關"
+    )
+    return view
+
+
 async def delete_route(route_key: str, *, updated_by: str, capability: str = CAPABILITY_LLM) -> DeleteResult:
     """Delete a route key's setting for one capability (restore the default: fall back to the layer above).
 
@@ -1032,8 +1147,8 @@ async def delete_route(route_key: str, *, updated_by: str, capability: str = CAP
     狀態標上 ``db_unavailable``。
 
     Args:
-        route_key: the route key or ``*``
-            用途鍵或 ``*``
+        route_key: the route key or a global key
+            用途鍵或全域鍵
         updated_by: who did it (written only to the log, since the row is deleted)
             操作者（只寫進 log，該列已刪除）
         capability: the capability
@@ -1099,6 +1214,8 @@ def _state_read(view: RouteView) -> CapabilityStateRead:
     resolved = view.resolved
     return CapabilityStateRead(
         source=resolved.source,
+        global_key=resolved.global_key,
+        forced=resolved.forced,
         effective=ChoiceRead(provider=resolved.endpoint, model=resolved.model or None, effort=view.effective_effort),
         label=view.label,
         stored=_choice_read(view.stored) if view.stored is not None else None,
@@ -1133,6 +1250,7 @@ def to_read(view: KeyView | RouteView) -> RouteRead:
         description=view.description,
         declared=view.declared,
         capabilities={item.capability: _state_read(item) for item in views},
+        switch=view.switch if isinstance(view, KeyView) else None,
     )
 
 
